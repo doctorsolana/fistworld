@@ -1384,19 +1384,13 @@ fn spawn_panel(
                 header.spawn((
                     BoundText("title".into()),
                     Text::new(model.title.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(T_TITLE),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_TITLE),
                     TextColor(INK),
                 ));
                 header.spawn((
                     BoundText("subtitle".into()),
                     Text::new(model.subtitle.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(T_LABEL),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_LABEL),
                     TextColor(INK_MUTED),
                 ));
             });
@@ -1431,10 +1425,7 @@ fn spawn_panel(
                 body.spawn((
                     BoundText("feedback".into()),
                     Text::new(message.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(T_BODY),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_BODY),
                     TextColor(if ok { FEEDBACK_OK } else { FEEDBACK_FAIL }),
                     Node {
                         display: if message.is_empty() {
@@ -1452,10 +1443,7 @@ fn spawn_panel(
 fn spawn_section(parent: &mut ChildSpawnerCommands<'_>, label: &str) {
     parent.spawn((
         Text::new(label),
-        TextFont {
-            font_size: FontSize::Px(T_SECTION),
-            ..default()
-        },
+        crate::ui::typography::text(T_SECTION),
         TextColor(INK_MUTED),
         Node {
             margin: UiRect::top(Val::Px(6.0)),
@@ -1482,19 +1470,13 @@ fn spawn_row(parent: &mut ChildSpawnerCommands<'_>, row: &RowModel) {
         .with_children(|card| {
             card.spawn((
                 Text::new(row.label.clone()),
-                TextFont {
-                    font_size: FontSize::Px(T_LABEL),
-                    ..default()
-                },
+                crate::ui::typography::text(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             card.spawn((
                 BoundText(row.id.clone()),
                 Text::new(row.value.clone()),
-                TextFont {
-                    font_size: FontSize::Px(T_VALUE),
-                    ..default()
-                },
+                crate::ui::typography::text(T_VALUE),
                 TextColor(INK),
             ));
             if row.controls.is_empty() {
@@ -1544,10 +1526,7 @@ fn spawn_control(parent: &mut ChildSpawnerCommands<'_>, control: &ControlModel) 
         BoundText(control.id.clone()),
         Text::new(control.label.clone()),
         UiButtonLabel,
-        TextFont {
-            font_size: FontSize::Px(T_BUTTON),
-            ..default()
-        },
+        crate::ui::typography::text(T_BUTTON),
         TextColor(INK),
         Pickable::IGNORE,
     ));
@@ -1571,19 +1550,13 @@ fn spawn_meter(parent: &mut ChildSpawnerCommands<'_>, meter: &MeterModel) {
         .with_children(|card| {
             card.spawn((
                 Text::new(meter.title.clone()),
-                TextFont {
-                    font_size: FontSize::Px(T_LABEL),
-                    ..default()
-                },
+                crate::ui::typography::text(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             card.spawn((
                 BoundText(meter.id.clone()),
                 Text::new(meter.summary.clone()),
-                TextFont {
-                    font_size: FontSize::Px(T_BODY),
-                    ..default()
-                },
+                crate::ui::typography::text(T_BODY),
                 TextColor(INK),
             ));
             card.spawn((

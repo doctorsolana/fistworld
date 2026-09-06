@@ -102,28 +102,19 @@ fn clock_plate() -> impl Bundle {
             (
                 ClockPeriodText,
                 Text::new("DAY 0"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
+                crate::ui::typography::text(11.0),
                 TextColor(INK_MUTED),
             ),
             (
                 ClockTimeText,
                 Text::new("--:--"),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
+                crate::ui::typography::text(15.0),
                 TextColor(INK),
             ),
             (
                 ClockWarpText,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
+                crate::ui::typography::text(13.0),
                 TextColor(EMBER),
                 Node {
                     display: Display::None,
@@ -155,10 +146,7 @@ fn mode_toggle() -> impl Bundle {
             ModeChipText,
             UiButtonLabel,
             Text::new("PLAY"),
-            TextFont {
-                font_size: FontSize::Px(10.0),
-                ..default()
-            },
+            crate::ui::typography::text(10.0),
             TextColor(INK_MUTED),
         )],
     )
@@ -205,10 +193,7 @@ fn god_plate() -> impl Bundle {
             hairline(),
             (
                 Text::new("G god   J time   N people   M map"),
-                TextFont {
-                    font_size: FontSize::Px(9.0),
-                    ..default()
-                },
+                crate::ui::typography::text(9.0),
                 TextColor(INK_MUTED),
             ),
         ],
@@ -246,10 +231,7 @@ fn warp_button(text: &str, factor: f32) -> impl Bundle {
         children![(
             Text::new(text),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(13.0),
-                ..default()
-            },
+            crate::ui::typography::text(13.0),
             TextColor(INK),
         )],
     )
@@ -275,10 +257,7 @@ fn spawn_hero_button() -> impl Bundle {
             SpawnHeroLabel,
             UiButtonLabel,
             Text::new("SPAWN HERO"),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
+            crate::ui::typography::text(11.0),
             TextColor(INK),
         )],
     )
@@ -303,10 +282,7 @@ fn found_village_button() -> impl Bundle {
             FoundVillageLabel,
             UiButtonLabel,
             Text::new("FOUND VILLAGE"),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
+            crate::ui::typography::text(11.0),
             TextColor(INK),
         )],
     )
@@ -323,10 +299,7 @@ fn god_notice() -> impl Bundle {
         },
         Pickable::IGNORE,
         Text::new(String::new()),
-        TextFont {
-            font_size: FontSize::Px(10.0),
-            ..default()
-        },
+        crate::ui::typography::text(10.0),
         // Madder, the reserved danger colour: this is the one place in god
         // chrome that reports a refusal, and it must not read as a label.
         TextColor(crate::ui::styles::ACCENT_RED),
@@ -376,10 +349,7 @@ fn spawn_npc_button() -> impl Bundle {
             SpawnNpcLabel,
             UiButtonLabel,
             Text::new("SPAWN VILLAGER"),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
+            crate::ui::typography::text(11.0),
             TextColor(INK),
         )],
     )
@@ -405,10 +375,7 @@ fn spawn_immigrant_boat_button() -> impl Bundle {
             SpawnImmigrantBoatLabel,
             UiButtonLabel,
             Text::new("SPAWN IMMIGRANT BOAT"),
-            TextFont {
-                font_size: FontSize::Px(10.0),
-                ..default()
-            },
+            crate::ui::typography::text(10.0),
             TextColor(INK),
         )],
     )
@@ -463,10 +430,7 @@ fn selection_plate() -> impl Bundle {
             (
                 SelectionNameText,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                crate::ui::typography::text(14.0),
                 TextColor(INK),
                 Node {
                     flex_grow: 1.0,
@@ -476,10 +440,7 @@ fn selection_plate() -> impl Bundle {
             (
                 SelectionStatusText,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(10.0),
-                    ..default()
-                },
+                crate::ui::typography::text(10.0),
                 TextColor(INK_MUTED),
             ),
             (
@@ -521,10 +482,7 @@ fn selection_plate() -> impl Bundle {
                 children![(
                     Text::new("EXPAND"),
                     UiButtonLabel,
-                    TextFont {
-                        font_size: FontSize::Px(9.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(9.0),
                     TextColor(INK),
                     Pickable::IGNORE,
                 )],
@@ -557,10 +515,7 @@ fn spawn_catapult_button() -> impl Bundle {
             SpawnCatapultLabel,
             UiButtonLabel,
             Text::new("SPAWN CATAPULT"),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
+            crate::ui::typography::text(11.0),
             TextColor(INK),
         )],
     )

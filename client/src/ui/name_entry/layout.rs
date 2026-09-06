@@ -21,13 +21,21 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
         ))
         .with_children(|root| {
             // Panel
-            root.spawn(Node {
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(40.0)),
-                row_gap: Val::Px(20.0),
-                ..default()
-            })
+            root.spawn((
+                crate::ui::motion::UiReveal::panel(),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(40.0)),
+                    row_gap: Val::Px(20.0),
+                    border: UiRect::all(Val::Px(3.0)),
+                    ..default()
+                },
+                BackgroundColor(crate::ui::styles::SIGN_WOOD),
+                BorderColor::all(crate::ui::styles::BRASS_DARK),
+                crate::ui::styles::plate_shadow(),
+            ))
             .with_children(|panel| {
+                crate::ui::frame::corners(panel);
                 // Title
                 panel
                     .spawn(Node {
@@ -35,10 +43,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                         ..default()
                     })
                     .insert(Text::new("Enter Player Name"))
-                    .insert(TextFont {
-                        font_size: FontSize::Px(32.0),
-                        ..default()
-                    })
+                    .insert(crate::ui::typography::text(32.0))
                     .insert(TextColor(INK_INVERSE));
 
                 // Input field
@@ -51,10 +56,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                     .with_children(|input_col| {
                         input_col
                             .spawn(Text::new("Name:"))
-                            .insert(TextFont {
-                                font_size: FontSize::Px(18.0),
-                                ..default()
-                            })
+                            .insert(crate::ui::typography::text(18.0))
                             .insert(TextColor(INK_INVERSE));
 
                         input_col
@@ -72,20 +74,14 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                                 input_box
                                     .spawn(NameInputDisplay)
                                     .insert(Text::new(""))
-                                    .insert(TextFont {
-                                        font_size: FontSize::Px(18.0),
-                                        ..default()
-                                    })
+                                    .insert(crate::ui::typography::body(18.0))
                                     .insert(TextColor(INK_INVERSE));
                             });
 
                         // Helper text
                         input_col
                             .spawn(Text::new("3-16 characters, alphanumeric only"))
-                            .insert(TextFont {
-                                font_size: FontSize::Px(12.0),
-                                ..default()
-                            })
+                            .insert(crate::ui::typography::text(12.0))
                             .insert(TextColor(Color::srgba(0.7, 0.7, 0.7, 0.8)));
                     });
 
@@ -93,10 +89,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                 panel
                     .spawn(ErrorMessageText)
                     .insert(Text::new(""))
-                    .insert(TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    })
+                    .insert(crate::ui::typography::text(14.0))
                     .insert(TextColor(ACCENT_RED))
                     .insert(Node {
                         min_height: Val::Px(20.0),
@@ -117,15 +110,12 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                             border_radius: BorderRadius::all(Val::Px(4.0)),
                             ..default()
                         },
-                        button_chrome(UiButtonVariant::Primary),
+                        button_chrome(UiButtonVariant::Secondary),
                     ))
                     .with_children(|btn| {
                         btn.spawn(Text::new("Join Game"))
                             .insert(UiButtonLabel)
-                            .insert(TextFont {
-                                font_size: FontSize::Px(20.0),
-                                ..default()
-                            })
+                            .insert(crate::ui::typography::text(20.0))
                             .insert(TextColor(INK_INVERSE));
                     });
             });

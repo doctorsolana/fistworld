@@ -357,7 +357,7 @@ fn spawn_creator(
                             justify_content: JustifyContent::Center,
                             padding: UiRect::axes(Val::Px(26.0), Val::Px(10.0)),
                             border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(8.0)),
+                            border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
                             ..default()
                         },
                         BackgroundColor(crate::ui::styles::LIMEWASH),
@@ -370,10 +370,7 @@ fn spawn_creator(
                             } else {
                                 "CREATE HERO"
                             }),
-                            TextFont {
-                                font_size: FontSize::Px(15.0),
-                                ..default()
-                            },
+                            crate::ui::typography::text(15.0),
                             TextColor(EMBER),
                         ));
                     });
@@ -391,7 +388,7 @@ fn spawn_creator(
                             align_items: AlignItems::Center,
                             padding: UiRect::all(Val::Px(16.0)),
                             border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(8.0)),
+                            border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
                             ..default()
                         },
                         BackgroundColor(crate::ui::styles::LIMEWASH),
@@ -461,19 +458,13 @@ fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, row: Creato
             .with_children(|center| {
                 center.spawn((
                     Text::new(label),
-                    TextFont {
-                        font_size: FontSize::Px(10.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(10.0),
                     TextColor(INK_MUTED),
                 ));
                 center.spawn((
                     SlotValueText(row),
                     Text::new("-"),
-                    TextFont {
-                        font_size: FontSize::Px(15.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(15.0),
                     TextColor(INK),
                 ));
             });
@@ -501,10 +492,7 @@ fn spawn_arrow(line: &mut ChildSpawnerCommands<'_>, glyph: &str, marker: ArrowBu
         btn.spawn((
             Text::new(glyph),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(16.0),
-                ..default()
-            },
+            crate::ui::typography::text(16.0),
             TextColor(EMBER),
         ));
     });
@@ -535,10 +523,7 @@ fn spawn_action_button(
         btn.spawn((
             Text::new(label),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(13.0),
-                ..default()
-            },
+            crate::ui::typography::text(13.0),
             TextColor(INK),
         ));
     });

@@ -15,7 +15,7 @@ use super::{CaptureConfig, CaptureTarget};
 use crate::render::systems::scaled_target::PresentCamera;
 
 #[derive(Resource)]
-pub(super) struct CapturePresentationTarget {
+pub(crate) struct CapturePresentationTarget {
     pub(super) image: Handle<Image>,
 }
 
@@ -88,5 +88,114 @@ pub(crate) fn setup_capture_presentation(
             ImageNode::new(image).with_mode(NodeImageMode::Stretch),
             Pickable::IGNORE,
         ));
+    }
+}
+
+/// Connected labs start in the launcher and can enter a different fullscreen
+/// resolution on connect. Keep their mirror at the real window size; otherwise
+/// native UI scale is applied to the old launcher image and clips the controls.
+/// Offline scenarios retain their explicitly requested artifact resolution.
+pub(crate) fn sync_capture_presentation(
+    config: Option<Res<CaptureConfig>>,
+    target: Option<Res<CapturePresentationTarget>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut cameras: Query<&mut RenderTarget, With<PresentCamera>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if config.is_some() {
+        return;
+    }
+    let (Some(target), Ok(window)) = (target, windows.single()) else {
+        return;
+    };
+    let size = UVec2::new(window.physical_width(), window.physical_height());
+    if size.min_element() == 0 {
+        return;
+    }
+    if let Some(image) = images.get(&target.image) {
+        if image.size() != size {
+            let mut extent = image.texture_descriptor.size;
+            extent.width = size.x;
+            extent.height = size.y;
+            images.get_mut(&target.image).unwrap().resize(extent);
+        }
+    }
+    for mut camera in &mut cameras {
+        if let RenderTarget::Image(image) = &*camera {
+            if image.handle == target.image && image.scale_factor != window.scale_factor() {
+                *camera = RenderTarget::Image(ImageRenderTarget {
+                    handle: target.image.clone(),
+                    scale_factor: window.scale_factor(),
+                });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connected_mirror_follows_fullscreen_resize_and_dpi() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .add_systems(Update, sync_capture_presentation);
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::new_target_texture(
+                1600,
+                900,
+                TextureFormat::Rgba8UnormSrgb,
+                None,
+            ));
+        app.insert_resource(CapturePresentationTarget {
+            image: image.clone(),
+        });
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                PresentCamera,
+                RenderTarget::Image(ImageRenderTarget {
+                    handle: image.clone(),
+                    scale_factor: 1.0,
+                }),
+            ))
+            .id();
+        for (width, height, scale) in [(2940, 1846, 1.0), (1280, 720, 1.5)] {
+            {
+                let mut window = app.world_mut().get_mut::<Window>(window).unwrap();
+                window.resolution.set_scale_factor_override(Some(scale));
+                window.resolution.set_physical_resolution(width, height);
+            }
+            app.update();
+            assert_eq!(
+                app.world()
+                    .resource::<Assets<Image>>()
+                    .get(&image)
+                    .unwrap()
+                    .size(),
+                UVec2::new(width, height)
+            );
+            let RenderTarget::Image(target) = app.world().get::<RenderTarget>(camera).unwrap()
+            else {
+                panic!("image target")
+            };
+            assert_eq!(target.scale_factor, scale);
+        }
+        app.world_mut().clear_trackers();
+        app.update();
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, Changed<RenderTarget>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
     }
 }

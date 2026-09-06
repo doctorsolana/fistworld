@@ -544,10 +544,7 @@ pub(super) fn rebuild_people_list(
                     name: String::new(),
                 },
                 Text::new("No one here yet"),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
+                crate::ui::typography::text(15.0),
                 TextColor(INK_MUTED),
                 Node {
                     margin: UiRect::all(Val::Px(10.0)),
@@ -621,10 +618,7 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
             } else {
                 record.name.clone()
             }),
-            TextFont {
-                font_size: FontSize::Px(16.0),
-                ..default()
-            },
+            crate::ui::typography::text(16.0),
             TextColor(name_color),
             Node {
                 flex_grow: 1.0,
@@ -645,10 +639,7 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
             } else {
                 "UNKNOWN".to_string()
             }),
-            TextFont {
-                font_size: FontSize::Px(12.5),
-                ..default()
-            },
+            crate::ui::typography::text(12.5),
             TextColor(if record.known {
                 INK_MUTED
             } else {
@@ -665,7 +656,9 @@ pub(super) fn sync_tab_visuals(
 ) {
     for (TabButton(button_tab), mut style) in buttons.iter_mut() {
         let active = *button_tab == *tab;
-        style.selected = active;
+        if style.selected != active {
+            style.selected = active;
+        }
     }
 
     for (body_tab, mut node) in bodies.iter_mut() {

@@ -847,19 +847,13 @@ fn spawn_market_page(
                     copy.spawn((
                         MarketBoundText::Title,
                         Text::new(model.title.clone()),
-                        TextFont {
-                            font_size: FontSize::Px(T_TITLE),
-                            ..default()
-                        },
+                        crate::ui::typography::text(T_TITLE),
                         TextColor(INK),
                     ));
                     copy.spawn((
                         MarketBoundText::Subtitle,
                         Text::new(model.subtitle.clone()),
-                        TextFont {
-                            font_size: FontSize::Px(T_LABEL),
-                            ..default()
-                        },
+                        crate::ui::typography::text(T_LABEL),
                         TextColor(INK_MUTED),
                     ));
                 });
@@ -867,10 +861,7 @@ fn spawn_market_page(
                 MarketAccessText,
                 MarketBoundText::Access,
                 Text::new(model.access.clone()),
-                TextFont {
-                    font_size: FontSize::Px(T_BODY),
-                    ..default()
-                },
+                crate::ui::typography::text(T_BODY),
                 TextColor(if model.access_enabled { STATUS_GOOD } else { INK_MUTED }),
             ));
         });
@@ -931,20 +922,14 @@ fn spawn_market_page(
                 .with_children(|intro| {
                     intro.spawn((
                         Text::new("HOW THIS EXCHANGE WORKS"),
-                        TextFont {
-                            font_size: FontSize::Px(T_LABEL),
-                            ..default()
-                        },
+                        crate::ui::typography::text(T_LABEL),
                         TextColor(INK),
                     ));
                     intro.spawn((
                         Text::new(
                             "Goods remain the seller's property until a real buyer clears the offer. Posting cargo is not an immediate sale.",
                         ),
-                        TextFont {
-                            font_size: FontSize::Px(T_BODY),
-                            ..default()
-                        },
+                        crate::ui::typography::text(T_BODY),
                         TextColor(INK_MUTED),
                         TextLayout::justify(Justify::Right),
                         Node {
@@ -955,10 +940,7 @@ fn spawn_market_page(
                 });
             content.spawn((
                 Text::new("GOODS LEDGER"),
-                TextFont {
-                    font_size: FontSize::Px(T_HEADING),
-                    ..default()
-                },
+                crate::ui::typography::text(T_HEADING),
                 TextColor(INK),
                 Node {
                     margin: UiRect::top(Val::Px(5.0)),
@@ -973,10 +955,7 @@ fn spawn_market_page(
         page.spawn((
             MarketFeedbackText,
             Text::new(model.feedback.clone()),
-            TextFont {
-                font_size: FontSize::Px(T_BODY),
-                ..default()
-            },
+            crate::ui::typography::text(T_BODY),
             TextColor(match model.feedback_success {
                 Some(true) => STATUS_GOOD,
                 Some(false) => Color::srgb(0.62, 0.18, 0.14),
@@ -1018,19 +997,13 @@ fn spawn_summary_tile(
         .with_children(|tile| {
             tile.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(T_LABEL),
-                    ..default()
-                },
+                crate::ui::typography::text(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             tile.spawn((
                 MarketBoundText::Summary(field),
                 Text::new(value),
-                TextFont {
-                    font_size: FontSize::Px(T_VALUE),
-                    ..default()
-                },
+                crate::ui::typography::text(T_VALUE),
                 TextColor(INK),
             ));
         });
@@ -1088,19 +1061,13 @@ fn spawn_market_row(
                         .with_children(|copy| {
                             copy.spawn((
                                 Text::new(row.good.label()),
-                                TextFont {
-                                    font_size: FontSize::Px(T_HEADING),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(T_HEADING),
                                 TextColor(INK),
                             ));
                             copy.spawn((
                                 MarketBoundText::Row(row.good, MarketRowField::Condition),
                                 Text::new(row.condition.clone()),
-                                TextFont {
-                                    font_size: FontSize::Px(T_LABEL),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(T_LABEL),
                                 TextColor(INK_MUTED),
                                 Node {
                                     max_width: Val::Px(142.0),
@@ -1193,10 +1160,7 @@ fn spawn_market_row(
                         .with_child((
                             Text::new("HISTORY"),
                             UiButtonLabel,
-                            TextFont {
-                                font_size: FontSize::Px(T_BUTTON),
-                                ..default()
-                            },
+                            crate::ui::typography::text(T_BUTTON),
                             TextColor(INK),
                             Pickable::IGNORE,
                         ));
@@ -1222,19 +1186,13 @@ fn spawn_market_fact(
         .with_children(|fact| {
             fact.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(T_LABEL),
-                    ..default()
-                },
+                crate::ui::typography::text(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             fact.spawn((
                 marker,
                 Text::new(value),
-                TextFont {
-                    font_size: FontSize::Px(T_VALUE),
-                    ..default()
-                },
+                crate::ui::typography::text(T_VALUE),
                 TextColor(INK),
             ));
         });
@@ -1295,10 +1253,7 @@ fn spawn_trade_button(
         },
         Text::new(label),
         UiButtonLabel,
-        TextFont {
-            font_size: FontSize::Px(T_BUTTON),
-            ..default()
-        },
+        crate::ui::typography::text(T_BUTTON),
         TextColor(INK),
         Pickable::IGNORE,
     ));

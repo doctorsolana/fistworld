@@ -10,6 +10,10 @@
 use bevy::prelude::*;
 
 use crate::states::GameState;
+use crate::ui::{
+    motion::Spring,
+    styles::{CRIMSON, PARCHMENT, SIGN_WOOD},
+};
 
 /// Whether right-clicks currently mean violence.
 #[derive(Resource, Default)]
@@ -25,22 +29,8 @@ pub struct CombatTargets {
 
 const BANNER_SHOWN_TOP: f32 = 14.0;
 const BANNER_HIDDEN_TOP: f32 = -92.0;
-/// An audibly springy drop: stiff enough to arrive fast, underdamped enough
-/// to overshoot once and settle - a sign swinging onto its hook.
-const SPRING_STIFFNESS: f32 = WAR_SPRING_STIFFNESS;
-const SPRING_DAMPING: f32 = WAR_SPRING_DAMPING;
 const BORDER_THICKNESS: f32 = 5.0;
 const BORDER_ALPHA: f32 = 0.5;
-/// The war palette, shared with the battalion bar and the standard flags so
-/// everything martial speaks one visual language.
-pub(crate) const CRIMSON: Color = Color::srgb(0.62, 0.16, 0.12);
-pub(crate) const PARCHMENT: Color = Color::srgb(0.97, 0.94, 0.86);
-pub(crate) const SIGN_WOOD: Color = Color::srgba(0.14, 0.09, 0.06, 0.94);
-/// Spring constants for war-UI panels arriving on screen; the banner drops
-/// from the top with these, the battalion bar rises from the bottom.
-pub(crate) const WAR_SPRING_STIFFNESS: f32 = 220.0;
-pub(crate) const WAR_SPRING_DAMPING: f32 = 16.0;
-
 pub struct CombatModePlugin;
 
 impl Plugin for CombatModePlugin {
@@ -71,8 +61,7 @@ struct CombatHelp;
 /// The hanging sign plus its spring state.
 #[derive(Component)]
 struct CombatBanner {
-    top: f32,
-    velocity: f32,
+    spring: Spring,
 }
 
 fn toggle_combat_mode(
@@ -94,7 +83,6 @@ fn toggle_combat_mode(
 
 fn spawn_combat_ui(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut mode: ResMut<CombatMode>,
     capture: Option<Res<crate::capture::CaptureConfig>>,
 ) {
@@ -109,7 +97,6 @@ fn spawn_combat_ui(
     if capture.is_some() && !hud_requested {
         return;
     }
-    let font = asset_server.load("fonts/Cinzel-Bold.ttf");
     commands
         .spawn((
             CombatUiRoot,
@@ -126,9 +113,19 @@ fn spawn_combat_ui(
         ))
         .with_children(|root| {
             root.spawn((CombatHelp, Pickable::IGNORE, Visibility::Hidden,
-                Node { position_type: PositionType::Absolute, bottom: Val::Px(176.0), left: Val::Percent(50.0), width: Val::Px(960.0), margin: UiRect::left(Val::Px(-480.0)), ..default() },
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(176.0), left: Val::Percent(50.0),
+                    width: Val::Px(800.0), margin: UiRect::left(Val::Px(-400.0)),
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
+                    ..default()
+                },
+                BackgroundColor(SIGN_WOOD),
+                BorderColor::all(crate::ui::styles::BRASS.with_alpha(0.45)),
                 Text::new("RMB drag: formation   |   Shift: add / toggle   |   Alt + click: individual   |   Ctrl / Cmd + 0-9: save group\nH: hold   |   X: attack-move   |   R: retreat   |   Alt + RMB: orbit"),
-                TextFont { font_size: FontSize::Px(12.0), ..default() }, TextColor(PARCHMENT),
+                crate::ui::typography::body(13.0), TextColor(PARCHMENT),
                 TextLayout::justify(Justify::Center),
                 TextShadow { offset: Vec2::new(0.0, 1.0), color: Color::BLACK },
             ));
@@ -186,8 +183,7 @@ fn spawn_combat_ui(
             // The hanging sign.
             root.spawn((
                 CombatBanner {
-                    top: BANNER_HIDDEN_TOP,
-                    velocity: 0.0,
+                    spring: Spring::new(BANNER_HIDDEN_TOP),
                 },
                 Pickable::IGNORE,
                 Node {
@@ -212,11 +208,7 @@ fn spawn_combat_ui(
                 BorderColor::all(CRIMSON.with_alpha(0.8)),
                 children![(
                     Text::new("COMBAT MODE"),
-                    TextFont {
-                        font: font.into(),
-                        font_size: FontSize::Px(21.0),
-                        ..default()
-                    },
+                    crate::ui::typography::heading(21.0),
                     TextColor(PARCHMENT),
                     TextShadow {
                         offset: Vec2::new(0.0, 1.5),
@@ -252,18 +244,17 @@ fn animate_combat_ui(
             },
         );
     }
-    let dt = time.delta_secs().min(0.05);
+    let dt = time.delta_secs();
     let target = if mode.0 {
         BANNER_SHOWN_TOP
     } else {
         BANNER_HIDDEN_TOP
     };
     for (mut banner, mut node) in banners.iter_mut() {
-        let displacement = target - banner.top;
-        banner.velocity +=
-            (displacement * SPRING_STIFFNESS - banner.velocity * SPRING_DAMPING) * dt;
-        banner.top += banner.velocity * dt;
-        let next = Val::Px(banner.top);
+        if !banner.spring.step(target, dt, 220.0, 16.0) {
+            continue;
+        }
+        let next = Val::Px(banner.spring.value);
         if node.top != next {
             node.top = next;
         }

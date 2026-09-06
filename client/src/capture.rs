@@ -28,9 +28,10 @@ mod inspection;
 mod live;
 mod performance;
 mod presentation;
-pub(crate) use presentation::setup_capture_presentation;
+pub(crate) use presentation::{setup_capture_presentation, sync_capture_presentation};
 mod scene_fixtures;
 mod ui_fixtures;
+mod ui_tour;
 mod world_fixture;
 
 pub(crate) use live::{
@@ -335,6 +336,7 @@ pub fn run(mut config: CaptureConfig) {
         app.add_systems(First, performance::measure_frames);
     }
     app.insert_resource(config);
+    ui_tour::install(&mut app);
 
     app.add_systems(PreStartup, configure_capture_window);
     app.add_systems(Startup, enter_world_offline);

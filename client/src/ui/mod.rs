@@ -42,16 +42,19 @@ pub fn pointer_over_ui(blockers: &Query<&Interaction>) -> bool {
 }
 
 pub mod business_management;
+mod button_motion;
 pub mod company_founding;
 pub mod debug_time_menu;
 pub mod encyclopedia;
 pub mod foundation;
+pub mod frame;
 pub mod hero_creator;
 pub mod history;
 pub mod hud;
 pub mod main_menu;
 pub mod market;
 pub mod modal;
+pub mod motion;
 pub mod name_entry;
 pub mod pause_menu;
 pub mod perf;
@@ -61,6 +64,7 @@ pub mod scroll;
 pub mod settlement_names;
 pub mod settlement_panel;
 pub mod styles;
+pub mod typography;
 pub mod world_map;
 
 pub use business_management::BusinessManagementPlugin;

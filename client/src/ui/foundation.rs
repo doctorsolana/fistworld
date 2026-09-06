@@ -13,8 +13,8 @@ use bevy::ui::InteractionDisabled;
 
 use super::styles::{
     BUTTON_DISABLED, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, EMBER, EMBER_RULE, INK,
-    INK_INVERSE, INK_MUTED, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, ROW_HOVERED, ROW_SELECTED,
-    SLATE, SLATE_HOVERED, SLATE_PRESSED,
+    INK_INVERSE, INK_MUTED, PLATE_RULE, PLATE_RULE_SOFT, ROW_HOVERED, ROW_SELECTED, SLATE,
+    SLATE_HOVERED, SLATE_PRESSED,
 };
 
 /// Stable UI layer assignments. Local `ZIndex` remains available inside a
@@ -31,11 +31,11 @@ pub mod layer {
 /// Typography scale for the 1600x900 design canvas. Bevy's resolution-aware
 /// UI scale converts these into physical pixels at other resolutions.
 pub mod type_scale {
-    pub const CAPTION: f32 = 10.0;
-    pub const BODY: f32 = 12.0;
-    pub const VALUE: f32 = 13.0;
-    pub const HEADING: f32 = 17.0;
-    pub const TITLE: f32 = 21.0;
+    pub const CAPTION: f32 = 12.0;
+    pub const BODY: f32 = 14.0;
+    pub const VALUE: f32 = 15.0;
+    pub const HEADING: f32 = 18.0;
+    pub const TITLE: f32 = 26.0;
 }
 
 /// Live simulation values need not rebuild a complete visual tree at network
@@ -88,6 +88,8 @@ pub enum UiButtonVariant {
     Row,
     /// Flat navigation control with a persistent selected underline/rule.
     Tab,
+    /// Navigation attached to a dark wood header.
+    Ribbon,
     /// Dark front-of-house control with inverse text.
     Inverse,
     Developer,
@@ -96,6 +98,7 @@ pub enum UiButtonVariant {
 
 /// Adds standard visual state handling to a Bevy `Button`.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[require(super::button_motion::ButtonMotion, bevy::ui::UiTransform)]
 pub struct UiButtonStyle {
     pub variant: UiButtonVariant,
     pub selected: bool,
@@ -110,6 +113,7 @@ pub struct UiButtonStyleExempt;
 /// Marks the text node whose contrast follows its owning standard button.
 /// Complex row/card buttons intentionally leave secondary metadata unmarked.
 #[derive(Component, Clone, Copy, Debug, Default)]
+#[require(bevy::ui::UiTransform)]
 pub struct UiButtonLabel;
 
 impl UiButtonStyle {
@@ -148,7 +152,12 @@ pub fn selected_button_chrome(
     (style, BackgroundColor(background), BorderColor::all(border))
 }
 
-fn button_colors(interaction: Interaction, style: UiButtonStyle, disabled: bool) -> (Color, Color) {
+pub(super) fn button_colors(
+    interaction: Interaction,
+    style: UiButtonStyle,
+    disabled: bool,
+) -> (Color, Color) {
+    use super::styles::{BRASS, SIGN_WOOD, WOOD_LIT};
     if disabled {
         return (BUTTON_DISABLED, PLATE_RULE);
     }
@@ -156,23 +165,30 @@ fn button_colors(interaction: Interaction, style: UiButtonStyle, disabled: bool)
         return match style.variant {
             UiButtonVariant::Row => (ROW_SELECTED, PLATE_RULE_SOFT),
             UiButtonVariant::Tab => (ROW_SELECTED, EMBER_RULE),
+            UiButtonVariant::Ribbon => (EMBER, BRASS),
             _ => (EMBER, EMBER_RULE),
         };
     }
     let background = match style.variant {
-        UiButtonVariant::Primary if interaction == Interaction::None => BUTTON_HOVERED,
+        UiButtonVariant::Primary
+        | UiButtonVariant::Inverse
+        | UiButtonVariant::Ribbon
+        | UiButtonVariant::Danger => match interaction {
+            Interaction::Hovered => WOOD_LIT,
+            Interaction::Pressed => SIGN_WOOD,
+            Interaction::None => SIGN_WOOD,
+        },
         UiButtonVariant::Ghost if interaction == Interaction::None => Color::NONE,
         UiButtonVariant::Row | UiButtonVariant::Tab => match interaction {
             Interaction::Pressed => BUTTON_PRESSED,
             Interaction::Hovered => ROW_HOVERED,
             Interaction::None => Color::NONE,
         },
-        UiButtonVariant::Inverse | UiButtonVariant::Developer => match interaction {
+        UiButtonVariant::Developer => match interaction {
             Interaction::Pressed => SLATE_PRESSED,
             Interaction::Hovered => SLATE_HOVERED,
             Interaction::None => SLATE,
         },
-        UiButtonVariant::Danger if interaction == Interaction::None => LIMEWASH_WELL,
         _ => match interaction {
             Interaction::Pressed => BUTTON_PRESSED,
             Interaction::Hovered => BUTTON_HOVERED,
@@ -185,7 +201,8 @@ fn button_colors(interaction: Interaction, style: UiButtonStyle, disabled: bool)
         match style.variant {
             UiButtonVariant::Row => PLATE_RULE_SOFT,
             UiButtonVariant::Tab | UiButtonVariant::Ghost => Color::NONE,
-            UiButtonVariant::Inverse | UiButtonVariant::Developer => PLATE_RULE,
+            UiButtonVariant::Inverse | UiButtonVariant::Primary | UiButtonVariant::Ribbon => BRASS,
+            UiButtonVariant::Developer => PLATE_RULE,
             UiButtonVariant::Danger => super::styles::ACCENT_RED,
             _ => PLATE_RULE,
         }
@@ -193,35 +210,24 @@ fn button_colors(interaction: Interaction, style: UiButtonStyle, disabled: bool)
     (background, border)
 }
 
-fn style_ui_buttons(
-    mut buttons: Query<(
-        &Interaction,
+fn style_ui_button_labels(
+    buttons: Query<(
         &UiButtonStyle,
         Has<InteractionDisabled>,
-        &mut BackgroundColor,
-        &mut BorderColor,
+        &Children,
+        &super::button_motion::ButtonMotion,
     )>,
-) {
-    for (interaction, style, disabled, mut background, mut border) in buttons.iter_mut() {
-        let (next_background, next_border) = button_colors(*interaction, *style, disabled);
-        if background.0 != next_background {
-            background.0 = next_background;
-        }
-        if *border != BorderColor::all(next_border) {
-            *border = BorderColor::all(next_border);
-        }
-    }
-}
-
-fn style_ui_button_labels(
-    buttons: Query<(&UiButtonStyle, Has<InteractionDisabled>, &Children)>,
     children: Query<&Children>,
-    mut labels: Query<&mut TextColor, With<UiButtonLabel>>,
+    mut labels: Query<(&mut TextColor, &mut bevy::ui::UiTransform), With<UiButtonLabel>>,
+    mut pending: Local<Vec<Entity>>,
 ) {
-    for (style, disabled, button_children) in buttons.iter() {
+    for (style, disabled, button_children, motion) in buttons.iter() {
         let desired = if disabled {
             INK_MUTED
         } else if style.variant == UiButtonVariant::Inverse
+            || style.variant == UiButtonVariant::Primary
+            || style.variant == UiButtonVariant::Ribbon
+            || style.variant == UiButtonVariant::Danger
             || style.variant == UiButtonVariant::Developer
             || (style.selected
                 && !matches!(style.variant, UiButtonVariant::Row | UiButtonVariant::Tab))
@@ -230,11 +236,16 @@ fn style_ui_button_labels(
         } else {
             INK
         };
-        let mut pending: Vec<Entity> = button_children.iter().collect();
+        pending.clear();
+        pending.extend(button_children.iter());
         while let Some(entity) = pending.pop() {
-            if let Ok(mut color) = labels.get_mut(entity) {
+            if let Ok((mut color, mut transform)) = labels.get_mut(entity) {
                 if color.0 != desired {
                     color.0 = desired;
+                }
+                let translation = bevy::ui::Val2::px(0.0, motion.offset());
+                if transform.translation != translation {
+                    transform.translation = translation;
                 }
             }
             if let Ok(descendants) = children.get(entity) {
@@ -344,6 +355,7 @@ pub struct UiFoundationPlugin;
 
 impl Plugin for UiFoundationPlugin {
     fn build(&self, app: &mut App) {
+        super::typography::install(app);
         app.add_plugins(TabNavigationPlugin);
         app.init_resource::<super::modal::ModalState>();
         // Screen-owned state systems run in `Update`; painting in `PostUpdate`
@@ -353,14 +365,19 @@ impl Plugin for UiFoundationPlugin {
         app.add_systems(
             PostUpdate,
             (
-                style_ui_buttons,
+                super::button_motion::animate_buttons,
                 style_ui_button_labels,
                 sync_button_focusability,
                 style_keyboard_focus,
                 audit_button_contract,
                 super::modal::sync_modal_state,
             )
-                .chain(),
+                .chain()
+                .before(bevy::ui::UiSystems::Layout),
+        );
+        app.add_systems(
+            PostUpdate,
+            super::motion::animate_reveals.before(bevy::ui::UiSystems::Layout),
         );
     }
 }
@@ -382,7 +399,10 @@ mod tests {
             ))
             .id();
 
-        world.run_system_once(style_ui_buttons).unwrap();
+        world.insert_resource(Time::<()>::default());
+        world
+            .run_system_once(super::super::button_motion::animate_buttons)
+            .unwrap();
         assert_eq!(
             world.get::<BackgroundColor>(entity).unwrap().0,
             BUTTON_DISABLED
@@ -403,10 +423,61 @@ mod tests {
         world.commands().entity(button).add_child(label);
         world.flush();
 
-        world.run_system_once(style_ui_buttons).unwrap();
+        world.insert_resource(Time::<()>::default());
+        world
+            .run_system_once(super::super::button_motion::animate_buttons)
+            .unwrap();
         world.run_system_once(style_ui_button_labels).unwrap();
         assert_eq!(world.get::<BackgroundColor>(button).unwrap().0, EMBER);
         assert_eq!(world.get::<TextColor>(label).unwrap().0, INK_INVERSE);
+    }
+
+    #[test]
+    fn hover_feedback_keeps_the_hit_area_still_and_danger_labels_readable() {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        app.insert_resource(time).add_systems(
+            Update,
+            (
+                super::super::button_motion::animate_buttons,
+                style_ui_button_labels,
+            )
+                .chain(),
+        );
+        let label = app.world_mut().spawn((UiButtonLabel, TextColor(INK))).id();
+        let button = app
+            .world_mut()
+            .spawn((
+                Button,
+                Interaction::Hovered,
+                button_chrome(UiButtonVariant::Danger),
+            ))
+            .add_child(label)
+            .id();
+        for _ in 0..30 {
+            app.update();
+        }
+        assert_eq!(
+            app.world()
+                .get::<bevy::ui::UiTransform>(button)
+                .unwrap()
+                .translation,
+            bevy::ui::Val2::ZERO
+        );
+        assert!(
+            matches!(app.world().get::<bevy::ui::UiTransform>(label).unwrap().translation.y, Val::Px(y) if y < -1.0)
+        );
+        assert_eq!(app.world().get::<TextColor>(label).unwrap().0, INK_INVERSE);
+        app.world_mut()
+            .entity_mut(button)
+            .insert(InteractionDisabled);
+        app.update();
+        assert_eq!(app.world().get::<TextColor>(label).unwrap().0, INK_MUTED);
+        assert_eq!(
+            app.world().get::<BackgroundColor>(button).unwrap().0,
+            BUTTON_DISABLED
+        );
     }
 
     #[test]

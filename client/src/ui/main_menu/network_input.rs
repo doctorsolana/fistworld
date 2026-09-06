@@ -188,7 +188,7 @@ pub(super) fn update_ip_display(
             format!("{}:{}", server_address.ip, server_address.port)
         };
 
-        let cursor = if show_cursor { "│" } else { "" };
+        let cursor = if show_cursor { "|" } else { "" };
         **text = format!("{}{}", display, cursor);
     }
 }

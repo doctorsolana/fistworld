@@ -151,6 +151,7 @@ impl LocalBusinessOwnership<'_, '_> {
 fn spawn_compact_panel(mut commands: Commands) {
     commands.spawn((
         SettlementPanel,
+        crate::ui::motion::UiReveal::panel(),
         TabGroup::new(0),
         PanelSignature::default(),
         Interaction::default(),
@@ -206,19 +207,13 @@ fn spawn_header(commands: &mut Commands, model: &CompactModel) -> Entity {
                 (
                     CompactBound::Title,
                     Text::new(model.title.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(20.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(20.0),
                     TextColor(INK),
                 ),
                 (
                     CompactBound::Subtitle,
                     Text::new(model.subtitle.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK_MUTED),
                 ),
             ],
@@ -255,19 +250,13 @@ fn spawn_tiles(commands: &mut Commands, tiles: &[(String, String)]) -> Entity {
                 children![
                     (
                         Text::new(label.clone()),
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(11.0),
                         TextColor(INK_MUTED),
                     ),
                     (
                         CompactBound::Tile(index),
                         Text::new(value.clone()),
-                        TextFont {
-                            font_size: FontSize::Px(16.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(16.0),
                         TextColor(INK),
                     ),
                 ],
@@ -290,10 +279,7 @@ fn spawn_line(commands: &mut Commands, index: usize, label: &str, value: &str) -
             children![
                 (
                     Text::new(label.to_string()),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK_MUTED),
                     Node {
                         flex_shrink: 0.0,
@@ -303,10 +289,7 @@ fn spawn_line(commands: &mut Commands, index: usize, label: &str, value: &str) -
                 (
                     CompactBound::Row(index),
                     Text::new(value.to_string()),
-                    TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(14.0),
                     TextColor(INK),
                     TextLayout::justify(Justify::Right),
                     Node {
@@ -377,10 +360,7 @@ fn spawn_card_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker
         .with_child((
             Text::new(label),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(13.0),
-                ..default()
-            },
+            crate::ui::typography::text(13.0),
             TextColor(INK),
             Pickable::IGNORE,
         ));

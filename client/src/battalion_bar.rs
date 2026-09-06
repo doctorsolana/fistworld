@@ -11,10 +11,12 @@ use bevy::prelude::*;
 
 use crate::army_roster::ArmyRoster;
 
-use crate::combat_mode::{
-    CombatMode, CRIMSON, PARCHMENT, SIGN_WOOD, WAR_SPRING_DAMPING, WAR_SPRING_STIFFNESS,
-};
+use crate::combat_mode::CombatMode;
 use crate::states::GameState;
+use crate::ui::{
+    motion::Spring,
+    styles::{CRIMSON, PARCHMENT, SIGN_WOOD},
+};
 
 /// Clears the selection plate that hugs the bottom edge; the cards hover
 /// just above it rather than fighting it for the same pixels.
@@ -60,8 +62,7 @@ impl Plugin for BattalionBarPlugin {
 /// The animated container; cards live inside a centered row.
 #[derive(Component)]
 struct BattalionBarRoot {
-    bottom: f32,
-    velocity: f32,
+    spring: Spring,
 }
 
 #[derive(Component)]
@@ -114,7 +115,6 @@ fn roman_numeral(mut value: u64) -> String {
 
 fn spawn_battalion_bar(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     capture: Option<Res<crate::capture::CaptureConfig>>,
 ) {
     // Same suppression contract as the HUD and the combat overlay.
@@ -122,11 +122,9 @@ fn spawn_battalion_bar(
     if capture.is_some() && !hud_requested {
         return;
     }
-    let font = asset_server.load("fonts/Cinzel-Bold.ttf");
     commands.spawn((
         BattalionBarRoot {
-            bottom: BAR_HIDDEN_BOTTOM,
-            velocity: 0.0,
+            spring: Spring::new(BAR_HIDDEN_BOTTOM),
         },
         Pickable::IGNORE,
         GlobalZIndex(56),
@@ -173,22 +171,14 @@ fn spawn_battalion_bar(
                 children![
                     (
                         Text::new("+"),
-                        TextFont {
-                            font: font.clone().into(),
-                            font_size: FontSize::Px(30.0),
-                            ..default()
-                        },
+                        crate::ui::typography::heading(30.0),
                         TextColor(PARCHMENT.with_alpha(0.55)),
                         Pickable::IGNORE,
                     ),
                     (
                         MusterCardLabel,
                         Text::new("MUSTER"),
-                        TextFont {
-                            font: font.into(),
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
+                        crate::ui::typography::heading(11.0),
                         TextColor(PARCHMENT.with_alpha(0.55)),
                         Pickable::IGNORE,
                     ),
@@ -203,7 +193,6 @@ fn spawn_battalion_bar(
 #[allow(clippy::type_complexity)]
 fn rebuild_battalion_cards(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     roster: Res<ArmyRoster>,
     row: Query<Entity, With<BattalionCardRow>>,
     existing: Query<Entity, With<BattalionCard>>,
@@ -238,7 +227,6 @@ fn rebuild_battalion_cards(
         commands.entity(card).despawn();
     }
 
-    let font = asset_server.load("fonts/Cinzel-Bold.ttf");
     commands.entity(row).with_children(|row| {
         for (battalion, ordinal, _) in &mine {
             row.spawn((
@@ -265,11 +253,7 @@ fn rebuild_battalion_cards(
             .with_children(|card| {
                 card.spawn((
                     Text::new(roman_numeral(*ordinal)),
-                    TextFont {
-                        font: font.clone().into(),
-                        font_size: FontSize::Px(27.0),
-                        ..default()
-                    },
+                    crate::ui::typography::heading(27.0),
                     TextColor(PARCHMENT),
                     TextShadow {
                         offset: Vec2::new(0.0, 1.5),
@@ -280,11 +264,7 @@ fn rebuild_battalion_cards(
                 card.spawn((
                     CardCountText(*battalion),
                     Text::new(""),
-                    TextFont {
-                        font: font.clone().into(),
-                        font_size: FontSize::Px(11.5),
-                        ..default()
-                    },
+                    crate::ui::typography::heading(11.5),
                     TextColor(PARCHMENT.with_alpha(0.82)),
                     Pickable::IGNORE,
                 ));
@@ -495,7 +475,7 @@ fn animate_battalion_bar(
     mode: Res<CombatMode>,
     mut roots: Query<(&mut BattalionBarRoot, &mut Node)>,
 ) {
-    let dt = time.delta_secs().min(0.05);
+    let dt = time.delta_secs();
     let target = if mode.0
         && !(selection.len() > 0 && selection.entities.iter().all(|e| machines.contains(*e)))
     {
@@ -504,11 +484,10 @@ fn animate_battalion_bar(
         BAR_HIDDEN_BOTTOM
     };
     for (mut root, mut node) in roots.iter_mut() {
-        let displacement = target - root.bottom;
-        root.velocity +=
-            (displacement * WAR_SPRING_STIFFNESS - root.velocity * WAR_SPRING_DAMPING) * dt;
-        root.bottom += root.velocity * dt;
-        let next = Val::Px(root.bottom);
+        if !root.spring.step(target, dt, 220.0, 16.0) {
+            continue;
+        }
+        let next = Val::Px(root.spring.value);
         if node.bottom != next {
             node.bottom = next;
         }

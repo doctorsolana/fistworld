@@ -49,10 +49,7 @@ pub(super) fn spawn_route_card(
                                 route.id.0,
                                 route.good.label().to_uppercase()
                             )),
-                            TextFont {
-                                font_size: FontSize::Px(15.0),
-                                ..default()
-                            },
+                            crate::ui::typography::text(15.0),
                             TextColor(INK),
                         ));
                         copy.spawn((
@@ -61,19 +58,13 @@ pub(super) fn spawn_route_card(
                                 route.mode.label().to_uppercase(),
                                 route.warehouse_name.to_uppercase()
                             )),
-                            TextFont {
-                                font_size: FontSize::Px(11.5),
-                                ..default()
-                            },
+                            crate::ui::typography::text(11.5),
                             TextColor(INK_MUTED),
                         ));
                     });
                 header.spawn((
                     Text::new(route.status.label().to_uppercase()),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(if route.status == TradeRouteStatus::Mothballed {
                         EMBER
                     } else {
@@ -94,11 +85,8 @@ pub(super) fn spawn_route_card(
                 for (index, stop) in route.stops.iter().enumerate() {
                     if index > 0 {
                         timeline.spawn((
-                            Text::new("→"),
-                            TextFont {
-                                font_size: FontSize::Px(17.0),
-                                ..default()
-                            },
+                            Text::new(">"),
+                            crate::ui::typography::text(17.0),
                             TextColor(INK_MUTED),
                         ));
                     }
@@ -135,18 +123,12 @@ pub(super) fn spawn_route_card(
                                     index + 1,
                                     stop.settlement_name.to_uppercase()
                                 )),
-                                TextFont {
-                                    font_size: FontSize::Px(11.5),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(11.5),
                                 TextColor(INK),
                             ));
                             stop_card.spawn((
                                 Text::new(stop.action.label().to_uppercase()),
-                                TextFont {
-                                    font_size: FontSize::Px(11.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(11.0),
                                 TextColor(EMBER),
                             ));
                         });
@@ -182,10 +164,7 @@ pub(super) fn spawn_route_card(
                 ] {
                     facts.spawn((
                         Text::new(text),
-                        TextFont {
-                            font_size: FontSize::Px(11.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(11.5),
                         TextColor(INK_MUTED),
                     ));
                 }
@@ -198,10 +177,7 @@ pub(super) fn spawn_route_card(
                         format_money(route.lifetime_delivery_revenue),
                         format_money(route.maximum_purchase_price),
                     )),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK_MUTED),
                 )),
                 TradeRouteMode::Merchant => card.spawn((
@@ -225,10 +201,7 @@ pub(super) fn spawn_route_card(
                             String::new()
                         },
                     )),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK_MUTED),
                 )),
             };
@@ -236,10 +209,7 @@ pub(super) fn spawn_route_card(
             if route.trips.is_empty() {
                 card.spawn((
                     Text::new("No completed circuit yet."),
-                    TextFont {
-                        font_size: FontSize::Px(11.5),
-                        ..default()
-                    },
+                    crate::ui::typography::text(11.5),
                     TextColor(INK_MUTED),
                 ));
             } else {
@@ -255,10 +225,7 @@ pub(super) fn spawn_route_card(
                             format_money(trip.consigned_value),
                             trip.travel_world_seconds as f32 / 60.0,
                         )),
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(11.0),
                         TextColor(INK_MUTED),
                     ));
                 }

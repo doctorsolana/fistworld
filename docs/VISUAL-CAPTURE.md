@@ -454,6 +454,12 @@ requires completed membership edits, policy replication, damage to both battalio
 at least 8 m travel by every Defensive troop and less than 0.05 m by every held troop.
 The final capture must complete before exit. This is not a performance benchmark.
 
+The connected presentation image follows physical window size and DPI, including the
+launcher-to-fullscreen transition. Its dimensions can therefore differ from the requested
+`FISTFORCE_RESOLUTION` in borderless mode; inspect the recorded dimensions. Use
+`FISTFORCE_DISPLAY_MODE=windowed` when the connected run needs an exact output size.
+Offline RON scenarios keep their explicitly requested artifact dimensions.
+
 ### Verified 2026-09-06
 
 Inspected the Army page at 1600x900 and 1280x720, then ran the connected scenario
@@ -475,3 +481,60 @@ now covers switching destination battalions while old row actions become invalid
 Verification completed with `cargo check --workspace --all-targets`,
 `cargo test --workspace` (873 passed, 11 existing ignored),
 `cargo build --workspace --profile playtest`, formatting and whitespace checks.
+
+
+## Shared UI theme gallery and motion rehearsal
+
+`capture/ui_gallery.py` writes named RON scenarios for the real encyclopedia tabs,
+company controls (top/bottom), ledger, founding form, property board, market, compact
+settlement panel, pause/settings, world map, developer panel, hero creator, front-end
+menus and populated combat bar. It does not generate alternate UI layouts.
+
+```sh
+python3 capture/ui_gallery.py /tmp/fistworld-ui-gallery
+BEVY_ASSET_ROOT="$PWD/client/assets" ./target/playtest/capture \
+  --scenario /tmp/fistworld-ui-gallery/people.ron --out /tmp/ui-people
+BEVY_ASSET_ROOT="$PWD/client/assets" ./target/playtest/capture \
+  --scenario /tmp/fistworld-ui-gallery/army.ron --resolution 1280x720 --out /tmp/ui-army-small
+BEVY_ASSET_ROOT="$PWD/client/assets" ./target/playtest/capture \
+  --scenario capture/scenarios/ui-theme-tour.ron --out /tmp/ui-tour
+```
+
+The tour starts after terrain readiness, then captures an uninterrupted 661-frame
+sequence at a fixed 60 Hz, with a window PNG and renderer JSON every three frames.
+It closes/reopens the encyclopedia, hovers and activates Places/Army/Companies/People,
+and asserts that the production action handlers show exactly one matching page.
+`.ui.json` adds the tab, visible pages, panel size/translation and input method.
+The offscreen presentation camera cannot use Bevy's window-only hit tester; the tour
+injects semantic `Interaction` plus input edges after Focus, and does not overwrite
+navigation state to fabricate success. It is motion and action coverage, not a claim
+of native mouse automation or a performance benchmark. Membership/network behavior
+remains covered by the connected army-management scenario above.
+
+`FISTFORCE_CAPTURE_FRONTEND=menu|name` selects the real launcher/name-entry state;
+these front-end captures require no terrain chunks. All other gallery pages retain
+the normal terrain readiness requirement. Inspect each PNG and its JSON together.
+
+### Theme verification, 2026-09-06
+
+Inspected all 21 gallery views at 1600x900, plus Army, People, company controls,
+ledger, market, graphics and controls at 1280x720. PNGs and renderer sidecars are in
+`logs/captures/ui-theme/after/` and `small/`; five pre-change references are in `before/`.
+The continuous tour passed all 221 capture probes and its navigation/hover assertions.
+Inspected arrival, tab-change and reopened frames and encoded the sequence as
+`logs/captures/ui-theme/ui-theme-tour.mp4`. The tour exercises production actions with
+semantic input, not native pointer hit-testing.
+
+The connected run exposed a stale presentation image after the launcher entered
+Retina fullscreen. Fixed its size/DPI synchronization and added a regression test.
+The repeat in `connected-retina/` has 22 inspected-metadata captures at 2940x1846;
+the overview, transfer and Hold line PNGs now show the controls and scrollable rosters
+inside the frame. The passing 24-soldier/two-catapult summary records bulk remove/refill,
+transfer roundtrip and stance replication, eight damaged soldiers in each battalion,
+12.904 m minimum Defensive travel and 0.000 m maximum Hold line travel. The earlier
+`connected/` artifacts preserve the oversized mirror defect for comparison.
+
+Final verification: `cargo check --workspace --all-targets`, `cargo test --workspace`
+(880 passed, 11 existing ignored), `cargo build --workspace --profile playtest`,
+formatting and whitespace checks. No frame-rate conclusions were drawn while the
+machine was also rendering another project.

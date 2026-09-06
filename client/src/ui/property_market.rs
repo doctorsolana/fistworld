@@ -867,7 +867,7 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>, place: &str, tier: &str, h
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(LIMEWASH),
+            BackgroundColor(crate::ui::styles::SIGN_WOOD),
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|header| {
@@ -880,11 +880,8 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>, place: &str, tier: &str, h
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(format!("{} LAND & PROPERTY", place.to_uppercase())),
-                        TextFont {
-                            font_size: FontSize::Px(T_TITLE),
-                            ..default()
-                        },
-                        TextColor(INK),
+                        crate::ui::typography::text(T_TITLE),
+                        TextColor(crate::ui::styles::PARCHMENT),
                     ));
                     copy.spawn((
                         Text::new(format!(
@@ -892,11 +889,8 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>, place: &str, tier: &str, h
                             tier.to_uppercase(),
                             hall.to_uppercase()
                         )),
-                        TextFont {
-                            font_size: FontSize::Px(T_BODY),
-                            ..default()
-                        },
-                        TextColor(INK_MUTED),
+                        crate::ui::typography::text(T_BODY),
+                        TextColor(crate::ui::styles::BRASS),
                     ));
                 });
             header
@@ -912,16 +906,13 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>, place: &str, tier: &str, h
                         border_radius: BorderRadius::all(Val::Px(RADIUS)),
                         ..default()
                     },
-                    button_chrome(UiButtonVariant::Ghost),
+                    button_chrome(UiButtonVariant::Inverse),
                 ))
                 .with_child((
                     Text::new("X"),
                     UiButtonLabel,
-                    TextFont {
-                        font_size: FontSize::Px(T_BUTTON),
-                        ..default()
-                    },
-                    TextColor(INK),
+                    crate::ui::typography::text(T_BUTTON),
+                    TextColor(crate::ui::styles::PARCHMENT),
                     Pickable::IGNORE,
                 ));
         });
@@ -953,10 +944,7 @@ fn spawn_company_context(
             if !has_hero {
                 context.spawn((
                     Text::new("Create a Hero to act for a company."),
-                    TextFont {
-                        font_size: FontSize::Px(T_BODY),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_BODY),
                     TextColor(INK_MUTED),
                 ));
                 return;
@@ -972,10 +960,7 @@ fn spawn_company_context(
                     .with_children(|row| {
                         row.spawn((
                             Text::new("ACTING AS"),
-                            TextFont {
-                                font_size: FontSize::Px(T_LABEL),
-                                ..default()
-                            },
+                            crate::ui::typography::text(T_LABEL),
                             TextColor(INK_MUTED),
                         ));
                         if mastered.len() > 1 {
@@ -984,10 +969,7 @@ fn spawn_company_context(
                         row.spawn((
                             ActingCompanyText,
                             Text::new(acting_company_text(acting)),
-                            TextFont {
-                                font_size: FontSize::Px(T_BUTTON),
-                                ..default()
-                            },
+                            crate::ui::typography::text(T_BUTTON),
                             TextColor(INK),
                             Node {
                                 flex_grow: 1.0,
@@ -998,10 +980,7 @@ fn spawn_company_context(
                             context_button(row, CycleActingCompany(1), ">");
                             row.spawn((
                                 Text::new(format!("{} companies", mastered.len())),
-                                TextFont {
-                                    font_size: FontSize::Px(T_LABEL),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(T_LABEL),
                                 TextColor(INK_MUTED),
                             ));
                         }
@@ -1020,10 +999,7 @@ fn spawn_company_context(
                     .with_children(|row| {
                         row.spawn((
                             Text::new("ACTING AS  /  no company yet"),
-                            TextFont {
-                                font_size: FontSize::Px(T_BUTTON),
-                                ..default()
-                            },
+                            crate::ui::typography::text(T_BUTTON),
                             TextColor(INK_MUTED),
                             Node {
                                 flex_grow: 1.0,
@@ -1036,10 +1012,7 @@ fn spawn_company_context(
             if !feedback.message.is_empty() {
                 context.spawn((
                     Text::new(feedback.message.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(T_BODY),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_BODY),
                     TextColor(if feedback.success {
                         Color::srgb(0.20, 0.48, 0.27)
                     } else {
@@ -1073,10 +1046,7 @@ fn context_button(
         .with_child((
             Text::new(label),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(T_BUTTON),
-                ..default()
-            },
+            crate::ui::typography::text(T_BUTTON),
             TextColor(INK),
             Pickable::IGNORE,
         ));
@@ -1123,10 +1093,7 @@ fn spawn_tab_bar(
                     PropertyTabCount(target),
                     Text::new(label),
                     UiButtonLabel,
-                    TextFont {
-                        font_size: FontSize::Px(T_BUTTON),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_BUTTON),
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
@@ -1229,10 +1196,7 @@ fn spawn_permit_card(
             .with_children(|heading| {
                 heading.spawn((
                     Text::new(kind.label().to_uppercase()),
-                    TextFont {
-                        font_size: FontSize::Px(T_HEADING),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_HEADING),
                     TextColor(INK),
                 ));
                 let badge = if kind == SettlementBuildingKind::House {
@@ -1250,10 +1214,7 @@ fn spawn_permit_card(
             });
             card.spawn((
                 Text::new(permit_description(kind)),
-                TextFont {
-                    font_size: FontSize::Px(T_BODY),
-                    ..default()
-                },
+                crate::ui::typography::text(T_BODY),
                 TextColor(INK_MUTED),
             ));
             card.spawn(Node {
@@ -1379,10 +1340,7 @@ fn spawn_permit_action(
         PermitActionLabel(kind),
         Text::new(values.action_label.clone()),
         UiButtonLabel,
-        TextFont {
-            font_size: FontSize::Px(T_BUTTON),
-            ..default()
-        },
+        crate::ui::typography::text(T_BUTTON),
         TextColor(if values.enabled { INK } else { INK_MUTED }),
         Pickable::IGNORE,
     ));
@@ -1421,20 +1379,14 @@ fn spawn_property_card(
             .with_children(|heading| {
                 heading.spawn((
                     Text::new(listing.kind.label().to_uppercase()),
-                    TextFont {
-                        font_size: FontSize::Px(T_HEADING),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_HEADING),
                     TextColor(INK),
                 ));
                 spawn_badge(heading, listing.stage.label().to_uppercase().as_str());
             });
             card.spawn((
                 Text::new(format!("Listed: {}", listing.reason.label())),
-                TextFont {
-                    font_size: FontSize::Px(T_BODY),
-                    ..default()
-                },
+                crate::ui::typography::text(T_BODY),
                 TextColor(INK_MUTED),
             ));
             card.spawn(Node {
@@ -1487,10 +1439,7 @@ fn spawn_property_card(
                     ListingActionLabel(index),
                     Text::new(values.action_label.clone()),
                     UiButtonLabel,
-                    TextFont {
-                        font_size: FontSize::Px(T_BUTTON),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_BUTTON),
                     TextColor(if values.enabled { INK } else { INK_MUTED }),
                     Pickable::IGNORE,
                 ));
@@ -1512,10 +1461,7 @@ fn spawn_badge(parent: &mut ChildSpawnerCommands<'_>, label: &str) {
         ))
         .with_child((
             Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(T_LABEL),
-                ..default()
-            },
+            crate::ui::typography::text(T_LABEL),
             TextColor(INK),
         ));
 }
@@ -1541,19 +1487,13 @@ fn spawn_bound_fact(
         .with_children(|fact| {
             fact.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(T_LABEL),
-                    ..default()
-                },
+                crate::ui::typography::text(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             fact.spawn((
                 marker,
                 Text::new(value),
-                TextFont {
-                    font_size: FontSize::Px(T_VALUE),
-                    ..default()
-                },
+                crate::ui::typography::text(T_VALUE),
                 TextColor(INK),
             ));
         });
@@ -1562,10 +1502,7 @@ fn spawn_bound_fact(
 fn spawn_empty_state(parent: &mut ChildSpawnerCommands<'_>, message: &str) {
     parent.spawn((
         Text::new(message),
-        TextFont {
-            font_size: FontSize::Px(T_VALUE),
-            ..default()
-        },
+        crate::ui::typography::text(T_VALUE),
         TextColor(INK_MUTED),
         Node {
             width: Val::Percent(100.0),

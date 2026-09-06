@@ -112,6 +112,7 @@ pub(super) fn spawn_map_ui(
             // Map panel
             root.spawn((
                 MapPanel,
+                crate::ui::motion::UiReveal::panel(),
                 Node {
                     width: Val::Px(MAP_PANEL_SIZE + 24.0),
                     height: Val::Px(MAP_PANEL_SIZE + 64.0),
@@ -128,12 +129,10 @@ pub(super) fn spawn_map_ui(
                 Pickable::default(),
             ))
             .with_children(|panel| {
+                crate::ui::frame::corners(panel);
                 panel.spawn((
                     Text::new("WORLD MAP"),
-                    TextFont {
-                        font_size: FontSize::Px(18.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(18.0),
                     TextColor(INK_INVERSE),
                     Node {
                         margin: UiRect::bottom(Val::Px(8.0)),

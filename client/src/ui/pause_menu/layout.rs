@@ -27,6 +27,7 @@ pub(super) fn spawn_pause_menu(
             parent
                 .spawn((
                     MenuContentContainer,
+                    crate::ui::motion::UiReveal::panel(),
                     Node {
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
@@ -45,20 +46,24 @@ pub(super) fn spawn_pause_menu(
                                 flex_direction: FlexDirection::Column,
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
+                                padding: UiRect::axes(Val::Px(22.0), Val::Px(28.0)),
+                                border: UiRect::all(Val::Px(3.0)),
+                                border_radius: BorderRadius::all(Val::Px(RADIUS)),
                                 ..default()
                             },
+                            BackgroundColor(crate::ui::styles::SIGN_WOOD),
+                            BorderColor::all(crate::ui::styles::BRASS_DARK),
+                            crate::ui::styles::plate_shadow(),
                         ))
                         .with_children(|col| {
+                            crate::ui::frame::corners(col);
                             // Pause title
                             col.spawn((
                                 Text::new("PAUSED"),
-                                TextFont {
-                                    font_size: FontSize::Px(72.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::heading(44.0),
                                 TextColor(INK_INVERSE),
                                 Node {
-                                    margin: UiRect::bottom(Val::Px(40.0)),
+                                    margin: UiRect::bottom(Val::Px(24.0)),
                                     ..default()
                                 },
                             ));
@@ -81,13 +86,10 @@ pub(super) fn spawn_pause_menu(
                             // Hint
                             col.spawn((
                                 Text::new("Press ESC to resume"),
-                                TextFont {
-                                    font_size: FontSize::Px(14.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(14.0),
                                 TextColor(INK_INVERSE_MUTED),
                                 Node {
-                                    margin: UiRect::top(Val::Px(30.0)),
+                                    margin: UiRect::top(Val::Px(16.0)),
                                     ..default()
                                 },
                             ));

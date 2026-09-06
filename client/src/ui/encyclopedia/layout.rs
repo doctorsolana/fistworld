@@ -9,10 +9,8 @@ use bevy::prelude::*;
 
 use super::*;
 use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
-use crate::ui::modal::{spawn_modal, ModalLayout};
-use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE, RADIUS};
+use crate::ui::styles::{EMBER, INK, INK_MUTED, RADIUS};
 
-const PANEL_SIZE: Vec2 = Vec2::new(1240.0, 820.0);
 const LIST_WIDTH: f32 = 340.0;
 // Civic and workplace records are intentionally deeper than the compact map
 // card. The pane scrolls, so a real permit/market/staffing record should not be
@@ -20,168 +18,6 @@ const LIST_WIDTH: f32 = 340.0;
 const PLACE_DETAIL_LINES: usize = 48;
 /// Key-figure tiles across the top of a place page.
 const PLACE_DETAIL_TILES: usize = 6;
-
-pub(super) fn spawn_encyclopedia(
-    mut commands: Commands,
-    roots: Query<(), With<EncyclopediaRoot>>,
-    capture: Option<Res<crate::capture::CaptureConfig>>,
-) {
-    if !roots.is_empty() {
-        return;
-    }
-    // Capture runs photograph the world, not the UI — except when a capture
-    // explicitly opens this window to verify it.
-    let capture_opts_in = std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA")
-        .is_ok_and(|value| !value.trim().is_empty())
-        || std::env::var("FISTFORCE_CAPTURE_TRADE").is_ok_and(|value| value == "1");
-    if capture.is_some() && !capture_opts_in {
-        return;
-    }
-
-    let nodes = spawn_modal(
-        &mut commands,
-        EncyclopediaRoot,
-        EncyclopediaBackdrop,
-        EncyclopediaPanel,
-        ModalLayout {
-            panel_size: PANEL_SIZE,
-            panel_padding: 0.0,
-        },
-    );
-
-    // Own the panel's layout: the shared helper centres its children, and this
-    // window wants a flush header / body / footer column.
-    commands.entity(nodes.panel).insert((
-        Node {
-            width: Val::Vw(94.0),
-            max_width: Val::Px(PANEL_SIZE.x),
-            height: Val::Vh(90.0),
-            max_height: Val::Px(PANEL_SIZE.y),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Stretch,
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
-            overflow: Overflow::clip(),
-            ..default()
-        },
-        BackgroundColor(LIMEWASH),
-        BorderColor::from(PLATE_RULE),
-        // Lifts the window off the world instead of sitting flat on it.
-        BoxShadow::new(
-            Color::srgba(0.0, 0.0, 0.0, 0.55),
-            Val::Px(0.0),
-            Val::Px(10.0),
-            Val::Px(2.0),
-            Val::Px(28.0),
-        ),
-    ));
-
-    commands.entity(nodes.panel).with_children(|panel| {
-        spawn_header(panel);
-        spawn_body(panel);
-        spawn_footer(panel);
-    });
-}
-
-fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
-    panel
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                flex_shrink: 0.0,
-                padding: UiRect::axes(Val::Px(20.0), Val::Px(14.0)),
-                border: UiRect::bottom(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(LIMEWASH_HEADER),
-            BorderColor::from(PLATE_RULE_SOFT),
-        ))
-        .with_children(|header| {
-            header.spawn((
-                Text::new("ENCYCLOPEDIA"),
-                TextFont {
-                    font_size: FontSize::Px(22.0),
-                    ..default()
-                },
-                TextColor(EMBER),
-            ));
-            header
-                .spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(10.0),
-                    ..default()
-                })
-                .with_children(|controls| {
-                    controls
-                        .spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(6.0),
-                            ..default()
-                        })
-                        .with_children(|tabs| {
-                            for tab in EncyclopediaTab::ALL {
-                                spawn_tab(tabs, tab);
-                            }
-                        });
-                    controls
-                        .spawn((
-                            Button,
-                            EncyclopediaCloseButton,
-                            Node {
-                                width: Val::Px(38.0),
-                                height: Val::Px(38.0),
-                                flex_shrink: 0.0,
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                border: UiRect::all(Val::Px(1.0)),
-                                border_radius: BorderRadius::all(Val::Px(6.0)),
-                                ..default()
-                            },
-                            button_chrome(UiButtonVariant::Ghost),
-                        ))
-                        .with_child((
-                            Text::new("X"),
-                            UiButtonLabel,
-                            TextFont {
-                                font_size: FontSize::Px(16.0),
-                                ..default()
-                            },
-                            TextColor(INK_MUTED),
-                        ));
-                });
-        });
-}
-
-fn spawn_tab(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab) {
-    parent
-        .spawn((
-            Button,
-            TabButton(tab),
-            Node {
-                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                ..default()
-            },
-            button_chrome(UiButtonVariant::Tab),
-        ))
-        .with_children(|button| {
-            button.spawn((
-                Text::new(tab.label()),
-                UiButtonLabel,
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
-                TextColor(INK_MUTED),
-            ));
-        });
-}
 
 fn spawn_filter(parent: &mut ChildSpawnerCommands<'_>, filter: PeopleFilter) {
     parent
@@ -193,7 +29,7 @@ fn spawn_filter(parent: &mut ChildSpawnerCommands<'_>, filter: PeopleFilter) {
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(11.0)),
+                border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
                 ..default()
             },
             button_chrome(UiButtonVariant::Tab),
@@ -202,16 +38,13 @@ fn spawn_filter(parent: &mut ChildSpawnerCommands<'_>, filter: PeopleFilter) {
             chip.spawn((
                 Text::new(filter.label()),
                 UiButtonLabel,
-                TextFont {
-                    font_size: FontSize::Px(13.5),
-                    ..default()
-                },
+                crate::ui::typography::text(13.5),
                 TextColor(INK_MUTED),
             ));
         });
 }
 
-fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
+pub(super) fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
     panel
         .spawn(Node {
             flex_grow: 1.0,
@@ -231,6 +64,7 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
             // one BACK bar. See `EncyclopediaPageHost`.
             body.spawn((
                 EncyclopediaPageHost,
+                crate::ui::motion::UiReveal::page(),
                 Node {
                     display: Display::None,
                     flex_grow: 1.0,
@@ -273,10 +107,7 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
                         EncyclopediaPageBackLabel,
                         Text::new("BACK"),
                         UiButtonLabel,
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(14.0),
                         TextColor(INK),
                         Pickable::IGNORE,
                     ));
@@ -344,20 +175,14 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
             .with_child((
                 Text::new("WORLD HISTORY"),
                 UiButtonLabel,
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
+                crate::ui::typography::text(12.0),
                 TextColor(INK),
                 Pickable::IGNORE,
             ));
             row.spawn((
                 PlaceCountText,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                crate::ui::typography::text(14.0),
                 TextColor(INK_MUTED),
             ));
         });
@@ -430,10 +255,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                         },
                         children![(
                             Text::new("Select a place"),
-                            TextFont {
-                                font_size: FontSize::Px(15.0),
-                                ..default()
-                            },
+                            crate::ui::typography::text(15.0),
                             TextColor(INK_MUTED),
                         )],
                     ));
@@ -453,19 +275,13 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                             card.spawn((
                                 PlaceDetailName,
                                 Text::new(""),
-                                TextFont {
-                                    font_size: FontSize::Px(26.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(26.0),
                                 TextColor(INK),
                             ));
                             card.spawn((
                                 PlaceDetailSubtitle,
                                 Text::new(""),
-                                TextFont {
-                                    font_size: FontSize::Px(14.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(14.0),
                                 TextColor(EMBER),
                                 Node {
                                     margin: UiRect::bottom(Val::Px(18.0)),
@@ -506,10 +322,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                         PlaceBackToCompanyLabel,
                                         Text::new("BACK TO COMPANY"),
                                         UiButtonLabel,
-                                        TextFont {
-                                            font_size: FontSize::Px(12.0),
-                                            ..default()
-                                        },
+                                        crate::ui::typography::text(12.0),
                                         TextColor(INK),
                                         Pickable::IGNORE,
                                     ));
@@ -532,10 +345,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     .with_child((
                                         Text::new("BUSINESS HISTORY"),
                                         UiButtonLabel,
-                                        TextFont {
-                                            font_size: FontSize::Px(12.0),
-                                            ..default()
-                                        },
+                                        crate::ui::typography::text(12.0),
                                         TextColor(INK),
                                         Pickable::IGNORE,
                                     ));
@@ -558,10 +368,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     .with_child((
                                         Text::new("MARKET"),
                                         UiButtonLabel,
-                                        TextFont {
-                                            font_size: FontSize::Px(12.0),
-                                            ..default()
-                                        },
+                                        crate::ui::typography::text(12.0),
                                         TextColor(INK),
                                         Pickable::IGNORE,
                                     ));
@@ -583,10 +390,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     .with_child((
                                         Text::new("SETTLEMENT HISTORY"),
                                         UiButtonLabel,
-                                        TextFont {
-                                            font_size: FontSize::Px(12.0),
-                                            ..default()
-                                        },
+                                        crate::ui::typography::text(12.0),
                                         TextColor(INK),
                                         Pickable::IGNORE,
                                     ));
@@ -623,19 +427,13 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                             (
                                                 PlaceDetailTileLabel(index),
                                                 Text::new(""),
-                                                TextFont {
-                                                    font_size: FontSize::Px(11.5),
-                                                    ..default()
-                                                },
+                                                crate::ui::typography::text(11.5),
                                                 TextColor(INK_MUTED),
                                             ),
                                             (
                                                 PlaceDetailTileValue(index),
                                                 Text::new(""),
-                                                TextFont {
-                                                    font_size: FontSize::Px(20.0),
-                                                    ..default()
-                                                },
+                                                crate::ui::typography::text(20.0),
                                                 TextColor(INK),
                                             ),
                                         ],
@@ -662,10 +460,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                 children![(
                                     Text::new("SEND MY HERO TO BUILD THIS"),
                                     crate::ui::foundation::UiButtonLabel,
-                                    TextFont {
-                                        font_size: FontSize::Px(14.0),
-                                        ..default()
-                                    },
+                                    crate::ui::typography::text(14.0),
                                     TextColor(INK),
                                     Pickable::IGNORE,
                                 )],
@@ -686,10 +481,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                         (
                                             PlaceDetailLabel(index),
                                             Text::new(""),
-                                            TextFont {
-                                                font_size: FontSize::Px(13.5),
-                                                ..default()
-                                            },
+                                            crate::ui::typography::text(13.5),
                                             TextColor(INK_MUTED),
                                             // Never compress the label: a long
                                             // value would otherwise wrap "TO
@@ -705,10 +497,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                         (
                                             PlaceDetailValue(index),
                                             Text::new(""),
-                                            TextFont {
-                                                font_size: FontSize::Px(16.0),
-                                                ..default()
-                                            },
+                                            crate::ui::typography::text(16.0),
                                             TextColor(INK),
                                             // The value wraps instead, right-aligned
                                             // so the column edge stays straight.
@@ -772,10 +561,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
             row.spawn((
                 PeopleCountText,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                crate::ui::typography::text(14.0),
                 TextColor(INK_MUTED),
             ));
         });
@@ -849,10 +635,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                         .with_children(|empty| {
                             empty.spawn((
                                 Text::new("Select a name"),
-                                TextFont {
-                                    font_size: FontSize::Px(16.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(16.0),
                                 TextColor(INK_MUTED),
                             ));
                         });
@@ -877,19 +660,13 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
             card.spawn((
                 DetailName,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(30.0),
-                    ..default()
-                },
+                crate::ui::typography::text(30.0),
                 TextColor(INK),
             ));
             card.spawn((
                 DetailSubtitle,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
+                crate::ui::typography::text(15.0),
                 TextColor(EMBER),
                 Node {
                     margin: UiRect::bottom(Val::Px(18.0)),
@@ -919,10 +696,7 @@ fn spawn_detail_stat(card: &mut ChildSpawnerCommands<'_>, field: DetailField) {
     .with_children(|row| {
         row.spawn((
             Text::new(field.label()),
-            TextFont {
-                font_size: FontSize::Px(13.5),
-                ..default()
-            },
+            crate::ui::typography::text(13.5),
             TextColor(INK_MUTED),
         ));
         row.spawn((
@@ -943,10 +717,7 @@ fn spawn_detail_stat(card: &mut ChildSpawnerCommands<'_>, field: DetailField) {
             value_row.spawn((
                 DetailStat(field),
                 Text::new("-"),
-                TextFont {
-                    font_size: FontSize::Px(16.0),
-                    ..default()
-                },
+                crate::ui::typography::text(16.0),
                 TextColor(INK),
             ));
             if field == DetailField::Affiliation {
@@ -977,10 +748,7 @@ fn spawn_retinue_button(card: &mut ChildSpawnerCommands<'_>) {
             RetinueLabel,
             UiButtonLabel,
             Text::new("CONSCRIPT"),
-            TextFont {
-                font_size: FontSize::Px(14.0),
-                ..default()
-            },
+            crate::ui::typography::text(14.0),
             TextColor(INK),
         ));
     });
@@ -1010,56 +778,10 @@ fn spawn_banner_button(parent: &mut ChildSpawnerCommands<'_>, glyph: &str, step:
             btn.spawn((
                 Text::new(glyph),
                 UiButtonLabel,
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                crate::ui::typography::text(14.0),
                 TextColor(INK_MUTED),
             ));
         });
-}
-
-fn spawn_footer(panel: &mut ChildSpawnerCommands<'_>) {
-    panel
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                flex_shrink: 0.0,
-                padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
-                border: UiRect::top(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(LIMEWASH_HEADER),
-            BorderColor::from(PLATE_RULE_SOFT),
-        ))
-        .with_children(|footer| {
-            footer.spawn((
-                Text::new("N or ESC  close"),
-                TextFont {
-                    font_size: FontSize::Px(13.5),
-                    ..default()
-                },
-                TextColor(INK_MUTED),
-            ));
-        });
-}
-
-pub(super) fn despawn_encyclopedia(
-    mut commands: Commands,
-    roots: Query<Entity, With<EncyclopediaRoot>>,
-    mut people: ResMut<KnownPeople>,
-) {
-    let mut despawned = false;
-    for root in roots.iter() {
-        commands.entity(root).despawn();
-        despawned = true;
-    }
-    // Re-request the roster next time it opens so it never shows stale levels.
-    if despawned {
-        people.requested = false;
-    }
 }
 
 #[cfg(test)]
@@ -1067,6 +789,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ui::FocusPolicy;
 
+    use super::super::shell::spawn_encyclopedia;
     use super::*;
     use crate::ui::encyclopedia::companies::{CompanyListViewport, CompanyPortfolioContent};
     use crate::ui::encyclopedia::places::{PlaceBusinessHistoryAction, PlaceDetailLine};

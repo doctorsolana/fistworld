@@ -8,10 +8,7 @@ fn label(parent: &mut ChildSpawnerCommands<'_>, slot: BoundText, size: f32, mute
     parent.spawn((
         slot,
         Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
+        crate::ui::typography::text(size),
         TextColor(if muted { INK_MUTED } else { INK }),
         Pickable::IGNORE,
     ));
@@ -19,10 +16,7 @@ fn label(parent: &mut ChildSpawnerCommands<'_>, slot: BoundText, size: f32, mute
 fn copy(parent: &mut ChildSpawnerCommands<'_>, value: &str, size: f32, color: Color) {
     parent.spawn((
         Text::new(value),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
+        crate::ui::typography::text(size),
         TextColor(color),
         Pickable::IGNORE,
     ));
@@ -49,10 +43,7 @@ fn button(parent: &mut ChildSpawnerCommands<'_>, action: ArmyAction, variant: Ui
                 BoundText::Button(action),
                 UiButtonLabel,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(text_size::BODY),
-                    ..default()
-                },
+                crate::ui::typography::text(text_size::BODY),
                 TextColor(INK),
                 Pickable::IGNORE,
             ));
@@ -335,10 +326,7 @@ pub(super) fn spawn_entries(parent: &mut ChildSpawnerCommands<'_>, kind: ListKin
                         BoundText::BattalionName(entity),
                         UiButtonLabel,
                         Text::new(""),
-                        TextFont {
-                            font_size: FontSize::Px(text_size::VALUE),
-                            ..default()
-                        },
+                        crate::ui::typography::text(text_size::VALUE),
                         TextColor(INK),
                         Pickable::IGNORE,
                     ));

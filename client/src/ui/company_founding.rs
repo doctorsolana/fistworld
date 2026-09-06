@@ -188,20 +188,14 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 } else {
                     "ANOTHER COMPANY"
                 }),
-                TextFont {
-                    font_size: FontSize::Px(T_TITLE),
-                    ..default()
-                },
+                crate::ui::typography::text(T_TITLE),
                 TextColor(INK),
             ));
 
             // NAME
             form.spawn((
                 Text::new("NAME"),
-                TextFont {
-                    font_size: FontSize::Px(T_LABEL),
-                    ..default()
-                },
+                crate::ui::typography::text(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             form.spawn((
@@ -229,10 +223,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 FoundingNameText,
                 Text::new(name_text(draft)),
                 UiButtonLabel,
-                TextFont {
-                    font_size: FontSize::Px(T_VALUE),
-                    ..default()
-                },
+                crate::ui::typography::body(T_VALUE),
                 TextColor(INK),
                 Pickable::IGNORE,
             ));
@@ -240,10 +231,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
             // CAPITAL
             form.spawn((
                 Text::new("FOUNDING CAPITAL  /  becomes the company treasury"),
-                TextFont {
-                    font_size: FontSize::Px(T_LABEL),
-                    ..default()
-                },
+                crate::ui::typography::text(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             form.spawn(Node {
@@ -258,10 +246,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 row.spawn((
                     FoundingCapitalText,
                     Text::new(capital_text(draft)),
-                    TextFont {
-                        font_size: FontSize::Px(T_VALUE),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_VALUE),
                     TextColor(INK),
                     TextLayout::justify(Justify::Center),
                     Node {
@@ -273,10 +258,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 step_button(row, AdjustFoundingCapital(500), "+5");
                 row.spawn((
                     Text::new(format!("Wallet {} coin", format_money(view.wallet))),
-                    TextFont {
-                        font_size: FontSize::Px(T_BODY),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_BODY),
                     TextColor(INK_MUTED),
                     Node {
                         margin: UiRect::left(Val::Px(12.0)),
@@ -332,10 +314,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 button.with_child((
                     Text::new(label),
                     UiButtonLabel,
-                    TextFont {
-                        font_size: FontSize::Px(T_BUTTON),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_BUTTON),
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
@@ -344,10 +323,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
             if !view.feedback.message.is_empty() {
                 form.spawn((
                     Text::new(view.feedback.message.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(T_BODY),
-                        ..default()
-                    },
+                    crate::ui::typography::text(T_BODY),
                     TextColor(if view.feedback.success {
                         Color::srgb(0.20, 0.48, 0.27)
                     } else {
@@ -381,10 +357,7 @@ fn step_button(parent: &mut ChildSpawnerCommands<'_>, marker: impl Component, la
         .with_child((
             Text::new(label.to_string()),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(T_BUTTON),
-                ..default()
-            },
+            crate::ui::typography::text(T_BUTTON),
             TextColor(INK),
             Pickable::IGNORE,
         ));
@@ -758,10 +731,7 @@ fn ensure_founding_page(
         if hero.is_none() {
             panel.spawn((
                 Text::new("Create a Hero first; a company needs a founder."),
-                TextFont {
-                    font_size: FontSize::Px(T_VALUE),
-                    ..default()
-                },
+                crate::ui::typography::text(T_VALUE),
                 TextColor(INK_MUTED),
             ));
             return;

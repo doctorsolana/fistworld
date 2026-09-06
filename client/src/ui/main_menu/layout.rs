@@ -84,10 +84,7 @@ pub(super) fn spawn_main_menu(
                     // Label
                     ip_section.spawn((
                         Text::new("SERVER IP"),
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(14.0),
                         TextColor(INK_INVERSE_MUTED),
                         Node {
                             margin: UiRect::bottom(Val::Px(8.0)),
@@ -118,10 +115,7 @@ pub(super) fn spawn_main_menu(
                                 IpTextDisplay,
                                 UiButtonLabel,
                                 Text::new(format!("{}:{}", server_address.ip, server_address.port)),
-                                TextFont {
-                                    font_size: FontSize::Px(20.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::body(20.0),
                                 TextColor(INK_INVERSE),
                             ));
                         });
@@ -134,10 +128,7 @@ pub(super) fn spawn_main_menu(
                     // Helper text
                     ip_section.spawn((
                         Text::new("Click to edit • Ctrl+V to paste • Select preset below"),
-                        TextFont {
-                            font_size: FontSize::Px(12.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(12.0),
                         TextColor(INK_INVERSE_MUTED),
                         Node {
                             margin: UiRect::top(Val::Px(6.0)),
@@ -165,10 +156,7 @@ pub(super) fn spawn_main_menu(
             // Version info at bottom
             parent.spawn((
                 Text::new("v0.1.0 | Bevy + Lightyear"),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                crate::ui::typography::text(14.0),
                 TextColor(INK_INVERSE_MUTED),
                 Node {
                     position_type: PositionType::Absolute,
@@ -181,7 +169,7 @@ pub(super) fn spawn_main_menu(
 
 pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, action: MenuButton) {
     let variant = match action {
-        MenuButton::Connect => UiButtonVariant::Primary,
+        MenuButton::Connect => UiButtonVariant::Secondary,
         MenuButton::Exit => UiButtonVariant::Danger,
     };
     parent
@@ -195,7 +183,7 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
                 align_items: AlignItems::Center,
                 margin: UiRect::all(Val::Px(8.0)),
                 border: UiRect::all(Val::Px(2.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
                 ..default()
             },
             button_chrome(variant),
@@ -204,10 +192,7 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
             btn.spawn((
                 Text::new(text),
                 UiButtonLabel,
-                TextFont {
-                    font_size: FontSize::Px(22.0),
-                    ..default()
-                },
+                crate::ui::typography::text(22.0),
                 TextColor(INK_INVERSE),
             ));
         });

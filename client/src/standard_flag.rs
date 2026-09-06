@@ -17,8 +17,8 @@ use bevy::prelude::*;
 
 use shared::components::{PlayerPosition, StandardBearer};
 
-use crate::combat_mode::CRIMSON;
 use crate::states::GameState;
+use crate::ui::styles::CRIMSON;
 
 /// Pole top sits well above helmet height so the pennant is never lost in
 /// the crowd it marks.

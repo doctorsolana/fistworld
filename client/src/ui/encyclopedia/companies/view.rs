@@ -74,7 +74,9 @@ pub(in crate::ui::encyclopedia) fn spawn_companies_tab(body: &mut ChildSpawnerCo
                             Node {
                                 padding: UiRect::axes(Val::Px(11.0), Val::Px(5.0)),
                                 border: UiRect::all(Val::Px(1.0)),
-                                border_radius: BorderRadius::all(Val::Px(11.0)),
+                                border_radius: BorderRadius::all(Val::Px(
+                                    crate::ui::styles::RADIUS,
+                                )),
                                 ..default()
                             },
                             button_chrome(UiButtonVariant::Tab),
@@ -82,10 +84,7 @@ pub(in crate::ui::encyclopedia) fn spawn_companies_tab(body: &mut ChildSpawnerCo
                         .with_child((
                             Text::new(filter.label()),
                             UiButtonLabel,
-                            TextFont {
-                                font_size: FontSize::Px(13.0),
-                                ..default()
-                            },
+                            crate::ui::typography::text(13.0),
                             TextColor(INK_MUTED),
                             Pickable::IGNORE,
                         ));
@@ -101,10 +100,7 @@ pub(in crate::ui::encyclopedia) fn spawn_companies_tab(body: &mut ChildSpawnerCo
                 right.spawn((
                     CompanyCountText,
                     Text::new("0 companies"),
-                    TextFont {
-                        font_size: FontSize::Px(13.5),
-                        ..default()
-                    },
+                    crate::ui::typography::text(13.5),
                     TextColor(INK_MUTED),
                 ));
                 right
@@ -125,10 +121,7 @@ pub(in crate::ui::encyclopedia) fn spawn_companies_tab(body: &mut ChildSpawnerCo
                     .with_child((
                         Text::new("NEW COMPANY"),
                         UiButtonLabel,
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(14.0),
                         TextColor(INK),
                         Pickable::IGNORE,
                     ));

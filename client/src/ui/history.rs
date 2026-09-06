@@ -728,18 +728,12 @@ fn spawn_header(
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(title),
-                        TextFont {
-                            font_size: FontSize::Px(24.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(24.0),
                         TextColor(INK),
                     ));
                     copy.spawn((
                         Text::new(subtitle),
-                        TextFont {
-                            font_size: FontSize::Px(12.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(12.5),
                         TextColor(INK_MUTED),
                     ));
                 });
@@ -793,10 +787,7 @@ fn spawn_range_bar(
                         .with_child((
                             Text::new(range.label()),
                             UiButtonLabel,
-                            TextFont {
-                                font_size: FontSize::Px(12.5),
-                                ..default()
-                            },
+                            crate::ui::typography::text(12.5),
                             TextColor(INK),
                             Pickable::IGNORE,
                         ));
@@ -813,10 +804,7 @@ fn spawn_range_bar(
             );
             bar.spawn((
                 Text::new(span),
-                TextFont {
-                    font_size: FontSize::Px(12.5),
-                    ..default()
-                },
+                crate::ui::typography::text(12.5),
                 TextColor(INK_MUTED),
             ));
         });
@@ -825,10 +813,7 @@ fn spawn_range_bar(
 fn spawn_empty_history(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
     parent.spawn((
         Text::new(text.to_string()),
-        TextFont {
-            font_size: FontSize::Px(16.0),
-            ..default()
-        },
+        crate::ui::typography::text(16.0),
         TextColor(INK_MUTED),
         Node {
             margin: UiRect::top(Val::Px(80.0)),
@@ -1670,18 +1655,12 @@ fn spawn_market_history(
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(format!("{} MARKET", good.label().to_uppercase())),
-                        TextFont {
-                            font_size: FontSize::Px(22.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(22.0),
                         TextColor(INK),
                     ));
                     copy.spawn((
                         Text::new("Executed prices are distinct from public quotes"),
-                        TextFont {
-                            font_size: FontSize::Px(12.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(12.5),
                         TextColor(INK_MUTED),
                     ));
                 });
@@ -2412,18 +2391,12 @@ fn spawn_stat_strip(parent: &mut ChildSpawnerCommands<'_>, stats: &[(&str, Strin
                     .with_children(|stat| {
                         stat.spawn((
                             Text::new((*label).to_string()),
-                            TextFont {
-                                font_size: FontSize::Px(11.5),
-                                ..default()
-                            },
+                            crate::ui::typography::text(11.5),
                             TextColor(INK_MUTED),
                         ));
                         stat.spawn((
                             Text::new(value.clone()),
-                            TextFont {
-                                font_size: FontSize::Px(15.0),
-                                ..default()
-                            },
+                            crate::ui::typography::text(15.0),
                             TextColor(INK),
                         ));
                     });
@@ -2498,18 +2471,12 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
             .with_children(|heading| {
                 heading.spawn((
                     Text::new(title.to_string()),
-                    TextFont {
-                        font_size: FontSize::Px(13.5),
-                        ..default()
-                    },
+                    crate::ui::typography::text(13.5),
                     TextColor(INK),
                 ));
                 heading.spawn((
                     Text::new(format!("{max:.1} {unit}")),
-                    TextFont {
-                        font_size: FontSize::Px(11.5),
-                        ..default()
-                    },
+                    crate::ui::typography::text(11.5),
                     TextColor(INK_MUTED),
                 ));
             });
@@ -2538,10 +2505,7 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
                             ));
                             entry.spawn((
                                 Text::new(item.label),
-                                TextFont {
-                                    font_size: FontSize::Px(11.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(11.0),
                                 TextColor(INK_MUTED),
                             ));
                         });
@@ -2981,18 +2945,12 @@ fn spawn_table_title(parent: &mut ChildSpawnerCommands<'_>, title: &str, note: &
         .with_children(|row| {
             row.spawn((
                 Text::new(title.to_string()),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                crate::ui::typography::text(14.0),
                 TextColor(INK),
             ));
             row.spawn((
                 Text::new(note.to_string()),
-                TextFont {
-                    font_size: FontSize::Px(11.5),
-                    ..default()
-                },
+                crate::ui::typography::text(11.5),
                 TextColor(INK_MUTED),
             ));
         });
@@ -3031,10 +2989,7 @@ fn spawn_table_cells(parent: &mut ChildSpawnerCommands<'_>, cells: &[String], he
             for (index, cell) in cells.iter().enumerate() {
                 row.spawn((
                     Text::new(cell.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(if header { 8.0 } else { 10.0 }),
-                        ..default()
-                    },
+                    crate::ui::typography::text(if header { 8.0 } else { 10.0 }),
                     TextColor(if header { INK_MUTED } else { INK }),
                     TextLayout::justify(if index == 0 {
                         Justify::Left

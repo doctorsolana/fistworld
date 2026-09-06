@@ -42,7 +42,7 @@ pub(super) fn animate_menu_transition(
     // Smoothly interpolate toward target
     let diff = target - state.transition;
     if diff.abs() > 0.001 {
-        state.transition += diff * speed * time.delta_secs();
+        state.transition += diff * (1.0 - (-speed * time.delta_secs()).exp());
         state.transition = state.transition.clamp(0.0, 1.0);
     } else {
         state.transition = target;
@@ -53,28 +53,34 @@ pub(super) fn animate_menu_transition(
     let offset = -80.0 * state.transition;
 
     for mut node in container_query.iter_mut() {
-        node.margin.left = Val::Px(offset);
+        if node.margin.left != Val::Px(offset) {
+            node.margin.left = Val::Px(offset);
+        }
     }
 
     // Show/hide the graphics panel
     for mut node in graphics_panel_query.iter_mut() {
-        if state.graphics_open && state.transition > 0.01 {
-            node.display = Display::Flex;
-            node.min_width = Val::Px(260.0 * state.transition);
-        } else {
-            node.display = Display::None;
-            node.min_width = Val::Px(0.0);
-        }
+        sync_panel(&mut node, state.graphics_open, state.transition);
     }
 
     // Show/hide the controls panel
     for mut node in controls_panel_query.iter_mut() {
-        if state.controls_open && state.transition > 0.01 {
-            node.display = Display::Flex;
-            node.min_width = Val::Px(260.0 * state.transition);
-        } else {
-            node.display = Display::None;
-            node.min_width = Val::Px(0.0);
-        }
+        sync_panel(&mut node, state.controls_open, state.transition);
+    }
+}
+
+fn sync_panel(node: &mut Mut<Node>, open: bool, transition: f32) {
+    let visible = open && transition > 0.01;
+    let display = if visible {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    let width = Val::Px(if visible { 260.0 * transition } else { 0.0 });
+    if node.display != display {
+        node.display = display;
+    }
+    if node.min_width != width {
+        node.min_width = width;
     }
 }

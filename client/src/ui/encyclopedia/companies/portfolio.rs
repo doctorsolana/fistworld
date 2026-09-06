@@ -14,10 +14,7 @@ pub(super) fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: 
             Text::new(
                 "PORTFOLIO UNAVAILABLE  /  Spawn or select your Hero to identify personal holdings. The company directory remains usable.",
             ),
-            TextFont {
-                font_size: FontSize::Px(13.5),
-                ..default()
-            },
+            crate::ui::typography::text(13.5),
             TextColor(INK_MUTED),
         ));
         return;
@@ -95,26 +92,17 @@ pub(super) fn portfolio_card(
         .with_children(|card| {
             card.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
+                crate::ui::typography::text(12.0),
                 TextColor(INK_MUTED),
             ));
             card.spawn((
                 Text::new(value),
-                TextFont {
-                    font_size: FontSize::Px(17.0),
-                    ..default()
-                },
+                crate::ui::typography::text(17.0),
                 TextColor(INK),
             ));
             card.spawn((
                 Text::new(note),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
+                crate::ui::typography::text(11.0),
                 TextColor(INK_MUTED),
             ));
         });
@@ -173,18 +161,12 @@ pub(super) fn spawn_company_row(
             .with_children(|line| {
                 line.spawn((
                     Text::new(company.name.clone()),
-                    TextFont {
-                        font_size: FontSize::Px(15.5),
-                        ..default()
-                    },
+                    crate::ui::typography::text(15.5),
                     TextColor(INK),
                 ));
                 line.spawn((
                     Text::new(company.status()),
-                    TextFont {
-                        font_size: FontSize::Px(11.5),
-                        ..default()
-                    },
+                    crate::ui::typography::text(11.5),
                     TextColor(if company.status() == "AT RISK" {
                         EMBER
                     } else {
@@ -195,10 +177,7 @@ pub(super) fn spawn_company_row(
             row.spawn((
                 CompanyRowLedger(company.id),
                 Text::new(company_ledger_line(company)),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
+                crate::ui::typography::text(12.0),
                 TextColor(INK_MUTED),
             ));
             if shares > 0 {
@@ -213,10 +192,7 @@ pub(super) fn spawn_company_row(
                             ""
                         }
                     )),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(EMBER),
                 ));
             }

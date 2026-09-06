@@ -18,6 +18,10 @@ fn wire_common_systems(app: &mut App) {
     app.add_systems(Startup, game_systems::setup_rendering);
     if std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_some() {
         app.add_systems(PostStartup, crate::capture::setup_capture_presentation);
+        app.add_systems(
+            PostUpdate,
+            crate::capture::sync_capture_presentation.before(bevy::camera::CameraUpdateSystems),
+        );
     }
 
     // Keep the offscreen scene target sized to window * render_scale in every

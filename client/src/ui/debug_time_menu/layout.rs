@@ -162,18 +162,12 @@ fn spawn_debug_header(panel: &mut ChildSpawnerCommands<'_>, title: &str, subtitl
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(title),
-                        TextFont {
-                            font_size: FontSize::Px(type_scale::HEADING),
-                            ..default()
-                        },
+                        crate::ui::typography::text(type_scale::HEADING),
                         TextColor(EMBER),
                     ));
                     copy.spawn((
                         Text::new(subtitle),
-                        TextFont {
-                            font_size: FontSize::Px(type_scale::CAPTION),
-                            ..default()
-                        },
+                        crate::ui::typography::text(type_scale::CAPTION),
                         TextColor(INK_MUTED),
                     ));
                 });
@@ -196,10 +190,7 @@ fn spawn_debug_header(panel: &mut ChildSpawnerCommands<'_>, title: &str, subtitl
                 .with_child((
                     Text::new("X"),
                     UiButtonLabel,
-                    TextFont {
-                        font_size: FontSize::Px(type_scale::VALUE),
-                        ..default()
-                    },
+                    crate::ui::typography::text(type_scale::VALUE),
                     TextColor(INK_MUTED),
                 ));
         });
@@ -216,18 +207,12 @@ fn spawn_section_header(parent: &mut ChildSpawnerCommands<'_>, title: &str, deta
         .with_children(|copy| {
             copy.spawn((
                 Text::new(title),
-                TextFont {
-                    font_size: FontSize::Px(type_scale::VALUE),
-                    ..default()
-                },
+                crate::ui::typography::text(type_scale::VALUE),
                 TextColor(INK),
             ));
             copy.spawn((
                 Text::new(detail),
-                TextFont {
-                    font_size: FontSize::Px(type_scale::CAPTION),
-                    ..default()
-                },
+                crate::ui::typography::text(type_scale::CAPTION),
                 TextColor(INK_MUTED),
             ));
         });
@@ -246,10 +231,7 @@ fn debug_button_row() -> Node {
 fn spawn_debug_footer(panel: &mut ChildSpawnerCommands<'_>, hint: &str) {
     panel.spawn((
         Text::new(hint),
-        TextFont {
-            font_size: FontSize::Px(type_scale::CAPTION),
-            ..default()
-        },
+        crate::ui::typography::text(type_scale::CAPTION),
         TextColor(INK_MUTED),
         Node {
             width: Val::Percent(100.0),
@@ -279,10 +261,7 @@ fn spawn_god_access_panel(panel: &mut ChildSpawnerCommands<'_>) {
                 Text::new(
                     "Enter the hosted-server access key to unlock developer controls for this connection. The key is never saved locally.",
                 ),
-                TextFont {
-                    font_size: FontSize::Px(type_scale::BODY),
-                    ..default()
-                },
+                crate::ui::typography::text(type_scale::BODY),
                 TextColor(INK_MUTED),
             ));
             body
@@ -303,20 +282,14 @@ fn spawn_god_access_panel(panel: &mut ChildSpawnerCommands<'_>) {
                     field.spawn((
                         GodAccessInputDisplay,
                         Text::new("_"),
-                        TextFont {
-                            font_size: FontSize::Px(type_scale::HEADING),
-                            ..default()
-                        },
+                        crate::ui::typography::text(type_scale::HEADING),
                         TextColor(INK_INVERSE),
                     ));
                 });
             body.spawn((
                 GodAccessFeedbackText,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(type_scale::CAPTION),
-                    ..default()
-                },
+                crate::ui::typography::text(type_scale::CAPTION),
                 TextColor(INK_MUTED),
                 Node {
                     min_height: Val::Px(20.0),
@@ -342,10 +315,7 @@ fn spawn_god_access_panel(panel: &mut ChildSpawnerCommands<'_>) {
                     button.spawn((
                         Text::new("UNLOCK GOD MODE"),
                         UiButtonLabel,
-                        TextFont {
-                            font_size: FontSize::Px(type_scale::BODY),
-                            ..default()
-                        },
+                        crate::ui::typography::text(type_scale::BODY),
                         TextColor(INK),
                     ));
                 });
@@ -458,10 +428,7 @@ fn debug_button_node() -> Node {
 }
 
 fn debug_button_font() -> TextFont {
-    TextFont {
-        font_size: FontSize::Px(type_scale::BODY),
-        ..default()
-    }
+    crate::ui::typography::text(type_scale::BODY)
 }
 
 pub(super) fn despawn_debug_time_menu(

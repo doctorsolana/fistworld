@@ -840,10 +840,7 @@ pub(super) fn rebuild_place_list(
                 // up; an unmarked empty state survives under a populated list.
                 PlaceRow(shared::components::SettlementId::default()),
                 Text::new("No places known yet"),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
+                crate::ui::typography::text(15.0),
                 TextColor(INK_MUTED),
                 Node {
                     margin: UiRect::all(Val::Px(10.0)),
@@ -922,10 +919,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
     .with_children(|row| {
         row.spawn((
             Text::new(if expanded { "-" } else { "+" }),
-            TextFont {
-                font_size: FontSize::Px(14.0),
-                ..default()
-            },
+            crate::ui::typography::text(14.0),
             TextColor(INK_MUTED),
             Node {
                 width: Val::Px(12.0),
@@ -935,10 +929,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
         ));
         row.spawn((
             Text::new(record.name.clone()),
-            TextFont {
-                font_size: FontSize::Px(16.0),
-                ..default()
-            },
+            crate::ui::typography::text(16.0),
             TextColor(INK),
             Node {
                 flex_grow: 1.0,
@@ -951,10 +942,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
                 record.tier.label(),
                 record.buildings.len() + 1
             )),
-            TextFont {
-                font_size: FontSize::Px(12.5),
-                ..default()
-            },
+            crate::ui::typography::text(12.5),
             TextColor(INK_MUTED),
         ));
     });
@@ -986,10 +974,7 @@ fn spawn_place_building_row(
     .with_children(|row| {
         row.spawn((
             Text::new(label.to_string()),
-            TextFont {
-                font_size: FontSize::Px(14.0),
-                ..default()
-            },
+            crate::ui::typography::text(14.0),
             TextColor(INK),
             Node {
                 flex_grow: 1.0,
@@ -998,10 +983,7 @@ fn spawn_place_building_row(
         ));
         row.spawn((
             Text::new(summary.to_string()),
-            TextFont {
-                font_size: FontSize::Px(11.5),
-                ..default()
-            },
+            crate::ui::typography::text(11.5),
             TextColor(INK_MUTED),
         ));
     });
@@ -2580,7 +2562,7 @@ fn place_detail_model(
                                         let rule = policy.rule(good);
                                         rule.enabled.then(|| {
                                             format!(
-                                                "{}: {} day{} cover → {}-unit target (max {})",
+                                                "{}: {} day{} cover / {}-unit target (max {})",
                                                 good.label(),
                                                 rule.coverage_days,
                                                 if rule.coverage_days == 1 { "" } else { "s" },

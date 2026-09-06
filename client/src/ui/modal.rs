@@ -7,7 +7,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::input::InputState;
 use crate::ui::foundation::{layer, UiButtonStyleExempt, UiRefreshExempt};
-use crate::ui::styles::{plate_shadow, LIMEWASH_LIT, MODAL_BACKDROP, PLATE_RULE, RADIUS};
+use crate::ui::styles::{plate_shadow, BRASS_DARK, LIMEWASH_LIT, MODAL_BACKDROP, RADIUS};
 
 /// Common marker for all windows created by [`spawn_modal`].
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,13 +119,14 @@ where
         let panel = root
             .spawn((
                 panel_marker,
+                super::motion::UiReveal::panel(),
                 Node {
                     width: Val::Px(layout.panel_size.x),
                     height: Val::Px(layout.panel_size.y),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     flex_direction: FlexDirection::Column,
-                    border: UiRect::all(Val::Px(1.0)),
+                    border: UiRect::all(Val::Px(3.0)),
                     border_radius: BorderRadius::all(Val::Px(RADIUS)),
                     padding: UiRect::all(Val::Px(layout.panel_padding)),
                     overflow: Overflow::clip(),
@@ -140,9 +141,10 @@ where
                 FocusPolicy::Block,
                 Pickable::default(),
                 BackgroundColor(LIMEWASH_LIT),
-                BorderColor::all(PLATE_RULE),
+                BorderColor::all(BRASS_DARK),
                 plate_shadow(),
             ))
+            .with_children(super::frame::corners)
             .id();
         panel_entity = Some(panel);
     });
@@ -257,7 +259,7 @@ mod tests {
         );
         assert_eq!(
             world.get::<BorderColor>(nodes.panel).unwrap(),
-            &BorderColor::all(PLATE_RULE)
+            &BorderColor::all(BRASS_DARK)
         );
         assert_eq!(
             world.get::<GlobalZIndex>(nodes.root),

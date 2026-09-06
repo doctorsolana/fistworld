@@ -42,10 +42,7 @@ pub(super) fn spawn_branch_card(
                     branch.used_bulk,
                     branch.bulk_capacity,
                 )),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
+                crate::ui::typography::text(13.0),
                 TextColor(EMBER),
             ));
             for (good, held, policy) in &branch.resources {
@@ -71,10 +68,7 @@ pub(super) fn spawn_branch_card(
                                 held,
                                 policy.retain_units,
                             )),
-                            TextFont {
-                                font_size: FontSize::Px(12.5),
-                                ..default()
-                            },
+                            crate::ui::typography::text(12.5),
                             TextColor(INK),
                         ));
                         line.spawn((
@@ -83,10 +77,7 @@ pub(super) fn spawn_branch_card(
                             } else {
                                 "HOLD ALL"
                             }),
-                            TextFont {
-                                font_size: FontSize::Px(11.5),
-                                ..default()
-                            },
+                            crate::ui::typography::text(11.5),
                             TextColor(INK_MUTED),
                         ));
                     });
@@ -197,10 +188,7 @@ pub(super) fn branch_policy_button(
         .with_child((
             Text::new(label),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(11.5),
-                ..default()
-            },
+            crate::ui::typography::text(11.5),
             TextColor(INK),
             Pickable::IGNORE,
         ));
@@ -262,19 +250,13 @@ pub(super) fn spawn_site_card(
                         site.id.0,
                         site.settlement.to_uppercase()
                     )),
-                    TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(14.0),
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
                 line.spawn((
                     Text::new(site.state.label().to_uppercase()),
-                    TextFont {
-                        font_size: FontSize::Px(11.5),
-                        ..default()
-                    },
+                    crate::ui::typography::text(11.5),
                     TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
@@ -289,10 +271,7 @@ pub(super) fn spawn_site_card(
                     site.positions,
                     signed_money(site.current_day.profit()),
                 )),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
+                crate::ui::typography::text(12.0),
                 TextColor(INK_MUTED),
                 Pickable::IGNORE,
             ));
@@ -305,10 +284,7 @@ pub(super) fn spawn_site_card(
                         format_money(price),
                         format_money(site.wage_arrears.saturating_add(site.tax_arrears)),
                     )),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
@@ -327,10 +303,7 @@ pub(super) fn spawn_site_card(
                         site.input_stock,
                         site.input_target,
                     )),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));

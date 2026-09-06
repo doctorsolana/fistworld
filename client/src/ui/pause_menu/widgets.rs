@@ -4,8 +4,9 @@ use super::*;
 
 pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, action: PauseButton) {
     let variant = match action {
+        PauseButton::Resume => UiButtonVariant::Secondary,
         PauseButton::Disconnect | PauseButton::Exit => UiButtonVariant::Danger,
-        _ => UiButtonVariant::Secondary,
+        _ => UiButtonVariant::Inverse,
     };
     parent
         .spawn((
@@ -27,10 +28,7 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
             btn.spawn((
                 Text::new(text),
                 UiButtonLabel,
-                TextFont {
-                    font_size: FontSize::Px(22.0),
-                    ..default()
-                },
+                crate::ui::typography::text(22.0),
                 TextColor(INK),
             ));
         });
@@ -44,6 +42,7 @@ pub(super) fn spawn_graphics_panel(
     parent
         .spawn((
             GraphicsSettingsPanel,
+            crate::ui::motion::UiReveal::page(),
             Node {
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::FlexStart,
@@ -55,19 +54,18 @@ pub(super) fn spawn_graphics_panel(
                 scrollbar_width: 8.0,
                 // Start hidden so it doesn't affect layout
                 display: Display::None,
-                border_radius: BorderRadius::all(Val::Px(12.0)),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
             BackgroundColor(FRONT_PANEL),
+            BorderColor::all(crate::ui::styles::BRASS_DARK),
         ))
         .with_children(|panel| {
             // Panel title
             panel.spawn((
                 Text::new("GRAPHICS"),
-                TextFont {
-                    font_size: FontSize::Px(26.0),
-                    ..default()
-                },
+                crate::ui::typography::text(26.0),
                 TextColor(INK_INVERSE_HEADING),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
@@ -78,10 +76,7 @@ pub(super) fn spawn_graphics_panel(
             // Help text
             panel.spawn((
                 Text::new("Toggle/adjust to fix flickering or brightness"),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
+                crate::ui::typography::text(12.0),
                 TextColor(INK_INVERSE_MUTED),
                 Node {
                     margin: UiRect::bottom(Val::Px(20.0)),
@@ -144,10 +139,7 @@ pub(super) fn spawn_graphics_panel(
                 } else {
                     "Borderless keeps the desktop video mode. Exclusive changes the monitor resolution."
                 }),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
+                crate::ui::typography::text(11.0),
                 TextColor(INK_INVERSE_MUTED),
                 Node {
                     max_width: Val::Px(430.0),
@@ -173,7 +165,7 @@ pub(super) fn spawn_graphics_panel(
                         padding: UiRect::all(Val::Px(10.0)),
                         margin: UiRect::bottom(Val::Px(12.0)),
                         border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.18, 0.13, 0.06, 0.96)),
@@ -183,10 +175,7 @@ pub(super) fn spawn_graphics_panel(
                     confirmation.spawn((
                         DisplayConfirmationText,
                         Text::new("Keep this display setting?"),
-                        TextFont {
-                            font_size: FontSize::Px(13.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(13.0),
                         TextColor(INK_INVERSE),
                     ));
                     confirmation
@@ -227,10 +216,7 @@ pub(super) fn spawn_graphics_panel(
                                         button.spawn((
                                             Text::new(label),
                                             UiButtonLabel,
-                                            TextFont {
-                                                font_size: FontSize::Px(12.0),
-                                                ..default()
-                                            },
+                                            crate::ui::typography::text(12.0),
                                             TextColor(INK_INVERSE),
                                         ));
                                     });
@@ -289,10 +275,7 @@ pub(super) fn spawn_toggle(
             // Label
             row.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
+                crate::ui::typography::text(18.0),
                 TextColor(INK_INVERSE),
                 Node {
                     margin: UiRect::right(Val::Px(40.0)),
@@ -311,7 +294,7 @@ pub(super) fn spawn_toggle(
                     height: Val::Px(30.0),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
                     ..default()
                 },
                 selected_button_chrome(UiButtonVariant::Secondary, enabled),
@@ -321,10 +304,7 @@ pub(super) fn spawn_toggle(
                     ToggleText(toggle),
                     UiButtonLabel,
                     Text::new(text),
-                    TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(14.0),
                     TextColor(INK_INVERSE),
                 ));
             });
@@ -350,10 +330,7 @@ pub(super) fn spawn_slider(
             // Label
             row.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
+                crate::ui::typography::text(18.0),
                 TextColor(INK_INVERSE),
                 Node {
                     margin: UiRect::right(Val::Px(20.0)),
@@ -375,10 +352,7 @@ pub(super) fn spawn_slider(
                 controls.spawn((
                     SliderValueText(control),
                     Text::new(value),
-                    TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(14.0),
                     TextLayout::no_wrap(),
                     TextColor(INK_INVERSE),
                     Node {
@@ -400,6 +374,7 @@ pub(super) fn spawn_controls_panel(
     parent
         .spawn((
             ControlsSettingsPanel,
+            crate::ui::motion::UiReveal::page(),
             Node {
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
@@ -408,19 +383,18 @@ pub(super) fn spawn_controls_panel(
                 min_width: Val::Px(0.0),
                 // Start hidden so it doesn't affect layout
                 display: Display::None,
-                border_radius: BorderRadius::all(Val::Px(12.0)),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
             BackgroundColor(FRONT_PANEL),
+            BorderColor::all(crate::ui::styles::BRASS_DARK),
         ))
         .with_children(|panel| {
             // Panel title
             panel.spawn((
                 Text::new("CONTROLS"),
-                TextFont {
-                    font_size: FontSize::Px(26.0),
-                    ..default()
-                },
+                crate::ui::typography::text(26.0),
                 TextColor(INK_INVERSE_HEADING),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
@@ -431,10 +405,7 @@ pub(super) fn spawn_controls_panel(
             // Help text
             panel.spawn((
                 Text::new("Adjust input settings"),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
+                crate::ui::typography::text(12.0),
                 TextColor(INK_INVERSE_MUTED),
                 Node {
                     margin: UiRect::bottom(Val::Px(20.0)),
@@ -471,10 +442,7 @@ pub(super) fn spawn_input_slider(
             // Label
             row.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
+                crate::ui::typography::text(18.0),
                 TextColor(INK_INVERSE),
                 Node {
                     margin: UiRect::right(Val::Px(20.0)),
@@ -496,10 +464,7 @@ pub(super) fn spawn_input_slider(
                 controls.spawn((
                     InputSliderValueText(control),
                     Text::new(value),
-                    TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(14.0),
                     TextColor(INK_INVERSE),
                     Node {
                         min_width: Val::Px(70.0),
@@ -532,10 +497,7 @@ fn spawn_step_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker
         .with_child((
             Text::new(glyph),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(18.0),
-                ..default()
-            },
+            crate::ui::typography::text(18.0),
             TextColor(INK_INVERSE),
         ));
 }

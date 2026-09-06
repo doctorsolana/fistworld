@@ -28,10 +28,7 @@ pub(super) fn detail_button<M: Component>(
         .with_child((
             Text::new(label),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(11.5),
-                ..default()
-            },
+            crate::ui::typography::text(11.5),
             TextColor(INK),
             Pickable::IGNORE,
         ));
@@ -57,18 +54,12 @@ pub(super) fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, va
         .with_children(|card| {
             card.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(11.5),
-                    ..default()
-                },
+                crate::ui::typography::text(11.5),
                 TextColor(INK_MUTED),
             ));
             card.spawn((
                 Text::new(value),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
+                crate::ui::typography::text(15.0),
                 TextColor(INK),
             ));
         });
@@ -87,18 +78,12 @@ pub(super) fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: 
         .with_children(|row| {
             row.spawn((
                 Text::new(title),
-                TextFont {
-                    font_size: FontSize::Px(13.5),
-                    ..default()
-                },
+                crate::ui::typography::text(13.5),
                 TextColor(EMBER),
             ));
             row.spawn((
                 Text::new(note),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
+                crate::ui::typography::text(11.0),
                 TextColor(INK_MUTED),
             ));
         });
@@ -120,10 +105,7 @@ pub(super) fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, valu
         .with_children(|row| {
             row.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(11.5),
-                    ..default()
-                },
+                crate::ui::typography::text(11.5),
                 TextColor(INK_MUTED),
                 Node {
                     width: Val::Px(112.0),
@@ -133,10 +115,7 @@ pub(super) fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, valu
             ));
             row.spawn((
                 Text::new(value),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
+                crate::ui::typography::text(13.0),
                 TextColor(INK),
                 TextLayout::justify(Justify::Right),
                 Node {
@@ -151,10 +130,7 @@ pub(super) fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, valu
 pub(super) fn spawn_note(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
     parent.spawn((
         Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(13.0),
-            ..default()
-        },
+        crate::ui::typography::text(13.0),
         TextColor(INK_MUTED),
     ));
 }
@@ -162,10 +138,7 @@ pub(super) fn spawn_note(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
 pub(super) fn spawn_empty(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
     parent.spawn((
         Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(14.0),
-            ..default()
-        },
+        crate::ui::typography::text(14.0),
         TextColor(INK_MUTED),
         TextLayout::justify(Justify::Center),
         Node {

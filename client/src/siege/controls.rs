@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
-    combat_mode::{CombatMode, PARCHMENT, SIGN_WOOD},
+    combat_mode::CombatMode,
     selection::Selection,
     ui::foundation::{
         button_chrome, surface_block, type_scale, UiButtonLabel, UiButtonStyle, UiButtonVariant,
     },
+    ui::styles::{PARCHMENT, SIGN_WOOD},
 };
 use lightyear::prelude::{Connected, MessageSender};
 use shared::protocol::{ReliableChannel, UnitCommand, UnitOrder, UnitSelection};

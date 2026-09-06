@@ -101,7 +101,7 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Buildings, worksites, farm ground and flocks | `client/src/settlement/buildings.rs`, `construction.rs`, `grounds.rs`, `livestock.rs` |
 | Doors, windmills and local lighting | `client/src/settlement/animation.rs`, `lighting.rs` |
 | Visible bakery stock | `client/src/settlement/stock.rs` |
-| Shared UI behavior and styling | `client/src/ui/foundation.rs`, `modal.rs`, `scroll.rs`, `styles.rs` |
+| Shared UI behavior and styling | `client/src/ui/foundation.rs`, `modal.rs`, `scroll.rs`, `styles.rs`, `typography.rs`, `motion.rs`, `button_motion.rs`, `frame.rs` |
 | Capture readiness, orchestration and fixture ownership | `client/src/capture.rs` and `capture/` |
 | Company directory and management presentation | `client/src/ui/encyclopedia/companies.rs` and `companies/` |
 

@@ -1,27 +1,11 @@
-//! Shared UI styles — limewash and iron-gall ink.
+//! Shared game chrome: wood frames, brass binding, parchment pages and dark ink.
 //!
-//! The look is a medieval colony ledger: pale limewashed surfaces, warm dark
-//! ink, and exactly one saturated colour. Three rules hold the whole thing
-//! together, and breaking any of them is what makes a HUD read as a programmer's
-//! debug overlay:
-//!
-//! 1. **No HUD text ever sits directly on the world.** Text lives on a plate.
-//!    The world behind it is grass, snow, sand, water and bright sky, and no
-//!    single text colour is legible on all of them. Put it on a plate and the
-//!    contrast becomes a constant you control.
-//! 2. **The plate's SILHOUETTE is the hard problem, not its text.** Ink on
-//!    limewash is ~11:1 and cannot break. What breaks is seeing that a plate is
-//!    there at all: at RTS tilt the top third of the frame is the hazed horizon,
-//!    which `DistanceFog` paints at roughly srgb(0.88, 0.92, 0.96) — BRIGHTER
-//!    than the plates. That is why every plate carries [`plate_shadow`] (a hard
-//!    contact layer plus a wide ambient one) and a darker-than-comfortable
-//!    hairline. Those are load-bearing, not decoration.
-//! 3. **One saturated colour, reserved for selection.** [`EMBER`] means "this is
-//!    the thing you are commanding" and appears nowhere else in play-mode
-//!    chrome. God and debug affordances use the neutral [`SLATE`] inversion, so
-//!    dev tools can never be mistaken for game state.
-//!
-//! Radii stay at 2-3px. Paper and stone do not have 9px corners.
+//! Text lives on opaque plates with a clear edge and shadow against bright terrain.
+//! Dark wood titles and inverse controls connect civilian ledgers to the war UI.
+//! Ember marks selection, crimson marks combat, red marks destructive actions;
+//! debug tools keep their neutral slate. Ornament never carries information.
+//! Use typography, frame and motion alongside this palette rather than inventing
+//! per-screen fonts, hover handlers or animation math. Corners stay at 2–3 px.
 
 use bevy::prelude::*;
 
@@ -33,49 +17,57 @@ use bevy::prelude::*;
 /// same warm family as everything else.
 pub const MENU_BACKGROUND: Color = Color::srgb(0.086, 0.078, 0.070);
 /// Opaque dark panel used inside front-of-house screens.
-pub const FRONT_PANEL: Color = Color::srgba(0.06, 0.055, 0.05, 0.95);
+pub const FRONT_PANEL: Color = Color::srgba(0.14, 0.09, 0.06, 0.98);
 
-/// Every in-game plate. Aged limewash — deliberately DARKER than paper-white so
+/// Every in-game plate. Aged parchment — deliberately DARKER than paper-white so
 /// it separates from the hazed horizon behind it.
-pub const LIMEWASH: Color = Color::srgba(0.836, 0.812, 0.769, 0.96);
+pub const LIMEWASH: Color = Color::srgba(0.890, 0.832, 0.706, 0.99);
 
 /// The lit face of a plate: the selected-unit plate, which should feel like a
 /// fresher surface laid on top.
-pub const LIMEWASH_LIT: Color = Color::srgba(0.886, 0.867, 0.827, 0.97);
+pub const LIMEWASH_LIT: Color = Color::srgba(0.965, 0.923, 0.824, 0.99);
 
 /// A recessed well inside a plate — the strip a row of buttons sits in.
-pub const LIMEWASH_WELL: Color = Color::srgba(0.741, 0.718, 0.678, 0.96);
+pub const LIMEWASH_WELL: Color = Color::srgba(0.800, 0.720, 0.571, 0.98);
 /// Denser header strip and lighter detail leaf used by ledger windows.
-pub const LIMEWASH_HEADER: Color = Color::srgba(0.780, 0.755, 0.710, 1.0);
-pub const LIMEWASH_DETAIL: Color = Color::srgba(0.898, 0.878, 0.843, 0.92);
+pub const LIMEWASH_HEADER: Color = Color::srgba(0.839, 0.763, 0.609, 1.0);
+pub const LIMEWASH_DETAIL: Color = Color::srgba(0.965, 0.923, 0.824, 0.98);
+
+/// Carved wood, brass binding and parchment shared with the war UI.
+pub const SIGN_WOOD: Color = Color::srgba(0.14, 0.09, 0.06, 0.98);
+pub const WOOD_LIT: Color = Color::srgb(0.25, 0.16, 0.095);
+pub const PARCHMENT: Color = Color::srgb(0.97, 0.94, 0.86);
+pub const BRASS: Color = Color::srgb(0.70, 0.53, 0.29);
+pub const BRASS_DARK: Color = Color::srgb(0.37, 0.26, 0.13);
+pub const CRIMSON: Color = Color::srgb(0.62, 0.16, 0.12);
 
 /// Button rest fill. A shade lighter than the plate, as if raised from it.
-pub const BUTTON_NORMAL: Color = Color::srgba(0.871, 0.851, 0.812, 0.96);
+pub const BUTTON_NORMAL: Color = Color::srgba(0.930, 0.864, 0.725, 1.0);
 /// Hover LIGHTENS: a raised surface catching more light, not ink soaking in.
-pub const BUTTON_HOVERED: Color = Color::srgba(0.941, 0.929, 0.902, 0.98);
+pub const BUTTON_HOVERED: Color = Color::srgba(0.994, 0.948, 0.833, 1.0);
 /// Pressed pushes into shade.
-pub const BUTTON_PRESSED: Color = Color::srgba(0.729, 0.706, 0.671, 0.98);
+pub const BUTTON_PRESSED: Color = Color::srgba(0.777, 0.677, 0.505, 1.0);
 /// Disabled controls remain visible but clearly unavailable.
-pub const BUTTON_DISABLED: Color = Color::srgba(0.741, 0.718, 0.678, 0.52);
+pub const BUTTON_DISABLED: Color = Color::srgba(0.800, 0.720, 0.571, 1.0);
 
 /// Flat list-row hover and selection fills. Rows are controls, but should not
 /// visually inflate into raised buttons inside dense directories.
-pub const ROW_HOVERED: Color = Color::srgba(0.741, 0.718, 0.678, 0.85);
+pub const ROW_HOVERED: Color = Color::srgba(0.777, 0.655, 0.453, 0.35);
 pub const ROW_SELECTED: Color = Color::srgba(0.560, 0.325, 0.129, 0.20);
 
 /// The carved outer edge on every plate. Dark and near-opaque on purpose: this
 /// is half of how a plate keeps a silhouette against bright terrain.
-pub const PLATE_RULE: Color = Color::srgba(0.361, 0.345, 318.0 / 1000.0, 0.85);
+pub const PLATE_RULE: Color = Color::srgba(0.37, 0.26, 0.13, 0.85);
 /// Hairline dividers INSIDE a plate, replacing nested bordered boxes.
-pub const PLATE_RULE_SOFT: Color = Color::srgba(0.361, 0.345, 318.0 / 1000.0, 0.32);
+pub const PLATE_RULE_SOFT: Color = Color::srgba(0.37, 0.26, 0.13, 0.27);
 // ---------------------------------------------------------------------------
 // Ink
 // ---------------------------------------------------------------------------
 
 /// Iron-gall ink. All primary text.
-pub const INK: Color = Color::srgb(0.129, 0.118, 0.102);
-/// Small-caps labels, hints, keybind lines. Tuned to stay readable at 10px.
-pub const INK_MUTED: Color = Color::srgb(0.361, 0.345, 318.0 / 1000.0);
+pub const INK: Color = Color::srgb(0.18, 0.125, 0.075);
+/// Small-caps labels, hints, keybind lines. Use at 12 px or larger.
+pub const INK_MUTED: Color = Color::srgb(0.38, 0.29, 0.19);
 /// Text ON a saturated or slate fill, where ink would disappear.
 pub const INK_INVERSE: Color = Color::srgb(0.965, 0.957, 0.933);
 /// Secondary copy on dark front-of-house surfaces.

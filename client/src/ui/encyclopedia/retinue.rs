@@ -125,19 +125,13 @@ pub(super) fn spawn_retinue_tab(body: &mut ChildSpawnerCommands<'_>) {
         .with_children(|row| {
             row.spawn((
                 Text::new("YOUR CLAN"),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                crate::ui::typography::text(14.0),
                 TextColor(EMBER),
             ));
             row.spawn((
                 RetinueCountText,
                 Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
+                crate::ui::typography::text(14.0),
                 TextColor(INK_MUTED),
             ));
         });
@@ -175,7 +169,7 @@ fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord)
             column_gap: Val::Px(12.0),
             padding: UiRect::axes(Val::Px(14.0), Val::Px(10.0)),
             border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(6.0)),
+            border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
             ..default()
         },
         BackgroundColor(LIMEWASH),
@@ -209,19 +203,13 @@ fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord)
                 } else {
                     record.name.clone()
                 }),
-                TextFont {
-                    font_size: FontSize::Px(16.0),
-                    ..default()
-                },
+                crate::ui::typography::text(16.0),
                 TextColor(INK),
             ));
             copy.spawn((
                 RetinueStatusText(record.id),
                 Text::new(retinue_status_line(record)),
-                TextFont {
-                    font_size: FontSize::Px(12.5),
-                    ..default()
-                },
+                crate::ui::typography::text(12.5),
                 TextColor(INK_MUTED),
             ));
         });
@@ -246,10 +234,7 @@ fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord)
         .with_child((
             Text::new("LOCATE"),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(12.5),
-                ..default()
-            },
+            crate::ui::typography::text(12.5),
             TextColor(INK),
             Pickable::IGNORE,
         ));
@@ -302,10 +287,7 @@ pub(super) fn rebuild_retinue_list(
             list.spawn((
                 RetinueRow,
                 Text::new("Your clan is just you for now. Sworn companions will gather here."),
-                TextFont {
-                    font_size: FontSize::Px(13.5),
-                    ..default()
-                },
+                crate::ui::typography::text(13.5),
                 TextColor(INK_MUTED),
                 Node {
                     padding: UiRect::all(Val::Px(10.0)),

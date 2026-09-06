@@ -471,10 +471,7 @@ fn spawn_small_button(
         .with_child((
             Text::new(label),
             UiButtonLabel,
-            TextFont {
-                font_size: FontSize::Px(9.0),
-                ..default()
-            },
+            crate::ui::typography::text(9.0),
             TextColor(INK),
         ));
 }
@@ -578,18 +575,12 @@ fn ensure_permit_tray(
             .with_children(|panel| {
                 panel.spawn((
                     Text::new("OWNED PERMITS"),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK),
                 ));
                 panel.spawn((
                     Text::new("Unused rights remain here when placement is closed."),
-                    TextFont {
-                        font_size: FontSize::Px(9.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(9.0),
                     TextColor(INK_MUTED),
                 ));
                 for permit in permits {
@@ -627,10 +618,7 @@ fn ensure_permit_tray(
                                     permit.kind.label(),
                                     place.to_uppercase()
                                 )),
-                                TextFont {
-                                    font_size: FontSize::Px(10.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(10.0),
                                 TextColor(INK),
                             ));
                             card.spawn((
@@ -640,10 +628,7 @@ fn ensure_permit_tray(
                                     format_money(permit.fee_escrow),
                                     permit.kind.construction_wood_required()
                                 )),
-                                TextFont {
-                                    font_size: FontSize::Px(9.0),
-                                    ..default()
-                                },
+                                crate::ui::typography::text(9.0),
                                 TextColor(INK_MUTED),
                             ));
                             card.spawn(Node {
@@ -1254,10 +1239,7 @@ fn ensure_placement_status(
                 panel.spawn((
                     PlacementStatusHeading,
                     Text::new(""),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
@@ -1278,10 +1260,7 @@ fn ensure_placement_status(
                         row.spawn((
                             PlacementQualityText,
                             Text::new(""),
-                            TextFont {
-                                font_size: FontSize::Px(9.0),
-                                ..default()
-                            },
+                            crate::ui::typography::text(9.0),
                             TextColor(INK),
                             Node {
                                 width: Val::Px(138.0),
@@ -1316,10 +1295,7 @@ fn ensure_placement_status(
                 panel.spawn((
                     PlacementStatusBody,
                     Text::new(""),
-                    TextFont {
-                        font_size: FontSize::Px(10.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(10.0),
                     TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
@@ -1441,10 +1417,7 @@ fn ensure_permit_notice(
         ))
         .with_child((
             Text::new(notice.message.clone()),
-            TextFont {
-                font_size: FontSize::Px(13.5),
-                ..default()
-            },
+            crate::ui::typography::text(13.5),
             TextColor(INK_INVERSE),
             Pickable::IGNORE,
         ));

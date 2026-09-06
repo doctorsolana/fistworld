@@ -41,21 +41,15 @@ pub(super) fn spawn_dropdown(parent: &mut ChildSpawnerCommands<'_>, presets: &Se
                         DropdownText,
                         UiButtonLabel,
                         Text::new(selected_name),
-                        TextFont {
-                            font_size: FontSize::Px(16.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(16.0),
                         TextColor(INK_INVERSE),
                     ));
 
                     // Arrow indicator
                     toggle.spawn((
-                        Text::new("▼"),
+                        Text::new("v"),
                         UiButtonLabel,
-                        TextFont {
-                            font_size: FontSize::Px(12.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(12.0),
                         TextColor(INK_INVERSE_MUTED),
                     ));
                 });
@@ -98,10 +92,7 @@ pub(super) fn spawn_dropdown(parent: &mut ChildSpawnerCommands<'_>, presets: &Se
                                 option.spawn((
                                     Text::new(&entry.name),
                                     UiButtonLabel,
-                                    TextFont {
-                                        font_size: FontSize::Px(15.0),
-                                        ..default()
-                                    },
+                                    crate::ui::typography::text(15.0),
                                     TextColor(if is_selected { EMBER } else { INK_INVERSE }),
                                 ));
                             });

@@ -1,6 +1,6 @@
 # Client UI architecture
 
-Last reconciled with Bevy 0.19 on 2026-08-19. This is the contract for new UI and for
+Last reconciled with Bevy 0.19 on 2026-09-06. This is the contract for new UI and for
 touching an existing screen. The goal is a coherent medieval ledger interface without
 screen-specific hover logic, accidental world input, or full-tree churn at simulation speed.
 
@@ -8,8 +8,13 @@ screen-specific hover logic, accidental world input, or full-tree churn at simul
 
 | Module | Owns |
 |---|---|
-| `client/src/ui/styles.rs` | Limewash/ink palette, rules, shadows and low-level visual constants |
+| `client/src/ui/styles.rs` | Wood/brass/parchment palette, ink, rules and shadows |
 | `client/src/ui/foundation.rs` | Semantic layers, type scale, standard button states, disabled/focus behavior, contract audit and live-panel refresh safety |
+| `client/src/ui/typography.rs` | Bundled Cinzel headings and MedievalSharp body text; shared font handles |
+| `client/src/ui/motion.rs` | Analytic springs and retained panel/page reveals |
+| `client/src/ui/button_motion.rs` | Shared button hover/press motion and paint easing |
+| `client/src/ui/frame.rs` | Non-interactive brass corner ornaments |
+| `client/src/ui/encyclopedia/shell.rs` | Bound-book frame, header, tabs and footer; separate from page layouts |
 | `client/src/ui/modal.rs` | One backdrop, canonical modal root/backdrop/panel structure, click-through protection and central modal-open state |
 | `client/src/ui/scroll.rs` | Wheel bubbling and nested scroll behavior |
 | Screen modules | Data model, layout and actions specific to that screen |
@@ -21,13 +26,17 @@ allowed; reusable chrome colours belong in `styles.rs`.
 
 ## Visual contract
 
-- In-world panels use limewash surfaces and iron-gall ink. Dark front-of-house screens
-  such as pause may use the inverse palette.
+- In-world panels use warm parchment and dark ink. Wood headers, brass binding and
+  parchment lettering connect the encyclopedia and menus to the combat UI. Dark panels
+  use the inverse palette; page bodies remain light for dense records.
 - `EMBER` means selected/commanded. Debug tools use `SLATE`; destructive actions use the
   danger color. Do not create another saturated accent in a screen module.
-- Use `foundation::type_scale` for new text: caption 10, body 12, value 13, heading 17,
-  title 21 on the 1600×900 design canvas.
-- Panels use a one-pixel rule, 2–3 px radius and `plate_shadow()`. Nested content uses
+- Use `typography::body` / `typography::heading` with `foundation::type_scale`: caption 12,
+  body 14, value 15, heading 18, title 26 on the 1600×900 design canvas. `typography::text`
+  applies the existing screens’ 17 px heading boundary. Both fonts are bundled under OFL
+  and installed once; do not load another font per screen or depend on system fonts.
+- Book frames use a 3 px brass-brown edge and small native brass corner ornaments.
+  Compact plates use a one-pixel rule, 2–3 px radius and `plate_shadow()`. Nested content uses
   soft dividers more often than boxes inside boxes.
 - Future authored frames should be nine-sliced `ImageNode`s. They must replace chrome,
   never become baked text or screen-sized bitmaps.
@@ -51,8 +60,8 @@ parent.spawn((
 ```
 
 The available variants are `Primary`, `Secondary`, `Ghost`, `Row`, `Tab`, `Inverse`,
-`Developer` and `Danger`. A development-time audit fails immediately if an ordinary Bevy
-`Button` lacks `UiButtonStyle`. `UiButtonStyleExempt` is reserved for the full-screen
+`Ribbon` (dark header navigation), `Developer` and `Danger`. A development-time audit fails
+immediately if an ordinary Bevy `Button` lacks `UiButtonStyle`. `UiButtonStyleExempt` is reserved for the full-screen
 outside-click target created by `modal_backdrop_chrome`; it is not an escape hatch for custom
 button styling.
 
@@ -81,7 +90,7 @@ Use `spawn_modal`. Custom layouts use `modal_root_chrome` and
 3. a blocking panel above it; and
 4. a modal `TabGroup`, so keyboard focus cannot escape behind the window.
 
-The default panel is the limewash ledger shell. A deliberately dark front-of-house screen must
+The default panel is the parchment ledger shell. A deliberately dark front-of-house screen must
 override it explicitly; developer and debug screens do not receive a separate prototype theme.
 
 Never color both the root and backdrop: their alpha compounds. `InputState::modal_open` is
@@ -97,6 +106,21 @@ Button state is computed after screen state in `PostUpdate`, so plugin registrat
 introduce a one-frame selected/hover mismatch. Layer assignments are centralized: presentation
 −1000, HUD 0, floating panel 100, modal 1000, tooltip 1100 and toast 1200. Screen-local child
 ordering may use local `ZIndex`.
+
+## Motion
+
+`UiReveal::panel()` gives a stable shell a 24 px arrival; `UiReveal::page()` gives retained
+pages an 8 px arrival when their own `Node.display` becomes visible. `TabBody` requires the
+page reveal. Do not attach it to a repeatedly rebuilt value/row, a whole input backdrop,
+or an entity whose `UiTransform` is already owned by another animation. Close remains
+immediate so invisible modal hit areas never linger. Native transforms do not reflow rows.
+
+`UiButtonStyle` requires shared button motion. Hover/press moves the primary label by a small
+spring translation; the button hit rectangle stays fixed, preventing edge-hover flicker.
+Rows and flat tabs stay still. Selection/disabled/variant changes snap their palette to keep
+labels readable, while hover paint eases. The analytic underdamped solver is shared with the
+combat banner and battalion bar, stays stable across long frames, and stops transform writes
+when settled. Do not copy Euler spring integration into a screen.
 
 ## Live simulation panels
 
@@ -171,8 +195,9 @@ The UI scale is derived from the 1600x900 launcher frame, so small captions land
 heading 17, value 15, button 14, body 13.5, label 11-12) and nothing a player must read to make a
 decision sits below body size. Place pages lead with key-figure tiles, then grouped sections
 (`group_rows` in `encyclopedia/places.rs`); history charts draw real lines
-(`spawn_chart_segment` rotates a thin node with `UiTransform`). The UI font has no middle-dot
-glyph; separate with ` / `.
+(`spawn_chart_segment` rotates a thin node with `UiTransform`). Use ` / ` between compact facts and ASCII `<`, `>`, `v`, `|` for steppers, dropdowns and
+carets. The bundled faces do not contain arrow/triangle/box-drawing glyphs; do not rely on
+system font fallback for controls.
 
 ## The encyclopedia is one window with pages
 
@@ -209,7 +234,7 @@ The client unit suite covers query scoping, one-scrim modals, the button-contrac
 disabled/selected contrast, hover-safe refresh and nested scrolling:
 
 ```bash
-cargo test -p client --lib
+cargo test --workspace
 ```
 
 The deterministic visual harness can render the real property board without opening the game

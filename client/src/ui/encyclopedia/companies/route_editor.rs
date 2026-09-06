@@ -68,10 +68,7 @@ pub(super) fn spawn_trade_route_editor(
                         } else {
                             "NEW CARAVAN ROUTE".to_string()
                         }),
-                        TextFont {
-                            font_size: FontSize::Px(24.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(24.0),
                         TextColor(INK),
                     ));
                     copy.spawn((
@@ -79,10 +76,7 @@ pub(super) fn spawn_trade_route_editor(
                             "{}  /  ORDERED MERCHANT TIMETABLE",
                             company.name.to_uppercase()
                         )),
-                        TextFont {
-                            font_size: FontSize::Px(12.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(12.0),
                         TextColor(EMBER),
                     ));
                 });
@@ -146,10 +140,7 @@ pub(super) fn spawn_trade_route_editor(
                 .with_children(|card| {
                     card.spawn((
                         Text::new("HOME STORAGE HALL"),
-                        TextFont {
-                            font_size: FontSize::Px(11.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(11.5),
                         TextColor(INK_MUTED),
                     ));
                     card.spawn((
@@ -165,10 +156,7 @@ pub(super) fn spawn_trade_route_editor(
                                 )
                             },
                         )),
-                        TextFont {
-                            font_size: FontSize::Px(13.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(13.5),
                         TextColor(INK),
                     ));
                     if draft.route.is_none() && warehouses.len() > 1 {
@@ -210,10 +198,7 @@ pub(super) fn spawn_trade_route_editor(
                             draft.cargo_target,
                             if draft.cargo_target == 1 { "" } else { "S" }
                         )),
-                        TextFont {
-                            font_size: FontSize::Px(13.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(13.5),
                         TextColor(INK),
                     ));
                     card.spawn(Node {
@@ -258,10 +243,7 @@ pub(super) fn spawn_trade_route_editor(
                         "ONE CIRCUIT ON COMMAND"
                     }
                 )),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
+                crate::ui::typography::text(13.0),
                 TextColor(INK),
             ));
             prices
@@ -318,11 +300,8 @@ pub(super) fn spawn_trade_route_editor(
             for (index, stop) in draft.stops.iter().enumerate() {
                 if index > 0 {
                     lane.spawn((
-                        Text::new("→"),
-                        TextFont {
-                            font_size: FontSize::Px(19.0),
-                            ..default()
-                        },
+                        Text::new(">"),
+                        crate::ui::typography::text(19.0),
                         TextColor(INK_MUTED),
                     ));
                 }
@@ -346,18 +325,12 @@ pub(super) fn spawn_trade_route_editor(
                             index + 1,
                             if index == 0 { "HOME" } else { "TOWN" }
                         )),
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(11.0),
                         TextColor(EMBER),
                     ));
                     stop_card.spawn((
                         Text::new(settlement_name(stop.settlement).to_uppercase()),
-                        TextFont {
-                            font_size: FontSize::Px(13.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(13.5),
                         TextColor(INK),
                     ));
                     let has_marketplace = directory.settlements.iter().any(|settlement| {
@@ -366,10 +339,7 @@ pub(super) fn spawn_trade_route_editor(
                     if !has_marketplace {
                         stop_card.spawn((
                             Text::new("LOCAL MOOT — BUILD A MARKETPLACE"),
-                            TextFont {
-                                font_size: FontSize::Px(11.0),
-                                ..default()
-                            },
+                            crate::ui::typography::text(11.0),
                             TextColor(EMBER),
                         ));
                     }
@@ -394,10 +364,7 @@ pub(super) fn spawn_trade_route_editor(
                     }
                     stop_card.spawn((
                         Text::new(stop.action.label().to_uppercase()),
-                        TextFont {
-                            font_size: FontSize::Px(11.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(11.5),
                         TextColor(INK_MUTED),
                     ));
                     stop_card
@@ -422,14 +389,14 @@ pub(super) fn spawn_trade_route_editor(
                                 editor_button(
                                     buttons,
                                     TradeRouteEditorAction::MoveStopLeft(index),
-                                    "←",
+                                    "<",
                                 );
                             }
                             if index > 0 && index + 1 < draft.stops.len() {
                                 editor_button(
                                     buttons,
                                     TradeRouteEditorAction::MoveStopRight(index),
-                                    "→",
+                                    ">",
                                 );
                             }
                             if index > 0 && draft.stops.len() > 2 {

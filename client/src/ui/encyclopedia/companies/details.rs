@@ -42,10 +42,7 @@ pub(super) fn spawn_company_detail(
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(company.name.clone()),
-                        TextFont {
-                            font_size: FontSize::Px(26.0),
-                            ..default()
-                        },
+                        crate::ui::typography::text(26.0),
                         TextColor(INK),
                     ));
                     copy.spawn((
@@ -55,10 +52,7 @@ pub(super) fn spawn_company_detail(
                             company.founded_day,
                             company.status(),
                         )),
-                        TextFont {
-                            font_size: FontSize::Px(12.5),
-                            ..default()
-                        },
+                        crate::ui::typography::text(12.5),
                         TextColor(EMBER),
                     ));
                 });
@@ -223,10 +217,7 @@ pub(super) fn spawn_company_detail(
                                 "HERO WALLET  {} coin",
                                 format_money(directory.local_wallet.unwrap_or(0))
                             )),
-                            TextFont {
-                                font_size: FontSize::Px(12.5),
-                                ..default()
-                            },
+                            crate::ui::typography::text(12.5),
                             TextColor(INK_MUTED),
                         ));
                         detail_button(
@@ -322,10 +313,7 @@ pub(super) fn spawn_company_detail(
                     } else {
                         "A staffed Storage Hall is required before this company can open a route."
                     }),
-                    TextFont {
-                        font_size: FontSize::Px(12.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(12.0),
                     TextColor(INK_MUTED),
                 ));
                 if ready_warehouse && directory.settlements.len() >= 2 {
@@ -379,10 +367,7 @@ pub(super) fn spawn_company_detail(
                     } else {
                         holder.name.clone()
                     }),
-                    TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
+                    crate::ui::typography::text(14.0),
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
@@ -392,10 +377,7 @@ pub(super) fn spawn_company_detail(
                         holder.shares,
                         f32::from(holder.shares) / 10.0
                     )),
-                    TextFont {
-                        font_size: FontSize::Px(13.5),
-                        ..default()
-                    },
+                    crate::ui::typography::text(13.5),
                     TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));

@@ -54,7 +54,13 @@ pub(super) fn enter_world_offline(
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
 ) {
     // No connection, no name entry — the map comes off disk.
-    next_state.set(GameState::Playing);
+    next_state.set(
+        match std::env::var("FISTFORCE_CAPTURE_FRONTEND").as_deref() {
+            Ok("menu") => GameState::MainMenu,
+            Ok("name") => GameState::Connected,
+            _ => GameState::Playing,
+        },
+    );
 
     // Stand in for the replicated WorldTime, otherwise day/night never advances past
     // "waiting for server" and every shot is unlit.

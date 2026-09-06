@@ -18,6 +18,7 @@ pub mod companies;
 pub mod layout;
 pub mod places;
 pub mod retinue;
+mod shell;
 pub mod state_sync;
 
 use bevy::prelude::*;
@@ -83,7 +84,7 @@ impl Plugin for EncyclopediaPlugin {
         app.add_systems(
             Update,
             (
-                layout::spawn_encyclopedia,
+                shell::spawn_encyclopedia,
                 actions::request_roster_on_open,
                 actions::handle_tab_buttons,
                 actions::handle_filter_buttons,
@@ -137,7 +138,7 @@ impl Plugin for EncyclopediaPlugin {
             )
                 .chain()
                 .after(companies::refresh_company_directory)
-                .after(layout::spawn_encyclopedia)
+                .after(shell::spawn_encyclopedia)
                 .run_if(encyclopedia_open)
                 .run_if(companies::company_tab_active)
                 .run_if(in_state(GameState::Playing)),
@@ -150,7 +151,7 @@ impl Plugin for EncyclopediaPlugin {
                 retinue::bind_retinue_status,
             )
                 .chain()
-                .after(layout::spawn_encyclopedia)
+                .after(shell::spawn_encyclopedia)
                 .run_if(encyclopedia_open)
                 .run_if(retinue::retinue_tab_active)
                 .run_if(in_state(GameState::Playing)),
@@ -161,14 +162,14 @@ impl Plugin for EncyclopediaPlugin {
             (army::handle_army_buttons, army::sync_army_panel)
                 .chain()
                 .after(crate::army_roster::ArmyRosterSet)
-                .after(layout::spawn_encyclopedia)
+                .after(shell::spawn_encyclopedia)
                 .run_if(encyclopedia_open)
                 .run_if(army::army_tab_active)
                 .run_if(in_state(GameState::Playing)),
         );
         app.add_systems(
             Update,
-            (layout::despawn_encyclopedia, close_pages_with_encyclopedia)
+            (shell::despawn_encyclopedia, close_pages_with_encyclopedia)
                 .run_if(encyclopedia_closed),
         );
         app.add_systems(OnEnter(GameState::MainMenu), close_on_main_menu);
@@ -642,6 +643,7 @@ pub struct PeopleCountText;
 
 /// Body root of a tab; only the active one is displayed.
 #[derive(Component, Clone, Copy)]
+#[require(crate::ui::motion::UiReveal = crate::ui::motion::UiReveal::page())]
 pub struct TabBody(pub EncyclopediaTab);
 
 // Detail pane pieces.
