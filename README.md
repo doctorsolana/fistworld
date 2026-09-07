@@ -145,7 +145,7 @@ constructs it. Those values remain prototype balance, not final design.
 - Physical palisades, stone walls, gates, guards and patrols.
 - Strategic travelling parties and armies with lossless tactical promotion/demotion.
 - Military hiring/upkeep, morale, weapon classes, diplomacy, clans and realm war.
-  Tactical battalions, formation orders, bounded shared route fields and basic melee are live;
+  Tactical battalions, formation orders, bounded shared route fields, melee and ballistic archers are live;
   see [combat controls and limits](docs/COMBAT-DESIGN.md).
 
 The checked state and dependencies for each item live in [ROADMAP.md](docs/ROADMAP.md).
@@ -320,6 +320,27 @@ remain separate replicated actors; neighbourhood views give full character rigs
 to at most the closest 160, while map-scale people use continuously moving
 proxy meshes directly on their selectable actor roots, so the client does not
 instantiate tens of thousands of skeleton or hierarchy entities at once.
+
+### Manual battalion battle
+
+```bash
+./run.sh battle5v5
+```
+
+Builds both binaries and opens five 50-person battalions against five defending
+battalions (500 soldiers total), with combat mode and a commander hero ready.
+Drag-select your troops and right-click an enemy to attack. The client stays
+under manual control. Closing it or pressing Ctrl-C stops the server started by
+this command. Logs are retained under `logs/battle5v5-*`.
+
+The usual `--dev` and `--release` profiles work here too. Stop any existing local
+server first; this mode reports an occupied port instead of terminating another
+session. `./run.sh battleworld` remains the smaller recruitment sandbox.
+
+Use `./run.sh archerworld` for two infantry battalions and one archer battalion
+against three enemy battalions (120 soldiers per side). Select the archers and
+right-click an enemy to fire; **V** toggles hold fire. Army management has equipment,
+fire-policy and quiver controls. See [archery controls and limits](docs/ARCHERY.md).
 
 ### Generated-world stress fixture
 

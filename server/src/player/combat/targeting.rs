@@ -99,6 +99,7 @@ pub fn acquire_targets(
     >,
     identities: Query<&PersonId>,
     policies: Query<&BattalionStance>,
+    bows: Query<(), With<BowEquipped>>,
     mut scratch: Local<AcquisitionScratch>,
 ) {
     scratch.candidates.clear();
@@ -120,7 +121,7 @@ pub fn acquire_targets(
         } else {
             continue;
         };
-        let range = if engaged || formed {
+        let range = if engaged || formed || bows.contains(entity) {
             0.0
         } else {
             match stance {

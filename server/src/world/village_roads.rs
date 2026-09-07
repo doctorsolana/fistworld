@@ -2250,11 +2250,11 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
         }
         BuildingType::Market | BuildingType::MarketPaved => SettlementBuildingKind::Market,
         BuildingType::PlaceholderTavern => SettlementBuildingKind::Tavern,
-        BuildingType::PlaceholderChurch => SettlementBuildingKind::Church,
+        BuildingType::Church => SettlementBuildingKind::Church,
         BuildingType::Windmill => SettlementBuildingKind::Windmill,
         BuildingType::Bakery => SettlementBuildingKind::Bakery,
         BuildingType::StorageHall => SettlementBuildingKind::StorageHall,
-        BuildingType::PlaceholderStoneQuarry => SettlementBuildingKind::StoneQuarry,
+        BuildingType::StoneQuarry => SettlementBuildingKind::StoneQuarry,
         BuildingType::LivestockFarm => SettlementBuildingKind::LivestockFarm,
     }
 }

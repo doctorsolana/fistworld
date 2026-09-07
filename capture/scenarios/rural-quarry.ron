@@ -1,0 +1,15 @@
+(version: 1, name: "rural-quarry", map: "village_lab",
+ output_dir: "logs/captures/rural-quarry", resolution: (1600, 1000), fixed_delta_seconds: 0.016666667,
+ target: scene, show_window: false, warmup_frames: 300,
+ readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+ environment: {"FISTFORCE_CAPTURE_RURAL": "quarry", "FISTFORCE_CAPTURE_CLOUDS": "clear", "FISTFORCE_CAPTURE_HERO": "default", "FISTFORCE_CAPTURE_HERO_OFFSET": "2.25,-5.0"},
+ shots: [
+ (name: "front-day", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 31.0, time_of_day: 0.43),
+ (name: "rear", focus: (-15.0, 0.0, -15.0), yaw: 0.60, zoom: 31.0, time_of_day: 0.50),
+ (name: "front-night", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 31.0, time_of_day: 0.00),
+ (name: "grounds", focus: (-15.0, 0.0, -8.0), yaw: 0.30, zoom: 58.0, time_of_day: 0.50),
+ (name: "gameplay", focus: (-15.0, 0.0, -15.0), yaw: 2.85, zoom: 75.0, time_of_day: 0.43),
+ (name: "entrance", focus: (-12.0, 0.0, -23.5), yaw: 2.80, zoom: 16.0, time_of_day: 0.43, pitch: Some(-0.12), eye: 10.4),
+ (name: "under-eaves", focus: (-3.0, 0.0, -13.0), yaw: 1.40, zoom: 17.0, time_of_day: 0.50, pitch: Some(-0.10), eye: 11.0),
+ ],
+)

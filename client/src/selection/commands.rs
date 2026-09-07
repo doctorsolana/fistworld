@@ -29,6 +29,10 @@ pub fn handle_command_keys(
     mut groups: ResMut<ControlGroups>,
     mut selection: ResMut<Selection>,
     mut senders: Query<&mut MessageSender<UnitOrder>, (With<crate::GameClient>, With<Connected>)>,
+    mut army_senders: Query<
+        &mut MessageSender<ArmyOrder>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
     mut notice: ResMut<crate::ui::hud::GodNotice>,
 ) {
     if !combat.0 {
@@ -39,6 +43,31 @@ pub fn handle_command_keys(
     }
     if input.ui_blocking() || crate::hero::control::placement_armed(&placement) {
         return;
+    }
+    if keys.just_pressed(KeyCode::KeyV) {
+        use shared::components::{FirePolicy, SoldierRole};
+        let selected = roster.selection(&selection.entities);
+        let archers: Vec<_> = roster
+            .battalions
+            .iter()
+            .filter(|b| b.role == SoldierRole::Archer && selected.battalions.contains(&b.id))
+            .collect();
+        let policy = if archers
+            .iter()
+            .any(|b| b.fire_policy == FirePolicy::FireAtWill)
+        {
+            FirePolicy::HoldFire
+        } else {
+            FirePolicy::FireAtWill
+        };
+        if let Ok(mut sender) = army_senders.single_mut() {
+            for b in archers {
+                sender.send::<ReliableChannel>(ArmyOrder::SetFirePolicy {
+                    battalion: b.entity,
+                    policy,
+                });
+            }
+        }
     }
     if keys.just_pressed(KeyCode::KeyX) {
         mode.0 = MovementMode::AttackMove;

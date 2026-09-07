@@ -18,7 +18,10 @@ pub(super) fn exercise_capture_door(
     settlements: Query<Entity, With<shared::components::Settlement>>,
     mut building_doors: Query<
         &mut shared::components::BuildingDoorDemand,
-        With<shared::components::SettlementBuilding>,
+        Or<(
+            With<shared::components::SettlementBuilding>,
+            With<shared::components::Settlement>,
+        )>,
     >,
     mut applied: Local<bool>,
 ) {
@@ -761,6 +764,14 @@ pub(super) fn enter_world_offline(
     // captures can verify the live preview + selector UI without a server.
     if std::env::var("FISTFORCE_CAPTURE_HERO_CREATOR").is_ok_and(|v| v == "1") {
         commands.insert_resource(crate::ui::hero_creator::HeroCreatorOpen(true));
+        if let Ok(preset)=std::env::var("FISTFORCE_CAPTURE_OUTFIT_PRESET") {
+            commands.queue(move |world: &mut World| {
+                let manifest=&world.resource::<crate::hero::HeroManifest>().0;
+                let mut outfit=shared::components::HeroOutfit::from_manifest(manifest);
+                manifest.apply_outfit(&preset,&mut outfit).expect("capture outfit preset");
+                world.resource_mut::<crate::hero::control::SelectedOutfit>().0=outfit;
+            });
+        }
     }
 
     // FISTFORCE_CAPTURE_WARBAR=1 stages three battalions with bearers and a

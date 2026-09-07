@@ -215,12 +215,15 @@ pub enum CharacterActivity {
     /// Trading blows in melee. Until dedicated combat art exists, clients
     /// reuse the most physical work motion available.
     Fighting,
+    /// Resting on the ground outdoors, distinct from a fatal combat reaction.
+    LyingDown,
 }
 
 impl CharacterActivity {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Idle => "Idle",
+            Self::LyingDown => "Resting outdoors",
             Self::Building => "Building",
             Self::Chopping => "Cutting timber",
             Self::Farming => "Working the fields",
@@ -512,8 +515,15 @@ impl HeroOutfit {
     pub fn varied(seed: u64) -> Self {
         let mut rng = crate::rng::XorShift64::new(seed ^ 0x5DEE_CE66_D3A1_9B0F);
         let mut slots = [0u8; HERO_SLOT_MAX];
-        for slot in slots.iter_mut() {
-            *slot = (rng.next_u64() % 6) as u8;
+        for (index, slot) in slots.iter_mut().enumerate() {
+            let value = (rng.next_u64() % 6) as u8;
+            // Preserve existing civilian choices. New equipment slots default
+            // to none; adding armour must not randomly equip every villager.
+            *slot = match index {
+                0 | 1 => value.min(3),
+                2 => value,
+                _ => 0,
+            };
         }
         Self {
             slots,
@@ -562,6 +572,15 @@ impl HeroOutfit {
         for (index, slot) in manifest.slots.iter().enumerate() {
             if !slot.items.iter().any(|item| item == node) {
                 continue;
+            }
+            let covered = manifest.coverage.iter().any(|rule| {
+                rule.hides_slots.contains(&slot.name)
+                    && manifest.slots.iter().enumerate().any(|(source, choices)| {
+                        choices.item(self.slot(source)) == Some(rule.item.as_str())
+                    })
+            });
+            if covered {
+                return true;
             }
             return slot.item(self.slot(index)) != Some(node);
         }

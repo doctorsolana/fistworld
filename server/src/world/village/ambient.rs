@@ -229,6 +229,34 @@ fn point_is_safe(
     navigation_segment_clear(point, point, obstacles, colliders, derived)
 }
 
+/// A sleeping body occupies more ground than a standing navigation capsule.
+/// Face the road, then lie backwards onto the verge, provided the whole patch
+/// is level and clear; cramped or sloped spots retain the seated rest pose.
+fn lying_place_is_safe(
+    point: Vec2,
+    facing: f32,
+    terrain: &WorldTerrain,
+    obstacles: Option<&SpatialObstacleGrid>,
+    colliders: Option<&StaticColliders>,
+    derived: Option<&DerivedColliderLibrary>,
+) -> bool {
+    let backward = Vec2::new(facing.sin(), facing.cos());
+    let side = Vec2::new(backward.y, -backward.x) * 0.48;
+    let height = terrain.get_height(point.x, point.y);
+    [
+        point - side,
+        point + side,
+        point + backward * 1.7 - side,
+        point + backward * 1.7 + side,
+    ]
+    .into_iter()
+    .all(|at| {
+        (terrain.get_height(at.x, at.y) - height).abs() < 0.16
+            && point_is_safe(at, terrain, obstacles, colliders, derived)
+            && navigation_segment_clear(point, at, obstacles, colliders, derived)
+    })
+}
+
 fn gathering_spots(
     settlements: &Query<
         (
@@ -690,7 +718,10 @@ pub fn run_ambient_routines(
             }
             _ => {
                 if routine.is_some() {
-                    if *activity == CharacterActivity::Sitting {
+                    if matches!(
+                        *activity,
+                        CharacterActivity::Sitting | CharacterActivity::LyingDown
+                    ) {
                         activity.set_if_neq(CharacterActivity::Idle);
                     }
                     // A real active work/build/home routine now owns any destination.
@@ -702,7 +733,10 @@ pub fn run_ambient_routines(
 
         if busy.get(entity).is_ok() {
             if routine.is_some() {
-                if *activity == CharacterActivity::Sitting {
+                if matches!(
+                    *activity,
+                    CharacterActivity::Sitting | CharacterActivity::LyingDown
+                ) {
                     activity.set_if_neq(CharacterActivity::Idle);
                 }
                 commands.entity(entity).remove::<AmbientRoutine>();
@@ -713,7 +747,10 @@ pub fn run_ambient_routines(
         let needs_ambient_life = off_duty.is_some() || occupation.0.is_none() || home.is_none();
         if !needs_ambient_life {
             if routine.is_some() {
-                if *activity == CharacterActivity::Sitting {
+                if matches!(
+                    *activity,
+                    CharacterActivity::Sitting | CharacterActivity::LyingDown
+                ) {
                     activity.set_if_neq(CharacterActivity::Idle);
                 }
                 clear_owned_movement(&mut commands, entity);
@@ -731,7 +768,10 @@ pub fn run_ambient_routines(
         });
         if !tactical {
             if routine.is_some() {
-                if *activity == CharacterActivity::Sitting {
+                if matches!(
+                    *activity,
+                    CharacterActivity::Sitting | CharacterActivity::LyingDown
+                ) {
                     activity.set_if_neq(CharacterActivity::Idle);
                 }
                 clear_owned_movement(&mut commands, entity);
@@ -746,10 +786,47 @@ pub fn run_ambient_routines(
             let Some((_, _, _, hall_position, hall_rotation)) = hall else {
                 continue;
             };
-            let destination = SettlementBuildingKind::Hall.entrance_position(
+            let entrance = SettlementBuildingKind::Hall.entrance_position(
                 hall_position.0,
                 hall_rotation.map_or(0.0, |rotation| rotation.0),
             );
+            // Claim an existing validated roadside gathering spot once. Reuse
+            // that destination all night instead of piling bodies in the door.
+            let destination = routine
+                .as_deref()
+                .and_then(|routine| match routine.phase {
+                    AmbientPhase::NightPending { destination }
+                    | AmbientPhase::NightShelter { destination } => Some(destination),
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    let seed = person_id.map_or(entity.to_bits(), |id| id.0) as usize;
+                    let occupied = ambient_occupied.entry(settlement).or_default();
+                    let spot = spot_cache.by_settlement.get(&settlement).and_then(|spots| {
+                        select_ambient_spot(seed % spots.len().max(1), spots, false, |spot| {
+                            spot.point.distance_squared(entrance.xz()) > 9.0
+                                && spot.point.distance_squared(hall_position.0.xz()) < 48.0 * 48.0
+                                && !ambient_place_occupied(occupied, spot.point)
+                                && point_is_safe(
+                                    spot.point,
+                                    &terrain,
+                                    obstacles.as_deref(),
+                                    colliders.as_deref(),
+                                    derived.as_deref(),
+                                )
+                        })
+                    });
+                    if let Some(spot) = spot {
+                        occupied.insert(ambient_occupancy_cell(spot.point));
+                        Vec3::new(
+                            spot.point.x,
+                            terrain.get_height(spot.point.x, spot.point.y),
+                            spot.point.y,
+                        )
+                    } else {
+                        position.0
+                    }
+                });
             let already_heading_to_shelter = routine.as_deref().is_some_and(|routine| {
                 matches!(
                     routine.phase,
@@ -789,6 +866,29 @@ pub fn run_ambient_routines(
             decisions += 1;
             activity.set_if_neq(CharacterActivity::Idle);
             if super::ground_distance(position.0, destination) <= AMBIENT_REACH {
+                if let Some(spot) = spot_cache.by_settlement.get(&settlement).and_then(|spots| {
+                    spots
+                        .iter()
+                        .find(|spot| spot.point.distance_squared(destination.xz()) < 0.1)
+                }) {
+                    facing.0 = spot.facing;
+                }
+                activity.set_if_neq(
+                    if super::ground_distance(position.0, entrance) > 3.0
+                        && lying_place_is_safe(
+                            position.0.xz(),
+                            facing.0,
+                            &terrain,
+                            obstacles.as_deref(),
+                            colliders.as_deref(),
+                            derived.as_deref(),
+                        )
+                    {
+                        CharacterActivity::LyingDown
+                    } else {
+                        CharacterActivity::Sitting
+                    },
+                );
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
@@ -1040,7 +1140,20 @@ pub fn run_ambient_routines(
                     routine.disperse_arrival = false;
                     facing.0 = rest_facing;
                     *activity = if sitting {
-                        CharacterActivity::Sitting
+                        if home.is_none()
+                            && lying_place_is_safe(
+                                position.0.xz(),
+                                facing.0,
+                                &terrain,
+                                obstacles.as_deref(),
+                                colliders.as_deref(),
+                                derived.as_deref(),
+                            )
+                        {
+                            CharacterActivity::LyingDown
+                        } else {
+                            CharacterActivity::Sitting
+                        }
                     } else {
                         CharacterActivity::Idle
                     };
@@ -1116,7 +1229,20 @@ pub fn run_ambient_routines(
                     .remove::<NavigationRouteFailed>()
                     .remove::<AmbientDirectTransit>();
                 *activity = if sitting {
-                    CharacterActivity::Sitting
+                    if home.is_none()
+                        && lying_place_is_safe(
+                            position.0.xz(),
+                            facing.0,
+                            &terrain,
+                            obstacles.as_deref(),
+                            colliders.as_deref(),
+                            derived.as_deref(),
+                        )
+                    {
+                        CharacterActivity::LyingDown
+                    } else {
+                        CharacterActivity::Sitting
+                    }
                 } else {
                     CharacterActivity::Idle
                 };
@@ -1163,6 +1289,83 @@ pub fn cleanup_orphaned_direct_transit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unhoused_night_rest_lies_down_and_dawn_releases_it() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.init_resource::<AmbientClock>();
+        app.init_resource::<AmbientSpotCache>();
+        let mut terrain = WorldTerrain::default();
+        terrain.apply_flatten_rect(Vec3::new(12., 10., 8.), Vec2::splat(12.), 0., 10.);
+        app.insert_resource(terrain);
+        app.add_systems(Update, run_ambient_routines);
+        let mut clock = WorldTime::new_default();
+        clock.seconds_in_cycle = clock.day_duration + 30.;
+        let clock_entity = app
+            .world_mut()
+            .spawn((clock, shared::components::TimeWarp::clamped(1.)))
+            .id();
+        let hall = app
+            .world_mut()
+            .spawn((
+                Settlement {
+                    name: "Restford".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 1,
+                    treasury: 0,
+                },
+                shared::components::SettlementId(1),
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.),
+            ))
+            .id();
+        let destination = Vec3::new(12., 10., 8.);
+        let resident = app
+            .world_mut()
+            .spawn((
+                CharacterName("Ada".into()),
+                PersonId(82),
+                CharacterKind::Villager,
+                PlayerPosition(destination),
+                PlayerRotation(0.),
+                RegionCoord::default(),
+                VillagerIntent::Resident { settlement: hall },
+                Occupation::default(),
+                CharacterActivity::Idle,
+                AmbientRoutine {
+                    settlement: hall,
+                    cycle: 1,
+                    last_world_seconds: 0.,
+                    next_world_seconds: 0.,
+                    disperse_arrival: false,
+                    phase: AmbientPhase::NightShelter { destination },
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(0.3));
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterActivity>(resident),
+            Some(&CharacterActivity::LyingDown)
+        );
+        assert!(app.world().get::<MoveTarget>(resident).is_none());
+        app.world_mut()
+            .get_mut::<WorldTime>(clock_entity)
+            .unwrap()
+            .seconds_in_cycle = 10.;
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterActivity>(resident),
+            Some(&CharacterActivity::Idle)
+        );
+        assert!(matches!(
+            app.world().get::<AmbientRoutine>(resident).unwrap().phase,
+            AmbientPhase::Waiting { .. }
+        ));
+    }
 
     #[test]
     fn roadside_spots_are_beyond_both_edges_and_face_the_path() {

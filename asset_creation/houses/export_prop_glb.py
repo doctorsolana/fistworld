@@ -1,7 +1,7 @@
 """<asset>.blend -> client/assets/game_assets/buildings/village/<Name>.glb (Bevy 0.19 conventions).
 
-    blender asset_creation/houses/farmstead.blend --background --python asset_creation/houses/export_prop_glb.py
-    python3 asset_creation/houses/inspect_prop_glb.py client/assets/game_assets/buildings/village/Farmstead.glb
+    blender asset_creation/houses/fishermans_hut.blend --background --python asset_creation/houses/export_prop_glb.py
+    python3 asset_creation/houses/inspect_prop_glb.py client/assets/game_assets/buildings/village/FishermansHut.glb
 
 Generic where export_cabin_glb.py was written for one asset. The full reasoning lives in
 PROP_PIPELINE.md; the short version of what this does that a plain File > Export would not:
@@ -41,28 +41,23 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 STEM = os.path.splitext(os.path.basename(bpy.data.filepath))[0]
 
 # Explicit, because the .blend stem is a working name and the shipped path is a game-facing one.
-# The wheat field is not a building and does not live with them.
 GLB_PATH = {
-    "farmstead": "game_assets/buildings/village/Farmstead.glb",
-    "wheat_field": "game_assets/environment/crops/WheatField.glb",
-    # The civic ladder. A settlement replaces the building on the same plot as it grows, so these are
-    # separate assets rather than variants -- the level 2 hall is a different construction (stone
-    # ground floor, jettied half-timbered upper), not the level 1 hall with a different texture.
-    "moot_hall": "game_assets/buildings/village/MootHall.glb",          # hamlet
-    "village_hall": "game_assets/buildings/village/VillageHall.glb",    # village
-    "town_hall": "game_assets/buildings/village/TownHall.glb",          # town
     # The market ladder: L1 on beaten earth, L2 once the settlement has paved it.
     "market": "game_assets/buildings/village/Market.glb",
     "market_paved": "game_assets/buildings/village/MarketPaved.glb",
     "bakery": "game_assets/buildings/village/Bakery.glb",
     "fishermans_hut": "game_assets/buildings/village/FishermansHut.glb",
     "fishing_pier": "game_assets/environment/shore/FishingPier.glb",
-    # The sheep barn. Its pasture is a separate replicated entity (LivestockPasture), not part of it.
-    "livestock_farm": "game_assets/buildings/village/LivestockFarm.glb",
     # Pasture livestock: a creature, not a building. Six named parts the client animates itself
     # (head nod, leg swing), so it ships no clips and lives with the environment art.
     "sheep": "game_assets/environment/animals/Sheep.glb",
 }
+assert STEM not in {"farmstead", "wheat_field", "livestock_farm", "stone_quarry", "church"}, (
+    "Rural assets export themselves; run their build_<asset>.py with --factory-startup."
+)
+assert STEM not in {"moot_hall", "village_hall", "town_hall"}, (
+    "Civic halls export themselves; run build_civic_halls.py with --factory-startup."
+)
 assert STEM not in {"log_cabin", "long_cabin", "cabin_l2", "long_cabin_l2"}, (
     "Village houses export themselves; run build_houses.py with --factory-startup."
 )
@@ -137,44 +132,16 @@ if door:
 
 bpy.context.view_layer.update()
 
-# --- 3b. CIVIC HALLS: pin Anchor_Door to one canonical local offset ------------------------------------
-#
-# Live settlements place the hall glb directly at the settlement position -- they do NOT go through the
-# authored-city plot path -- and `SettlementBuildingKind::door_offset(Hall)` is a single hardcoded
-# Vec2(0.0, -5.20), taken from the moot hall. Ship three halls whose Anchor_Door sits at three
-# different local offsets and promoting a settlement silently moves the door, and with it the road
-# endpoint, the immigration and relief queues, permit collection and every cached route.
-#
-# Translating the model here so every level resolves Anchor_Door to the SAME local point makes that
-# constant correct for all of them, needs no level-aware door lookup in Rust, and means a hall upgrade
-# grows backwards and sideways from a fixed threshold rather than sliding the frontage.
-#
-# It is deliberately not a per-level table in the game: an asset invariant that the exporter enforces
-# cannot drift out of sync with the art the way a table of magic numbers can.
-# CANON_DOOR is in glTF/Bevy space (X, Z) because that is the space the Rust constant is in. At this
-# point in the script we are still in Blender coordinates, and export_yup will map Blender +Y -> glTF
-# -Z. So the Blender-space target is (x, -z). Comparing the glTF value against Blender Y directly
-# shifted every hall 10 m and flipped the door off its facing assert.
-#
-# The bakery also pins its art to the established road approach at Vec2(0, -4.0).
-# The self-exporting windmill now enforces its own corresponding asset contract.
-#
-# Pinning the ART to the SHIPPED constant, rather than asking Rust to change to match the art, is the
-# choice that cannot rot: the assert below fails the export the day the two drift apart, whereas a
-# hand-edited constant just silently stops describing the model. It also means integration needs no
-# door_offset change at all.
+# --- 3b. Pin legacy assets to their existing service approaches -----------------
+# Values are glTF X/Z; Blender +Y maps to glTF -Z. Self-exporting civic halls,
+# houses, the lumberjack hut and windmill enforce their contracts in their builders.
 CANON_DOOR_BY_STEM = {
-    "moot_hall": (0.0, -5.20),          # door_offset(Hall) -- one value for all three rungs
-    "village_hall": (0.0, -5.20),
-    "town_hall": (0.0, -5.20),
     # The market is 12 x 12 now, so its edge is at -6.0 and -4.00 would put the threshold two
     # metres INSIDE the square. door_offset(Market) has to move to -6.50 with it.
     "market": (0.0, -6.50),             # door_offset(Market) -- NEEDS THE RUST CONSTANT MOVED
     "market_paved": (0.0, -6.50),       # both levels share a threshold, as the halls do
     "bakery": (0.0, -4.00),             # door_offset(Bakery)
-    "livestock_farm": (0.0, -3.80),     # door_offset(LivestockFarm)
 }
-CIVIC = {"moot_hall", "village_hall", "town_hall"}
 if STEM in CANON_DOOR_BY_STEM:
     CANON_DOOR = CANON_DOOR_BY_STEM[STEM]
     CANON_DOOR_BLENDER = (CANON_DOOR[0], -CANON_DOOR[1])
@@ -198,12 +165,6 @@ if STEM in CANON_DOOR_BY_STEM:
     got = (anchor.location.x, -anchor.location.y)          # back into glTF terms for the message
     assert abs(got[0] - CANON_DOOR[0]) < 1e-4 and abs(got[1] - CANON_DOOR[1]) < 1e-4, \
         f"{STEM} Anchor_Door landed at glTF {got}, wanted {CANON_DOOR}"
-    if STEM in CIVIC:
-        # Halls additionally share one facade plane, so a promotion cannot slide the frontage.
-        body_world = [body.matrix_world @ v.co for v in body.data.vertices]
-        front_z = -max(v.y for v in body_world)
-        assert abs(front_z - (-4.60)) < 0.06, \
-            f"{STEM} facade landed at glTF z={front_z:.3f}, wanted -4.600; anchor and art drifted apart"
     log(f"door-pin: shifted {shift.x:+.3f},{shift.y:+.3f} (blender) -> Anchor_Door at glTF {CANON_DOOR}")
 
 for o in bpy.data.objects:

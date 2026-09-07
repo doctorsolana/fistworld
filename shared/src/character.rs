@@ -10,7 +10,23 @@
 //! client renders from.
 
 use serde::Deserialize;
+pub mod locomotion;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+/// A worn item's explicit visibility exclusions (for example helmet -> hair).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct CharacterCoverage {
+    pub item: String,
+    pub hides_slots: Vec<String>,
+}
+
+/// Named equipment recipe; unspecified slots preserve the person's appearance.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct CharacterOutfitPreset {
+    pub name: String,
+    pub items: BTreeMap<String, String>,
+}
 
 /// One wardrobe slot (e.g. "hair"). Exactly ONE item per slot may be visible:
 /// two overlapping garments read as an untextured patch where they intersect
@@ -74,6 +90,10 @@ pub struct CharacterManifest {
     /// Body mesh node name; wears the skin material.
     pub body: String,
     pub slots: Vec<CharacterSlot>,
+    #[serde(default)]
+    pub coverage: Vec<CharacterCoverage>,
+    #[serde(default)]
+    pub outfits: Vec<CharacterOutfitPreset>,
     pub skin: CharacterSkin,
     /// Clips that drive the body skeleton (idle/walk/...).
     pub body_clips: Vec<String>,
@@ -85,6 +105,33 @@ pub struct CharacterManifest {
 const MANIFEST_RELATIVE: &str = "characters/Humanoid.ron";
 
 impl CharacterManifest {
+    /// Apply a data-named kit while retaining skin tone, hair and omitted slots.
+    /// Resolve the complete recipe before modifying the replicated outfit.
+    pub fn apply_outfit(
+        &self,
+        name: &str,
+        outfit: &mut crate::components::HeroOutfit,
+    ) -> Result<(), String> {
+        let preset = self
+            .outfits
+            .iter()
+            .find(|preset| preset.name == name)
+            .ok_or_else(|| format!("unknown character outfit '{name}'"))?;
+        let mut next = *outfit;
+        for (slot_name, item) in &preset.items {
+            let index = self
+                .slot_index(slot_name)
+                .ok_or_else(|| format!("unknown slot '{slot_name}'"))?;
+            let item_index = self.slots[index]
+                .items
+                .iter()
+                .position(|candidate| candidate == item)
+                .ok_or_else(|| format!("unknown item '{item}' in '{slot_name}'"))?;
+            next.slots[index] = item_index as u8;
+        }
+        *outfit = next;
+        Ok(())
+    }
     /// Load the shipped manifest, searching the same asset roots as maps.
     pub fn load() -> Result<Self, String> {
         let (path, text) = read_manifest_text()?;
@@ -102,9 +149,15 @@ impl CharacterManifest {
         if self.slots.is_empty() {
             return Err("manifest has no wardrobe slots".to_string());
         }
+        if self.slots.len() > crate::components::HERO_SLOT_MAX {
+            return Err("wardrobe exceeds replicated slot capacity".into());
+        }
         for slot in &self.slots {
             if slot.items.is_empty() {
                 return Err(format!("slot '{}' has no items", slot.name));
+            }
+            if slot.items.len() > 256 {
+                return Err(format!("slot '{}' exceeds u8 item capacity", slot.name));
             }
             if !slot.items.contains(&slot.default) {
                 return Err(format!(
@@ -112,6 +165,19 @@ impl CharacterManifest {
                     slot.name, slot.default
                 ));
             }
+        }
+        for rule in &self.coverage {
+            if !self.is_wardrobe_node(&rule.item)
+                || rule
+                    .hides_slots
+                    .iter()
+                    .any(|slot| self.slot_index(slot).is_none())
+            {
+                return Err(format!("invalid wardrobe coverage for '{}'", rule.item));
+            }
+        }
+        for preset in &self.outfits {
+            self.apply_outfit(&preset.name, &mut crate::components::HeroOutfit::default())?;
         }
         if self.skin.tones.is_empty() {
             return Err("manifest has no skin tones".to_string());
@@ -190,6 +256,34 @@ fn read_manifest_text() -> Result<(PathBuf, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equipment_presets_cover_hair_without_losing_the_selected_style() {
+        let manifest = CharacterManifest::load().unwrap();
+        let mut outfit = crate::components::HeroOutfit::from_manifest(&manifest);
+        let hair = manifest.slot_index("hair").unwrap();
+        outfit.slots[hair] = 5;
+        let before = outfit;
+        manifest.apply_outfit("soldier_mail", &mut outfit).unwrap();
+        assert_eq!(outfit.slots[hair], before.slots[hair]);
+        assert_eq!(outfit.skin, before.skin);
+        assert!(outfit.hides_node(&manifest, "Hair_Afro"));
+        assert!(!outfit.hides_node(&manifest, "Headgear_NasalHelmet"));
+        outfit.slots[manifest.slot_index("headgear").unwrap()] = 0;
+        assert!(!outfit.hides_node(&manifest, "Hair_Afro"));
+        let before = outfit;
+        assert!(manifest.apply_outfit("missing", &mut outfit).is_err());
+        assert_eq!(outfit, before);
+    }
+
+    #[test]
+    fn civilian_variation_does_not_start_wearing_new_armour() {
+        for seed in 0..100 {
+            let outfit = crate::components::HeroOutfit::varied(seed);
+            assert!(outfit.slots[0] < 4 && outfit.slots[1] < 4);
+            assert_eq!(outfit.slots[3..], [0, 0, 0]);
+        }
+    }
 
     /// The shipped manifest must parse and be self-consistent. This is the
     /// guard against an art build that renames a node without the game

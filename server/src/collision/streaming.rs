@@ -259,6 +259,7 @@ fn load_chunk(
             kind,
             position: spawn.position,
             scale: spawn.scale,
+            rotation: spawn.rotation,
             cell,
         };
 

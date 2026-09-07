@@ -308,19 +308,32 @@ restarting the server creates a fresh world.
 
 One ordered `UnitOrder` stream owns move/attack/hold intent. Membership edits commit
 sequentially before the next edit is validated. Durable battalion IDs compact complete
-selections; individual entities are mapped only in messages. Shared pure geometry drives
+selections; any named member also expands to the owned battalion on the server.
+Unassigned individual entities are mapped only in messages. Shared pure geometry drives
 both preview and authority, with `PersonId` tie-breaks. `EngagedWith(PersonId)` carries
 confirmed targeting to client presentation.
 
 `player/orders/navigation.rs` owns bounded shared formation fields and certified routes;
 `hero::step_units` remains the only marching position integrator. Civilian road planners
 do not own commanded formations. The client derives its army roster only when membership,
-identity or vitals change.
+identity, formation preferences or vitals change.
+`BattalionFormation` retains preferred files/spacing; sparse `FormationSeat` offsets
+keep rank assignment consistent despite client/server walking delay. The drag preview
+caches layouts and retains its footprint/count UI while the pointer is stationary.
 
-`player/combat/fronts` owns persistent file queues and contact-face reservations;
-`combat/skirmish` owns individual/partial-selection approaches. Both use a shared
-local body index and the existing authoritative mover. Rank home positions permit
-bounded local reactions; casualty replacement never sorts the entire battalion.
+`player/orders/attack.rs` assigns selected battalions to the nearby enemy line at
+the command boundary; a focus modifier keeps the clicked objective.
+`player/combat/fronts` retains battalion intent and quiet deployment files;
+`fronts/steering.rs` chooses individual combat approaches with bounded local
+avoidance. Distant approaches preserve files; screened reserves follow the person
+ahead until nearby contact or a clear approach releases them. This replaces rectangular enemy-face
+reservations and section bends. Supporting soldiers wait or sidestep instead of
+being forced into exact combat slots. Existing fights have separation priority.
+Contact-point decisions are staggered and briefly retained, while death invalidates
+them immediately; local motion does not rescore every possible approach each tick.
+`combat/skirmish` owns unassigned individuals’ approaches. Both use the shared
+local body index and authoritative mover. Survivors regroup after local combat
+has remained quiet; direct movement immediately replaces combat intent.
 Server-clock attack/reaction components drive client-authored clips, and mortality
 settles immediately while a marked fatal body remains briefly for its fall.
 See [COMBAT-DESIGN.md](COMBAT-DESIGN.md) for budgets and limits.
@@ -425,3 +438,12 @@ responses. Policy replicates separately from a transient move/attack objective;
 membership edits propagate the destination policy. Responses reuse `orders` and its
 bounded formation routes. The retained Army page under `ui/encyclopedia/army/` separates
 pure roster/action models, layout, binding and input. See COMBAT-DESIGN.md for priority.
+
+### Archer combat
+
+`player/archery` owns equipment validation, weapon transitions, staggered ranged
+targeting, baked convex collision queries and swept arrow impacts. Its systems run
+in the shared Navigation chain: weapon selection before formation steering, firing
+and impacts after movement and melee. Shared launch/shot timelines drive cached
+client bow graphs and arrow scenes. The coarse ranged body grid supplements the
+existing melee grid. See [ARCHERY.md](ARCHERY.md) for contracts and limits.

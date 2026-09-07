@@ -266,7 +266,7 @@ pub(super) fn attach_settlement_visuals(
 
         commands
             .entity(entity)
-            .remove::<BuildingDoorAnimation>()
+            .remove::<(BuildingDoorAnimation, WindowLighting)>()
             .insert((
                 SettlementVisual { building_type: art },
                 DoorVisualSource {

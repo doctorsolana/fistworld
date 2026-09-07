@@ -177,6 +177,22 @@ pub(crate) fn spawn_army_tab(body: &mut ChildSpawnerCommands<'_>) {
                             );
                         });
                         label(policy, BoundText::Policy, text_size::VALUE, false);
+                        policy
+                            .spawn(Node {
+                                flex_wrap: FlexWrap::Wrap,
+                                row_gap: Val::Px(6.0),
+                                ..row()
+                            })
+                            .with_children(|r| {
+                                for role in [SoldierRole::Infantry, SoldierRole::Archer] {
+                                    button(r, ArmyAction::Role(role), UiButtonVariant::Secondary);
+                                }
+                                for fire in [FirePolicy::FireAtWill, FirePolicy::HoldFire] {
+                                    button(r, ArmyAction::Fire(fire), UiButtonVariant::Secondary);
+                                }
+                                button(r, ArmyAction::Rearm, UiButtonVariant::Ghost);
+                            });
+                        label(policy, BoundText::Equipment, text_size::BODY, false);
                     });
                 detail
                     .spawn(Node {

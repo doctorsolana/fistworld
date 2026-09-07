@@ -611,6 +611,8 @@ pub fn step_units(
 
             let speed = if is_catapult {
                 shared::components::CATAPULT_SPEED
+            } else if kind == Some(&CharacterKind::Hero) && !authored_traversal {
+                super::swimming::speed(&terrain, current, HERO_MOVE_SPEED * if on_road { ROAD_SPEED_MULTIPLIER } else { 1.0 })
             } else {
                 HERO_MOVE_SPEED * if on_road { ROAD_SPEED_MULTIPLIER } else { 1.0 }
             };
@@ -777,6 +779,7 @@ pub fn step_units(
 
         let next_y = pier_traversal
             .and_then(|pier| pier.deck_height_at(current))
+            .or_else(|| (kind == Some(&CharacterKind::Hero) && !authored_traversal).then(|| super::swimming::surface(&terrain, current)).flatten())
             .unwrap_or_else(|| terrain.get_height(current.x, current.y));
         let next_pos = Vec3::new(current.x, next_y, current.y);
 
@@ -1297,6 +1300,7 @@ mod tests {
         colliders.instances.insert(
             1,
             StaticColliderInstance {
+                rotation: Quat::IDENTITY,
                 kind: tree_kind,
                 position: tree_position,
                 scale: 1.0,

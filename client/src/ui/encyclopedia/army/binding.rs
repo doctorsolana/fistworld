@@ -80,6 +80,10 @@ pub(crate) fn sync_army_panel(
                     |b| b.stance.description(),
                 )
                 .into(),
+            BoundText::Equipment => model.unit.map_or(String::new(), |b| {
+                if b.role == SoldierRole::Archer { format!("{} / {} arrows. Attack closes to bow range; a new attack resumes fire. Stop 100 m from enemies to rearm.",b.arrows,b.count*usize::from(QUIVER_CAPACITY)) }
+                else { "Change equipment while stopped at least 100 m from enemies. Detached troops keep their equipment.".into() }
+            }),
             BoundText::Notice => {
                 if state.confirm_disband {
                     "Disband this battalion? Its troops stay in your army as unassigned.".into()
@@ -107,9 +111,10 @@ pub(crate) fn sync_army_panel(
                 .find(|b| b.entity == e)
                 .map_or(String::new(), |b| {
                     format!(
-                        "{} / {} troops\n{}",
+                        "{} / {} troops / {}\n{}",
                         b.count,
                         MAX_BATTALION_SIZE,
+                        b.role.label(),
                         b.stance.label()
                     )
                 }),
@@ -121,7 +126,7 @@ pub(crate) fn sync_army_panel(
                         .and_then(|id| roster.battalions.iter().find(|b| b.id == id))
                         .map_or("Unassigned", |b| b.name.as_str())
                 };
-                format!("STR {} / {:.0} HP / {source}", s.strength, s.current_health)
+                format!("{} / STR {} / {:.0} HP / {source}{}", s.role.label(), s.strength, s.current_health, if s.role == SoldierRole::Archer { format!(" / {} arrows",s.arrows) } else { String::new() })
             }),
             BoundText::Button(action) => model.button(action, &state, &roster, pending).0,
         };

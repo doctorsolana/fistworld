@@ -23,6 +23,7 @@ pub struct CombatSpace {
     by_battalion: HashMap<BattalionId, Vec<usize>>,
     cells: HashMap<(i32, i32), Vec<usize>>,
     accounts: HashMap<String, usize>,
+    ranged_cells: HashMap<(i32, i32), Vec<usize>>,
 }
 fn cell(p: Vec2) -> (i32, i32) {
     ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)
@@ -32,9 +33,20 @@ impl CombatSpace {
         self.by_entity.get(&e).map(|i| &self.bodies[*i])
     }
     pub fn nearby(&self, p: Vec2) -> impl Iterator<Item = &Body> {
-        let at = cell(p);
-        (-1..=1)
-            .flat_map(move |x| (-1..=1).filter_map(move |z| self.cells.get(&(at.0 + x, at.1 + z))))
+        self.within(p, CELL)
+    }
+    pub fn within(&self, p: Vec2, radius: f32) -> impl Iterator<Item = &Body> {
+        let (size, cells) = if radius > 12. {
+            (16., &self.ranged_cells)
+        } else {
+            (CELL, &self.cells)
+        };
+        let at = ((p.x / size).floor() as i32, (p.y / size).floor() as i32);
+        let rings = (radius / size).ceil() as i32;
+        (-rings..=rings)
+            .flat_map(move |x| {
+                (-rings..=rings).filter_map(move |z| cells.get(&(at.0 + x, at.1 + z)))
+            })
             .flatten()
             .map(|i| &self.bodies[*i])
     }
@@ -147,6 +159,9 @@ pub fn rebuild_combat_space(
 ) {
     space.bodies.clear();
     space.by_entity.clear();
+    for entries in space.ranged_cells.values_mut() {
+        entries.clear();
+    }
     for entries in space.cells.values_mut() {
         entries.clear();
     }
@@ -181,12 +196,21 @@ pub fn rebuild_combat_space(
         let index = space.bodies.len();
         space.by_entity.insert(entity, index);
         space.cells.entry(cell(body.point)).or_default().push(index);
+        space
+            .ranged_cells
+            .entry((
+                (body.point.x / 16.).floor() as i32,
+                (body.point.y / 16.).floor() as i32,
+            ))
+            .or_default()
+            .push(index);
         if let Some(id) = body.battalion {
             space.by_battalion.entry(id).or_default().push(index);
         }
         space.bodies.push(body);
     }
     space.cells.retain(|_, v| !v.is_empty());
+    space.ranged_cells.retain(|_, v| !v.is_empty());
     space.by_battalion.retain(|_, v| !v.is_empty());
 }
 
@@ -195,7 +219,7 @@ pub fn assign_formation_contacts(
     mut commands: Commands,
     space: Res<CombatSpace>,
     fronts: Res<CombatFormations>,
-    soldiers: Query<(Entity, &FormationMember, Option<&AttackOrder>)>,
+    soldiers: Query<(Entity, &FormationMember, Option<&AttackOrder>), Without<BowEquipped>>,
     mut loads: Local<HashMap<Entity, usize>>,
 ) {
     loads.clear();

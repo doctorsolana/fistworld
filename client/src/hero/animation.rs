@@ -2,15 +2,26 @@
 
 use super::appearance::{HeroAssets, HeroManifest, HeroPreviewRig};
 use super::motion::HeroVisual;
-use bevy::animation::AnimationTargetId;
+use bevy::animation::{AnimationTargetId, RepeatAnimation};
 use bevy::camera::primitives::{Frustum, Sphere};
 use bevy::camera::visibility::ViewVisibility;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use shared::character::locomotion::*;
 use shared::components::{CharacterActivity, CharacterKind, CharacterMotion};
 use shared::economy::{CarriedLoad, PorterCartState};
 use shared::player::HERO_MOVE_SPEED;
+
+#[derive(Default)]
+pub(super) struct MovementClips {
+    pub run: Option<AnimationNodeIndex>,
+    pub swim: Option<AnimationNodeIndex>,
+    pub swim_idle: Option<AnimationNodeIndex>,
+    pub lie_down: Option<AnimationNodeIndex>,
+    pub lie_idle: Option<AnimationNodeIndex>,
+    pub rest_seconds: Option<f32>,
+}
 
 /// Animation graph handles, shared by every hero.
 #[derive(Clone)]
@@ -25,6 +36,8 @@ pub struct HeroGraph {
 /// Link from the hero root to the AnimationPlayer entity inside its scene.
 #[derive(Component)]
 pub(super) struct HeroAnim {
+    pub(super) archery: super::archery::ArcheryClips,
+    pub(super) movement: MovementClips,
     pub(super) player: Entity,
     pub(super) idle: Option<AnimationNodeIndex>,
     pub(super) walk: Option<AnimationNodeIndex>,
@@ -272,6 +285,18 @@ pub(super) fn setup_hero_animation(
         // world teardown). Cosmetic animation setup must never crash the
         // client on either stale entity.
         commands.entity(rig_root).try_insert(HeroAnim {
+            archery: super::archery::ArcheryClips {
+                ready: hero_graph.body.get("bow_ready").copied(),
+                shoot: hero_graph.body.get("bow_shoot").copied(),
+            },
+            movement: MovementClips {
+                run: hero_graph.body.get("run").copied(),
+                swim: hero_graph.body.get("swim").copied(),
+                swim_idle: hero_graph.body.get("swim_idle").copied(),
+                lie_down: hero_graph.body.get("lie_down").copied(),
+                lie_idle: hero_graph.body.get("lie_idle").copied(),
+                ..default()
+            },
             player: player_entity,
             idle,
             walk,
@@ -282,6 +307,7 @@ pub(super) fn setup_hero_animation(
                 strike: hero_graph.body.get("combat_strike").copied(),
                 recoil: hero_graph.body.get("combat_recoil").copied(),
                 fall: hero_graph.body.get("combat_fall").copied(),
+                fall_back: hero_graph.body.get("combat_fall_back").copied(),
             },
             harvest,
             carry,
@@ -304,6 +330,7 @@ pub(super) fn desired_body_animation(
     carrying: bool,
     carting: bool,
     motion: Option<CharacterMotion>,
+    swimming: bool,
 ) -> (Option<AnimationNodeIndex>, f32, bool) {
     // A seated character can be translated by a moving parent such as a
     // vessel. That world-space speed is not locomotion: the feet must remain
@@ -311,12 +338,24 @@ pub(super) fn desired_body_animation(
     if activity == Some(CharacterActivity::Sitting) {
         return (anim.sit_idle.or(anim.idle), 1.0, false);
     }
+    if activity == Some(CharacterActivity::LyingDown) {
+        let clip = if anim.movement.rest_seconds.unwrap_or(0.0) < 1.5 {
+            anim.movement.lie_down
+        } else {
+            anim.movement.lie_idle
+        };
+        return (clip.or(anim.sit_idle).or(anim.idle), 1.0, false);
+    }
 
     // Different start/stop thresholds keep small replicated speed noise from
     // continually restarting idle and walk.
     let current = anim.current_body;
     let was_locomoting = current.is_some()
-        && (current == anim.walk || current == anim.carry || current == anim.pull);
+        && (current == anim.walk
+            || current == anim.movement.run
+            || current == anim.carry
+            || current == anim.pull
+            || current == anim.movement.swim);
     let observed_speed = visual
         .speed
         .max(motion.map_or(0.0, |motion| motion.velocity.length()));
@@ -327,6 +366,17 @@ pub(super) fn desired_body_animation(
     let moving = motion.is_some_and(CharacterMotion::is_moving)
         || visual.speed > if was_locomoting { 0.10 } else { 0.24 };
     let stride_speed = (observed_speed / HERO_MOVE_SPEED).clamp(0.4, 1.6);
+    if swimming {
+        return if moving {
+            (
+                anim.movement.swim.or(anim.idle),
+                (observed_speed / SWIM_SPEED).clamp(0.5, 1.8),
+                false,
+            )
+        } else {
+            (anim.movement.swim_idle.or(anim.idle), 1.0, false)
+        };
+    }
 
     if carting {
         return (
@@ -343,7 +393,25 @@ pub(super) fn desired_body_animation(
         );
     }
     if moving {
-        return (anim.walk.or(anim.idle), stride_speed, false);
+        let running = observed_speed
+            >= if current == anim.movement.run {
+                RUN_EXIT_SPEED
+            } else {
+                RUN_ENTER_SPEED
+            };
+        return if running && anim.movement.run.is_some() {
+            (
+                anim.movement.run,
+                (observed_speed / RUN_CYCLE_SPEED).clamp(0.5, 1.8),
+                false,
+            )
+        } else {
+            (
+                anim.walk.or(anim.idle),
+                (observed_speed / WALK_CYCLE_SPEED).clamp(0.4, 1.8),
+                false,
+            )
+        };
     }
 
     let clip = match activity {
@@ -363,6 +431,8 @@ pub(super) fn desired_body_animation(
 /// a short crossfade. The face loop remains a separate masked layer.
 pub(super) fn drive_hero_locomotion(
     time: Res<Time>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
+    aboard: Query<(), With<shared::components::AboardBoat>>,
     mut heroes: Query<(
         Entity,
         &HeroVisual,
@@ -384,7 +454,9 @@ pub(super) fn drive_hero_locomotion(
         Has<shared::components::CombatReady>,
         Option<&shared::components::CombatSwing>,
         Option<&shared::components::CombatReaction>,
+        Option<&shared::components::PersonId>,
     )>,
+    bows: Query<Option<&shared::components::BowShot>, With<shared::components::BowEquipped>>,
 ) {
     let census = *tally
         .enabled
@@ -490,6 +562,23 @@ pub(super) fn drive_hero_locomotion(
         }
 
         let carting = cart.is_some();
+        let swimming = !carting
+            && transform
+                .zip(terrain.as_deref())
+                .is_some_and(|(at, terrain)| {
+                    let at = at.translation();
+                    swimming_at(
+                        terrain.get_height(at.x, at.z),
+                        terrain.get_water_height(at.x, at.z),
+                        at.y,
+                        aboard.contains(entity),
+                    )
+                });
+        if activity == Some(&CharacterActivity::LyingDown) {
+            *anim.movement.rest_seconds.get_or_insert(0.0) += time.delta_secs();
+        } else {
+            anim.movement.rest_seconds = None;
+        }
         let carrying = !carting && carried.is_some_and(|load| !load.is_empty());
         let (mut desired, mut speed, freeze_at_contact) = desired_body_animation(
             visual,
@@ -498,19 +587,41 @@ pub(super) fn drive_hero_locomotion(
             carrying,
             carting,
             motion.copied(),
+            swimming,
         );
-        let combat_pose = combat
-            .get(entity)
-            .ok()
-            .and_then(|(ready, swing, reaction)| {
-                anim.combat.sample(
-                    now,
-                    ready || activity == Some(&CharacterActivity::Fighting),
-                    swing,
-                    reaction,
-                    motion.is_some_and(|m| m.is_moving()) || visual.speed > 0.24,
-                )
-            });
+        let combat_pose = (!swimming)
+            .then(|| {
+                combat
+                    .get(entity)
+                    .ok()
+                    .and_then(|(ready, swing, reaction, person)| {
+                        anim.combat.sample(
+                            now,
+                            ready || activity == Some(&CharacterActivity::Fighting),
+                            swing,
+                            reaction,
+                            motion.is_some_and(|m| m.is_moving()) || visual.speed > 0.24,
+                            person.copied(),
+                        )
+                    })
+            })
+            .flatten();
+        let archery_pose = (!swimming
+            && !carrying
+            && !carting
+            && !motion.is_some_and(|m| m.is_moving())
+            && visual.speed <= 0.24
+            && super::archery::available(activity.copied())
+            && !combat.get(entity).is_ok_and(|(_, _, reaction, _)| {
+                reaction.is_some_and(|r| r.fatal || now - r.at < 0.4)
+            }))
+        .then(|| {
+            bows.get(entity)
+                .ok()
+                .and_then(|shot| anim.archery.sample(now, shot))
+        })
+        .flatten();
+        let combat_pose = archery_pose.or(combat_pose);
         if let Some((clip, seek)) = combat_pose {
             desired = Some(clip);
             speed = if seek.is_some() { 0.0 } else { 1.0 };
@@ -528,9 +639,15 @@ pub(super) fn drive_hero_locomotion(
                 .filter(|previous| *previous != desired && player.is_playing_animation(*previous));
             // `start` deliberately restarts job clips at a readable contact
             // pose. Only the old and new body clips coexist during this fade.
+            let one_shot = Some(desired) == anim.movement.lie_down
+                || combat_pose.is_some_and(|(_, seek)| seek.is_some());
             player
                 .start(desired)
-                .repeat()
+                .set_repeat(if one_shot {
+                    RepeatAnimation::Never
+                } else {
+                    RepeatAnimation::Forever
+                })
                 .set_weight(if previous.is_some() { 0.0 } else { 1.0 });
             anim.current_body = Some(desired);
             anim.fading_body = previous;
@@ -539,7 +656,11 @@ pub(super) fn drive_hero_locomotion(
 
         if let Some(active) = player.animation_mut(desired) {
             if let Some((_, Some(seek))) = combat_pose {
-                active.set_seek_time(seek);
+                // Speed zero still lets Bevy modulo an exact end timestamp
+                // back to zero. A clock-sampled clip must skip advancement.
+                active.pause().set_seek_time(seek);
+            } else {
+                active.resume();
             }
             if combat_pose.is_none() && freeze_at_contact && active.seek_time() != 0.0 {
                 active.set_seek_time(0.0);

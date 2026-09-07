@@ -3,8 +3,8 @@
 Blender --background --factory-startup --threads 2 --python-exit-code 1 \
   --python asset_creation/houses/build_houses.py [-- --asset CabinL2]
 
-Metres, Blender +Y front -> glTF -Z. The four existing plots and door anchors
-are stable contracts. Architectural parts share one palette material; every
+Metres, Blender +Y front -> glTF -Z. Dimensions restore the original wall plans; plot bounds and approach anchors
+are checked against the exported geometry. Architectural parts share one palette material; every
 window/lantern shares CabinGlass and the existing bounded night-light system.
 """
 
@@ -18,6 +18,7 @@ from pathlib import Path
 
 import bpy
 from mathutils import Matrix, Vector
+from mathutils.bvhtree import BVHTree
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -52,11 +53,19 @@ class House:
 
 
 HOUSES = [
-    House("LogCabin", "log_cabin", False, False, 3.80, 8424),
+    House("LogCabin", "log_cabin", False, False, 4.30, 8424),
     House("LongCabin", "long_cabin", True, False, 3.25, 4656),
-    House("CabinL2", "cabin_l2", False, True, 3.90, 8808),
-    House("LongCabinL2", "long_cabin_l2", True, True, 3.00, 11280),
+    House("CabinL2", "cabin_l2", False, True, 4.30, 8808),
+    House("LongCabinL2", "long_cabin_l2", True, True, 3.65, 11280),
 ]
+
+DOOR_HALF_WIDTH = 0.65
+DOOR_BOTTOM = 0.03
+DOOR_HEIGHT = 2.10
+DOOR_HINGE_FORWARD = (
+    0.21  # Outside the jamb: the leaf must clear the frame as it swings.
+)
+DOOR_OPENING_TOP = DOOR_BOTTOM + DOOR_HEIGHT + 0.05
 
 BALCONY_FLOOR_Z = 2.48
 BALCONY_FLOOR_THICKNESS = 0.15
@@ -212,31 +221,57 @@ def roof_panel(mesh, top_a, top_b, bottom_a, bottom_b, rows, cols):
             mesh.add(edge, [winding], "edge", 0.1)
 
 
+def roof_wall_closure(mesh, wall, profile, bottom, tone):
+    """Fill the attic to the roof at the wall plane, not at the outer eave.
+
+    Overhangs put the underside higher above the wall than above the fascia.
+    Hip ends also need the actual trapezoid profile, not a guessed rectangle.
+    """
+    state = mesh.random.getstate()
+    for (a, za), (b, zb) in zip(profile, profile[1:]):
+        mesh.add(
+            [
+                wall.p(a, 0, bottom),
+                wall.p(a, 0, za),
+                wall.p(b, 0, zb),
+                wall.p(b, 0, bottom),
+            ],
+            [(0, 1, 2, 3)],
+            tone,
+        )
+    mesh.random.setstate(state)
+
+
 def foundation(mesh, w, d):
-    mesh.box((0, 0, 0.04), (2 * w + 0.18, 2 * d + 0.18, 0.40), "mortar")
-    for wall, half in [
-        (Facade(mesh, (0, d + 0.10, 0), (1, 0, 0), (0, 1, 0)), w),
-        (Facade(mesh, (0, -d - 0.10, 0), (-1, 0, 0), (0, -1, 0)), w),
-        (Facade(mesh, (w + 0.10, 0, 0), (0, -1, 0), (1, 0, 0)), d),
-        (Facade(mesh, (-w - 0.10, 0, 0), (0, 1, 0), (-1, 0, 0)), d),
+    # Perimeter footings leave the doorway and interior floor at walking grade.
+    # A full raised foundation box was a hidden 24 cm step across every entry.
+    mesh.box((0, 0, -0.08), (2 * w + 0.18, 2 * d + 0.18, 0.16), "mortar")
+    front = Facade(mesh, (0, d + 0.10, 0), (1, 0, 0), (0, 1, 0))
+    for wall, spans in [
+        (front, [(-w, -DOOR_HALF_WIDTH), (DOOR_HALF_WIDTH, w)]),
+        (Facade(mesh, (0, -d - 0.10, 0), (-1, 0, 0), (0, -1, 0)), [(-w, w)]),
+        (Facade(mesh, (w + 0.10, 0, 0), (0, -1, 0), (1, 0, 0)), [(-d, d)]),
+        (Facade(mesh, (-w - 0.10, 0, 0), (0, 1, 0), (-1, 0, 0)), [(-d, d)]),
     ]:
-        count = math.ceil(2 * half / 0.60)
-        for i in range(count):
-            wall.panel(
-                -half + i * 2 * half / count + 0.018,
-                -half + (i + 1) * 2 * half / count - 0.018,
-                -0.10,
-                0.235,
-                0.012,
-                "stone",
-                0.15,
-            )
-    mesh.box((0, 0, 0.25), (2 * w - 0.18, 2 * d - 0.18, 0.08), "wood")
+        for a, b in spans:
+            wall.box((a + b) / 2, -0.12, 0.075, b - a, 0.25, 0.47, "mortar")
+            count = math.ceil((b - a) / 0.60)
+            for i in range(count):
+                wall.panel(
+                    a + i * (b - a) / count + 0.018,
+                    a + (i + 1) * (b - a) / count - 0.018,
+                    -0.10,
+                    0.235,
+                    0.012,
+                    "stone",
+                    0.15,
+                )
+    mesh.box((0, 0, -0.028), (2 * w - 0.18, 2 * d - 0.18, 0.08), "wood")
 
 
 def walls(mesh, w, d, bottom, top, front_door=False, plaster=False):
     """Hollow shell; inexpensive siding faces carry the timber course detail."""
-    spans = [(-w, -0.55), (0.55, w)] if front_door else [(-w, w)]
+    spans = [(-w, -DOOR_HALF_WIDTH), (DOOR_HALF_WIDTH, w)] if front_door else [(-w, w)]
     front = Facade(mesh, (0, d, 0), (1, 0, 0), (0, 1, 0))
     back = Facade(mesh, (0, -d, 0), (-1, 0, 0), (0, -1, 0))
     right = Facade(mesh, (w, 0, 0), (0, -1, 0), (1, 0, 0))
@@ -261,10 +296,10 @@ def walls(mesh, w, d, bottom, top, front_door=False, plaster=False):
             front.box(
                 0,
                 -0.065,
-                (top + 2.03) / 2,
-                1.10,
+                (top + DOOR_OPENING_TOP) / 2,
+                2 * DOOR_HALF_WIDTH,
                 0.13,
-                top - 2.03,
+                top - DOOR_OPENING_TOP,
                 "plaster" if plaster else "wood",
             )
         count = 4 if plaster else 8
@@ -314,29 +349,48 @@ def chimney(mesh, x, y, base, top):
 
 def entrance(mesh, leaf, glass, d, long, upper):
     front = Facade(mesh, (0, d, 0), (1, 0, 0), (0, 1, 0))
-    for x in [-0.56, 0.56]:
-        front.box(x, 0.10, 1.12, 0.13, 0.24, 1.90, "edge")
-    front.box(0, 0.12, 2.06, 1.30, 0.28, 0.18, "fresh")
+    for x in [-0.70, 0.70]:
+        front.box(x, 0.10, 1.05, 0.13, 0.24, 2.26, "edge")
+    front.box(0, 0.12, DOOR_OPENING_TOP + 0.09, 1.56, 0.28, 0.18, "fresh")
+    # Continuous timber behind the decorative plank seams keeps a closed leaf opaque.
+    front.box(
+        0,
+        -0.005,
+        DOOR_BOTTOM + DOOR_HEIGHT / 2,
+        1.20,
+        0.03,
+        DOOR_HEIGHT,
+        "wood",
+        target=leaf,
+    )
     for i in range(5):
         front.box(
-            -0.4 + i * 0.2, 0.045, 1.115, 0.188, 0.09, 1.69, "wood", 0.1, target=leaf
+            -0.48 + i * 0.24,
+            0.045,
+            DOOR_BOTTOM + DOOR_HEIGHT / 2,
+            0.228,
+            0.09,
+            DOOR_HEIGHT,
+            "wood",
+            0.1,
+            target=leaf,
         )
-    for z in [0.49, 1.78]:
-        front.box(0, 0.105, z, 0.97, 0.06, 0.09, "oak", target=leaf)
-        front.box(-0.20, 0.145, z, 0.61, 0.023, 0.045, "iron", target=leaf)
+    for z in [0.25, 1.91]:
+        front.box(0, 0.105, z, 1.17, 0.06, 0.09, "oak", target=leaf)
+        front.box(-0.26, 0.145, z, 0.73, 0.023, 0.045, "iron", target=leaf)
     leaf.beam(
-        front.p(-0.42, 0.105, 0.54), front.p(0.42, 0.105, 1.72), 0.07, 0.055, "edge"
+        front.p(-0.52, 0.105, 0.30), front.p(0.52, 0.105, 1.85), 0.07, 0.055, "edge"
     )
-    front.box(0.35, 0.17, 1.14, 0.07, 0.055, 0.14, "iron", target=leaf)
-    front.box(-0.535, 0.045, 0.49, 0.065, 0.14, 0.11, "iron", target=leaf)
-    front.box(-0.535, 0.045, 1.78, 0.065, 0.14, 0.11, "iron", target=leaf)
+    front.box(0.45, 0.17, 1.08, 0.07, 0.055, 0.14, "iron", target=leaf)
+    front.box(-0.635, DOOR_HINGE_FORWARD, 0.25, 0.065, 0.14, 0.11, "iron", target=leaf)
+    front.box(-0.635, DOOR_HINGE_FORWARD, 1.91, 0.065, 0.14, 0.11, "iron", target=leaf)
     reach = 0.77 if long else 0.80
-    mesh.box((0, d + reach * 0.50, 0.07), (1.72, reach, 0.20), "stone")
+    mesh.box((0, d + reach * 0.50, -0.03), (1.85, reach, 0.10), "stone")
     # Small porch, or the L2 long house's balcony shelter over the same doorway.
     porch_front = d + reach - 0.05
-    porch_eave = 2.18
+    porch_eave = 2.36
     if not (long and upper):
-        peak = 2.72
+        peak = 2.92
         for side in [-1, 1]:
             roof_panel(
                 mesh,
@@ -357,8 +411,7 @@ def entrance(mesh, leaf, glass, d, long, upper):
     # Every knee brace bears into a continuous header joining both posts.
     # The header supports either the two porch rafters or the balcony floor.
     header_top = (
-        BALCONY_FLOOR_Z - BALCONY_FLOOR_THICKNESS / 2
-        if long and upper else porch_eave
+        BALCONY_FLOOR_Z - BALCONY_FLOOR_THICKNESS / 2 if long and upper else porch_eave
     )
     header_bottom = header_top - 0.16
     mesh.box((0, porch_front, header_top - 0.08), (1.98, 0.14, 0.16), "edge")
@@ -366,11 +419,15 @@ def entrance(mesh, leaf, glass, d, long, upper):
     for x in [-0.90, 0.90]:
         mesh.box(
             (x, porch_front, (post_bottom + header_top) / 2),
-            (0.13, 0.13, header_top - post_bottom), "edge"
+            (0.13, 0.13, header_top - post_bottom),
+            "edge",
         )
         mesh.beam(
-            (x, porch_front, header_bottom - 0.43),
-            (x * 0.57, porch_front, header_bottom + 0.04), 0.09, 0.09, "oak"
+            (x, porch_front, header_bottom - 0.32),
+            (x * 0.70, porch_front, header_bottom + 0.04),
+            0.09,
+            0.09,
+            "oak",
         )
     # A shared pane material gives the lantern a warm flame without another lamp.
     front.box(0.78, 0.28, 1.77, 0.15, 0.15, 0.22, "glass", target=glass)
@@ -380,7 +437,7 @@ def entrance(mesh, leaf, glass, d, long, upper):
         for y in [0.19, 0.37]:
             front.box(x, y, 1.77, 0.025, 0.025, 0.26, "iron")
     front.box(0.78, 0.16, 2.0, 0.04, 0.34, 0.045, "iron")
-    return (-0.535, d + 0.045, 0.25)
+    return (-0.635, d + DOOR_HINGE_FORWARD, DOOR_BOTTOM)
 
 
 def architecture(spec):
@@ -388,12 +445,12 @@ def architecture(spec):
     if spec.long:
         palette["roof"] = (0.26, 0.125, 0.039, 1)
     body, leaf, glass = (BuildingMesh(palette, seed) for seed in [217, 218, 219])
-    w, d = (3.30, 1.68) if spec.long else (2.25, 2.35)
+    w, d = (3.60, 2.10) if spec.long else (2.50, 3.00)
     foundation(body, w, d)
     front, back, right, left = walls(
         body, w, d, 0.30, 2.38, front_door=True, plaster=spec.long
     )
-    front_window = 2.05 if spec.long else 1.40
+    front_window = 2.25 if spec.long else 1.55
     window(front, glass, -front_window, 1.36, planter=not spec.long)
     window(front, glass, front_window, 1.36)
     window(back, glass, 0, 1.36)
@@ -440,7 +497,8 @@ def architecture(spec):
             window(upper_front, glass, 0, 3.43, tall=True)
             body.box(
                 (0, ud + 0.40, BALCONY_FLOOR_Z),
-                (2.58, 0.91, BALCONY_FLOOR_THICKNESS), "wood"
+                (2.58, 0.91, BALCONY_FLOOR_THICKNESS),
+                "wood",
             )
             for x in [-1.24, -0.62, 0, 0.62, 1.24]:
                 body.box((x, ud + 0.80, 2.89), (0.075, 0.075, 0.76), "edge")
@@ -448,9 +506,33 @@ def architecture(spec):
             for x in [-1.25, 1.25]:
                 body.box((x, ud + 0.38, 3.29), (0.11, 0.85, 0.11), "fresh")
                 body.beam((x, d, 1.70), (x, ud + 0.70, 2.42), 0.13, 0.13, "oak")
-    rw, rd = uw + 0.45, ud + 0.40
+    rw, rd = uw + (0.385 if spec.long else 0.44), ud + 0.40
+    wall_top = 4.55 if spec.upper else 2.38
     if spec.long:
         ridge = rw - 1.27
+        front_contact = eave + (peak - eave) * (rd - ud) / rd - 0.025
+        hip_contact = eave + (peak - eave) * (rw - uw) / (rw - ridge) - 0.025
+        hip_break = rd * (uw - ridge) / (rw - ridge)
+        for side in [-1, 1]:
+            roof_wall_closure(
+                body,
+                Facade(body, (0, side * ud, 0), (side, 0, 0), (0, side, 0)),
+                [(-uw, front_contact), (uw, front_contact)],
+                wall_top - 0.025,
+                "plaster",
+            )
+            roof_wall_closure(
+                body,
+                Facade(body, (side * uw, 0, 0), (0, -side, 0), (side, 0, 0)),
+                [
+                    (-ud, front_contact),
+                    (-hip_break, hip_contact),
+                    (hip_break, hip_contact),
+                    (ud, front_contact),
+                ],
+                wall_top - 0.025,
+                "plaster",
+            )
         for side in [-1, 1]:
             roof_panel(
                 body,
@@ -486,10 +568,25 @@ def architecture(spec):
             "fresh",
         )
     else:
+        wall_contact = eave + (peak - eave) * (rw - uw) / rw - 0.025
+        for side in [-1, 1]:
+            roof_wall_closure(
+                body,
+                Facade(body, (side * uw, 0, 0), (0, -side, 0), (side, 0, 0)),
+                [(-ud, wall_contact), (ud, wall_contact)],
+                wall_top - 0.025,
+                "plaster" if spec.upper else "wood",
+            )
         for y in [-ud, ud]:
             body.add(
-                [(-uw, y, eave), (uw, y, eave), (0, y, peak - 0.07)],
-                [(2, 1, 0)] if y > 0 else [(0, 1, 2)],
+                [
+                    (-uw, y, eave),
+                    (uw, y, eave),
+                    (uw, y, wall_contact),
+                    (0, y, peak - 0.025),
+                    (-uw, y, wall_contact),
+                ],
+                [(4, 3, 2, 1, 0)] if y > 0 else [(0, 1, 2, 3, 4)],
                 "plaster",
             )
             if y > 0:
@@ -499,7 +596,13 @@ def architecture(spec):
             else:
                 body.beam((0, y, eave), (0, y, peak - 0.08), 0.13, 0.18, "oak")
             for sign in [-1, 1]:
-                body.beam((sign * uw, y, eave), (0, y, peak - 0.08), 0.13, 0.17, "oak")
+                body.beam(
+                    (sign * uw, y, wall_contact - 0.05),
+                    (0, y, peak - 0.08),
+                    0.13,
+                    0.17,
+                    "oak",
+                )
         for side in [-1, 1]:
             roof_panel(
                 body,
@@ -537,7 +640,35 @@ def architecture(spec):
         (6.73 if spec.upper else 5.16) if spec.long else (6.76 if spec.upper else 4.14),
     )
     pivot = entrance(body, leaf, glass, d, spec.long, spec.upper)
+    if not spec.upper:
+        # A real ceiling blocks views through the single-sided attic from an open door.
+        # Upper-storey houses already have a solid first-floor slab.
+        body.add(
+            [(-w, -d, 2.30), (-w, d, 2.30), (w, d, 2.30), (w, -d, 2.30)],
+            [(0, 1, 2, 3)],
+            "oak",
+        )
     return body, leaf, glass, pivot, front_window, d
+
+
+def validate_door_sweep(body, leaf, pivot):
+    """Reject frame/porch collisions throughout the authored 96-degree swing."""
+    pivot = Vector(pivot)
+    static = BVHTree.FromPolygons(body.vertices, body.faces)
+    # Only the two small hinge blocks may meet the jamb. Test every timber,
+    # strap and handle face, including the back and edges of the door leaf.
+    moving_faces = [
+        face
+        for face in leaf.faces
+        if max((Vector(leaf.vertices[i]) - pivot).xy.length for i in face) > 0.10
+    ]
+    for degrees in range(97):
+        rotation = Matrix.Rotation(math.radians(degrees), 3, "Z")
+        vertices = [pivot + rotation @ (Vector(v) - pivot) for v in leaf.vertices]
+        moving = BVHTree.FromPolygons(vertices, moving_faces)
+        assert not static.overlap(
+            moving
+        ), f"Door hits architecture at {degrees} degrees"
 
 
 def build(spec):
@@ -551,6 +682,7 @@ def build(spec):
     scene.render.fps = 24
     scene.frame_start, scene.frame_end = 0, 22
     body, leaf, glass, pivot, window_x, front = architecture(spec)
+    validate_door_sweep(body, leaf, pivot)
     material = palette_material("House_Palette")
     body.object(spec.name + "_Body", material)
     door = leaf.object("HouseDoor", material, pivot)

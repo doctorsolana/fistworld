@@ -1,4 +1,4 @@
-//! Individuals and partial selections keep their autonomy. They choose an
+//! Unassigned troops retain individual control. They choose an
 //! exposed opponent and a free approach, rather than inheriting a battalion's
 //! frontage or making every ally chase the clicked person through the ranks.
 use super::{
@@ -24,6 +24,7 @@ pub fn steer_skirmishers(
     space: Res<CombatSpace>,
     clock: Query<&WorldTime>,
     health: Query<&Health>,
+    bows: Query<(), With<BowEquipped>>,
     mut last: Local<f64>,
     units: Query<(
         Entity,
@@ -54,6 +55,9 @@ pub fn steer_skirmishers(
         }
     }
     for (entity, order, position, attack, moving) in &units {
+        if bows.contains(entity) {
+            continue;
+        }
         let Some(body) = space.body(entity) else {
             continue;
         };

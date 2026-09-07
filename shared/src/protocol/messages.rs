@@ -202,16 +202,33 @@ impl bevy::ecs::entity::MapEntities for SailToLanding {
 pub enum ArmyOrder {
     /// Form a new battalion from these soldiers. Soldiers already serving
     /// elsewhere transfer. The server names it by ordinal.
-    Muster { members: Vec<Entity> },
+    Muster {
+        members: Vec<Entity>,
+    },
     /// Enlist soldiers into an existing battalion.
     Assign {
         battalion: Entity,
         members: Vec<Entity>,
     },
     /// Release soldiers from whatever battalion they serve in.
-    Dismiss { members: Vec<Entity> },
+    Dismiss {
+        members: Vec<Entity>,
+    },
     /// Dissolve a battalion; its soldiers become unassigned.
-    Disband { battalion: Entity },
+    Disband {
+        battalion: Entity,
+    },
+    SetRole {
+        battalion: Entity,
+        role: crate::components::SoldierRole,
+    },
+    SetFirePolicy {
+        battalion: Entity,
+        policy: crate::components::FirePolicy,
+    },
+    Rearm {
+        battalion: Entity,
+    },
     SetStance {
         battalion: Entity,
         stance: crate::components::BattalionStance,
@@ -232,7 +249,11 @@ impl bevy::ecs::entity::MapEntities for ArmyOrder {
                     *member = mapper.get_mapped(*member);
                 }
             }
-            ArmyOrder::Disband { battalion } | ArmyOrder::SetStance { battalion, .. } => {
+            ArmyOrder::Disband { battalion }
+            | ArmyOrder::SetStance { battalion, .. }
+            | ArmyOrder::SetRole { battalion, .. }
+            | ArmyOrder::SetFirePolicy { battalion, .. }
+            | ArmyOrder::Rearm { battalion } => {
                 *battalion = mapper.get_mapped(*battalion);
             }
         }
@@ -1022,6 +1043,21 @@ mod tests {
                 1,
             ),
             (ArmyOrder::Disband { battalion: raw(50) }, 1),
+            (
+                ArmyOrder::SetRole {
+                    battalion: raw(50),
+                    role: crate::components::SoldierRole::Archer,
+                },
+                1,
+            ),
+            (
+                ArmyOrder::SetFirePolicy {
+                    battalion: raw(50),
+                    policy: crate::components::FirePolicy::HoldFire,
+                },
+                1,
+            ),
+            (ArmyOrder::Rearm { battalion: raw(50) }, 1),
             (
                 ArmyOrder::SetStance {
                     battalion: raw(50),

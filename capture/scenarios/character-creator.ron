@@ -1,0 +1,8 @@
+(
+ version:1,name:"character-creator",map:"village_lab",
+ output_dir:"logs/captures/character-refresh/creator",resolution:(1600,1000),
+ fixed_delta_seconds:0.016666667,target:window,show_window:false,warmup_frames:300,
+ readiness:(minimum_frames:90,maximum_frames:1200,minimum_loaded_chunks:25,stable_loaded_chunk_frames:20),
+ environment:{"FISTFORCE_CAPTURE_HERO_CREATOR":"1","FISTFORCE_CAPTURE_OUTFIT_PRESET":"soldier_mail","FISTFORCE_CAPTURE_CLOUDS":"clear"},
+ shots:[(name:"mail-equipment",focus:(-15.0,0.0,-15.0),yaw:0.0,zoom:30.0,time_of_day:0.43)],
+)

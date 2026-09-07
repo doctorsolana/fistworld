@@ -22,7 +22,8 @@ pub enum BuildingType {
     /// civic art arrives. They deliberately have no scene path: the client
     /// draws their definitions as simple coloured boxes.
     PlaceholderTavern,
-    PlaceholderChurch,
+    /// Authored church; retains the original blockout discriminant.
+    Church,
     VillageHall,
     TownHall,
     /// First processing industries. Appended here originally as blockouts;
@@ -39,10 +40,8 @@ pub enum BuildingType {
     /// Authored private depot. Retains the original blockout's position so
     /// binary replication discriminants remain unchanged.
     StorageHall,
-    /// Temporary solid blockout for the first stone-extraction trade. The
-    /// semantic building remains `StoneQuarry`, so authored quarry art can
-    /// replace this without touching saves or economy code.
-    PlaceholderStoneQuarry,
+    /// Authored stone workshop and crane yard; retains its original discriminant.
+    StoneQuarry,
     /// The sheep barn. Its pasture stays a separately replicated and
     /// rendered entity. Keeps the old blockout's discriminant; the alias
     /// reads pre-art RON data that still calls it `PlaceholderLivestockFarm`.
@@ -74,6 +73,8 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::LongCabinL2,
     BuildingType::LivestockFarm,
     BuildingType::StorageHall,
+    BuildingType::StoneQuarry,
+    BuildingType::Church,
 ];
 
 impl BuildingType {
@@ -93,12 +94,12 @@ impl BuildingType {
             BuildingType::FishermansHut => "building_fishermans_hut",
             BuildingType::Market => "building_market",
             BuildingType::PlaceholderTavern => "placeholder_tavern",
-            BuildingType::PlaceholderChurch => "placeholder_church",
+            BuildingType::Church => "building_church",
             BuildingType::Windmill => "building_windmill",
             BuildingType::Bakery => "building_bakery",
             BuildingType::MarketPaved => "building_market_paved",
             BuildingType::StorageHall => "building_storage_hall",
-            BuildingType::PlaceholderStoneQuarry => "placeholder_stone_quarry",
+            BuildingType::StoneQuarry => "building_stone_quarry",
             BuildingType::LivestockFarm => "building_livestock_farm",
             BuildingType::LongCabin => "building_long_cabin",
             BuildingType::CabinL2 => "building_cabin_l2",
@@ -128,11 +129,14 @@ impl BuildingType {
             BuildingType::MarketPaved => {
                 Some("game_assets/buildings/village/MarketPaved.glb#Scene0")
             }
-            BuildingType::PlaceholderTavern | BuildingType::PlaceholderChurch => None,
+            BuildingType::PlaceholderTavern => None,
+            BuildingType::Church => Some("game_assets/buildings/village/Church.glb#Scene0"),
             BuildingType::StorageHall => {
                 Some("game_assets/buildings/village/StorageHall.glb#Scene0")
             }
-            BuildingType::PlaceholderStoneQuarry => None,
+            BuildingType::StoneQuarry => {
+                Some("game_assets/buildings/village/StoneQuarry.glb#Scene0")
+            }
             BuildingType::LivestockFarm => {
                 Some("game_assets/buildings/village/LivestockFarm.glb#Scene0")
             }
@@ -162,15 +166,14 @@ impl BuildingType {
 
     pub fn definition(&self) -> BuildingDef {
         match self {
-            // Measured off the glb, not guessed: X 6.00 (gable to gable) by Z 6.94 (the roof
-            // overhang, which is wider than the 5.00 walls), 4.33 tall from the sunk foundation
-            // at -0.16 to the ridge at +4.17. See asset_creation/inspect_prop_glb.py.
+            // Restored 5 x 6 m wall plan, with the porch included in the plot.
+            // Bounds are measured from the exported GLB; the foundation beds at -0.16 m.
             BuildingType::LogCabin => BuildingDef {
                 building_type: *self,
                 display_name: "Log Cabin",
-                footprint: Vec2::new(6.0, 6.94),
-                footprint_center: Vec2::ZERO,
-                height: 4.33,
+                footprint: Vec2::new(6.0, 7.36),
+                footprint_center: Vec2::new(0.0, -0.19),
+                height: 4.362,
                 flatten_radius: 1.5,
                 color: Color::srgb(0.42, 0.28, 0.18),
                 model_path: Some("game_assets/buildings/village/LogCabin.glb#Scene0"),
@@ -195,20 +198,20 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Farmstead",
                 footprint: Vec2::new(5.41, 6.62),
-                footprint_center: Vec2::new(0.1354, -0.1704),
-                height: 4.07,
+                footprint_center: Vec2::new(0.0, -0.10),
+                height: 5.22,
                 flatten_radius: 1.6,
                 color: Color::srgb(0.44, 0.30, 0.19),
                 model_path: Some("game_assets/buildings/village/Farmstead.glb#Scene0"),
             },
-            // Two storeys, but a village hall rather than a courthouse: 6.45 x 8.74 on the ground,
-            // 8.18 m to the tip of the bell cupola's finial. Measured off the glb.
+            // Civic plots include roof overhangs; walls grow behind the shared -5.2 m entrance.
+            // Heights and bounds are measured from the final exported meshes.
             BuildingType::MootHall => BuildingDef {
                 building_type: *self,
                 display_name: "Moot Hall",
-                footprint: Vec2::new(6.45, 8.74),
-                footprint_center: Vec2::new(0.0, -0.2300),
-                height: 8.18,
+                footprint: Vec2::new(7.20, 8.80),
+                footprint_center: Vec2::new(0.0, -0.20),
+                height: 8.44,
                 flatten_radius: 2.2,
                 color: Color::srgb(0.43, 0.29, 0.18),
                 model_path: Some("game_assets/buildings/village/MootHall.glb#Scene0"),
@@ -216,9 +219,9 @@ impl BuildingType {
             BuildingType::VillageHall => BuildingDef {
                 building_type: *self,
                 display_name: "Village Hall",
-                footprint: Vec2::new(7.7779, 10.4400),
-                footprint_center: Vec2::new(0.0, 0.6200),
-                height: 9.44,
+                footprint: Vec2::new(8.16, 10.46),
+                footprint_center: Vec2::new(0.0, 0.63),
+                height: 9.94,
                 flatten_radius: 2.4,
                 color: Color::srgb(0.45, 0.36, 0.27),
                 model_path: Some("game_assets/buildings/village/VillageHall.glb#Scene0"),
@@ -226,8 +229,8 @@ impl BuildingType {
             BuildingType::TownHall => BuildingDef {
                 building_type: *self,
                 display_name: "Town Hall",
-                footprint: Vec2::new(10.2400, 14.4900),
-                footprint_center: Vec2::new(0.0, 2.6450),
+                footprint: Vec2::new(10.40, 14.58),
+                footprint_center: Vec2::new(0.0, 2.69),
                 height: 21.62,
                 flatten_radius: 2.8,
                 color: Color::srgb(0.47, 0.44, 0.39),
@@ -283,27 +286,24 @@ impl BuildingType {
                 color: Color::srgb(0.47, 0.34, 0.21),
                 model_path: Some("game_assets/buildings/village/StorageHall.glb#Scene0"),
             },
-            BuildingType::PlaceholderStoneQuarry => BuildingDef {
+            BuildingType::StoneQuarry => BuildingDef {
                 building_type: *self,
-                display_name: "Stone Quarry (blockout)",
+                display_name: "Stone Quarry",
                 footprint: Vec2::new(9.0, 8.0),
                 footprint_center: Vec2::ZERO,
-                height: 3.0,
+                height: 5.51,
                 flatten_radius: 2.0,
                 color: Color::srgb(0.43, 0.44, 0.42),
-                model_path: None,
+                model_path: Some("game_assets/buildings/village/StoneQuarry.glb#Scene0"),
             },
-            // Measured off LivestockFarm.glb (asset_creation/houses/inspect_prop_glb.py): the barn
-            // with its hay porch, haystack and holding pen, X -4.26..+5.02 by Z -3.60..+4.14, base
-            // sunk to -0.16 and the main ridge at +5.16. Anchor_Door is pinned to door_offset
-            // (0, -3.8) at export, which is why the footprint centre sits off-origin. The PASTURE
-            // is not part of this footprint: it is the replicated `LivestockPasture` 12 m behind.
+            // Full-size timber barn and grounded yard stock. The walkable
+            // sheep pasture remains a separate entity 12 m behind the plot.
             BuildingType::LivestockFarm => BuildingDef {
                 building_type: *self,
                 display_name: "Livestock Farm",
                 footprint: Vec2::new(9.2790, 7.7440),
                 footprint_center: Vec2::new(0.3795, 0.2720),
-                height: 5.3200,
+                height: 6.90,
                 flatten_radius: 2.2,
                 color: Color::srgb(0.46, 0.30, 0.18),
                 model_path: Some("game_assets/buildings/village/LivestockFarm.glb#Scene0"),
@@ -318,15 +318,15 @@ impl BuildingType {
                 color: Color::srgb(0.52, 0.25, 0.16),
                 model_path: None,
             },
-            BuildingType::PlaceholderChurch => BuildingDef {
+            BuildingType::Church => BuildingDef {
                 building_type: *self,
-                display_name: "Church (blockout)",
+                display_name: "Church",
                 footprint: Vec2::new(8.0, 12.0),
                 footprint_center: Vec2::ZERO,
-                height: 7.0,
+                height: 15.19,
                 flatten_radius: 2.0,
                 color: Color::srgb(0.58, 0.58, 0.54),
-                model_path: None,
+                model_path: Some("game_assets/buildings/village/Church.glb#Scene0"),
             },
             // Solid tower footprint only: the animated sails sweep 8.80 m
             // overhead but clear the cabin at every cap yaw. Reserving their
@@ -358,7 +358,7 @@ impl BuildingType {
                 display_name: "Long Cabin",
                 footprint: Vec2::new(8.1180, 5.6000),
                 footprint_center: Vec2::new(0.0000, -0.1900),
-                height: 5.3800,
+                height: 5.3820,
                 flatten_radius: 1.9,
                 color: Color::srgb(0.42, 0.28, 0.18),
                 model_path: Some("game_assets/buildings/village/LongCabin.glb#Scene0"),
@@ -367,9 +367,9 @@ impl BuildingType {
             BuildingType::CabinL2 => BuildingDef {
                 building_type: *self,
                 display_name: "Cabin, Upper Storey",
-                footprint: Vec2::new(6.4721, 7.3600),
-                footprint_center: Vec2::ZERO,
-                height: 6.9800,
+                footprint: Vec2::new(6.4721, 7.5500),
+                footprint_center: Vec2::new(0.0, -0.095),
+                height: 6.9820,
                 flatten_radius: 1.8,
                 color: Color::srgb(0.45, 0.36, 0.27),
                 model_path: Some("game_assets/buildings/village/CabinL2.glb#Scene0"),
@@ -379,9 +379,9 @@ impl BuildingType {
             BuildingType::LongCabinL2 => BuildingDef {
                 building_type: *self,
                 display_name: "Long Cabin, Upper Storey",
-                footprint: Vec2::new(8.6866, 5.6721),
-                footprint_center: Vec2::ZERO,
-                height: 6.8920,
+                footprint: Vec2::new(8.6866, 6.0000),
+                footprint_center: Vec2::new(0.0, -0.160),
+                height: 6.9520,
                 flatten_radius: 2.1,
                 color: Color::srgb(0.45, 0.36, 0.27),
                 model_path: Some("game_assets/buildings/village/LongCabinL2.glb#Scene0"),

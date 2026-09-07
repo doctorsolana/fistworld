@@ -191,7 +191,10 @@ fn explicit_attack_and_partial_battalion_march_are_not_overridden() {
                 units: vec![a, b],
                 battalions: vec![],
             },
-            command: UnitCommand::Attack { target: enemy },
+            command: UnitCommand::Attack {
+                target: enemy,
+                mode: shared::protocol::AttackMode::Focus,
+            },
         },
     );
     impact(w, Vec3::new(0.0, 80.0, 0.0), 10.0);

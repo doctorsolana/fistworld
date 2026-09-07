@@ -56,7 +56,7 @@ pub fn order_catapult(
         .ok_or("Catapult unavailable")?
         .0;
     let target = match command {
-        UnitCommand::Attack { target } => Some((
+        UnitCommand::Attack { target, .. } => Some((
             SiegeTarget::Person(target),
             world
                 .get::<PlayerPosition>(target)

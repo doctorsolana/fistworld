@@ -346,7 +346,19 @@ pub(super) fn issue_order_on_right_click(
                 if let Ok(mut sender) = ground_world.sender.single_mut() {
                     sender.send::<ReliableChannel>(UnitOrder {
                         selection: ground_world.roster.selection(&fighters),
-                        command: UnitCommand::Attack { target: victim },
+                        command: UnitCommand::Attack {
+                            target: victim,
+                            mode: if keys.any_pressed([
+                                KeyCode::ControlLeft,
+                                KeyCode::ControlRight,
+                                KeyCode::SuperLeft,
+                                KeyCode::SuperRight,
+                            ]) {
+                                shared::protocol::AttackMode::Focus
+                            } else {
+                                shared::protocol::AttackMode::EngageLine
+                            },
+                        },
                     });
                 }
                 return;

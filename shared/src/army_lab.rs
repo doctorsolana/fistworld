@@ -21,6 +21,10 @@ pub struct ArmyLabScenario {
     pub catapult: Option<CatapultScenario>,
     #[serde(default)]
     pub management: bool,
+    #[serde(default)]
+    pub archer_battalions: Vec<usize>,
+    #[serde(default)]
+    pub counterattack_after_seconds: Option<f32>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +32,8 @@ pub struct ArmyDeployment {
     pub target: [f32; 3],
     pub facing: [f32; 2],
     pub width: f32,
+    #[serde(default)]
+    pub preserve_shape: bool,
 }
 impl ArmyLabScenario {
     pub fn from_env() -> Option<Self> {
@@ -56,6 +62,13 @@ impl ArmyLabScenario {
                 && Vec3::from_array(result.camera_focus).is_finite()
         );
         assert!(!result.deployments.is_empty());
+        assert!(result
+            .archer_battalions
+            .iter()
+            .all(|i| *i < result.battalions));
+        assert!(result
+            .counterattack_after_seconds
+            .is_none_or(|s| s.is_finite() && s >= 0.));
         if let Some(battle) = &result.battle {
             assert!((1..=12).contains(&battle.defender_battalions));
             assert!((1..=64).contains(&battle.defenders_per_battalion));
@@ -66,6 +79,17 @@ impl ArmyLabScenario {
             );
             assert!((5.0..=120.0).contains(&battle.observe_seconds));
             assert!(battle.independent_attackers <= 8);
+            assert!(
+                battle.attacker_offsets.is_empty()
+                    || battle.attacker_offsets.len() == result.battalions
+            );
+            assert!(battle
+                .attacker_offsets
+                .iter()
+                .all(|p| Vec2::from_array(*p).is_finite()));
+            assert!(battle
+                .retarget_after_seconds
+                .is_none_or(|t| t.is_finite() && t > 0.0 && t < battle.observe_seconds));
         }
         for d in &result.deployments {
             assert!(
@@ -106,6 +130,12 @@ pub struct BattleScenario {
     pub minimum_engaged_battalions: usize,
     #[serde(default)]
     pub independent_attackers: usize,
+    /// Optional per-battalion offsets for crowded approach fixtures.
+    #[serde(default)]
+    pub attacker_offsets: Vec<[f32; 2]>,
+    /// Reissue a normal attack during contact to exercise interrupted approaches.
+    #[serde(default)]
+    pub retarget_after_seconds: Option<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

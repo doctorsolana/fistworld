@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|realworld|multi] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -379,6 +379,66 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         ;;
+    battle5v5|archerworld)
+        cd "$(dirname "${BASH_SOURCE[0]}")"
+        # This fixture needs a fresh server. Do not terminate an unrelated
+        # running game or connect its client to the wrong world.
+        if { command -v lsof >/dev/null 2>&1 && lsof -nP -iUDP:5000 -t 2>/dev/null | grep -q .; } ||
+           { command -v ss >/dev/null 2>&1 && ss -H -uln 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:5000([[:space:]]|$)'; }; then
+            echo "UDP 5000 is already in use. Stop the current game server, then rerun ./run.sh $MODE." >&2
+            exit 1
+        fi
+
+        export CITYSIM_MAP_ID=battle_lab FISTWORLD_DEV=1
+        export FISTWORLD_VILLAGE_LAB_RUNTIME=1 FISTWORLD_LAB_SCENARIO=skirmish
+        export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
+        export FISTFORCE_AUTOCONNECT=battlelab FISTWORLD_AUTOSPAWN_HERO=1
+        export FISTWORLD_AUTOSPAWN_AT=-32,-72 FISTFORCE_COMBAT_MODE=1
+        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--20,-36}"
+        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-125}"
+        export FISTFORCE_START_YAW="${FISTFORCE_START_YAW:-0}"
+        export BEVY_ASSET_ROOT="$PWD/client/assets"
+        export RUST_LOG="${RUST_LOG:-info}"
+        BATTLE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$PWD/logs/$MODE-$(date +%Y%m%d-%H%M%S)}"
+        mkdir -p "$BATTLE_LOG_DIR"
+        BATTLE_SCENARIO="battle-5v5"
+        if [[ "$MODE" == "archerworld" ]]; then
+            BATTLE_SCENARIO="battle-mixed-archers"
+            echo -e "${YELLOW}Two infantry battalions and one archer battalion versus three enemy battalions.${NC}"
+            echo -e "${YELLOW}Right-click an enemy to attack; Army management controls equipment and firing policy.${NC}"
+        else
+            echo -e "${YELLOW}5 vs 5 battalions: 250 soldiers per side, manual control.${NC}"
+        fi
+        echo -e "${YELLOW}Logs: $BATTLE_LOG_DIR${NC}"
+
+        # Build the pair before starting either process. Launch the binaries
+        # directly so the existing EXIT/interrupt trap owns their exact PIDs.
+        cargo build "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server -p client
+        env FISTWORLD_ARMY_SCENARIO="$PWD/capture/scenarios/$BATTLE_SCENARIO.ron" \
+            "./target/$TARGET_DIR/server" >"$BATTLE_LOG_DIR/server.log" 2>&1 &
+        SERVER_PID=$!
+        # STARTED_SERVER stays zero: cleanup_all reaps these exact children,
+        # without using the older modes' broad cleanup_server fallback.
+        if ! wait_for_local_server; then
+            tail -n 30 "$BATTLE_LOG_DIR/server.log" >&2
+            exit 1
+        fi
+        echo -e "${BLUE}Opening battle. Drag-select your troops and right-click an enemy to attack.${NC}"
+        # Only the server receives the fixture. Giving it to the client would
+        # activate the automated attack/capture/exit driver and take control.
+        env -u FISTWORLD_ARMY_SCENARIO "./target/$TARGET_DIR/client" \
+            >"$BATTLE_LOG_DIR/client.log" 2>&1 &
+        CLIENT1_PID=$!
+        if wait "$CLIENT1_PID"; then
+            CLIENT1_PID=""
+        else
+            client_status=$?
+            CLIENT1_PID=""
+            tail -n 30 "$BATTLE_LOG_DIR/client.log" >&2
+            exit "$client_status"
+        fi
+        echo -e "${GREEN}Client closed. Stopping battle server...${NC}"
+        ;;
     both|testworld|testlab|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|realworld|reallab)
         cleanup_server
         if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "uxstressworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" || "$MODE" == "battleworld" ]]; then
@@ -467,7 +527,7 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|realworld|multi|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
@@ -481,7 +541,9 @@ case $MODE in
         echo "  economyworld - Watch the three-village 50-day economy schedule (starts at 10x)"
         echo "  stressworld - Watch three logged 200-person villages together (starts at 10x)"
         echo "  denseworld - Watch one logged 1,000-person village at 10x"
-        echo "  battleworld - Small secure village for combat testing (select hero, press C, right-click a target)"
+        echo "  battleworld - Open battlefield sandbox for recruiting troops and making battalions"
+        echo "  archerworld - Mixed infantry and archers with an enemy countercharge"
+        echo "  battle5v5 - Build and open a manual battle with five 50-person battalions per side"
         echo "  realworld - Watch a logged 32-villager stress village on big_world"
         echo "  multi   - Start server + 2 clients for multiplayer testing"
         echo "  windows - Build & run Windows client with GPU (for WSL2)"

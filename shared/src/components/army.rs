@@ -36,6 +36,29 @@ pub struct Battalion {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemberOfBattalion(pub BattalionId);
 
+/// Preferred deployment shape, retained on the battalion entity across orders.
+/// Combat may temporarily bend/compress the line without changing this choice.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct BattalionFormation {
+    pub files: u8,
+    pub spacing: f32,
+}
+
+impl Default for BattalionFormation {
+    fn default() -> Self {
+        Self {
+            files: crate::formation::DEFAULT_FILES as u8,
+            spacing: crate::formation::FILE_SPACING,
+        }
+    }
+}
+
+/// Last ordered offset within a formation, replicated only on redeployment.
+/// Shared layout uses it to avoid reassigning ranks because a client's walking
+/// positions are a network tick behind the server.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct FormationSeat(pub Vec2);
+
 /// Standing policy, independent of a current move/attack order. The server
 /// copies the battalion's policy onto members at assignment and policy changes.
 /// Unassigned troops default to Defensive.
@@ -62,7 +85,7 @@ impl BattalionStance {
 }
 
 /// Worn by exactly one soldier per battalion: the one carrying the standard.
-/// Selecting the bearer selects the battalion, and the flag he carries is how
+/// Selecting any member selects the battalion, and the flag he carries is how
 /// a formation reads as a UNIT on the battlefield rather than a crowd. The
 /// server appoints a bearer at muster and appoints a successor if he falls.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +140,28 @@ mod combat_wire_tests {
                     bincode::deserialize(&encoded).unwrap();
                 assert_eq!(decoded, state);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod formation_wire_tests {
+    use super::*;
+    #[test]
+    fn remembered_shapes_and_seats_roundtrip() {
+        for files in [1, 10, 25, MAX_BATTALION_SIZE as u8] {
+            let value = (
+                BattalionFormation {
+                    files,
+                    spacing: 1.2375,
+                },
+                FormationSeat(Vec2::new(-19.25, 6.5)),
+            );
+            let bytes = bincode::serialize(&value).unwrap();
+            assert_eq!(
+                bincode::deserialize::<(BattalionFormation, FormationSeat)>(&bytes).unwrap(),
+                value
+            );
         }
     }
 }

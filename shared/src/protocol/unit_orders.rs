@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::components::BattalionId;
 
 /// Bounds both individual selections and server-expanded battalions. Full
-/// battalions travel as durable IDs; partial selections still name individuals.
+/// battalions travel as durable IDs; unassigned troops name individuals.
 pub const MAX_UNITS_PER_ORDER: usize = 1024;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
@@ -33,6 +33,15 @@ pub struct FormationFrontage {
     pub width: f32,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub enum AttackMode {
+    /// Spread selected battalions across the nearby enemy line.
+    #[default]
+    EngageLine,
+    /// Concentrate on the clicked battalion/person.
+    Focus,
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum UnitCommand {
     Move {
@@ -42,6 +51,7 @@ pub enum UnitCommand {
     },
     Attack {
         target: Entity,
+        mode: AttackMode,
     },
     Hold,
     /// Siege units bombard this fixed point until moved or held.
@@ -77,7 +87,7 @@ impl MapEntities for UnitOrder {
         for unit in &mut self.selection.units {
             *unit = mapper.get_mapped(*unit);
         }
-        if let UnitCommand::Attack { target } = &mut self.command {
+        if let UnitCommand::Attack { target, .. } = &mut self.command {
             *target = mapper.get_mapped(*target);
         }
     }
@@ -112,6 +122,11 @@ mod tests {
             UnitCommand::AttackGround { target },
             UnitCommand::Attack {
                 target: Entity::from_raw_u32(90).unwrap(),
+                mode: AttackMode::Focus,
+            },
+            UnitCommand::Attack {
+                target: Entity::from_raw_u32(90).unwrap(),
+                mode: AttackMode::EngageLine,
             },
             UnitCommand::Move {
                 target,
@@ -151,10 +166,11 @@ mod tests {
             );
             assert_eq!(order.selection.battalions, vec![BattalionId(u64::MAX)]);
             match command {
-                UnitCommand::Attack { .. } => assert_eq!(
+                UnitCommand::Attack { mode, .. } => assert_eq!(
                     order.command,
                     UnitCommand::Attack {
-                        target: Entity::from_raw_u32(3).unwrap()
+                        target: Entity::from_raw_u32(3).unwrap(),
+                        mode
                     }
                 ),
                 _ => assert_eq!(order.command, command),

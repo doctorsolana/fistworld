@@ -90,6 +90,10 @@ impl Plugin for ProtocolPlugin {
         app.component::<CharacterMotion>().replicate();
         app.component::<CharacterActivity>().replicate();
         app.component::<Battalion>().replicate();
+        app.component::<crate::components::FormationSeat>()
+            .replicate();
+        app.component::<crate::components::BattalionFormation>()
+            .replicate();
         app.component::<crate::components::BattalionStance>()
             .replicate();
         app.component::<MemberOfBattalion>().replicate();
@@ -100,6 +104,15 @@ impl Plugin for ProtocolPlugin {
         app.component::<crate::components::CombatSwing>()
             .replicate();
         app.component::<crate::components::CombatReaction>()
+            .replicate();
+        app.component::<crate::components::SoldierRole>()
+            .replicate();
+        app.component::<crate::components::FirePolicy>().replicate();
+        app.component::<crate::components::Quiver>().replicate();
+        app.component::<crate::components::BowEquipped>()
+            .replicate();
+        app.component::<crate::components::BowShot>().replicate();
+        app.component::<crate::components::ArrowProjectile>()
             .replicate();
         app.component::<CharacterObjective>().replicate();
         app.component::<CharacterDayPlan>().replicate();

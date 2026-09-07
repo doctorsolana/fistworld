@@ -29,7 +29,13 @@ fn mixed_verbs_obey_last_intent_and_keep_weapon_cooldowns() {
     let mut world = World::new();
     let a = soldier(&mut world, "alice", Vec3::ZERO);
     let b = soldier(&mut world, "bob", Vec3::X);
-    let attack = selected(a, UnitCommand::Attack { target: b });
+    let attack = selected(
+        a,
+        UnitCommand::Attack {
+            target: b,
+            mode: shared::protocol::AttackMode::Focus,
+        },
+    );
     let movement = UnitOrder::move_to(vec![a], Vec3::X * 30.0);
     for (first, last, attacks) in [
         (attack.clone(), movement.clone(), false),
@@ -74,7 +80,10 @@ fn authority_dead_embarked_and_invalid_destinations_leave_previous_intent_alone(
             }),
             mode: MovementMode::Move,
         },
-        UnitCommand::Attack { target: own },
+        UnitCommand::Attack {
+            target: own,
+            mode: shared::protocol::AttackMode::Focus,
+        },
     ] {
         assert_eq!(
             apply_unit_order(&mut world, "alice", selected(own, command)).0,
@@ -277,4 +286,87 @@ fn an_obstructed_battalion_reaches_its_slots_through_the_real_mover() {
         })
         .collect();
     panic!("{} soldiers failed to arrive", stuck.len());
+}
+
+#[test]
+fn commanding_one_member_moves_the_whole_battalion_until_explicitly_released() {
+    let mut w = World::new();
+    w.init_resource::<BattalionLedger>();
+    let a = soldier(&mut w, "alice", Vec3::ZERO);
+    let b = soldier(&mut w, "alice", Vec3::X * 1.4);
+    apply_army_order(
+        &mut w,
+        "alice",
+        ArmyOrder::Muster {
+            members: vec![a, b],
+        },
+    );
+    assert_eq!(
+        apply_unit_order(&mut w, "alice", UnitOrder::move_to(vec![b], Vec3::Z * 10.0)).0,
+        2
+    );
+    let previous = w.get::<MarchOrder>(a).unwrap().destination;
+    apply_army_order(&mut w, "alice", ArmyOrder::Dismiss { members: vec![b] });
+    assert_eq!(
+        apply_unit_order(&mut w, "alice", UnitOrder::move_to(vec![b], Vec3::X * 20.0)).0,
+        1
+    );
+    assert_eq!(w.get::<MarchOrder>(a).unwrap().destination, previous);
+}
+
+#[test]
+fn accepted_width_is_remembered_and_a_refused_command_cannot_change_it() {
+    let mut w = World::new();
+    w.init_resource::<BattalionLedger>();
+    let people: Vec<_> = (0..50)
+        .map(|i| soldier(&mut w, "alice", Vec3::X * i as f32))
+        .collect();
+    apply_army_order(
+        &mut w,
+        "alice",
+        ArmyOrder::Muster {
+            members: people.clone(),
+        },
+    );
+    let battalion = w
+        .query_filtered::<Entity, With<Battalion>>()
+        .single(&w)
+        .unwrap();
+    let command = UnitCommand::Move {
+        target: Vec3::Z * 20.0,
+        frontage: Some(FormationFrontage {
+            facing: Vec2::Y,
+            width: 33.6,
+        }),
+        mode: MovementMode::Move,
+    };
+    assert_eq!(
+        apply_unit_order(&mut w, "alice", selected(people[5], command)).0,
+        50
+    );
+    let shape = *w.get::<BattalionFormation>(battalion).unwrap();
+    assert_eq!(shape.files, 25);
+    assert_eq!(
+        apply_unit_order(
+            &mut w,
+            "alice",
+            UnitOrder::move_to(vec![people[5]], Vec3::Z * 50.0)
+        )
+        .0,
+        50
+    );
+    assert_eq!(w.get::<BattalionFormation>(battalion), Some(&shape));
+    let refused = UnitCommand::Move {
+        target: Vec3::NAN,
+        frontage: Some(FormationFrontage {
+            facing: Vec2::X,
+            width: 4.2,
+        }),
+        mode: MovementMode::Move,
+    };
+    assert_eq!(
+        apply_unit_order(&mut w, "alice", selected(people[5], refused)).0,
+        0
+    );
+    assert_eq!(w.get::<BattalionFormation>(battalion), Some(&shape));
 }

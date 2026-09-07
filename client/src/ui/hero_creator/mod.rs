@@ -676,7 +676,16 @@ fn value_label(raw: &str, slot_prefix: Option<&str>) -> String {
     let trimmed = slot_prefix
         .and_then(|prefix| raw.strip_prefix(prefix))
         .unwrap_or(raw);
-    trimmed.replace('_', " ").trim().to_uppercase()
+    let mut label = String::new();
+    let mut previous_lower = false;
+    for ch in trimmed.chars() {
+        if ch.is_uppercase() && previous_lower {
+            label.push(' ');
+        }
+        label.push(if ch == '_' { ' ' } else { ch });
+        previous_lower = ch.is_lowercase();
+    }
+    label.trim().to_uppercase()
 }
 
 fn sync_slot_labels(

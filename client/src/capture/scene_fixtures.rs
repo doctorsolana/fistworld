@@ -207,7 +207,7 @@ pub(super) fn drive_capture_dinghy(
 ///
 /// Spec: `slot0,slot1,...,skin` per hero, semicolon-separated, all indices
 /// into the manifest's slot items / skin tones (order as in Humanoid.ron:
-/// bottom, top, hair). Missing or unparsable fields use the manifest default.
+/// bottom, top, hair, headgear). Missing or unparsable fields use the manifest default.
 /// `FISTFORCE_CAPTURE_HERO=default` spawns one hero in the declared default.
 /// `FISTFORCE_CAPTURE_HERO_OFFSET=x,z` offsets those heroes from the shot focus,
 /// which is useful for verifying world-space UI such as the minimap marker.

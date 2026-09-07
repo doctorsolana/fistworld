@@ -4,10 +4,13 @@ Everything learned turning a Tripo-generated blob into a rigged, animated, cloth
 character. Written for the next time you do this, and for when you start wiring it into the game.
 
 **Current asset:** `character/humanoid.blend`, shipped as a 1.70 m character in
-`Humanoid.glb`: 18 joints (16 deform/rig bones plus two attachment joints), 14 actions,
-14 selectable wardrobe meshes and six skin tones. It is built reproducibly by the scripts
+`Humanoid.glb`: 21 joints (18 deform/rig bones plus three attachment joints), 27 actions,
+21 selectable wardrobe meshes plus the empty no-headgear choice, and six skin tones. It is built reproducibly by the scripts
 listed in §15. The early 426-vertex/no-wardrobe figures retained later in this document are
 rebuild history, not the shipping mesh budget.
+
+See [CHARACTER_HANDOVER.md](CHARACTER_HANDOVER.md) for the current animation, equipment,
+runtime integration and verification contract. Later sections retain historical experiments.
 
 **v1 (`tripo_boy.blend`) is deleted.** Everything v2 still reuses was distilled into
 `humanoid_legacy_donor.blend` (121 KB): the `arm.L/R` + `hand.L/R` geometry (190 verts) and the `WalkCycle`

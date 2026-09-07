@@ -15,6 +15,7 @@ struct Staged;
 
 pub fn stage_connected_army(world: &mut World) {
     if world.contains_resource::<Staged>() {
+        drive_archer_counterattack(world);
         return;
     }
     let Some(scenario) = ArmyLabScenario::from_env() else {
@@ -49,12 +50,13 @@ pub fn stage_connected_army(world: &mut World) {
             soldiers.push(FormationSoldier {
                 entity,
                 identity: seed,
+                seat: None,
                 position: point,
-                strength: CharacterAttributes::from_seed(seed).physique(),
             });
         }
         groups.push(FormationGroup {
             key: group as u64,
+            shape: default(),
             soldiers,
         });
     }
@@ -63,13 +65,27 @@ pub fn stage_connected_army(world: &mut World) {
         Vec3::from_array(scenario.origin),
         Some(FormationFrontage {
             facing: Vec2::Y,
-            width: scenario.deployments[0].width,
+            width: (scenario
+                .soldiers_per_battalion
+                .min(shared::formation::DEFAULT_FILES)
+                .saturating_sub(1) as f32
+                * shared::formation::FILE_SPACING
+                + shared::formation::BATTALION_GAP)
+                * scenario.battalions as f32
+                - shared::formation::BATTALION_GAP,
         }),
     );
     let mut memberships = Vec::new();
-    for block in blocks {
+    for (index, block) in blocks.into_iter().enumerate() {
+        let offset = scenario
+            .battle
+            .as_ref()
+            .and_then(|b| b.attacker_offsets.get(index))
+            .copied()
+            .unwrap_or([0.0, 0.0]);
         let mut members = Vec::new();
         for (entity, mut point) in block.slots {
+            point += Vec3::new(offset[0], 0.0, offset[1]);
             point.y = terrain.get_height(point.x, point.z);
             commands.entity(entity).insert((
                 PlayerPosition(point),
@@ -92,6 +108,35 @@ pub fn stage_connected_army(world: &mut World) {
             scenario.soldiers_per_battalion
         );
     }
+    let mut battalions: Vec<_> = world
+        .query::<(Entity, &Battalion, &CommandedBy)>()
+        .iter(world)
+        .filter(|(_, _, o)| o.0 == scenario.account)
+        .map(|(e, b, _)| (b.ordinal, e))
+        .collect();
+    battalions.sort_by_key(|(ordinal, _)| *ordinal);
+    for &index in &scenario.archer_battalions {
+        let battalion = battalions[index].1;
+        assert!(
+            crate::player::army::apply_army_order(
+                world,
+                &scenario.account,
+                ArmyOrder::SetRole {
+                    battalion,
+                    role: SoldierRole::Archer
+                }
+            )
+            .0 > 0
+        );
+        crate::player::army::apply_army_order(
+            world,
+            &scenario.account,
+            ArmyOrder::SetFirePolicy {
+                battalion,
+                policy: FirePolicy::HoldFire,
+            },
+        );
+    }
     if let Some(battle) = &scenario.battle {
         stage_defenders(world, &scenario, battle);
     }
@@ -105,6 +150,13 @@ pub fn stage_connected_army(world: &mut World) {
     }
     if scenario.management {
         management::stage(world, &scenario.account);
+    }
+    if let Some(delay) = scenario.counterattack_after_seconds {
+        world.insert_resource(ArcherCounterattack {
+            delay,
+            deadline: None,
+            done: false,
+        });
     }
     world.insert_resource(Staged);
     info!(
@@ -137,12 +189,13 @@ fn stage_defenders(
             soldiers.push(FormationSoldier {
                 entity,
                 identity: seed,
+                seat: None,
                 position: p,
-                strength: CharacterAttributes::from_seed(seed).physique(),
             });
         }
         groups.push(FormationGroup {
             key: group as u64,
+            shape: default(),
             soldiers,
         });
     }
@@ -210,4 +263,69 @@ fn stage_defenders(
         scenario.total(),
         battle.defender_battalions * battle.defenders_per_battalion
     );
+}
+
+#[derive(Resource)]
+struct ArcherCounterattack {
+    delay: f32,
+    deadline: Option<f64>,
+    done: bool,
+}
+fn drive_archer_counterattack(world: &mut World) {
+    let Some(state) = world.get_resource::<ArcherCounterattack>() else {
+        return;
+    };
+    if state.done {
+        return;
+    }
+    let delay = state.delay;
+    let deadline = state.deadline;
+    let Some(now) = world
+        .query::<&WorldTime>()
+        .iter(world)
+        .next()
+        .map(crate::player::archery::seconds)
+    else {
+        return;
+    };
+    if deadline.is_none() {
+        if world.query::<&BowShot>().iter(world).next().is_some() {
+            world.resource_mut::<ArcherCounterattack>().deadline = Some(now + f64::from(delay));
+        }
+        return;
+    }
+    if now < deadline.unwrap() {
+        return;
+    }
+    let target = world
+        .query::<(Entity, &SoldierRole, &CommandedBy, &Health)>()
+        .iter(world)
+        .find(|(_, role, o, h)| {
+            **role == SoldierRole::Archer && o.0 != "battlelab_enemy" && !h.is_dead()
+        })
+        .map(|(e, ..)| e);
+    let Some(target) = target else {
+        return;
+    };
+    let battalions = world
+        .query::<(&Battalion, &CommandedBy)>()
+        .iter(world)
+        .filter(|(_, o)| o.0 == "battlelab_enemy")
+        .map(|(b, _)| b.id)
+        .collect();
+    crate::player::orders::apply_unit_order(
+        world,
+        "battlelab_enemy",
+        shared::protocol::UnitOrder {
+            selection: shared::protocol::UnitSelection {
+                units: vec![],
+                battalions,
+            },
+            command: shared::protocol::UnitCommand::Attack {
+                target,
+                mode: shared::protocol::AttackMode::Focus,
+            },
+        },
+    );
+    world.resource_mut::<ArcherCounterattack>().done = true;
 }

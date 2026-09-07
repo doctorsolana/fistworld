@@ -7,3 +7,5 @@ edition = "2021"
 bevy = { workspace = true }
 lightyear = { workspace = true }
 shared = { path = "../shared" }
+
+parry3d = "0.25.3"

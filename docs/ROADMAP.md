@@ -623,10 +623,12 @@ you are logged off.
 
 - [x] Basic authoritative melee, engagement acquisition, cooldowns, death/estate settlement
       and tactical battalions. See [COMBAT-DESIGN.md](COMBAT-DESIGN.md) for live controls and limits.
-- [x] Persistent melee files, distinct multi-battalion contact faces, casualty replacement,
-      local flank reactions and independent partial-selection approaches; clock-driven
-      guard/strike/recoil/fall presentation and connected clash scenarios.
-- [ ] Weapon classes, armour, healing, morale, adaptive battlefield tactics and diplomacy.
+- [x] Battalion selection and remembered deployment files, individual local combat
+      approaches, screened reserves and casualty replacement. Stable contact choices
+      allow flanking and unassigned soldiers to join; clock-driven guard/strike/recoil/fall
+      presentation and connected clash scenarios verify the results.
+- [x] Infantry/archer equipment, finite quivers, fire policy, ballistic arrows and sidearm fallback. See [ARCHERY.md](ARCHERY.md).
+- [ ] Additional weapon classes, armour, healing, morale, adaptive battlefield tactics and diplomacy.
 - [ ] Retinue hiring, military wages, equipment and campaign upkeep. Civilian business and
       civic hiring/payroll are already live in Phases 3–4.
 - [ ] Complete player business acquisition and offline income. Live-server permits,

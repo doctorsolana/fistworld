@@ -1,6 +1,7 @@
 //! Deterministic formation layout shared by the command preview and the server.
 //! This computes destinations, never authority or movement.
 
+use crate::components::BattalionFormation;
 use crate::protocol::FormationFrontage;
 use bevy::prelude::*;
 
@@ -8,7 +9,9 @@ pub const DEFAULT_FILES: usize = 10;
 pub const FILE_SPACING: f32 = 1.4;
 pub const RANK_SPACING: f32 = 1.7;
 pub const BATTALION_GAP: f32 = 5.0;
-pub const MAX_FILES: usize = 20;
+pub const MAX_FILES: usize = crate::components::MAX_BATTALION_SIZE;
+pub const MIN_FILE_SPACING: f32 = 1.15;
+pub const MAX_FILE_SPACING: f32 = 1.65;
 
 #[derive(Clone, Debug)]
 pub struct FormationSoldier {
@@ -16,22 +19,26 @@ pub struct FormationSoldier {
     /// Durable PersonId; entity IDs differ between the server and its clients.
     pub identity: u64,
     pub position: Vec3,
-    pub strength: u8,
+    pub seat: Option<Vec2>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FormationGroup {
     pub key: u64,
+    pub shape: BattalionFormation,
     pub soldiers: Vec<FormationSoldier>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FormationBlock {
     pub key: u64,
     pub centre: Vec3,
     pub facing: Vec2,
     pub files: usize,
+    pub spacing: f32,
     pub slots: Vec<(Entity, Vec3)>,
+    /// File for each slot, including incomplete ranks and casualty gaps.
+    pub file_indices: Vec<usize>,
 }
 
 pub fn centre(positions: impl Iterator<Item = Vec3>) -> Vec3 {
@@ -90,37 +97,56 @@ pub fn layout(
         groups[begin..end].sort_by_key(|group| group.key);
         begin = end;
     }
-    let files = frontage.map_or(DEFAULT_FILES, |f| {
-        let available = (f.width - BATTALION_GAP * (groups.len() - 1) as f32).max(0.0);
-        (1 + (available / groups.len() as f32 / FILE_SPACING).floor() as usize).clamp(2, MAX_FILES)
+    let width_each = frontage.map(|f| {
+        (f.width - BATTALION_GAP * (groups.len() - 1) as f32).max(0.0) / groups.len() as f32
     });
-    let width = |g: &FormationGroup| (g.soldiers.len().min(files) - 1) as f32 * FILE_SPACING;
+    for group in &mut groups {
+        group.shape = deployment_shape(group.soldiers.len(), group.shape, width_each);
+    }
+    let width = |g: &FormationGroup| (usize::from(g.shape.files) - 1) as f32 * g.shape.spacing;
     let total = groups.iter().map(width).sum::<f32>() + BATTALION_GAP * (groups.len() - 1) as f32;
     let mut offset = -total * 0.5;
     let mut blocks = Vec::with_capacity(groups.len());
     for mut group in groups {
+        let files = usize::from(group.shape.files);
+        let spacing = group.shape.spacing;
         let block_width = width(&group);
         let at = target + Vec3::new(right.x, 0.0, right.y) * (offset + block_width * 0.5);
         offset += block_width + BATTALION_GAP;
+        let seated = group
+            .soldiers
+            .iter()
+            .filter_map(|s| s.seat)
+            .collect::<Vec<_>>();
+        let origin = centre(group.soldiers.iter().map(|s| s.position)).xz()
+            - seated.iter().copied().sum::<Vec2>() / seated.len().max(1) as f32;
+        let ordered_position = |s: &FormationSoldier| s.seat.unwrap_or(s.position.xz() - origin);
+        // Keep nearby soldiers in nearby ranks. Re-sorting by strength on every
+        // command made otherwise small redeployments send people across the block.
         group.soldiers.sort_by(|a, b| {
-            b.strength
-                .cmp(&a.strength)
+            ordered_position(b)
+                .dot(facing)
+                .total_cmp(&ordered_position(a).dot(facing))
                 .then(a.identity.cmp(&b.identity))
         });
         let mut slots = Vec::with_capacity(group.soldiers.len());
+        let mut file_indices = Vec::with_capacity(group.soldiers.len());
         for (rank, soldiers) in group.soldiers.chunks_mut(files).enumerate() {
             soldiers.sort_by(|a, b| {
-                a.position
-                    .xz()
+                ordered_position(a)
                     .dot(right)
-                    .total_cmp(&b.position.xz().dot(right))
+                    .total_cmp(&ordered_position(b).dot(right))
                     .then(a.identity.cmp(&b.identity))
             });
             let count = soldiers.len();
             for (file, soldier) in soldiers.iter().enumerate() {
-                let lateral = (file as f32 - (count - 1) as f32 * 0.5) * FILE_SPACING;
+                // The short last rank occupies real files, so its file queues
+                // agree with combat replacement instead of sliding on arrival.
+                let first_file = (files - count) / 2;
+                let lateral = ((first_file + file) as f32 - (files - 1) as f32 * 0.5) * spacing;
                 let xz = at.xz() + right * lateral - facing * rank as f32 * RANK_SPACING;
                 slots.push((soldier.entity, Vec3::new(xz.x, target.y, xz.y)));
+                file_indices.push(first_file + file);
             }
         }
         blocks.push(FormationBlock {
@@ -128,10 +154,36 @@ pub fn layout(
             centre: at,
             facing,
             files,
+            spacing,
             slots,
+            file_indices,
         });
     }
     blocks
+}
+
+pub fn deployment_shape(
+    count: usize,
+    preferred: BattalionFormation,
+    width: Option<f32>,
+) -> BattalionFormation {
+    let limit = count.clamp(1, MAX_FILES);
+    let files = width
+        .map_or(usize::from(preferred.files), |w| {
+            1 + (w.max(0.0) / FILE_SPACING).round() as usize
+        })
+        .clamp(1, limit);
+    let spacing = width
+        .filter(|_| files > 1)
+        .map_or(preferred.spacing, |w| w / (files - 1) as f32);
+    BattalionFormation {
+        files: files as u8,
+        spacing: if spacing.is_finite() {
+            spacing.clamp(MIN_FILE_SPACING, MAX_FILE_SPACING)
+        } else {
+            FILE_SPACING
+        },
+    }
 }
 
 #[cfg(test)]
@@ -142,16 +194,17 @@ mod tests {
         (0..5)
             .map(|g| FormationGroup {
                 key: g,
+                shape: default(),
                 soldiers: (0..50)
                     .map(|s| FormationSoldier {
                         entity: Entity::from_raw_u32((g * 50 + s + 1) as u32).unwrap(),
                         identity: g * 50 + s + 1,
+                        seat: None,
                         position: Vec3::new(
                             g as f32 * 20.0 + (s % 10) as f32,
                             0.0,
                             (s / 10) as f32,
                         ),
-                        strength: (s % 20) as u8,
                     })
                     .collect(),
             })
@@ -253,5 +306,102 @@ mod tests {
             a.iter().map(|b| &b.slots).collect::<Vec<_>>(),
             b.iter().map(|b| &b.slots).collect::<Vec<_>>()
         );
+    }
+}
+
+#[cfg(test)]
+mod fluid_tests {
+    use super::*;
+    fn group() -> FormationGroup {
+        FormationGroup {
+            key: 1,
+            shape: default(),
+            soldiers: (0..50)
+                .map(|i| FormationSoldier {
+                    entity: Entity::from_raw_u32(i + 1).unwrap(),
+                    identity: i as u64,
+                    position: Vec3::new(
+                        (i % 10) as f32 * FILE_SPACING,
+                        0.0,
+                        -((i / 10) as f32) * RANK_SPACING,
+                    ),
+                    seat: None,
+                })
+                .collect(),
+        }
+    }
+    #[test]
+    fn a_fifty_person_battalion_can_form_two_ranks_and_keep_them_on_a_normal_move() {
+        let mut group = group();
+        let wide = layout(
+            vec![group.clone()],
+            Vec3::Z * 20.0,
+            Some(FormationFrontage {
+                facing: Vec2::Y,
+                width: 33.6,
+            }),
+        )
+        .pop()
+        .unwrap();
+        assert_eq!(wide.files, 25);
+        assert_eq!(wide.slots.len().div_ceil(wide.files), 2);
+        group.shape = BattalionFormation {
+            files: wide.files as u8,
+            spacing: wide.spacing,
+        };
+        let moved = layout(vec![group], Vec3::Z * 50.0, None).pop().unwrap();
+        assert_eq!(moved.files, 25);
+        assert_eq!(moved.spacing, wide.spacing);
+    }
+    #[test]
+    fn small_drag_adjustments_change_spacing_without_jumping_a_whole_file() {
+        let a = deployment_shape(50, default(), Some(33.2));
+        let b = deployment_shape(50, default(), Some(33.3));
+        assert_eq!(a.files, 25);
+        assert_eq!(a.files, b.files);
+        assert!((b.spacing - a.spacing - 0.1 / 24.0).abs() < 0.00001);
+    }
+    #[test]
+    fn replicated_seats_make_redeployment_insensitive_to_walking_replication_delay() {
+        let mut a = group();
+        for s in &mut a.soldiers {
+            s.seat = Some(s.position.xz());
+        }
+        let mut b = a.clone();
+        for s in &mut b.soldiers {
+            s.position += Vec3::new(
+                (s.identity % 3) as f32 * 0.1,
+                0.0,
+                (s.identity % 7) as f32 * 0.05,
+            );
+        }
+        for facing in [Vec2::Y, Vec2::X, Vec2::new(0.6, 0.8)] {
+            let f = Some(FormationFrontage {
+                facing,
+                width: 33.6,
+            });
+            assert_eq!(
+                layout(vec![a.clone()], Vec3::Z * 40.0, f)[0].slots,
+                layout(vec![b.clone()], Vec3::Z * 40.0, f)[0].slots
+            );
+        }
+    }
+    #[test]
+    fn partial_last_rank_occupies_real_files() {
+        let mut g = group();
+        g.soldiers.truncate(17);
+        let b = layout(
+            vec![g],
+            Vec3::ZERO,
+            Some(FormationFrontage {
+                facing: Vec2::Y,
+                width: 12.6,
+            }),
+        )
+        .pop()
+        .unwrap();
+        for ((_, slot), file) in b.slots.iter().zip(&b.file_indices) {
+            assert!((slot.x - (*file as f32 - 4.5) * b.spacing).abs() < 0.001);
+        }
     }
 }

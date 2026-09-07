@@ -1,0 +1,25 @@
+// Overlapping friendly approaches, followed by a fresh attack in mid-melee.
+(
+    version: 1,
+    account: "battlelab",
+    map: "battle_lab",
+    battalions: 3,
+    soldiers_per_battalion: 50,
+    origin: (-20.0, 0.0, -52.0),
+    deployments: [
+        (target: (-20.0, 0.0, -14.0), facing: (0.0, 1.0), width: 47.81),
+    ],
+    camera_focus: (-20.0, 0.0, -25.0),
+    camera_zoom: 78.0,
+    timeout_seconds: 180.0,
+    battle: Some((
+        defender_battalions: 1,
+        defenders_per_battalion: 50,
+        defender_origin: (-20.0, 0.0, -14.0),
+        defender_facing: (0.0, -1.0),
+        observe_seconds: 40.0,
+        minimum_engaged_battalions: 3,
+        attacker_offsets: [(8.0, 0.0), (0.0, -3.0), (-8.0, -6.0)],
+        retarget_after_seconds: Some(8.0),
+    )),
+)

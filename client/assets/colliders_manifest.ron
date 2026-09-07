@@ -234,10 +234,6 @@
       vertex_filter: LowerYPercent ( percent: 0.611 ),
       collidable: true,
     ),
-    // Walls top out at 2.20 m of a 4.07 m total (-0.16..3.91), so 0.580 cuts at the eaves. The hull
-    // takes in the farmyard (hay bales, sheaves, scythe) as well as the house, which is intended —
-    // units should walk round them.
-    //
     // NOTE the WHEAT FIELD is deliberately absent from this file. It is PropKind::WheatField, a
     // separate glb, and a crop field must be WALKABLE so farmers can stand in it to harvest. An
     // asset with no entry here has no collider, which is how it says so. It is also why the field
@@ -264,27 +260,23 @@
       kind: "building_moot_hall",
       gltf_path: "game_assets/buildings/village/MootHall.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.558 ),
+      vertex_filter: LowerYPercent ( percent: 0.261 ),
       collidable: true,
     ),
     // ---------------------------------------------------------------------------------------------
-    // CIVIC LADDER (L2/L3).
-    //
-    // `percent` is (eaves - base_y) / height, so the hull is sliced at the eaves and the roof
-    // overhang does not inflate the footprint. It is DERIVED PER LEVEL, never copied: the town hall
-    // carries a 6.3 m roof and a 21.6 m belfry over a 9.1 m wall, so the moot hall's 0.558 would
-    // swallow most of the roof and part of the tower. The same formula reproduces the moot hall's
-    // existing 0.558 from its own numbers, which is how these two were checked.
-    //
+    // CIVIC LADDER (L2/L3). Ground-navigation hulls sliced near 2 m:
+    // (2.0 - base_y) / total_height. Roofs, dormers and the upper jetty
+    // must not widen the collider at a character's walking height.
+    // Moot: 2.2/8.44; village: 2.2/9.94; town: 2.2/21.62.
     ( kind: "building_village_hall",
       gltf_path: "game_assets/buildings/village/VillageHall.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.555 ),
+      vertex_filter: LowerYPercent ( percent: 0.221 ),
       collidable: true ),
     ( kind: "building_town_hall",
       gltf_path: "game_assets/buildings/village/TownHall.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.431 ),
+      vertex_filter: LowerYPercent ( percent: 0.102 ),
       collidable: true ),
     // ---------------------------------------------------------------------------------------------
     // Processing industries. These slices end at the usable wall/cabin head,
@@ -326,22 +318,32 @@
       kind: "building_farmstead",
       gltf_path: "game_assets/buildings/village/Farmstead.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.580 ),
+      vertex_filter: LowerYPercent ( percent: 0.420 ),
       collidable: true,
     ),
-    // The sheep barn. Walls top out at 2.64 m of a 5.32 m total (-0.16..5.16), so 0.526 cuts at the
-    // eaves and keeps the hay porch's roof and the T-shaped ridge out of the hull. The hull takes in
-    // the porch posts, the haystack and the holding pen, which is intended -- units walk round them.
-    // Anchor_Door sits 0.6 m outside the eaves-slice hull (asserted by build_livestock_farm.py).
-    //
-    // The PASTURE is deliberately absent, exactly like the wheat field: `LivestockPasture` is a
-    // separate replicated entity 12 m behind the plot, fenced by the client, and it must stay
-    // walkable for the herders and the flock.
+    // Both rural hulls are sliced near 2 m: roofs, hoists and ventilators do not
+    // obstruct walking. The separate field and sheep pasture remain collider-free.
     (
       kind: "building_livestock_farm",
       gltf_path: "game_assets/buildings/village/LivestockFarm.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.526 ),
+      vertex_filter: LowerYPercent ( percent: 0.318 ),
+      collidable: true,
+    ),
+
+    // Authored stone yard and church replace their former box collision.
+    (
+      kind: "building_stone_quarry",
+      gltf_path: "game_assets/buildings/village/StoneQuarry.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.399 ),
+      collidable: true,
+    ),
+    (
+      kind: "building_church",
+      gltf_path: "game_assets/buildings/village/Church.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.145 ),
       collidable: true,
     ),
 

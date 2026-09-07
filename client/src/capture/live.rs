@@ -307,6 +307,14 @@ pub(crate) fn drive_live_voyage_capture(
 pub(crate) fn drive_live_lab_capture(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
+    resting_people: Query<
+        (
+            &shared::components::PersonId,
+            &shared::components::CharacterActivity,
+            &GlobalTransform,
+        ),
+        With<crate::hero::HeroDressed>,
+    >,
     mut cameras: Query<&mut CommanderCamera>,
     mut state: Local<LiveLabCaptureState>,
     inspection: CaptureInspection,
@@ -333,6 +341,18 @@ pub(crate) fn drive_live_lab_capture(
         *state = LiveLabCaptureState::Waiting { day, path, zoom };
     }
 
+    let follow_rest = std::env::var("FISTWORLD_LAB_CAPTURE_ACTIVITY").as_deref() == Ok("rest");
+    let resting = follow_rest
+        .then(|| {
+            resting_people
+                .iter()
+                .filter(|(_, activity, _)| {
+                    **activity == shared::components::CharacterActivity::LyingDown
+                })
+                .min_by_key(|(person, _, _)| person.0)
+                .map(|(person, _, at)| (person.0, at.translation()))
+        })
+        .flatten();
     match &mut *state {
         LiveLabCaptureState::Uninitialized | LiveLabCaptureState::Disabled => {}
         LiveLabCaptureState::Waiting { day, path, zoom } => {
@@ -345,6 +365,16 @@ pub(crate) fn drive_live_lab_capture(
             let Ok(mut camera) = cameras.single_mut() else {
                 return;
             };
+            if follow_rest {
+                let Some((person, point)) = resting else {
+                    return;
+                };
+                camera.focus = point;
+                camera.focus_target = point;
+                if matches!(*readiness, ReadinessProgress { frames: 0, .. }) {
+                    info!("live character rest capture: PersonId({person}) at {point:?}");
+                }
+            }
             camera.zoom = *zoom;
             camera.zoom_target = *zoom;
             info!(
@@ -374,6 +404,16 @@ pub(crate) fn drive_live_lab_capture(
             };
             // A replicated/restored commander view may arrive after the clock.
             // Keep the requested framing throughout warmup and terrain streaming.
+            if follow_rest {
+                let Some((person, point)) = resting else {
+                    return;
+                };
+                camera.focus = point;
+                camera.focus_target = point;
+                if matches!(*readiness, ReadinessProgress { frames: 0, .. }) {
+                    info!("live character rest capture: PersonId({person}) at {point:?}");
+                }
+            }
             camera.zoom = *zoom;
             camera.zoom_target = *zoom;
             if *frames_left > 0 {

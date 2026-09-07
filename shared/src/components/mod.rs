@@ -1,7 +1,9 @@
 //! Shared ECS components used by both server and client.
 
 mod actors;
+mod archery;
 mod army;
+pub use archery::*;
 mod building_kinds;
 mod buildings;
 mod civic;

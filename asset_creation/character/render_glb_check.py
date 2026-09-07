@@ -1,140 +1,167 @@
-"""Round-trip check: import the exported .glb back into a clean scene and render it.
+"""Render the shipped GLB, explicitly binding each action and its imported slot.
 
-    blender --background --factory-startup --python asset_creation/character/render_glb_check.py
-
-Renders what actually shipped rather than the source scene, so a bad bake, a mirrored limb or a
-broken walk shows up as a picture instead of a number. Output goes to asset_creation/renders/glb_*.
+blender --background --factory-startup --threads 2 --python-exit-code 1 \
+  --python asset_creation/character/render_glb_check.py
+Output: logs/reviews/character-refresh. No changes to the source or shipped asset.
 """
 
+import json
 import math
 import os
 import sys
+from pathlib import Path
 
 import bpy
 from mathutils import Vector
 
-# Three levels: <repo>/asset_creation/<family>/<script>.py
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-GLB = os.path.join(REPO, "client", "assets", "characters", "Humanoid.glb")
-OUT = os.path.join(REPO, "asset_creation", "renders")
-RES = 460
-SAMPLES = 40
+sys.path.insert(0, str(Path(__file__).parent))
+from animation_pose import bind_action
+from wardrobe_items import COVERAGE, DEFAULT_OUTFIT, OUTFITS, SLOTS
 
-# Studio numbers from CHARACTER_PIPELINE.md section 10, restated for a 1.7 m character. Light power
-# goes as P/d^2, so moving from a 1-unit rig to 1.7 m multiplies every wattage by 1.703^2 = 2.90.
-K = 1.70333
-DIST = 4.6 * K  # a little further out than the studio setup so 1.88 m clears the 85 mm frame
-
-for o in list(bpy.data.objects):
-    bpy.data.objects.remove(o, do_unlink=True)
-
-bpy.ops.import_scene.gltf(filepath=GLB)
-# Blender 5's factory-startup scene contributes an object of its own; keep only what the glb brought.
-EXPECTED = {"Rig", "Character_Base", "Tshirt"}
-imported = {o.name: o for o in bpy.data.objects
-            if o.name in EXPECTED or o.name.startswith(("Hair_", "Shorts_"))}
-for o in list(bpy.data.objects):
-    if o.name not in imported:
-        print("[check] pruning stray startup object:", o.name)
-        bpy.data.objects.remove(o, do_unlink=True)
-print("[check] imported:", sorted(imported))
-
+ROOT = Path(__file__).resolve().parents[2]
+OUT = ROOT / "logs/reviews/character-refresh"
+OUT.mkdir(parents=True, exist_ok=True)
+for obj in list(bpy.data.objects):
+    bpy.data.objects.remove(obj, do_unlink=True)
+bpy.ops.import_scene.gltf(filepath=str(ROOT / "client/assets/characters/Humanoid.glb"))
+rig = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+imported = {o.name: o for o in bpy.data.objects}
+clips = {
+    track.name: (strip.action, strip.action_slot)
+    for track in rig.animation_data.nla_tracks
+    for strip in track.strips
+}
+assert set(SLOTS["headgear"]).issubset(imported), "Missing equipment nodes"
 scene = bpy.context.scene
 scene.render.engine = "CYCLES"
-scene.cycles.samples = SAMPLES
-scene.render.resolution_x = scene.render.resolution_y = RES
-scene.render.film_transparent = False
+scene.cycles.samples = 16
+scene.render.resolution_x = 500
+scene.render.resolution_y = 600
+scene.render.resolution_percentage = 100
 scene.view_settings.view_transform = "Khronos PBR Neutral"
-scene.world = bpy.data.worlds.new("W")
-scene.world.color = (0.45, 0.45, 0.45)
-
-# Seamless cyclorama, radius scaled with the character.
-bpy.ops.mesh.primitive_plane_add(size=20 * K)
+scene.world.color = (0.35, 0.35, 0.35)
+scene.render.image_settings.file_format = "PNG"
+scene.render.threads_mode = "FIXED"
+scene.render.threads = 2
+bpy.ops.mesh.primitive_plane_add(size=200)
 floor = bpy.context.object
-mat = bpy.data.materials.new("Backdrop")
-if not mat.node_tree:
-    mat.use_nodes = True
-bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-bsdf.inputs["Base Color"].default_value = (0.32, 0.32, 0.33, 1)
-bsdf.inputs["Roughness"].default_value = 1.0
+mat = bpy.data.materials.new("Review floor")
+mat.diffuse_color = (0.16, 0.18, 0.20, 1)
 floor.data.materials.append(mat)
-
-
-def add_light(name, loc, energy, size):
-    d = bpy.data.lights.new(name, type="AREA")
-    d.energy = energy
+for name, loc, power, size in [
+    ("Key", (-3, 4, 5), 950, 4),
+    ("Fill", (3, 2, 3), 350, 4),
+    ("Rim", (1, -3, 4), 700, 3),
+]:
+    d = bpy.data.lights.new(name, "AREA")
+    d.energy = power
     d.size = size
     o = bpy.data.objects.new(name, d)
     scene.collection.objects.link(o)
     o.location = loc
-    aim = Vector((0, 0, 0.95 * K)) - Vector(loc)
-    o.rotation_euler = aim.to_track_quat("-Z", "Y").to_euler()
-    return o
-
-
-P = K * K  # power scale
-add_light("Key", (-2.2 * K, -2.6 * K, 3.0 * K), 340 * P, 2.5 * K)
-add_light("Fill", (2.8 * K, -1.6 * K, 1.4 * K), 95 * P, 3.0 * K)
-add_light("Rim", (0.8 * K, 3.0 * K, 2.2 * K), 110 * P, 2.0 * K)
-
-cam_data = bpy.data.cameras.new("Cam")
-cam_data.lens = 85.0
-cam = bpy.data.objects.new("Cam", cam_data)
+    o.rotation_euler = (
+        (Vector((0, 0, 0.9)) - o.location).to_track_quat("-Z", "Y").to_euler()
+    )
+d = bpy.data.cameras.new("Review camera")
+d.type = "ORTHO"
+d.ortho_scale = 2.6
+cam = bpy.data.objects.new("Review camera", d)
 scene.collection.objects.link(cam)
 scene.camera = cam
 
 
-def look_from(angle_deg, height=1.05, dist=DIST):
-    """Place the camera at a yaw around the character. 0 deg = looking at its face.
-
-    The glTF importer converts back to Blender Z-up ((x,y,z)_gltf -> (x,-z,y)_blender), so a
-    character facing -Z in the file faces +Y here. Its nose therefore points toward +Y and the
-    camera must stand at +Y looking back to see the face -- standing at -Y photographs its back.
-    Heights below are plain metres: the geometry is already at game scale, so scaling them by K
-    again would aim the camera over the character's head.
-    """
-    a = math.radians(angle_deg)
-    cam.location = (dist * math.sin(a), dist * math.cos(a), height + 0.12)
-    target = Vector((0, 0, height))
-    cam.rotation_euler = (target - Vector(cam.location)).to_track_quat("-Z", "Y").to_euler()
+def wear(changes):
+    outfit = DEFAULT_OUTFIT | changes
+    hidden = {
+        slot for item, slots in COVERAGE if item in outfit.values() for slot in slots
+    }
+    for slot, items in SLOTS.items():
+        for item in items:
+            imported[item].hide_render = slot in hidden or item != outfit[slot]
 
 
-def wear(hair="Hair_Tousled", garments=("Shorts_Cargo", "Tshirt")):
-    for name, o in imported.items():
-        if o.type != "MESH":
-            continue
-        if name.startswith("Hair_"):
-            o.hide_render = name != hair
-        elif name.startswith(("Shorts_", "Tshirt")):
-            o.hide_render = name not in garments
-        else:
-            o.hide_render = False
+def pose(name, seconds):
+    bind_action(rig, *clips[name])
+    scene.frame_set(round(seconds * scene.render.fps))
+    bpy.context.view_layer.update()
 
 
-def shot(path, frame=1):
-    scene.frame_set(frame)
-    scene.render.filepath = path
+def bounds(obj):
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    mesh = evaluated.to_mesh()
+    points = [evaluated.matrix_world @ v.co for v in mesh.vertices]
+    evaluated.to_mesh_clear()
+    return [
+        [min(v[i] for v in points) for i in range(3)],
+        [max(v[i] for v in points) for i in range(3)],
+    ]
+
+
+stats = {}
+for name, (act, slot) in clips.items():
+    if name.startswith("face_"):
+        continue
+    stats[name] = []
+    duration = (act.frame_range[1] - act.frame_range[0]) / scene.render.fps
+    for fraction in [0, 0.25, 0.5, 0.75, 1]:
+        pose(name, duration * fraction)
+        stats[name].append(bounds(imported["Character_Base"]))
+(OUT / "export-pose-bounds.json").write_text(json.dumps(stats, indent=2))
+
+
+def shot(label, clip="idle", seconds=0, outfit=None, angle=30):
+    selected = os.environ.get("CHARACTER_REVIEW_SHOTS", "").split(",")
+    if selected != [""] and label not in selected:
+        return
+    wear(outfit or {})
+    pose(clip, seconds)
+    low, high = bounds(imported["Character_Base"])
+    center = Vector(tuple((a + b) / 2 for a, b in zip(low, high)))
+    center.z = max(0.65, center.z)
+    a = math.radians(angle)
+    cam.location = center + Vector((5 * math.sin(a), 5 * math.cos(a), 1.35))
+    cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+    floor.location.z = -0.025 if not clip.startswith("swim") else -1.5
+    scene.render.filepath = str(OUT / (label + ".png"))
     bpy.ops.render.render(write_still=True)
-    print("[check] wrote", os.path.basename(path))
+    print("[review]", label, flush=True)
 
 
-os.makedirs(OUT, exist_ok=True)
-wear()
-
-# 1. turnaround at rest -- catches mirrored limbs, bad materials, wrong facing
-for label, ang in (("front", 0), ("34", 35), ("side", 90), ("back", 180)):
-    look_from(ang)
-    shot(os.path.join(OUT, f"glb_{label}.png"))
-
-# 2. the walk, sampled across the cycle -- catches a mis-rebuilt action
-look_from(35)
-for f in (1, 4, 7, 10, 13, 16, 19, 22):
-    shot(os.path.join(OUT, f"glb_walk_{f:02d}.png"), frame=f)
-
-# 3. every hairstyle, to prove all six bakes survived
-look_from(20, height=1.52, dist=DIST * 0.42)
-for h in ("Hair_Tousled", "Hair_Crop", "Hair_Bob", "Hair_Bowl", "Hair_Topknot", "Hair_Afro"):
-    wear(hair=h)
-    shot(os.path.join(OUT, f"glb_hair_{h.split('_')[1].lower()}.png"))
-
-print("[check] done")
+for name in OUTFITS:
+    shot(name, outfit=OUTFITS[name])
+shot("mail-back", outfit=OUTFITS["soldier_mail"], angle=145)
+shot("topknot", outfit={"hair": "Hair_Topknot"})
+for clip, seconds in [
+    ("build", 0.4),
+    ("chop", 0.5),
+    ("harvest", 0.6),
+    ("carry", 0.25),
+    ("walk", 0.25),
+    ("run", 0.16),
+    ("run", 0.32),
+    ("bow_ready", 0),
+    ("bow_shoot", .85),
+    ("bow_shoot", 1.10),
+    ("combat_strike", 0.16),
+    ("combat_strike", 0.30),
+    ("combat_fall", 1),
+    ("combat_fall_back", 1),
+    ("lie_down", 0.75),
+    ("lie_idle", 0),
+    ("swim", 0),
+    ("swim", 0.83),
+    ("swim_idle", 0),
+]:
+    outfit = (
+        OUTFITS["soldier_mail"]
+        if clip.startswith(("combat", "bow"))
+        else {"top": "Top_Tunic", "bottom": "Bottom_Breeches"}
+    )
+    shot(
+        f"{clip}-{seconds:.2f}",
+        clip,
+        seconds,
+        outfit,
+        60 if clip.startswith("swim") else 30,
+    )
+print("[review] done", flush=True)

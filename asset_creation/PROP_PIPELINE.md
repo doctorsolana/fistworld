@@ -13,8 +13,21 @@ Use each building's documented entry point: the older `export_prop_glb.py` appli
 stonework and readable silhouettes keep the village coherent without making every
 workplace another copy of the cabin.
 
+The current civic ladder is documented in [CIVIC_LEVELS_INTEGRATION.md](CIVIC_LEVELS_INTEGRATION.md)
+and self-exports through `houses/build_civic_halls.py`.
+The [rural buildings and wheat](RURAL_BUILDINGS.md) use individual `build_*.py`
+entry points and the shared `houses/rural_architecture.py` construction/export helpers.
+
 ### Building detail checks learned from the September 2026 review
 
+- Preserve scale as well as style. Measure the old and new wall plans, roof envelope,
+  storey heights and door opening against the shipped character at the same camera.
+  An unchanged reserved plot does not prove the building still fills that plot.
+  The house plans are 5.00 × 6.00 m (compact) and 7.20 × 4.20 m (long), at both levels.
+  The normal entrance leaf is 2.10 m tall and starts 3 cm above terrain grade.
+- Close the wall-to-roof joint at the roof height **over the wall**, not the lower
+  outer eave. A solid roof backing can still leave daylight above a wall plate.
+  Gables and hip ends need their actual roof profiles; inspect below every corner.
 - Inspect roofs from below with backface culling enabled. Main roofs, hips,
   porches and lean-tos need actual backing and closed edges; a top-facing sheet
   disappears below the eaves. `houses/building_mesh.py::roof_underside` adds
@@ -40,6 +53,18 @@ workplace another copy of the cabin.
 - On mechanisms, inspect the full independent rotation of every parent and child.
   A rotor must clear its stationary tower at every cap yaw; its shaft and bearing
   must physically join the cap, and sailcloth must stay clear of its crossbars.
+- Window panes must sit outside the final wall finish, including proud timber cladding.
+  Check a daytime close-up and night glow; an emissive pane can still be buried.
+  Keep braces and banners out of the opening, and connect every mullion to its frame.
+  For angled or curved walls, the local tangent/outward/up axes must form a
+  right-handed basis. A mirrored basis reverses the glass winding and hides it
+  under backface culling; inspect rear windows at night as well as the main facade.
+- Derive chimney bases from the roof plane at the chimney location, not the ridge height.
+  Set the full stack back inside the gable wall too; roof penetration must not leave
+  its lower section sticking through the exterior wall. Mount shields and trim
+  in front of their supporting beams so the beams do not cut through their faces.
+  Side wall caps must follow the roof slope across their full thickness so they do not
+  protrude through shingles at the outside edge.
 - Recheck the navigation hull after adding backing or moving cargo. Overhead
   geometry must stay out of the ground slice; cargo must leave the entrance clear.
   Verify both the actual exported GLB and the Bevy PNG/JSON, not just the source scene.
@@ -373,40 +398,29 @@ solid 11 x 8 m block nothing could enter. There is no filter that fixes this —
 
 An asset with **no entry in `colliders_manifest.ron`** has no collider; that absence *is* the
 declaration. The field is a `PropKind`, not a `BuildingType`. `Farmstead.glb` ships an `Anchor_Field`
-empty so the house/field offset lives in the asset rather than in Rust.
+empties matching the authoritative `field_positions` offsets. Shared layout owns
+placement; the exported anchors are checked against that contract.
 
 Fields also want independent placement and rotation, and growth stages then become an asset swap.
 
-### Blocks do not read as crops — and LEAN is what makes straws work
+### Lean, density and grain heads make crops readable
 
-The first version made each row a run of boxes with a tinted top face. Cheap, and it read as **loaves
-of bread**, because a wheat field contains no large flat surfaces anywhere. Rebuilt as individual
-straws: a 3-quad strip, 8 verts, stalk tapering up to an EAR that flares at 82% height and closes to a
-point. A stalk that only tapers reads as grass; the ear is what names the crop.
+The September 2026 field uses 20 rows of 61 seeded stalk positions. Each stalk has
+an opaque tapered stem and two crossed, leaning grain-head planes. The harvested
+corner keeps short stubble and three tied sheaves. Lean gives the heads projected
+area at an overhead game camera; crossed planes keep them legible while orbiting.
+The complete 8 × 11 m plot has 15,224 exported vertices and 7,624 triangles.
 
-That still looked sparse and near-black at game distance, and the reason is geometric rather than
-artistic: **a vertical flat quad has almost no projected area under a top-down camera.** Upright
-straws go edge-on and vanish, leaving bare soil. Three fixes together, in order of importance:
+The material is double-sided and opaque. This avoids alpha sorting and blended
+transparency costs; it does not eliminate ordinary geometric overdraw. Buildings
+instead have real closed roof undersides and keep backface culling enabled.
 
-1. **Lean them.** ~19° of tilt turns every straw broadside to an overhead camera. Real wheat leans once
-   it carries grain, so this costs nothing in plausibility.
-2. **Raise density.** 16 rows at 0.105 m spacing, not 11 at 0.13.
-3. **Lighten the soil.** Near-black earth turns every gap into a hole and dominates the read.
+### It ships vertex colours without an atlas
 
-No alpha anywhere — the straws are opaque geometry, so there is no transparency sorting and no
-overdraw. The material is `doubleSided` instead (Blender's `use_backface_culling = False`), without
-which every strip disappears from behind and half the field blinks out as the camera orbits.
-
-### It ships vertex colours, not a baked atlas
-
-Every other asset here bakes vertex colour x position-noise into an atlas. `smart_project` over ~2400
-straw quads would cut a 1024 map into islands whose padded area exceeds the map, so they shrink and
-bleed. The colour is already per vertex, so it ships as **COLOR_0**, which glTF carries natively and
-Bevy multiplies into base colour.
-
-Objects opt out with `obj["bake"] = False`. Result: no atlas, and 616 KB against 843 KB — despite ten
-times the geometry. Bake when the look comes from position-based noise; ship COLOR_0 when the geometry
-is already coloured per vertex.
+The field and the rebuilt rural buildings export `COLOR_0` directly. No textures,
+UV atlases or material extensions are required. The crop is one mesh and one
+material; its seeded variation is reproducible. Older texture-baked props still
+use their documented exporter, but `build_wheat_field.py` exports itself.
 
 ---
 
@@ -443,3 +457,13 @@ both the four canonical GLBs and their editable `.blend` sources. The previous s
 cabin build/texture/animation/export scripts were replaced; do not apply the older
 −X-facing exporter or texture passes to these +Y-facing sources.
 See [HOUSE_HANDOVER.md](HOUSE_HANDOVER.md) for budgets, collider slices and real Bevy captures.
+
+### Door sweep clearance
+
+A door that is clear when closed can still cut through a knee brace or the edge
+of its own frame while opening. Check the entire leaf, its backing and hardware
+through the full animation arc. Place the hinge axis on the correct face of the
+jamb, and keep porch framing clear of that arc. An open doorway also exposes
+the interior: provide a ceiling or inward-facing walls so exterior backface
+culling cannot reveal sky through the opposite attic. The house builder checks
+the sweep geometrically; continuous Bevy captures remain the visual check.

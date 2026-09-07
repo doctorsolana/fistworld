@@ -121,7 +121,10 @@ fn replacing_an_attack_cannot_reset_a_ready_weapon_deadline() {
                     units: vec![a],
                     battalions: vec![],
                 },
-                command: UnitCommand::Attack { target: b },
+                command: UnitCommand::Attack {
+                    target: b,
+                    mode: shared::protocol::AttackMode::Focus,
+                },
             },
         );
         app.update();

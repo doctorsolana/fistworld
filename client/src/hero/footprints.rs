@@ -169,10 +169,19 @@ pub fn stamp_footprints(
     let mut seen: Vec<Entity> = Vec::new();
     for (entity, transform, visual, activity, aboard) in walkers.iter() {
         let pos = transform.translation();
-        if aboard
+        if shared::character::locomotion::swimming_at(
+            terrain.get_height(pos.x, pos.z),
+            terrain.get_water_height(pos.x, pos.z),
+            pos.y,
+            aboard,
+        ) || aboard
             || matches!(
                 activity,
-                Some(CharacterActivity::Sitting) | Some(CharacterActivity::Indoors)
+                Some(
+                    CharacterActivity::Sitting
+                        | CharacterActivity::LyingDown
+                        | CharacterActivity::Indoors
+                )
             )
             || Vec2::new(pos.x - focus.x, pos.z - focus.z).length_squared()
                 > TRACK_RADIUS * TRACK_RADIUS

@@ -454,9 +454,21 @@ mod house_appearance_tests {
     #[test]
     fn planning_envelope_contains_both_upgrade_lines() {
         let reserved = SettlementBuildingKind::House.placement_definition();
-        for art in [BuildingType::CabinL2, BuildingType::LongCabinL2] {
+        let minimum = reserved.footprint_center - reserved.footprint * 0.5;
+        let maximum = reserved.footprint_center + reserved.footprint * 0.5;
+        for art in [
+            BuildingType::LogCabin,
+            BuildingType::LongCabin,
+            BuildingType::CabinL2,
+            BuildingType::LongCabinL2,
+        ] {
             let actual = art.definition();
-            assert!(reserved.footprint.cmpge(actual.footprint).all());
+            assert!(minimum
+                .cmple(actual.footprint_center - actual.footprint * 0.5)
+                .all());
+            assert!(maximum
+                .cmpge(actual.footprint_center + actual.footprint * 0.5)
+                .all());
         }
     }
 }

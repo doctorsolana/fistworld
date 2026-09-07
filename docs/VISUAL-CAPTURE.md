@@ -78,7 +78,9 @@ gameplay/town zoom. `lumberjack-hut-door.ron` records its ordinary door-demand c
 zoom. `houses-lineup.ron` compares both families and upgrade levels in one view;
 `houses-doors.ron` continuously exercises all four door clips. Their fixture uses
 `FISTFORCE_CAPTURE_HOUSES=cabin-l1|cabin-l2|long-l1|long-l2|lineup` and the production
-`HouseAppearance`, household lighting and door-demand consumers. It has no connected
+`HouseAppearance`, household lighting and door-demand consumers. Each individual house scenario also
+places a dressed character beside the entrance and includes an `entrance-scale`
+view at eye height. It has no connected
 villager simulation; use the client/server lab for NPC journeys.
 
 Other checked-in references include
@@ -385,6 +387,17 @@ timeout writes `failure.json` and exits with an error. Inspect images and both J
 files. The army lab uses the existing owned presentation image for `target: window`,
 so its composed HUD capture also works when a macOS swapchain returns black.
 
+### Fluid formation regression
+
+Use `capture/scenarios/army-fluid.ron` in both binaries with the same army launch
+recipe. It widens three 50-person battalions to 25 files/two ranks, then uses an
+ordinary ground click (`preserve_shape: true`) before a quarter-turn redeployment.
+The client checks every replicated arrival and facing. Drag previews capture the
+composed window so the footprint and rank-count label can both be inspected.
+`battle-3v3.ron` also verifies selection expansion from one member per battalion
+before its normal engage-line attack. These runs are functional/visual checks,
+not performance benchmarks.
+
 ## Connected clash scenarios
 
 `battle-1v1.ron`, `battle-2v1.ron`, `battle-3v1.ron` and `battle-skirmish.ron`
@@ -393,6 +406,12 @@ and the account with `FISTFORCE_AUTOCONNECT=battlelab`. Use a fresh server per r
 `FISTFORCE_RESOLUTION=1600x900`, and a separate output directory. The scenario
 owns camera framing. Both sides are ordinary server characters, discharged into
 retinues and mustered through the real handlers; defenders receive Hold.
+
+`battle-animation.ron` is the close-up version: eight soldiers per side, a short
+approach and twenty seconds of real combat after first contact. Use it when
+changing attack, recoil or death clips. Review the PNGs alongside each
+`.battle.json` impact/reaction timestamp: an offline fatal pose alone cannot prove
+that replication and mortality leave enough time for the animation to finish.
 
 The client waits for the complete replicated population, dressed rigs, owned
 roster, stable terrain and unblocked UI. It selects the attacking battalions and
@@ -411,6 +430,68 @@ These are functional checks: personally inspect the approach, contact, casualty
 replacement and late fight to assess crossing, crowding, poses and stalls.
 Screenshot readbacks and compilation disturb timing; these runs are not FPS
 benchmarks. Use `army-250.ron` as the separate march/redeployment regression.
+
+For a separate timing run, set `FISTWORLD_BATTLE_METRICS_ONLY=1` on the client,
+along with `FISTFORCE_CLIENT_PERF=1`; enable `CITYSIM_NET_DEBUG=1` on the server.
+The driver still takes its initial readiness/selection screenshot, then records
+one position sample per simulated second without GPU readbacks or PNG encoding.
+Its summary marks `metrics_only`, distinguishes `samples` from `shots`, and keeps
+the gameplay assertions. This mode is not a replacement for visual verification.
+Exclude startup/pipeline warmup from timing interpretation, retain the render
+settings and concurrent machine workload, and use the server's measured phase
+costs rather than treating its scheduled 16.7 ms tick interval as CPU time.
+`battle-5v5.ron` extends the same check to 500 soldiers.
+
+### Crowded combat and mid-fight orders
+
+`battle-crowded.ron` starts three 50-person attacking battalions with overlapping
+approaches to one defending battalion. The client reissues an army attack eight
+seconds after first contact through the same mouse/order path. Scenario offsets
+only stage the initial fixture; runtime movement and collision remain production
+systems. Its summary also requires the mid-fight order to have been issued.
+
+After a connected run, use:
+
+```sh
+python3 tools/analyze_battle_capture.py /path/to/capture-directory
+```
+
+`movement-analysis.json` records individual contact participation, travel before
+contact, substantial direction reversals, close body overlaps, and unsupported
+five-second idle windows. Waiting within three metres of an engaged ally and five
+metres of an enemy is classified as support. These are diagnostics to inspect
+alongside the PNG sequence, not blanket requirements for every rear-rank soldier
+to fight or an FPS measurement. Compare the same scenario and observation window;
+casualties and target availability can legitimately alter contact participation.
+
+### Hands-on three-versus-three battle
+
+For the larger **manual five-versus-five** fixture, use `./run.sh battle5v5`.
+It builds the client/server pair, supplies `battle-5v5.ron` only to the server,
+waits for the network listener and opens the client as `battlelab` with combat
+mode and a hero. Closing the client or interrupting the launcher stops its own
+server. Both logs are retained in `logs/battle5v5-*`; an already occupied server
+port is reported without stopping that session. This is a hands-on launcher,
+not an automatic verification run. The connected capture recipes above remain
+the way to run assertions and record the full battle automatically.
+
+`battle-3v3.ron` stages three 50-person battalions per side, 44 m apart. For
+manual play, give **only the server** `FISTWORLD_ARMY_SCENARIO`; setting it on
+the client runs the automated attack/capture/exit sequence instead. Start a fresh
+server using the connected launch recipe above with this scenario, then launch:
+
+```sh
+env -u FISTWORLD_ARMY_SCENARIO CITYSIM_MAP_ID=battle_lab \
+  FISTFORCE_AUTOCONNECT=battlelab FISTWORLD_AUTOSPAWN_HERO=1 \
+  FISTWORLD_AUTOSPAWN_AT=-32,-72 FISTFORCE_COMBAT_MODE=1 \
+  FISTFORCE_START_FOCUS=-20,-36 FISTFORCE_START_ZOOM=100 FISTFORCE_START_YAW=0 \
+  BEVY_ASSET_ROOT="$PWD/client/assets" ./target/playtest/client
+```
+
+The server also needs `FISTWORLD_DEV=1` for the existing hero spawn hook. The
+player receives 150 mustered soldiers and a hero behind the line; the 150 enemy
+soldiers Hold until engaged. No client driver issues attacks, locks the camera
+or exits the session. Normal Army-page membership/stance controls remain live.
 
 ## Connected catapult rehearsal
 
@@ -570,3 +651,80 @@ drives the production door consumer. The fixture is selected with
 `FISTFORCE_CAPTURE_SETTLEMENT=windmill`; it does not simulate connected NPC entry.
 The free-look cameras use the fixture elevation 8.885553 m. Inspect each PNG
 with its JSON, including the full rotation and the low threshold views.
+
+
+### Civic hall progression
+
+`civic-moot.ron`, `civic-village.ron` and `civic-town.ron` stage one actual
+settlement root at its authored level. Each checks front/rear, normal zoom,
+night glass, entrance and a low side view. `civic-lineup.ron` compares all three
+at one camera scale. `civic-doors.ron` runs a continuous 271-frame open/close
+cycle through `BuildingDoorDemand`, probing every 30 frames.
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture   --scenario capture/scenarios/civic-lineup.ron --out logs/captures/civic-halls/lineup
+```
+
+The fixture reserves/levels the same largest-hall footprint as founding, and
+uses the real settlement scene, material and door consumers. The human in the
+individual art views is a scale reference. This offline fixture does not
+simulate immigration, service queues or connected NPC threshold crossing.
+
+### Rural workplaces and fields
+
+`rural-farmstead.ron`, `rural-livestock.ron`, `rural-quarry.ron` and
+`rural-church.ron` select `FISTFORCE_CAPTURE_RURAL` fixtures. They use the actual
+building visual, window-light and door consumers, with real walkable wheat-field
+or sheep-pasture entities where applicable. Plots use the shared flattening
+bounds and grade; the supplied worker roster enables occupied night windows.
+These fixtures have building entities rather than civic settlement roots, so
+`settlements_at_least` does not describe their readiness.
+
+Each scenario inspects day/night, rear, grounds, gameplay zoom, entry and roof
+views. `rural-doors.ron` stages all four buildings and continuously drives the
+normal `BuildingDoorDemand` consumer for 271 frames, probing every 30 frames.
+Inspect the PNGs and JSON. These offline views do not simulate worker travel,
+harvesting, services or connected NPC entry. Sources and budgets are documented
+in [RURAL_BUILDINGS.md](../asset_creation/RURAL_BUILDINGS.md).
+
+## Character animation and equipment review
+
+`character-work-review.ron`, `character-motion-review.ron`,
+`character-armour-review.ron`, `character-deaths-review.ron`,
+`character-rest-review.ron` and `character-swim-review.ron` record uninterrupted
+2.5-second sequences through the production character driver. They wait for
+`HeroDressed` as well as terrain readiness. `character-creator.ron` checks the
+composed equipment selector with the mail preset selected. Full asset rebuild,
+clip ownership and stable wardrobe indices are documented in
+[CHARACTER_HANDOVER.md](../asset_creation/CHARACTER_HANDOVER.md).
+
+The connected Village Lab accepts `FISTWORLD_LAB_CAPTURE_ACTIVITY=rest` with its
+usual capture flags. It waits for a **replicated** `LyingDown` resident and focuses
+that person. Pair with `FISTFORCE_AUTOTIME_PRESET=night` in a local dev lab to
+exercise the real nighttime routine. A work-pose fixture is not proof that a
+civilian has reached its authoritative workplace, and the swim fixture does not
+certify connected input/navigation; use the movement tests and connected lab too.
+
+### Bow asset review
+
+`character-archery-review.ron` stages three ordinary dressed characters with
+`BowEquipped` and a single clock-sampled `BowShot`. The body and bow/string use
+their production animation systems. Readiness includes both wardrobe and bow
+graph setup. This is an asset presentation fixture; it does not assert ranged
+combat or arrow damage. See `asset_creation/ARCHERY_HANDOVER.md`.
+
+### Connected archery
+
+`battle-archers.ron` requires arrows released, in-flight projectiles, active
+body/bow animation and an archer sidearm transition during an infantry
+countercharge. `battle-mixed-archers.ron`
+checks three battalions per side with archers behind infantry. Their `.battle.json`
+files include roles, remaining arrows, bow release times and sampled projectile
+positions. `archery_visuals` records body clip selection, playhead, weight, bow
+readiness and motion. `battle-archers-close.ron` frames the entire firing line;
+`battle-archer-animation.ron` uses four archers and zoom 10 to make hands, draw
+and release readable. Inspect these close PNGs as well as the wider fight.
+`army-archers.ron` checks frontage/movement and the tactical HUD;
+`army-archer-management.ron` checks the retained Army page, bulk membership,
+transfers and bombardment stances with archer battalions.
+The generic melee contact/casualty pass alone does not prove archery works.

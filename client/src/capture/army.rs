@@ -64,15 +64,18 @@ pub(crate) fn drive_army_input(
     let centre = Vec3::from_array(deployment.target).xz();
     let facing = Vec2::from_array(deployment.facing).normalize();
     let right = Vec2::new(facing.y, -facing.x);
+    let width = if deployment.preserve_shape {
+        0.0
+    } else {
+        deployment.width
+    };
     if let Ok(mut window) = windows.single_mut() {
         let centre = Vec2::new(window.width(), window.height()) * 0.5;
         window.set_cursor_position(Some(centre));
     }
     match state.input_phase {
         1 => {
-            commands.insert_resource(CursorTerrainOverride(
-                centre - right * deployment.width * 0.5,
-            ));
+            commands.insert_resource(CursorTerrainOverride(centre - right * width * 0.5));
             state.input_phase = 2;
         }
         2 => {
@@ -80,10 +83,8 @@ pub(crate) fn drive_army_input(
             state.input_phase = 3;
         }
         3 => {
-            commands.insert_resource(CursorTerrainOverride(
-                centre + right * deployment.width * 0.5,
-            ));
-            state.input_phase = 4;
+            commands.insert_resource(CursorTerrainOverride(centre + right * width * 0.5));
+            state.input_phase = if deployment.preserve_shape { 5 } else { 4 };
         }
         5 => {
             mouse.release(MouseButton::Right);
@@ -105,7 +106,12 @@ pub(crate) fn drive_army_capture(
     mut selection: ResMut<Selection>,
     mut mode: ResMut<crate::combat_mode::CombatMode>,
     mut cameras: Query<&mut CommanderCamera>,
-    people: Query<(&PlayerPosition, &PlayerRotation, Option<&PersonId>)>,
+    people: Query<(
+        &PlayerPosition,
+        &PlayerRotation,
+        Option<&PersonId>,
+        Option<&FormationSeat>,
+    )>,
     terrain: Res<shared::terrain::WorldTerrain>,
     clocks: Query<&WorldTime>,
     inspection: CaptureInspection,
@@ -133,7 +139,7 @@ pub(crate) fn drive_army_capture(
             .expected
             .iter()
             .filter_map(|(e, _, destination, _)| {
-                people.get(*e).ok().map(|(p, _, _)| {
+                people.get(*e).ok().map(|(p, _, _, _)| {
                     (
                         format!("{e:?}"),
                         p.0.to_array(),
@@ -236,7 +242,7 @@ pub(crate) fn drive_army_capture(
     if state.stage == Stage::Prepare {
         let mut groups = BTreeMap::<u64, Vec<FormationSoldier>>::new();
         for soldier in roster.soldiers.values() {
-            let Ok((point, _, _)) = people.get(soldier.entity) else {
+            let Ok((point, _, _, seat)) = people.get(soldier.entity) else {
                 return;
             };
             groups
@@ -244,19 +250,27 @@ pub(crate) fn drive_army_capture(
                 .or_default()
                 .push(FormationSoldier {
                     entity: soldier.entity,
+                    seat: seat.map(|s| s.0),
                     identity: soldier.identity,
                     position: point.0,
-                    strength: soldier.strength,
                 });
         }
         let deployment = &scenario.deployments[state.deployment];
         let blocks = shared::formation::layout(
             groups
                 .into_iter()
-                .map(|(key, soldiers)| FormationGroup { key, soldiers })
+                .map(|(key, soldiers)| FormationGroup {
+                    key,
+                    shape: roster
+                        .battalions
+                        .iter()
+                        .find(|b| b.id.0 == key)
+                        .map_or(default(), |b| b.formation),
+                    soldiers,
+                })
                 .collect(),
             Vec3::from_array(deployment.target),
-            Some(FormationFrontage {
+            (!deployment.preserve_shape).then_some(FormationFrontage {
                 facing: Vec2::from_array(deployment.facing),
                 width: deployment.width,
             }),
@@ -273,7 +287,11 @@ pub(crate) fn drive_army_capture(
             }
         }
         state.input_phase = 1;
-        state.stage = Stage::Preview;
+        state.stage = if deployment.preserve_shape {
+            Stage::Moving
+        } else {
+            Stage::Preview
+        };
         return;
     }
     if state.stage == Stage::Release {
@@ -287,7 +305,7 @@ pub(crate) fn drive_army_capture(
     let mut max_error = 0.0_f32;
     let mut evidence = Vec::new();
     for (entity, start, goal, facing) in &state.expected {
-        let Ok((point, rotation, person)) = people.get(*entity) else {
+        let Ok((point, rotation, person, _)) = people.get(*entity) else {
             continue;
         };
         let error = point.0.xz().distance(goal.xz());
@@ -303,6 +321,9 @@ pub(crate) fn drive_army_capture(
     }
     if state.stage == Stage::Arrival && world.frame.saturating_sub(state.last_progress) >= 120 {
         state.last_progress = world.frame;
+        // Keep the latest stalled-arrival evidence inspectable during a run.
+        // The strict final arrival/facing assertions remain unchanged.
+        std::fs::write(out.join("progress.json"), serde_json::to_vec_pretty(&serde_json::json!({"deployment":state.deployment + 1,"arrived":arrived,"aligned":aligned,"people":evidence})).unwrap()).expect("army progress evidence");
         info!("Army lab deployment {}: arrived={arrived}, aligned={aligned}, max_error={max_error:.3}m", state.deployment + 1);
     }
     let (name, next, target) = match state.stage {
@@ -312,7 +333,7 @@ pub(crate) fn drive_army_capture(
                 && preview.slots == scenario.total()
                 && preview.stable_frames >= 12 =>
         {
-            ("preview", Stage::Release, CaptureTarget::Scene)
+            ("preview", Stage::Release, CaptureTarget::Window)
         }
         Stage::Moving if moved == scenario.total() => {
             ("moving", Stage::Arrival, CaptureTarget::Scene)
@@ -336,7 +357,7 @@ pub(crate) fn drive_army_capture(
     .expect("army measurements");
     let mut request = live_capture_request(
         out.join(format!("{stem}.png")),
-        "connected-army-250",
+        "connected-army",
         &stem,
         target,
     );

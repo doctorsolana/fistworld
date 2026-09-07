@@ -115,32 +115,28 @@ struct SelectionGesture {
     entities: Vec<Entity>,
     additive: bool,
     toggle: bool,
-    individual: bool,
 }
 
-/// Selecting a battalion's standard bearer selects the battalion: click the
-/// flag, command the unit. Runs right after picking, so both a single click
-/// and a drag-box that caught the bearer grow to the full roster before any
-/// ring, plate or order reads the selection. Expansion is idempotent - the
-/// re-run triggered by its own write finds nothing to add and writes nothing.
-#[allow(clippy::type_complexity)]
-pub(super) fn expand_standard_bearer_selection(
+/// Every member represents their battalion. Expansion also covers control-group
+/// recall and roster selections, and runs only when selection/membership changes.
+pub(super) fn expand_battalion_selection(
     mut selection: ResMut<Selection>,
-    bearers: Query<
-        &shared::components::MemberOfBattalion,
-        With<shared::components::StandardBearer>,
-    >,
     members: Query<(Entity, &shared::components::MemberOfBattalion)>,
+    changed: Query<(), Changed<shared::components::MemberOfBattalion>>,
 ) {
-    let Some(gesture) = selection.bypass_change_detection().pending.take() else {
+    let pending = selection.bypass_change_detection().pending.take();
+    if pending.is_none() && !selection.is_changed() && changed.is_empty() {
         return;
+    }
+    let (mut hits, additive, toggle) = match pending {
+        Some(g) => (g.entities, g.additive, g.toggle),
+        None => (selection.entities.clone(), false, false),
     };
-    let mut hits = gesture.entities;
-    if !gesture.individual {
-        let battalions: std::collections::HashSet<_> = hits
-            .iter()
-            .filter_map(|e| bearers.get(*e).ok().map(|m| m.0))
-            .collect();
+    let battalions: std::collections::HashSet<_> = hits
+        .iter()
+        .filter_map(|e| members.get(*e).ok().map(|(_, m)| m.0))
+        .collect();
+    if !battalions.is_empty() {
         let mut seen: std::collections::HashSet<_> = hits.iter().copied().collect();
         for (soldier, member) in &members {
             if battalions.contains(&member.0) && seen.insert(soldier) {
@@ -148,7 +144,9 @@ pub(super) fn expand_standard_bearer_selection(
             }
         }
     }
-    selection.apply_group(hits, gesture.additive, gesture.toggle);
+    if additive || selection.entities != hits {
+        selection.apply_group(hits, additive, toggle);
+    }
 }
 
 impl Selection {
@@ -204,18 +202,11 @@ impl Selection {
             self.set(next);
         }
     }
-    pub(super) fn gesture(
-        &mut self,
-        entities: Vec<Entity>,
-        additive: bool,
-        toggle: bool,
-        individual: bool,
-    ) {
+    pub(super) fn gesture(&mut self, entities: Vec<Entity>, additive: bool, toggle: bool) {
         self.pending = Some(SelectionGesture {
             entities,
             additive,
             toggle,
-            individual,
         });
     }
 }
@@ -589,11 +580,11 @@ pub fn can_command(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn shift_toggles_battalions_and_alt_selects_only_the_person() {
+    fn any_member_selects_and_shift_toggles_the_whole_battalion() {
         use shared::components::{BattalionId, MemberOfBattalion, StandardBearer};
         let mut app = App::new();
         app.init_resource::<Selection>();
-        app.add_systems(Update, expand_standard_bearer_selection);
+        app.add_systems(Update, expand_battalion_selection);
         let flag = app
             .world_mut()
             .spawn((MemberOfBattalion(BattalionId(1)), StandardBearer))
@@ -608,22 +599,22 @@ mod tests {
             .set(vec![outsider]);
         app.world_mut()
             .resource_mut::<Selection>()
-            .gesture(vec![flag], true, true, false);
+            .gesture(vec![mate], true, true);
         app.update();
         assert_eq!(app.world().resource::<Selection>().len(), 3);
         assert!(app.world().resource::<Selection>().is_selected(mate));
         app.world_mut()
             .resource_mut::<Selection>()
-            .gesture(vec![flag], true, true, false);
+            .gesture(vec![mate], true, true);
         app.update();
         assert_eq!(app.world().resource::<Selection>().entities, vec![outsider]);
         app.world_mut()
             .resource_mut::<Selection>()
-            .gesture(vec![flag], false, false, true);
+            .gesture(vec![mate], false, false);
         app.update();
         app.update();
-        assert_eq!(app.world().resource::<Selection>().entities, vec![flag]);
-        assert!(!app.world().resource::<Selection>().is_selected(mate));
+        assert_eq!(app.world().resource::<Selection>().len(), 2);
+        assert!(app.world().resource::<Selection>().is_selected(flag));
     }
 
     use super::*;

@@ -16,6 +16,8 @@ pub struct SoldierFacts {
     pub current_health: f32,
     pub max_health: f32,
     pub available: bool,
+    pub role: SoldierRole,
+    pub arrows: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +31,10 @@ pub struct BattalionFacts {
     pub mean_strength: u32,
     pub health_fraction: f32,
     pub stance: BattalionStance,
+    pub formation: BattalionFormation,
+    pub role: SoldierRole,
+    pub fire_policy: FirePolicy,
+    pub arrows: usize,
 }
 
 #[derive(Resource, Default)]
@@ -40,15 +46,14 @@ pub struct ArmyRoster {
 }
 
 impl ArmyRoster {
-    /// Compress only completely selected battalions. Partial selections stay
-    /// individual, so an Alt-click never commands the rest of that battalion.
+    /// Any selected member represents the whole battalion, including saved groups.
     pub fn selection(&self, entities: &[Entity]) -> UnitSelection {
         let selected: HashSet<_> = entities.iter().copied().collect();
         let mut represented = HashSet::new();
         let battalions = self
             .battalions
             .iter()
-            .filter(|b| !b.members.is_empty() && b.members.iter().all(|e| selected.contains(e)))
+            .filter(|b| !b.members.is_empty() && b.members.iter().any(|e| selected.contains(e)))
             .map(|b| {
                 represented.extend(b.members.iter().copied());
                 b.id
@@ -111,6 +116,10 @@ pub struct RosterChanges<'w, 's> {
                 Changed<PersonId>,
                 Changed<Battalion>,
                 Changed<BattalionStance>,
+                Changed<SoldierRole>,
+                Changed<FirePolicy>,
+                Changed<Quiver>,
+                Changed<BattalionFormation>,
                 Changed<MemberOfBattalion>,
                 Added<AboardBoat>,
             )>,
@@ -137,10 +146,20 @@ pub fn refresh_army_roster(
             Option<&Health>,
             Has<AboardBoat>,
             Option<&PersonId>,
+            Option<&SoldierRole>,
+            Option<&Quiver>,
         ),
         With<CharacterKind>,
     >,
-    battalions: Query<(Entity, &Battalion, &CommandedBy, Option<&BattalionStance>)>,
+    battalions: Query<(
+        Entity,
+        &Battalion,
+        &CommandedBy,
+        Option<&BattalionStance>,
+        Option<&BattalionFormation>,
+        Option<&SoldierRole>,
+        Option<&FirePolicy>,
+    )>,
     mut roster: ResMut<ArmyRoster>,
 ) {
     let removed = changes.members.read().count()
@@ -154,7 +173,9 @@ pub fn refresh_army_roster(
     let account = name.name.trim().to_lowercase();
     let mut troops = HashMap::new();
     let mut serving = BTreeMap::<BattalionId, Vec<Entity>>::new();
-    for (entity, owner, name, attributes, member, health, aboard, identity) in &soldiers {
+    for (entity, owner, name, attributes, member, health, aboard, identity, role, quiver) in
+        &soldiers
+    {
         if account.is_empty() || owner.0 != account || health.is_some_and(|h| h.is_dead()) {
             continue;
         }
@@ -172,11 +193,13 @@ pub fn refresh_army_roster(
                 current_health: health.map_or(CHARACTER_MAX_HEALTH, |h| h.current),
                 max_health: health.map_or(CHARACTER_MAX_HEALTH, |h| h.max),
                 available: !aboard,
+                role: role.copied().unwrap_or_default(),
+                arrows: quiver.map_or(0, |q| q.arrows),
             },
         );
     }
     let mut units = Vec::new();
-    for (entity, battalion, owner, stance) in &battalions {
+    for (entity, battalion, owner, stance, formation, role, policy) in &battalions {
         if account.is_empty() || owner.0 != account {
             continue;
         }
@@ -197,6 +220,10 @@ pub fn refresh_army_roster(
             name: battalion.name.clone(),
             ordinal: battalion.ordinal,
             stance: stance.copied().unwrap_or_default(),
+            formation: formation.copied().unwrap_or_default(),
+            role: role.copied().unwrap_or_default(),
+            fire_policy: policy.copied().unwrap_or_default(),
+            arrows: members.iter().map(|e| usize::from(troops[e].arrows)).sum(),
             count: members.len(),
             mean_strength: strength / members.len().max(1) as u32,
             health_fraction: if max_health > 0.0 {
@@ -269,7 +296,7 @@ mod tests {
         assert_eq!(app.world().resource::<ArmyRoster>().battalions[0].count, 0);
     }
     #[test]
-    fn full_and_partial_control_groups_keep_their_selection_meaning() {
+    fn control_groups_follow_the_battalion_when_saved_from_any_member() {
         let mut app = app();
         let a = soldier(&mut app);
         let b = soldier(&mut app);
@@ -279,14 +306,14 @@ mod tests {
         let partial = roster.selection(&[a]);
         assert_eq!(whole.battalions, vec![BattalionId(1)]);
         assert!(whole.units.is_empty());
-        assert_eq!(partial.units, vec![a]);
-        assert!(partial.battalions.is_empty());
+        assert!(partial.units.is_empty());
+        assert_eq!(partial.battalions, whole.battalions);
         let c = soldier(&mut app);
         app.world_mut().despawn(b);
         app.update();
         let roster = app.world().resource::<ArmyRoster>();
         assert_eq!(roster.resolve(&whole).len(), 2);
         assert!(roster.resolve(&whole).contains(&c));
-        assert_eq!(roster.resolve(&partial), vec![a]);
+        assert_eq!(roster.resolve(&partial), roster.resolve(&whole));
     }
 }

@@ -3,7 +3,7 @@ use super::*;
 use std::collections::HashMap;
 #[derive(Default)]
 pub struct SeparationScratch {
-    participants: Vec<(Entity, Vec2, bool)>,
+    participants: Vec<(Entity, Vec2, bool, bool)>,
     cells: HashMap<(i32, i32), Vec<usize>>,
     pushes: HashMap<Entity, Vec2>,
 }
@@ -27,6 +27,7 @@ pub fn separate_melee_bodies(
         Has<crate::player::orders::MarchOrder>,
         Has<super::SkirmishOrder>,
         Option<&super::fronts::FormationMember>,
+        Has<shared::components::EngagedWith>,
     )>,
     formations: Option<Res<super::fronts::CombatFormations>>,
     mut bodies: Query<
@@ -66,7 +67,7 @@ pub fn separate_melee_bodies(
         let fixed =
             policies
                 .get(entity)
-                .is_ok_and(|(policy, directed, marching, skirmish, member)| {
+                .is_ok_and(|(policy, directed, marching, skirmish, member, _)| {
                     policy == Some(&shared::components::BattalionStance::HoldLine)
                         && !directed
                         && !marching
@@ -80,12 +81,20 @@ pub fn separate_melee_bodies(
                                 })
                         })
                 });
-        participants.push((entity, Vec2::new(position.0.x, position.0.z), fixed));
+        let engaged = policies
+            .get(entity)
+            .is_ok_and(|(_, _, _, _, _, engaged)| engaged);
+        participants.push((
+            entity,
+            Vec2::new(position.0.x, position.0.z),
+            fixed,
+            engaged,
+        ));
     }
     if participants.len() < 2 {
         return;
     }
-    for (index, (_, point, _)) in participants.iter().enumerate() {
+    for (index, (_, point, _, _)) in participants.iter().enumerate() {
         cells
             .entry((
                 (point.x / CELL).floor() as i32,
@@ -97,7 +106,7 @@ pub fn separate_melee_bodies(
 
     let min_distance = BODY_RADIUS * 2.0;
     cells.retain(|_, indices| !indices.is_empty());
-    for (index, (entity, point, fixed)) in participants.iter().enumerate() {
+    for (index, (entity, point, fixed, engaged)) in participants.iter().enumerate() {
         let cell = (
             (point.x / CELL).floor() as i32,
             (point.y / CELL).floor() as i32,
@@ -112,8 +121,13 @@ pub fn separate_melee_bodies(
                     if *other_index <= index {
                         continue;
                     }
-                    let (other, other_point, other_fixed) = participants[*other_index];
-                    if *fixed && other_fixed {
+                    let (other, other_point, other_fixed, other_engaged) =
+                        participants[*other_index];
+                    // Arriving allies yield to an established fight. Two
+                    // fighters still resolve overlap symmetrically.
+                    let fixed = *fixed || (*engaged && !other_engaged && !other_fixed);
+                    let other_fixed = other_fixed || (other_engaged && !*engaged && !fixed);
+                    if fixed && other_fixed {
                         continue;
                     }
                     let offset = *point - other_point;
@@ -133,13 +147,13 @@ pub fn separate_melee_bodies(
                         Vec2::new(angle.cos(), angle.sin())
                     };
                     let correction = ((min_distance - distance) * 0.5).min(MAX_PUSH_PER_TICK);
-                    if !*fixed {
+                    if !fixed {
                         *pushes.entry(*entity).or_default() +=
                             axis * correction * if other_fixed { 2.0 } else { 1.0 };
                     }
                     if !other_fixed {
                         *pushes.entry(other).or_default() -=
-                            axis * correction * if *fixed { 2.0 } else { 1.0 };
+                            axis * correction * if fixed { 2.0 } else { 1.0 };
                     }
                 }
             }

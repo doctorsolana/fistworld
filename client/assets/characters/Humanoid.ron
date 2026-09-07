@@ -3,9 +3,19 @@
   scene: "characters/Humanoid.glb#Scene0",
   body: "Character_Base",
   slots: [
-    (name: "bottom", default: "Bottom_Shorts", items: ["Bottom_Shorts", "Bottom_Shorts_Long", "Bottom_Breeches", "Bottom_Trousers"]),
-    (name: "top", default: "Top_Tee", items: ["Top_Tee", "Top_LongSleeve", "Top_Jerkin", "Top_Tunic"]),
-    (name: "hair", default: "Hair_Tousled", items: ["Hair_Tousled", "Hair_Crop", "Hair_Bowl", "Hair_Spiky", "Hair_Long", "Hair_Afro"]),
+    (name: "bottom", default: "Bottom_Shorts", items: ["Bottom_Shorts", "Bottom_Shorts_Long", "Bottom_Breeches", "Bottom_Trousers", "Bottom_WoolBoots"]),
+    (name: "top", default: "Top_Tee", items: ["Top_Tee", "Top_LongSleeve", "Top_Jerkin", "Top_Tunic", "Top_PaddedArmour", "Top_LeatherArmour", "Top_MailArmour"]),
+    (name: "hair", default: "Hair_Tousled", items: ["Hair_Tousled", "Hair_Crop", "Hair_Bowl", "Hair_Spiky", "Hair_Long", "Hair_Afro", "Hair_Topknot"]),
+    (name: "headgear", default: "Headgear_None", items: ["Headgear_None", "Headgear_NasalHelmet", "Headgear_IronCap"]),
+  ],
+  coverage: [
+    (item: "Headgear_NasalHelmet", hides_slots: ["hair"]),
+    (item: "Headgear_IronCap", hides_slots: ["hair"]),
+  ],
+  outfits: [
+    (name: "soldier_padded", items: {"bottom": "Bottom_WoolBoots", "top": "Top_PaddedArmour", "headgear": "Headgear_None"}),
+    (name: "soldier_leather", items: {"bottom": "Bottom_WoolBoots", "top": "Top_LeatherArmour", "headgear": "Headgear_IronCap"}),
+    (name: "soldier_mail", items: {"bottom": "Bottom_WoolBoots", "top": "Top_MailArmour", "headgear": "Headgear_NasalHelmet"}),
   ],
   skin: (
     material: "Skin_Tan",   // the primitive in the glb to re-point
@@ -19,6 +29,6 @@
       (name: "Deep", rgb: (0.0620, 0.0260, 0.0130)),
     ],
   ),
-  body_clips: ["combat_guard", "combat_strike", "combat_recoil", "combat_fall", "build", "carry", "chop", "harvest", "idle", "pull", "sit_down", "sit_idle", "talk", "walk"],
+  body_clips: ["bow_ready", "bow_shoot", "build", "carry", "chop", "combat_fall", "combat_fall_back", "combat_guard", "combat_recoil", "combat_strike", "harvest", "idle", "lie_down", "lie_idle", "pull", "run", "sit_down", "sit_idle", "swim", "swim_idle", "talk", "walk"],
   face_clips: ["face_angry", "face_happy", "face_idle", "face_sad", "face_surprised"],
 )

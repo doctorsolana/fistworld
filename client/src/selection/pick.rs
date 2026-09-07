@@ -292,7 +292,7 @@ mod tests {
             .press(MouseButton::Left);
         world.run_system_once(pick_on_left_click).unwrap();
         world
-            .run_system_once(super::super::expand_standard_bearer_selection)
+            .run_system_once(super::super::expand_battalion_selection)
             .unwrap();
         {
             let mut mouse = world.resource_mut::<ButtonInput<MouseButton>>();
@@ -301,7 +301,7 @@ mod tests {
         }
         world.run_system_once(pick_on_left_click).unwrap();
         world
-            .run_system_once(super::super::expand_standard_bearer_selection)
+            .run_system_once(super::super::expand_battalion_selection)
             .unwrap();
     }
 
@@ -447,7 +447,7 @@ mod tests {
 
         world.run_system_once(pick_on_left_click).unwrap();
         world
-            .run_system_once(super::super::expand_standard_bearer_selection)
+            .run_system_once(super::super::expand_battalion_selection)
             .unwrap();
 
         assert_eq!(world.resource::<Selection>().entities, vec![hero]);
@@ -480,9 +480,6 @@ pub(super) fn pick_on_left_click(
     let shift = keys
         .as_ref()
         .is_some_and(|k| k.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]));
-    let individual = keys
-        .as_ref()
-        .is_some_and(|k| k.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]));
     let cursor = windows.single().ok().and_then(|w| w.cursor_position());
 
     // --- track the drag -----------------------------------------------------
@@ -578,7 +575,6 @@ pub(super) fn pick_on_left_click(
             hits.into_iter().map(|(entity, _)| entity).collect(),
             shift,
             false,
-            individual,
         );
         return;
     }
@@ -624,6 +620,5 @@ pub(super) fn pick_on_left_click(
         best.into_iter().map(|(entity, _)| entity).collect(),
         shift,
         true,
-        individual,
     );
 }

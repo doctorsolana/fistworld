@@ -1,0 +1,8 @@
+// Archer formation movement and the retained Army management page.
+(
+ version:1, account:"armylab", map:"battle_lab",
+ battalions:1, soldiers_per_battalion:16, archer_battalions:[0],
+ origin:(-20.0,0.0,-60.0),
+ deployments:[(target:(-20.0,0.0,-25.0),facing:(0.0,1.0),width:21.0)],
+ camera_focus:(-20.0,0.0,-25.0),camera_zoom:55.0,timeout_seconds:180.0,
+)

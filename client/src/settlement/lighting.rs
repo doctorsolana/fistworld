@@ -1,17 +1,18 @@
 //! Building window glow, bounded local lamps and building night lighting.
 
-use super::buildings::BuildingVisual;
+use super::buildings::{BuildingVisual, SettlementVisual};
 use super::grounds::FishingPierVisual;
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use shared::components::{
-    Household, PlayerPosition, SettlementBuilding, SettlementBuildingKind, WorldTime,
+    Household, PlayerPosition, Settlement, SettlementBuilding, SettlementBuildingKind,
+    SettlementTier, WorldTime,
 };
 
-/// Per-building glass and lamps. Cloned materials let occupied homes and
-/// staffed workshops glow independently while sharing the same source GLB.
+/// Per-building glass and lamps. Cloned materials let homes, workshops and
+/// civic halls glow independently while sharing the same source GLB.
 #[derive(Component)]
 pub(super) struct WindowLighting {
     pub(super) glass: Handle<StandardMaterial>,
@@ -45,19 +46,34 @@ pub(super) struct BuildingNightLamp {
 /// GLB material names are resolved once, when the scene is bound.
 fn window_material(kind: SettlementBuildingKind) -> Option<&'static str> {
     match kind {
+        SettlementBuildingKind::Hall => Some("CivicHallGlass"),
         SettlementBuildingKind::House => Some("CabinGlass"),
         SettlementBuildingKind::LumberjackHut => Some("HutGlass"),
         SettlementBuildingKind::Windmill => Some("WindMillGlass"),
+        SettlementBuildingKind::Farmstead => Some("FarmsteadGlass"),
+        SettlementBuildingKind::LivestockFarm => Some("LivestockFarmGlass"),
+        SettlementBuildingKind::StoneQuarry => Some("StoneQuarryGlass"),
+        SettlementBuildingKind::Church => Some("ChurchGlass"),
         _ => None,
     }
 }
 
-fn windows_occupied(household: Option<&Household>, building: Option<&SettlementBuilding>) -> bool {
-    household.is_some_and(|home| !home.residents.is_empty())
+fn windows_occupied(
+    household: Option<&Household>,
+    building: Option<&SettlementBuilding>,
+    settlement: Option<&Settlement>,
+) -> bool {
+    settlement.is_some_and(|hall| hall.tier != SettlementTier::Ruins)
+        || household.is_some_and(|home| !home.residents.is_empty())
         || building.is_some_and(|site| {
             matches!(
                 site.kind,
-                SettlementBuildingKind::LumberjackHut | SettlementBuildingKind::Windmill
+                SettlementBuildingKind::LumberjackHut
+                    | SettlementBuildingKind::Windmill
+                    | SettlementBuildingKind::Farmstead
+                    | SettlementBuildingKind::LivestockFarm
+                    | SettlementBuildingKind::StoneQuarry
+                    | SettlementBuildingKind::Church
             ) && !site.workers.is_empty()
         })
 }
@@ -79,7 +95,7 @@ pub(super) const WINDOW_EMISSIVE: LinearRgba = LinearRgba::new(13.0, 4.25, 0.80,
 /// lights are reserved for the close neighbourhood where their ground spill
 /// is visible; hundreds of distant domestic lights only burden light
 /// preparation and fragment shading.
-// Each selected building has two shadowless lamps; workshops share the cabin budget.
+// Each selected building has two shadowless lamps; homes, workshops and civic halls share the budget.
 pub(super) const MAX_LIT_WINDOW_BUILDINGS: usize = 40;
 
 pub(super) const WINDOW_POINT_LIGHT_RADIUS: f32 = 190.0;
@@ -94,13 +110,22 @@ pub(super) const WINDOW_LIGHT_BUDGET_INTERVAL_SECONDS: f64 = 0.25;
 pub(super) fn setup_window_lighting(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    houses: Query<(Entity, &SettlementBuilding), (With<BuildingVisual>, Without<WindowLighting>)>,
+    houses: Query<
+        (Entity, Option<&SettlementBuilding>, Option<&Settlement>),
+        (
+            Or<(With<BuildingVisual>, With<SettlementVisual>)>,
+            Without<WindowLighting>,
+        ),
+    >,
     children: Query<&Children>,
     names: Query<&Name>,
     primitives: Query<(&GltfMaterialName, &MeshMaterial3d<StandardMaterial>)>,
 ) {
-    for (house, building) in houses.iter() {
-        let Some(glass_material) = window_material(building.kind) else {
+    for (house, building, settlement) in houses.iter() {
+        let kind = building
+            .map(|site| site.kind)
+            .or_else(|| settlement.map(|_| SettlementBuildingKind::Hall));
+        let Some(glass_material) = kind.and_then(window_material) else {
             continue;
         };
         let mut stack = vec![house];
@@ -181,7 +206,7 @@ pub(super) fn setup_window_lighting(
     }
 }
 
-/// Fade occupied homes and staffed workshops on after dark and off at dawn.
+/// Fade occupied homes, staffed workshops and active halls with the day/night cycle.
 ///
 /// The replicated household on the cabin is the durable occupancy fact. Do not
 /// cross-join it with separate character entities here: those entities may be
@@ -196,6 +221,7 @@ pub(super) fn sync_window_lighting(
         Entity,
         Option<&Household>,
         Option<&SettlementBuilding>,
+        Option<&Settlement>,
         Option<&PlayerPosition>,
         &mut WindowLighting,
     )>,
@@ -218,8 +244,8 @@ pub(super) fn sync_window_lighting(
 
         if let Ok(camera) = camera.single() {
             if camera.zoom <= 420.0 {
-                for (house, household, building, position, _) in houses.iter() {
-                    if !windows_occupied(household, building) {
+                for (house, household, building, settlement, position, _) in houses.iter() {
+                    if !windows_occupied(household, building, settlement) {
                         continue;
                     }
                     let Some(position) = position else { continue };
@@ -242,15 +268,15 @@ pub(super) fn sync_window_lighting(
         } else {
             // Headless visual tests and unusual camera-less transitions contain
             // only a handful of houses; preserve the straightforward behavior.
-            for (house, household, building, _, _) in houses.iter() {
-                if windows_occupied(household, building) {
+            for (house, household, building, settlement, _, _) in houses.iter() {
+                if windows_occupied(household, building, settlement) {
                     budget.enabled.insert(house);
                 }
             }
         }
     }
 
-    for (house, household, building, _position, mut window) in houses.iter_mut() {
+    for (house, household, building, settlement, _position, mut window) in houses.iter_mut() {
         // Scene streaming/re-instantiation can replace a house's descendants
         // while the replicated building entity survives. The old component
         // then points at despawned lamps and used to remain permanently dark
@@ -262,7 +288,7 @@ pub(super) fn sync_window_lighting(
             commands.entity(house).remove::<WindowLighting>();
             continue;
         }
-        let occupied = windows_occupied(household, building);
+        let occupied = windows_occupied(household, building, settlement);
         let target = window_light_target(clock, occupied);
         let next_glow = move_towards(
             window.strength,
@@ -330,12 +356,7 @@ pub(super) fn setup_building_night_lighting(
                 Some(SettlementBuildingKind::FishermansHut) => {
                     &[("Light_Interior", 820_000.0, 10.0)]
                 }
-                // The barn is not a Household, so the cabin window-glow path skips it; one warm
-                // interior lamp at the authored anchor is what says "someone is in with the flock".
-                Some(SettlementBuildingKind::LivestockFarm) => {
-                    &[("Light_Interior", 720_000.0, 9.0)]
-                }
-                // Windmill panes and lantern use the budgeted window-light path above.
+                // Authored rural sites and the windmill share the bounded window-light path.
                 Some(SettlementBuildingKind::Bakery) => &[
                     ("Light_Interior", 720_000.0, 9.0),
                     ("Light_Lantern", 440_000.0, 7.5),

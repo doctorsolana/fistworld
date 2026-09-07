@@ -28,8 +28,12 @@ Bone-local axes, measured off this rig, because none of them are guessable (sect
 
 import math
 import os
+import sys
 
 import bpy
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from animation_pose import bind_action
 
 # Three levels: <repo>/asset_creation/<family>/<script>.py
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -53,13 +57,11 @@ scene = bpy.context.scene
 rig.animation_data_create()
 for pb in rig.pose.bones:
     pb.rotation_mode = "XYZ"
-# Attachment bones (add_attach_bones.py) are markers that weight no vertices and that NO clip poses.
-# They must be excluded from BODY_BONES, or finish()'s "every body bone is keyed" assert fires. The
-# assert exists because an unkeyed bone holds the previous clip's pose -- which cannot happen to a
-# bone nothing ever poses.
+# Tool orientation belongs to the unweighted grip socket, not to anatomical
+# wrist twisting. All body clips key every attachment bone so switching from
+# work to locomotion cannot leave an old tool rotation on the rig.
 ATTACH_BONES = tuple(pb.name for pb in rig.pose.bones if pb.name.startswith("attach."))
-BODY_BONES = tuple(pb.name for pb in rig.pose.bones
-                   if pb.name not in FACE_BONES and pb.name not in ATTACH_BONES)
+BODY_BONES = tuple(pb.name for pb in rig.pose.bones if pb.name not in FACE_BONES)
 
 
 def reset_pose():
@@ -102,6 +104,20 @@ def finish(name, expect_bones):
     act.name = name
     act.use_fake_user = True
     assert act.name == name, f"action name got suffixed: {act.name}"
+    # Key missing properties as REST, not the last pose's value. Checking only
+    # bone names allowed a location-only root to retain a death rotation.
+    lo, hi = act.frame_range
+    bag = act.layers[0].strips[0].channelbag(act.slots[0])
+    existing = {(fc.data_path, fc.array_index) for fc in bag.fcurves}
+    for bone_name in expect_bones:
+        pb = rig.pose.bones[bone_name]
+        for prop, values in (("location", (0, 0, 0)), ("rotation_euler", (0, 0, 0)), ("scale", (1, 1, 1))):
+            path = f'pose.bones["{bone_name}"].{prop}'
+            for index, value in enumerate(values):
+                if (path, index) not in existing:
+                    getattr(pb, prop)[index] = value
+                    for frame in (lo, hi):
+                        pb.keyframe_insert(prop, index=index, frame=frame)
     touched = set()
     for layer in act.layers:
         for strip in layer.strips:
@@ -396,218 +412,9 @@ assert min(lo) > -0.0005, f"talk sinks {min(lo):.5f}"
 check_loop("talk", Q + 1)
 
 
-# ==================================================================================================
-# BODY: build -- driving something with a hammer, right-handed. Loops as a work rhythm.
-#
-# The loop point sits at the TOP of the wind-up, which is the slowest moment in the cycle. Looping on
-# the strike would put the seam on the fastest frame, where a one-frame discontinuity is most visible.
-#
-# Timing is deliberately asymmetric, because a hammer is: the wind-up occupies over half the cycle and
-# the strike lands in 16% of it. Equal timing reads as waving, not working.
-# ==================================================================================================
-WORK_LOOP = 32        # 1.33 s at 24 fps
-
-# ANGLES ARE OFF STRAIGHT-DOWN, not off horizontal: 0 is the arm hanging, 90 is straight BACK, 180 is
-# straight up. An early pass used 105 for the wind-up thinking it meant "raised", and it put the arm
-# horizontally behind the character -- measured at frame 1 as direction (+0.18,+0.94,+0.29).
-#
-# STAY ON ONE SIDE OF THE BODY. Correcting that to +158 (up and BACK) fixed the pose and broke the
-# MOTION: the strike is at -46 (forward and down), so between the two keys the arm travelled the long
-# way round -- down past the hip, behind the body, and back up. Both extremes looked right and the
-# swing was a windmill, reading as an undercut rather than a hammer blow. Every value here is
-# NEGATIVE, so the hand sweeps up the front, over, and back down the front, never passing through
-# hanging. Two poses being individually correct says nothing about the arc between them.
-#
-# The strike also has to over-rotate. arm.R inherits `torso`, and a rotation about the shared local X
-# tips the torso's TOP forward while tipping the arm's TIP backward, so a 14 deg forward lean cancels
-# 14 deg of the swing.
-#            overhead ------ strike ---- follow ---- lift back up -- overhead
-# THE STRIKE ANGLE IS SET BY THE HAMMER, NOT BY TASTE. It used to bottom out at -32, which dropped the
-# fist to 0.59 m -- hammering somewhere around his own knees -- and left the haft 62 deg below
-# horizontal at impact. A hammer's face is perpendicular to its haft, so at that angle the face CANNOT
-# be made to point along the blow: the best any wrist rotation could reach was dot 0.52, and it
-# measured 0.31. Bringing the strike up to -72 puts the haft near horizontal, the face straight down,
-# and the blow at bench height where a framing carpenter actually works.
-B_ARM_R   = [(0.00, -155), (0.10, -162), (0.26, -86), (0.33, -72), (0.46, -112), (1.00, -155)]
-B_HAND_R  = [(0.00,  18), (0.10,  22), (0.26,  -6), (0.33, -14), (0.46,   8), (1.00,  18)]
-# A hammer's FACE is perpendicular to its haft, so which way the haft points says nothing about which
-# way the hammer hits. Measured with no twist, the face sat at (-0.05,-0.76,+0.64) at impact -- forward
-# and UP -- while the head drove downward at (0.02,-0.17,-0.99). dot = -0.51: it was landing claw-first.
-# The correction is very close to a straight reversal, which is what a carpenter's grip actually is;
-# you do not hold a hammer the way it hangs off your belt. Same fix as chop's C_TWIST, same reason.
-B_TWIST   = [(0.00, 168), (0.10, 172), (0.26, 182), (0.33, 186), (0.46, 176), (1.00, 168)]
-B_ARM_L   = [(0.00, -22), (0.10, -22), (0.26, -30), (0.33, -32), (0.46, -26), (1.00, -22)]
-B_TORSO   = [(0.00,   2), (0.10,   1), (0.26,  13), (0.33,  16), (0.46,  10), (1.00,   2)]
-B_HEAD    = [(0.00,  10), (0.10,  10), (0.26,  16), (0.33,  18), (0.46,  14), (1.00,  10)]
-B_HIPS_Y  = [(0.00,  -4), (0.10,  -4), (0.26,   3), (0.33,   5), (0.46,   1), (1.00,  -4)]
-# Strictly NON-NEGATIVE: both feet stay planted through the whole clip, so any downward root motion
-# drives them through the floor. The character rises on the wind-up and returns to zero on the strike.
-B_ROOT_Z  = [(0.00, 0.014), (0.10, 0.016), (0.26, 0.000), (0.33, 0.000), (0.46, 0.006), (1.00, 0.014)]
-
-begin("build")
-W = WORK_LOOP
-for f in range(1, W + 2):
-    ph = (f - 1) / W
-    key("arm.R",  f, rot=(D(profile(ph, B_ARM_R)), 0, 0))
-    key("hand.R", f, rot=(D(profile(ph, B_HAND_R)), D(profile(ph, B_TWIST)), 0))
-    key("arm.L",  f, rot=(D(profile(ph, B_ARM_L)), 0, D(-6)))
-    key("hand.L", f, rot=(D(-10), 0, 0))
-    key("torso",  f, rot=(D(profile(ph, B_TORSO)), D(-7), 0))
-    key("head",   f, rot=(D(profile(ph, B_HEAD)), D(6), 0))
-    key("hips",   f, rot=(0, D(profile(ph, B_HIPS_Y)), 0))
-    key("root",   f, loc=(0, 0, profile(ph, B_ROOT_Z)))
-fill_rest({"arm.R", "hand.R", "arm.L", "hand.L", "torso", "head", "hips", "root"},
-          list(range(1, W + 2)))
-finish("build", BODY_BONES)
-scene.frame_start, scene.frame_end = 1, W + 1
-lo = lowest(range(1, W + 2))
-log(f"  build floor: {min(lo):+.6f}..{max(lo):+.6f}")
-assert min(lo) > -0.0005, f"build sinks {min(lo):.5f}"
-check_loop("build", W + 1)
-
-
-# ==================================================================================================
-# BODY: chop -- felling a tree. A HORIZONTAL swing into the trunk.
-#
-# The first version swung the axe down the way you split a log on a block. That is the wrong action:
-# you fell a tree by cutting into the SIDE of the trunk at roughly chest height, so the blade travels
-# across, not down.
-#
-# That changes what drives the clip. A downward chop is arm pitch; a felling stroke is TORSO YAW, with
-# the arms held out in front and the body unwinding through them.
-#
-# THE ARM BAND MUST BE NARROW. The previous pass still swung the arms 66 deg (-132 -> -66), and that
-# one number was the whole problem: it lifted BOTH hands to head height and dropped them, which reads
-# as a two-handed overhead flail rather than a chop. Hands measured 0.835 -> 0.507 -> 0.835 over the
-# cycle, a 0.33 rise on a body 1.0 tall.
-#
-# A feller's hands stay at roughly chest height for the entire stroke. What travels is the BODY. So
-# the arm band here is 23 deg (-117 .. -94), straddling -90 (straight out in front), and the yaw does
-# nearly all the work -- 58 deg wound up to -44 followed through, a 102 deg unwind.
-#
-# The two arms are no longer given the same number. Sharing one profile made them a rigid slab hinged
-# at the shoulders; offsetting them ~16 deg puts the left hand further along the haft, which is where
-# the forward hand of a two-handed grip actually sits.
-#
-# ROLL is what keeps it from looking like a dance move. A real felling cut angles slightly DOWN into
-# the trunk, so the torso side-bends through the stroke and the arc tilts off horizontal.
-#
-# THE WRIST TWIST IS NOT DECORATION -- WITHOUT IT THE AXE IS EDGE-UP.
-#
-# The haft comes out right on its own: it is the joint's own axis, so an arm held forward puts the axe
-# forward. Which way the BLADE is turned about that axis does not, and nothing else in the clip
-# controls it. Measured with the twist at zero, the bit sat at (0.0, 0.0, +1.0) -- straight up -- for
-# every frame of the swing, and dot(bit, travel) was NEGATIVE through the strike. The villager was
-# slapping the tree with the flat of the axe, edge trailing.
-#
-# That reads exactly like a backwards model, and it is worth being clear that it is not one: at rest
-# the axe hangs bit-forward, which verify_facing.py confirms against the shipped .glb. A tool's
-# orientation is fixed relative to the HAND, so raising the arm rolls the blade with it. Only the
-# wrist can put it back, so the twist tracks the swing and holds the edge into the cut.
-#
-# The yaw is also negative-first, so the wind-up goes over the RIGHT shoulder and the stroke crosses
-# to the left. It was the other way round, which asked the right arm -- the one holding the axe -- to
-# cross the body on the backswing.
-# ==================================================================================================
-C_ARM_L   = [(0.00,  -96), (0.12,  -92), (0.30, -104), (0.38, -108), (0.55, -100), (1.00,  -96)]
-C_ARM_R   = [(0.00, -112), (0.12, -117), (0.30,  -99), (0.38,  -94), (0.55, -104), (1.00, -112)]
-C_YAW     = [(0.00,  -52), (0.12,  -58), (0.30,   32), (0.38,   44), (0.55,   12), (1.00,  -52)]
-C_ROLL    = [(0.00,    8), (0.12,   10), (0.30,   -6), (0.38,  -10), (0.55,   -2), (1.00,    8)]
-C_PITCH   = [(0.00,   -2), (0.12,   -3), (0.30,    8), (0.38,   11), (0.55,    4), (1.00,   -2)]
-C_HEAD    = [(0.00,    6), (0.12,    6), (0.30,   10), (0.38,   12), (0.55,    8), (1.00,    6)]
-C_HAND    = [(0.00,   22), (0.12,   26), (0.30,   -4), (0.38,  -10), (0.55,   10), (1.00,   22)]
-C_TWIST   = [(0.00,  -78), (0.12,  -74), (0.30,  -92), (0.38,  -96), (0.55,  -88), (1.00,  -78)]
-C_ROOT_Z  = [(0.00, 0.010), (0.12, 0.012), (0.30, 0.000), (0.38, 0.000), (0.55, 0.005), (1.00, 0.010)]
-
-begin("chop")
-for f in range(1, W + 2):
-    ph = (f - 1) / W
-    yaw = profile(ph, C_YAW)
-    hand = D(profile(ph, C_HAND))
-    twist = D(profile(ph, C_TWIST))
-    # Offset, not shared: the left hand rides further up the haft than the right, which holds the butt.
-    key("arm.L",  f, rot=(D(profile(ph, C_ARM_L)), 0, D(-10)))
-    key("arm.R",  f, rot=(D(profile(ph, C_ARM_R)), 0, D(6)))
-    key("hand.L", f, rot=(hand, twist, 0))
-    key("hand.R", f, rot=(hand, twist, 0))
-    key("torso",  f, rot=(D(profile(ph, C_PITCH)), D(yaw), D(profile(ph, C_ROLL))))
-    key("head",   f, rot=(D(profile(ph, C_HEAD)), D(-0.45 * yaw), 0))   # eyes stay on the cut
-    key("hips",   f, rot=(0, D(-0.35 * yaw), 0))                        # counter-twist below the waist
-    key("root",   f, loc=(0, 0, profile(ph, C_ROOT_Z)))
-fill_rest({"arm.L", "arm.R", "hand.L", "hand.R", "torso", "head", "hips", "root"},
-          list(range(1, W + 2)))
-finish("chop", BODY_BONES)
-scene.frame_start, scene.frame_end = 1, W + 1
-lo = lowest(range(1, W + 2))
-log(f"  chop floor: {min(lo):+.6f}..{max(lo):+.6f}")
-assert min(lo) > -0.0005, f"chop sinks {min(lo):.5f}"
-check_loop("chop", W + 1)
-
-
-# ==================================================================================================
-# BODY: harvest -- mowing wheat with a scythe.
-#
-# The scythe had no clip of its own and was being previewed on `chop`, which is not a scything motion
-# at all and read as a man waving a bow around. A scythe stroke is nothing like an axe stroke:
-#
-#   * the blade travels a wide FLAT arc a few centimetres off the ground, not at chest height
-#   * the arms barely move -- it is almost pure torso yaw, wider than the chop's (95 deg here)
-#   * the mower STOOPS. A snath is 1.3 m and the blade has to reach the ground; standing upright with
-#     a scythe is the giveaway that nobody looked at a reference
-#   * the return is slow and lifted, and it is HALF the clip. On a chop the recovery is dead time; on
-#     a scythe it is half the work, so the cut occupies 0.06..0.40 and the rest walks it back.
-#
-# THE EDGE IS ON A DIFFERENT AXIS FROM THE OTHER TWO TOOLS. The axe and hammer lead with local -Y, so
-# their wrist twist is about putting -Y onto the direction of travel. The scythe's blade extends along
-# -Y and its sharpened edge faces -X (build_tools.py offsets the edge strip in -X from the spine). So
-# for the scythe it is -X that must lead, and -Y must lie horizontal across the sweep. Reusing chop's
-# twist would have laid the blade over on its back with the spine leading.
-# ==================================================================================================
-# These angles are SOLVED, not chosen. A 1.32 m snath on a hand 0.6 m off the ground buries the blade
-# if the arm hangs at all: at the first-guess -68 the tip sat 0.21 below the floor with the blade
-# dangling near-vertical (|blade.z| 0.8). Scanning wrist twist against arm pitch found exactly one
-# combination that lands the tip on the ground with the blade FLAT -- arm -83, twist -75, which puts
-# the snath 27 deg below horizontal. That is also just about what a real snath sits at, which is the
-# reassuring part: the geometry and the reference agree.
-# The blade is SET DOWN into the cut and LIFTED on the return, which is both what a mower does and
-# what keeps the tip out of the ground: the arm is highest at the wind-up (-97), lowest through the
-# cut (-83), and lifts again to swing back.
-H_ARM_R   = [(0.00,  -97), (0.06,  -95), (0.28,  -83), (0.40,  -87), (0.62,  -93), (1.00,  -97)]
-H_ARM_L   = [(0.00,  -75), (0.06,  -73), (0.28,  -61), (0.40,  -65), (0.62,  -71), (1.00,  -75)]
-H_YAW     = [(0.00,  -48), (0.06,  -54), (0.28,   26), (0.40,   41), (0.62,   16), (1.00,  -48)]
-H_PITCH   = [(0.00,   20), (0.06,   22), (0.28,   19), (0.40,   17), (0.62,   19), (1.00,   20)]
-H_ROLL    = [(0.00,    6), (0.06,    8), (0.28,   -4), (0.40,   -7), (0.62,   -2), (1.00,    6)]
-H_HEAD    = [(0.00,  -14), (0.06,  -15), (0.28,  -12), (0.40,  -11), (0.62,  -13), (1.00,  -14)]
-H_HAND    = [(0.00,   10), (0.06,   12), (0.28,    2), (0.40,   -2), (0.62,    4), (1.00,   10)]
-H_TWIST   = [(0.00,  -70), (0.06,  -68), (0.28,  -76), (0.40,  -80), (0.62,  -73), (1.00,  -70)]
-# Feet planted the whole way, so this may never go negative; the mower settles slightly into the cut.
-H_ROOT_Z  = [(0.00, 0.008), (0.06, 0.010), (0.28, 0.001), (0.40, 0.000), (0.62, 0.004), (1.00, 0.008)]
-
-begin("harvest")
-for f in range(1, W + 2):
-    ph = (f - 1) / W
-    yaw = profile(ph, H_YAW)
-    hand = D(profile(ph, H_HAND))
-    twist = D(profile(ph, H_TWIST))
-    # The left hand is on the UPPER nib, which sits back toward the body from the right hand's grip,
-    # so the left arm is deliberately the LESS extended of the two.
-    key("arm.L",  f, rot=(D(profile(ph, H_ARM_L)), 0, D(-16)))
-    key("arm.R",  f, rot=(D(profile(ph, H_ARM_R)), 0, D(8)))
-    key("hand.L", f, rot=(hand, twist, 0))
-    key("hand.R", f, rot=(hand, twist, 0))
-    key("torso",  f, rot=(D(profile(ph, H_PITCH)), D(yaw), D(profile(ph, H_ROLL))))
-    key("head",   f, rot=(D(profile(ph, H_HEAD)), D(-0.5 * yaw), 0))     # watching the swathe
-    key("hips",   f, rot=(0, D(-0.4 * yaw), 0))
-    key("root",   f, loc=(0, 0, profile(ph, H_ROOT_Z)))
-fill_rest({"arm.L", "arm.R", "hand.L", "hand.R", "torso", "head", "hips", "root"},
-          list(range(1, W + 2)))
-finish("harvest", BODY_BONES)
-scene.frame_start, scene.frame_end = 1, W + 1
-lo = lowest(range(1, W + 2))
-log(f"  harvest floor: {min(lo):+.6f}..{max(lo):+.6f}")
-assert min(lo) > -0.0005, f"harvest sinks {min(lo):.5f}"
-check_loop("harvest", W + 1)
-
+# Work authoring is isolated from locomotion and face expressions.
+from work_clips import build_work_clips
+build_work_clips(globals())
 
 # ==================================================================================================
 # BODY: carry -- walking with a load held in FRONT, in both arms.
@@ -762,10 +569,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from combat_clips import build_combat_clips
 build_combat_clips(globals())
+from locomotion_clips import build_locomotion_clips
+build_locomotion_clips(globals())
+from archery_clips import build_archery_clips
+build_archery_clips(globals())
 
 for a in bpy.data.actions:
     a.use_fake_user = True
-rig.animation_data.action = bpy.data.actions["idle"]
+bind_action(rig, bpy.data.actions["idle"])
 scene.frame_start, scene.frame_end = 1, BODY_LOOP + 1
 scene.frame_set(1)
 

@@ -124,7 +124,7 @@ fn spawn_combat_ui(
                 },
                 BackgroundColor(SIGN_WOOD),
                 BorderColor::all(crate::ui::styles::BRASS.with_alpha(0.45)),
-                Text::new("RMB drag: formation   |   Shift: add / toggle   |   Alt + click: individual   |   Ctrl / Cmd + 0-9: save group\nH: hold   |   X: attack-move   |   R: retreat   |   Alt + RMB: orbit"),
+                Text::new("RMB drag: width/facing   |   RMB: move/attack   |   Ctrl/Cmd + RMB: focus attack   |   Alt + RMB: orbit\n[ / ]: width   |   , / .: turn   |   Shift: add/toggle   |   H: hold   |   X: attack-move   |   R: retreat   |   V: fire/hold fire"),
                 crate::ui::typography::body(13.0), TextColor(PARCHMENT),
                 TextLayout::justify(Justify::Center),
                 TextShadow { offset: Vec2::new(0.0, 1.0), color: Color::BLACK },

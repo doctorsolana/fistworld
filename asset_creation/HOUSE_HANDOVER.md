@@ -8,7 +8,9 @@ a jettied plaster-and-oak upper storey; the long house also gains a front balcon
 Both levels keep the same ground-floor architecture within their family.
 
 The four canonical asset paths and scene names are unchanged. Stable family selection,
-level selection, household capacity, plot reservations and server authority are unchanged.
+level selection, household capacity and server authority are unchanged. Plot bounds
+include the restored larger shells and their porches; placement derives the union
+of the two L2 definitions so an upgrade cannot outgrow the reserved ground.
 `HouseAppearance::for_new_house` selects level 2 for new houses from Village tier onward;
 this asset replacement does not add an automatic retrofit of existing level 1 homes.
 
@@ -43,10 +45,10 @@ These are exported vertices, including flat-normal splits, summed across all pri
 
 | Asset | Previous vertices | New vertices | Reduction | Triangles | GLB bytes |
 |---|---:|---:|---:|---:|---:|
-| `LogCabin` (compact L1) | 8,424 | 4,778 | 43.3% | 2,388 | 191,236 |
-| `LongCabin` (long L1) | 4,656 | 4,408 | 5.3% | 2,198 | 176,768 |
-| `CabinL2` (compact L2) | 8,808 | 6,890 | 21.8% | 3,444 | 273,612 |
-| `LongCabinL2` (long L2) | 11,280 | 6,208 | 45.0% | 3,098 | 246,968 |
+| `LogCabin` (compact L1) | 8,424 | 4,958 | 41.1% | 2,480 | 198,252 |
+| `LongCabin` (long L1) | 4,656 | 4,604 | 1.1% | 2,296 | 184,396 |
+| `CabinL2` (compact L2) | 8,808 | 7,066 | 19.8% | 3,534 | 280,504 |
+| `LongCabinL2` (long L2) | 11,280 | 6,400 | 43.3% | 3,194 | 254,464 |
 
 Every variant has three mesh nodes/primitives (body, door, glass) and two materials,
 down from three materials. There are no textures, skins, extensions or degenerate
@@ -59,13 +61,36 @@ the house foundation bed; beam and brace positions derive from their supports.
 Reduced geometry and asset size are measured; no FPS improvement
 is claimed from these counts alone.
 
+## Restored proportions
+
+The first replacement made the visible buildings too small despite preserving the
+planning plots. The compact wall plan is now 5.00 × 6.00 m again (was 4.50 × 4.70),
+and the long plan is 7.20 × 4.20 m (was 6.60 × 3.36). That restores 42% and 36%
+more ground-floor area respectively, without making either family taller. Both
+levels share their family's wall plan. Windows, lights, roof pitch and upper jetty
+derive from the enlarged architecture rather than a runtime scale transform.
+
+The front leaf is 2.10 m tall, about 1.19 m wide, with its bottom at +0.03 m.
+The old solid raised foundation has become perimeter footings around a grade-level
+entry: apron top +0.02 m and interior floor +0.012 m. Enlarging the door therefore
+does not leave villagers walking through a raised stone block. Porch headers clear
+the taller opening. Attic panels follow the actual roof profile over each wall,
+closing the gaps left by treating the outer eave height as the wall contact height.
+
 ## Doors, lights and navigation
 
-Every variant has one `HouseDoor`, with a hollow visual doorway behind it. The clips
+Every variant has one `HouseDoor`, with a hollow visual doorway behind it.
+A continuous timber backing closes the decorative plank seams on the leaf. The clips
 are node rotations: `door_open` takes 16/24 s from 0° to 96°; `door_close` takes
 22/24 s back to 0°. Both are stashed in NLA. The normal replicated
 `BuildingDoorDemand` consumer owns playback, reversals and shared demand.
-Window shutters and the upper balcony are static architectural geometry.
+The hinge axis sits on the outer jamb, and the shorter knee braces clear the
+whole sweep. The builder rejects collisions between the moving leaf/hardware
+and static architecture at every degree from 0 to 96, permitting only the small
+hinge blocks to contact their mounting jamb. Level-1 interiors have a ceiling;
+level 2 already has its first-floor slab, so open doors cannot expose the sky
+through single-sided attic walls. Window shutters and the upper balcony are
+static architectural geometry.
 
 All window panes and the porch lantern share `CabinGlass`, separate from
 `House_Palette`. The existing settlement lighting code clones glass once per home,
@@ -75,24 +100,24 @@ shared budget of 40 nearby lit buildings. Upper and side windows glow through th
 same emissive material, without adding lamps per pane. `Light_Interior` remains an
 authoring anchor and adds no runtime light.
 
-All geometry fits the original reserved plots. The following existing art anchors
-are preserved exactly in glTF space. Server approaches still use the shared House
+All geometry fits the updated reserved plots. The following art approach anchors
+are exported in glTF space. Server approaches still use the shared House
 entrance calculation, which stages people outside the full planning envelope.
 
-| Asset | Reserved plot (m) | `Anchor_Door` | Hull points | Front clearance (m) |
-|---|---|---|---:|---:|
-| LogCabin | 6.00 × 6.94 | `(0, 0, -3.80)` | 67 | ≥0.635 |
-| LongCabin | 8.118 × 5.60, centre Z −0.19 | `(0, 0, -3.25)` | 70 | ≥0.785 |
-| CabinL2 | 6.4721 × 7.36 | `(0, 0, -3.90)` | 67 | ≥0.735 |
-| LongCabinL2 | 8.6866 × 5.6721 | `(0, 0, -3.00)` | 66 | ≥0.535 |
+| Asset | Reserved plot (m) | Plot centre Z | `Anchor_Door` |
+|---|---|---:|---|
+| LogCabin | 6.00 × 7.36 | −0.190 | `(0, 0, -4.30)` |
+| LongCabin | 8.118 × 5.60 | −0.190 | `(0, 0, -3.25)` |
+| CabinL2 | 6.4721 × 7.55 | −0.095 | `(0, 0, -4.30)` |
+| LongCabinL2 | 8.6866 × 6.00 | −0.160 | `(0, 0, -3.65)` |
 
 The one convex hull per house is sliced at 2.00 m above the origin. Roof overhangs,
 chimneys and the upper jetty/balcony must not extend the obstacle into walkable space
 at ground level. Measured vertical bounds are −0.16..4.202, −0.16..5.222,
 −0.16..6.822 and −0.16..6.792 m respectively; the manifest fractions are
 0.495186, 0.401338, 0.309367 and 0.310702. All four art approaches exceed the
-character navigation radius plus a 5 cm margin. The roof/contact correction changed
-these four hulls and the storage hall; the other 33 collider entries are unchanged.
+character navigation radius plus a 5 cm margin. The enlargement changes only these four hulls; the other 34 collider entries
+are unchanged. Restart both real binaries to load the new planning/collision data.
 
 ## Verification
 
@@ -108,17 +133,24 @@ cargo build --workspace --profile playtest
 
 Individual scenarios `house-cabin-l1.ron`, `house-cabin-l2.ron`, `house-long-l1.ron`
 and `house-long-l2.ron` cover front daylight, rear, midnight, gameplay zoom and
-two low views under the eaves. Both L2 scenarios also frame the lower porch joints.
+two low views under the eaves, and a level entrance view beside a dressed
+character at the normal game scale. Both L2 scenarios also frame the lower porch joints.
 The lineup places L1 in front and L2 behind, with the long family on the image's left.
 The continuous door scenario samples all four doors every 30 frames at fixed 60 Hz.
 Inspect the PNGs and matching `.capture.json` files; representative inspected output
 is retained under `houses/renders/house_*` and `houses/renders/houses_*`.
+The enlarged September 6 exports passed 80 PNG/metadata captures: 30 individual
+angles, two lineup views, ten continuous lineup door samples and two 19-frame
+close-up door sequences. Every semantic assertion passed. The full workspace
+check/build passed, and the workspace tests reported 889 passed, 11 existing
+ignored. Rebuilding reproduced the captured GLBs byte for byte.
 These use the real renderer, occupancy lighting and door-demand consumer. They are
 offline art fixtures, not a connected NPC journey test.
 
 Shared regression tests cover each variant's reserved plot, exact art entrance,
 baked clearance, glass/anchor names, clip target/timing, mesh/material count,
-vertex budget, roof backing and porch headers. Existing client tests cover occupied-house daylight transitions,
+vertex budget, restored wall dimensions, a clear grade-level entrance,
+roof backing, wall-to-roof closures, interior ceilings and porch headers. Existing client tests cover occupied-house daylight transitions,
 stale scene rebinding, lamp budgeting and door playback/interruption behavior.
 
 ![Timber backing beneath the main and porch roofs in Bevy](houses/renders/roof_underside_ingame.png)

@@ -21,16 +21,20 @@ repositions bones but RECOMPUTES their local axes, and pose channels are stored 
 becomes its own mirror image. Rescaling fcurves cannot fix a change of *meaning*. So every action is
 sampled as armature-space matrices BEFORE the transform and rewritten from those afterwards.
 
-v2 has nine actions, not one. All of them are sampled and rebuilt -- including the face clips, whose
+All actions are sampled and rebuilt -- including the face clips, whose
 eye bones rotate with everything else.
 """
 
 import math
 import os
+import sys
 
 import bpy
 import bmesh
 from mathutils import Matrix, Vector
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from animation_pose import bind_action
 
 TARGET_HEIGHT_M = 1.70
 # Three levels: <repo>/asset_creation/<family>/<script>.py
@@ -86,12 +90,12 @@ actions = sorted(bpy.data.actions, key=lambda a: a.name)
 def bones_touched(act):
     """Which bones this action actually keys -- reported so the body/face split is visible in the log.
 
-    THE SPLIT CANNOT BE CARRIED INTO THE GLB. In the .blend it is real: body clips key 14 bones and
+    THE SPLIT CANNOT BE CARRIED INTO THE GLB. In the .blend it is real: new body clips key 16 bones and
     face clips key 2, asserted by animate_basemodel_v2.py's finish(). But Blender's glTF exporter
     emits channels for EVERY joint of an armature in EVERY animation, whatever the action contains.
     Verified twice: filtering the rewrite down to the owned bones, and then also turning
     export_bake_animation off, both still produced every joint in every clip (currently 18
-    animated nodes in all 14 clips).
+    animated nodes in all 25 clips).
 
     That is fine, because Bevy's AnimationGraph mask blocks targets at the GRAPH NODE, not by whether
     a clip has curves for them: mask the two eye bones out of every body node and into every face
@@ -121,9 +125,7 @@ def frames_of(act):
 
 
 def bind(act):
-    rig.animation_data.action = act
-    if act.slots:
-        rig.animation_data.action_slot = act.slots[0]
+    bind_action(rig, act)
 
 
 # --- 1. sample every action in armature space, BEFORE anything moves --------------------------------
@@ -174,9 +176,12 @@ for act in actions:
             bpy.context.view_layer.update()
         # Keys every bone, and the OWNED filter below is why that is fine rather than sloppy.
         for pb in ordered:
-            pb.keyframe_insert("location", frame=f)
-            pb.keyframe_insert("rotation_quaternion", frame=f)
-            pb.keyframe_insert("scale", frame=f)
+            # Game time starts at zero; a frame-1 start otherwise inserts an
+            # extra 1/24 s hold into every loop and delays timed melee impact.
+            frame = f - min(per)
+            pb.keyframe_insert("location", frame=frame)
+            pb.keyframe_insert("rotation_quaternion", frame=frame)
+            pb.keyframe_insert("scale", frame=frame)
     rebuilt = rig.animation_data.action
     bpy.data.actions.remove(act)
     rebuilt.name = old_name
@@ -187,7 +192,7 @@ for a in sorted(bpy.data.actions, key=lambda x: x.name):
     log(f"  {a.name:16s} keys {len(bones_touched(a)):2d} bones")
 
 # --- 4. prove the walk still lands on the floor ------------------------------------------------------
-for name in ("walk", "idle", "sit_idle"):
+for name in ("walk", "run", "idle", "sit_idle", "build", "chop", "harvest", "carry", "pull", "combat_guard", "combat_strike", "combat_recoil"):
     act = bpy.data.actions.get(name)
     if not act:
         continue

@@ -66,6 +66,7 @@ fn one_static_prop(
     colliders.instances.insert(
         1,
         StaticColliderInstance {
+                rotation: Quat::IDENTITY,
             kind,
             position,
             scale: 1.0,

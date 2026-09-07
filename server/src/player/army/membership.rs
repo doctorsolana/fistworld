@@ -44,6 +44,7 @@ fn recruits(
 fn release(world: &mut World, soldier: Entity) {
     world.entity_mut(soldier).remove::<(
         MemberOfBattalion,
+        FormationSeat,
         StandardBearer,
         crate::player::combat::fronts::FormationMember,
         crate::player::combat::fronts::PausedFormationMarch,
@@ -55,11 +56,41 @@ fn release(world: &mut World, soldier: Entity) {
 pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (usize, String) {
     let unavailable = || (0, "Battalion or soldier unavailable".to_string());
     match order {
+        order @ (ArmyOrder::SetRole { .. }
+        | ArmyOrder::SetFirePolicy { .. }
+        | ArmyOrder::Rearm { .. }) => {
+            crate::player::archery::apply_equipment_order(world, account, order)
+        }
         ArmyOrder::Muster { members } => {
             let soldiers = match recruits(world, account, members) {
                 Ok(s) => s,
                 Err(e) => return (0, e.into()),
             };
+            // Re-forming detached archers must not silently replace their bows.
+            // A mixed muster becomes infantry, subject to the same equipment
+            // boundary as an explicit role change or transfer.
+            let role = if !soldiers.is_empty()
+                && soldiers
+                    .iter()
+                    .all(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Archer))
+            {
+                SoldierRole::Archer
+            } else {
+                SoldierRole::Infantry
+            };
+            let changing: Vec<_> = soldiers
+                .iter()
+                .copied()
+                .filter(|e| world.get::<SoldierRole>(*e).copied().unwrap_or_default() != role)
+                .collect();
+            if !changing.is_empty()
+                && !crate::player::archery::safe_to_equip(world, &changing, account)
+            {
+                return (
+                    0,
+                    "Stop 100 m from enemies before combining different equipment types".into(),
+                );
+            }
             let standing = world
                 .query::<(&Battalion, &CommandedBy)>()
                 .iter(world)
@@ -82,6 +113,8 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                 },
                 CommandedBy(account.into()),
                 BattalionStance::default(),
+                role,
+                FirePolicy::default(),
                 PlayerPosition(position),
                 RegionCoord::from_world_pos(position),
                 Replicate::to_clients(NetworkTarget::All),
@@ -89,6 +122,7 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
             for (i, soldier) in soldiers.iter().enumerate() {
                 let mut entity = world.entity_mut(*soldier);
                 entity.remove::<(
+                    FormationSeat,
                     crate::player::combat::fronts::FormationMember,
                     crate::player::combat::fronts::PausedFormationMarch,
                     CombatReady,
@@ -100,6 +134,12 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                     entity.remove::<StandardBearer>();
                 }
                 super::response::apply_policy(world, *soldier, BattalionStance::default());
+                crate::player::archery::inherit_equipment(
+                    world,
+                    *soldier,
+                    role,
+                    FirePolicy::default(),
+                );
             }
             (
                 soldiers.len(),
@@ -128,6 +168,24 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                 .get::<BattalionStance>(battalion)
                 .copied()
                 .unwrap_or_default();
+            let role = world
+                .get::<SoldierRole>(battalion)
+                .copied()
+                .unwrap_or_default();
+            let policy = world
+                .get::<FirePolicy>(battalion)
+                .copied()
+                .unwrap_or_default();
+            let changing: Vec<_> = soldiers
+                .iter()
+                .copied()
+                .filter(|e| world.get::<SoldierRole>(*e).copied().unwrap_or_default() != role)
+                .collect();
+            if !changing.is_empty()
+                && !crate::player::archery::safe_to_equip(world, &changing, account)
+            {
+                return (0,"Stop 100 m from enemies before transferring troops to a different equipment type".into());
+            }
             let mut accepted = 0;
             let requested = soldiers.len();
             for soldier in soldiers {
@@ -144,6 +202,7 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                 world
                     .entity_mut(soldier)
                     .remove::<(
+                        FormationSeat,
                         crate::player::combat::fronts::FormationMember,
                         crate::player::combat::fronts::PausedFormationMarch,
                         CombatReady,
@@ -151,6 +210,7 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                     .insert(MemberOfBattalion(id))
                     .remove::<StandardBearer>();
                 super::response::apply_policy(world, soldier, stance);
+                crate::player::archery::inherit_equipment(world, soldier, role, policy);
                 room -= 1;
                 accepted += 1;
             }

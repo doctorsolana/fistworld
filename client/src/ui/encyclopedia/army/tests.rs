@@ -23,6 +23,8 @@ fn fixture() -> (ArmyRoster, ArmyManagement) {
                 current_health: 100.0,
                 max_health: 100.0,
                 available: n != 6,
+                role: SoldierRole::Infantry,
+                arrows: 0,
             },
         );
     }
@@ -37,6 +39,10 @@ fn fixture() -> (ArmyRoster, ArmyManagement) {
             mean_strength: 15,
             health_fraction: 1.0,
             stance: BattalionStance::Defensive,
+            formation: default(),
+            role: shared::components::SoldierRole::Infantry,
+            fire_policy: shared::components::FirePolicy::FireAtWill,
+            arrows: 0,
         });
     }
     (
@@ -189,4 +195,38 @@ fn retained_controls_survive_health_policy_and_checkbox_changes() {
         .query::<&Text>()
         .iter(app.world())
         .any(|t| t.0 == "Battalion 2"));
+}
+#[test]
+fn archery_controls_send_owned_battalion_commands_and_show_ammunition() {
+    let (mut roster, state) = fixture();
+    let unit = &mut roster.battalions[0];
+    unit.role = SoldierRole::Archer;
+    unit.arrows = 3;
+    let model = PanelModel::new(&roster, &state);
+    assert_eq!(
+        model.command(ArmyAction::Fire(FirePolicy::HoldFire), &state, &roster),
+        Some(ArmyOrder::SetFirePolicy {
+            battalion: e(101),
+            policy: FirePolicy::HoldFire
+        })
+    );
+    assert_eq!(
+        model.command(ArmyAction::Role(SoldierRole::Infantry), &state, &roster),
+        Some(ArmyOrder::SetRole {
+            battalion: e(101),
+            role: SoldierRole::Infantry
+        })
+    );
+    assert!(model.button(ArmyAction::Rearm, &state, &roster, false).1);
+    assert!(!model.button(ArmyAction::Rearm, &state, &roster, true).1);
+    assert!(
+        model
+            .button(
+                ArmyAction::Role(SoldierRole::Archer),
+                &state,
+                &roster,
+                false
+            )
+            .2
+    );
 }

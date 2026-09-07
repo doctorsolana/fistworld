@@ -438,3 +438,98 @@ fn assert_workshop_window_lighting(
         assert_eq!(app.world().get::<PointLight>(*lamp).unwrap().intensity, 0.0);
     }
 }
+
+#[test]
+fn civic_panes_bind_on_settlement_roots_and_follow_daylight_and_ruins() {
+    use super::buildings::SettlementVisual;
+    use super::lighting::setup_window_lighting;
+    use bevy::gltf::GltfMaterialName;
+    use shared::components::{Settlement, SettlementTier};
+
+    let mut app = App::new();
+    app.init_resource::<Time>();
+    app.init_resource::<Assets<StandardMaterial>>();
+    app.add_systems(
+        Update,
+        (setup_window_lighting, sync_window_lighting).chain(),
+    );
+    let mut clock = WorldTime::new(600.0, 300.0, 0.0);
+    clock.set_normalized_time(0.0);
+    let clock_entity = app.world_mut().spawn(clock).id();
+    let source = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    let root = app
+        .world_mut()
+        .spawn((
+            Settlement {
+                name: "Civic lighting".into(),
+                tier: SettlementTier::Town,
+                residents: 30,
+                treasury: 0,
+            },
+            SettlementVisual {
+                building_type: shared::building::BuildingType::TownHall,
+            },
+        ))
+        .id();
+    let pane = app
+        .world_mut()
+        .spawn((
+            GltfMaterialName("CivicHallGlass".into()),
+            MeshMaterial3d(source.clone()),
+        ))
+        .id();
+    app.world_mut().entity_mut(root).add_child(pane);
+    for name in ["Light_Window.L", "Light_Window.R"] {
+        let anchor = app.world_mut().spawn(Name::new(name)).id();
+        app.world_mut().entity_mut(root).add_child(anchor);
+    }
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_secs(1));
+    app.update();
+    let lighting = app.world().get::<WindowLighting>(root).unwrap();
+    assert_eq!(lighting.strength, 1.0);
+    assert_eq!(
+        lighting.lamps.len(),
+        2,
+        "all panes share two budgeted exterior lamps"
+    );
+    let material = lighting.glass.clone();
+    assert_ne!(material, source);
+    app.update();
+    assert_eq!(
+        app.world().get::<WindowLighting>(root).unwrap().glass,
+        material
+    );
+    app.world_mut()
+        .get_mut::<WorldTime>(clock_entity)
+        .unwrap()
+        .set_normalized_time(0.5);
+    app.update();
+    assert_eq!(
+        app.world().get::<WindowLighting>(root).unwrap().strength,
+        0.0
+    );
+    app.world_mut()
+        .get_mut::<WorldTime>(clock_entity)
+        .unwrap()
+        .set_normalized_time(0.0);
+    app.world_mut().get_mut::<Settlement>(root).unwrap().tier = SettlementTier::Ruins;
+    app.update();
+    let lighting = app.world().get::<WindowLighting>(root).unwrap();
+    assert_eq!(lighting.strength, 0.0);
+    for lamp in &lighting.lamps {
+        assert_eq!(app.world().get::<PointLight>(*lamp).unwrap().intensity, 0.0);
+    }
+    assert_eq!(
+        app.world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&source)
+            .unwrap()
+            .emissive,
+        LinearRgba::BLACK
+    );
+}

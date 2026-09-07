@@ -1,0 +1,10 @@
+// Connected close view of four archers drawing, releasing, and meeting a charge.
+(
+ version:1, account:"battlelab", map:"battle_lab",
+ battalions:1, soldiers_per_battalion:4, archer_battalions:[0],
+ origin:(-20.0,0.0,-50.0),
+ deployments:[(target:(-20.0,0.0,0.0),facing:(0.0,1.0),width:8.0)],
+ camera_focus:(-20.0,0.0,-46.0),camera_zoom:10.0,timeout_seconds:180.0,
+ counterattack_after_seconds:Some(6.0),
+ battle:Some((defender_battalions:1,defenders_per_battalion:8,defender_origin:(-20.0,0.0,0.0),defender_facing:(0.0,-1.0),observe_seconds:35.0,minimum_engaged_battalions:1)),
+)

@@ -13,6 +13,9 @@ pub mod control;
 pub mod footprints;
 
 mod animation;
+mod archery;
+mod arrows;
+pub(crate) use archery::{ArcheryInspection, BowDressed};
 mod appearance;
 mod attachments;
 mod carts;
@@ -70,6 +73,13 @@ impl Plugin for HeroPlugin {
         app.init_resource::<CarriedLoadAssets>();
         app.init_resource::<PorterCartAssets>();
         app.init_resource::<ToolAssets>();
+        app.add_systems(
+            Update,
+            (arrows::attach, arrows::animate)
+                .chain()
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.init_resource::<archery::BowAssets>();
         app.init_resource::<control::WorldPlacementMode>();
         app.init_resource::<footprints::FootprintPool>();
         app.init_resource::<footprints::StrideTrackers>();
@@ -93,11 +103,13 @@ impl Plugin for HeroPlugin {
                 (
                     tag_carry_attachments,
                     tag_tool_attachments,
+                    archery::tag_bow_attachments,
                     tag_character_heads,
                     sync_indoor_visibility,
                     sync_porter_cart_visuals,
                     sync_carried_load_visuals,
                     sync_tool_visuals,
+                    archery::sync_bows,
                     (
                         tag_porter_cart_load_attachments,
                         sync_porter_cart_load_visuals,
@@ -108,6 +120,8 @@ impl Plugin for HeroPlugin {
                         setup_porter_cart_animation,
                         drive_hero_locomotion,
                         drive_porter_cart_motion,
+                        archery::setup_bows,
+                        archery::drive_bows,
                     )
                         .chain(),
                 ),

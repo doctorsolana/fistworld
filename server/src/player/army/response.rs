@@ -160,14 +160,18 @@ pub fn react_to_bombardment(world: &mut World) {
             .map(|(entity, position)| FormationSoldier {
                 entity: *entity,
                 position: *position,
-                strength: 0,
+                seat: None,
                 identity: world
                     .get::<PersonId>(*entity)
                     .map_or(entity.to_bits(), |id| id.0),
             })
             .collect();
-        let block =
-            fronts::current_block(world, id.map_or(units[0].to_bits(), |id| id.0), &soldiers);
+        let block = fronts::current_block(
+            world,
+            id.map_or(units[0].to_bits(), |id| id.0),
+            &soldiers,
+            default(),
+        );
         let centre = shared::formation::centre(positions.iter().map(|(_, p)| *p));
         let away = (centre - impact.position)
             .xz()
@@ -224,7 +228,12 @@ pub fn react_to_bombardment(world: &mut World) {
                 mode: MovementMode::Move,
             },
         };
-        let (accepted, _) = crate::player::orders::apply_unit_order(world, &account, order);
+        let (accepted, _) = crate::player::orders::apply_local_unit_order(
+            world,
+            &account,
+            order.selection.units,
+            order.command,
+        );
         if accepted > 0 {
             for entity in units {
                 world

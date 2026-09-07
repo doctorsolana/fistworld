@@ -57,6 +57,11 @@ fn block(app: &mut App, account: &str, anchor: Vec2, facing: Vec2, n: usize) -> 
                 .id()
         })
         .collect();
+    for entity in &soldiers {
+        app.world_mut()
+            .entity_mut(*entity)
+            .insert(PersonId(entity.to_bits()));
+    }
     apply_army_order(
         app.world_mut(),
         account,
@@ -140,7 +145,7 @@ fn a_casualty_advances_only_its_own_file() {
     }
 }
 #[test]
-fn three_attackers_reserve_distinct_faces_of_one_battalion() {
+fn three_attackers_approach_directly_and_each_reaches_contact() {
     let mut app = lab();
     let defenders = block(&mut app, "bob", Vec2::new(0.0, 10.0), -Vec2::Y, 50);
     let mut attackers = Vec::new();
@@ -154,26 +159,26 @@ fn three_attackers_reserve_distinct_faces_of_one_battalion() {
         &selected,
         UnitCommand::Attack {
             target: defenders[0],
+            mode: shared::protocol::AttackMode::Focus,
         },
     );
     tick(&mut app, 3);
-    let state = app.world().resource::<CombatFormations>();
-    let mut faces = std::collections::BTreeSet::new();
+    // A wing must approach the fight from its current side immediately;
+    // there is no whole-battalion detour to a reserved rectangular flank.
     for unit in &attackers {
-        let id = app.world().get::<FormationMember>(unit[0]).unwrap().group;
-        assert!(faces.insert(state.fronts[&id].sector.unwrap()));
+        let entity = unit[0];
+        let at = app.world().get::<PlayerPosition>(entity).unwrap().0.xz();
+        let goal = app
+            .world()
+            .get::<crate::player::hero::MoveTarget>(entity)
+            .unwrap()
+            .0
+            .xz();
+        assert!(
+            goal.y > at.y,
+            "approach should advance toward the enemy: {at:?} -> {goal:?}"
+        );
     }
-    assert_eq!(faces.len(), 3);
-    let centre = app
-        .world()
-        .get::<FormationMember>(attackers[1][0])
-        .unwrap()
-        .group;
-    assert_eq!(
-        state.fronts[&centre].sector,
-        Some(Face::Front),
-        "the centre takes the front regardless of command order"
-    );
     let mut seen = std::collections::BTreeSet::new();
     for _ in 0..300 {
         tick(&mut app, 6);
@@ -208,17 +213,25 @@ fn a_weapon_cannot_reach_through_a_friendly_body() {
 }
 
 #[test]
-fn partial_selection_detaches_and_attacks_an_exposed_opponent() {
+fn explicitly_released_soldiers_can_attack_an_exposed_opponent() {
     let mut app = lab();
     let defenders = block(&mut app, "bob", Vec2::new(0.0, 0.0), -Vec2::Y, 50);
     let attackers = block(&mut app, "alice", Vec2::new(0.0, -1.55), Vec2::Y, 50);
     let raiders = block(&mut app, "alice", Vec2::new(0.0, 13.0), -Vec2::Y, 5);
+    apply_army_order(
+        app.world_mut(),
+        "alice",
+        ArmyOrder::Dismiss {
+            members: raiders[..3].to_vec(),
+        },
+    );
     order(
         &mut app,
         "alice",
         &raiders[..1],
         UnitCommand::Attack {
             target: defenders[0],
+            mode: shared::protocol::AttackMode::Focus,
         },
     );
     order(
@@ -227,6 +240,7 @@ fn partial_selection_detaches_and_attacks_an_exposed_opponent() {
         &raiders[1..3],
         UnitCommand::Attack {
             target: defenders[0],
+            mode: shared::protocol::AttackMode::Focus,
         },
     );
     for e in &raiders[..3] {
@@ -310,12 +324,20 @@ fn a_distant_independent_attack_keeps_a_navigation_goal() {
     let mut app = lab();
     let defenders = block(&mut app, "bob", Vec2::new(0.0, 55.0), -Vec2::Y, 5);
     let raiders = block(&mut app, "alice", Vec2::new(0.0, -55.0), Vec2::Y, 5);
+    apply_army_order(
+        app.world_mut(),
+        "alice",
+        ArmyOrder::Dismiss {
+            members: raiders[..1].to_vec(),
+        },
+    );
     order(
         &mut app,
         "alice",
         &raiders[..1],
         UnitCommand::Attack {
             target: defenders[0],
+            mode: shared::protocol::AttackMode::Focus,
         },
     );
     tick(&mut app, 8);
@@ -346,7 +368,15 @@ fn a_battle_approach_uses_one_shared_route_around_a_wall() {
         obstacle_type: 0,
     });
     app.insert_resource(obstacles);
-    order(&mut app, "alice", &a, UnitCommand::Attack { target: b[0] });
+    order(
+        &mut app,
+        "alice",
+        &a,
+        UnitCommand::Attack {
+            target: b[0],
+            mode: shared::protocol::AttackMode::Focus,
+        },
+    );
     tick(&mut app, 1);
     let groups: std::collections::HashSet<_> = a
         .iter()
@@ -373,4 +403,238 @@ fn a_battle_approach_uses_one_shared_route_around_a_wall() {
         reached,
         "the battle order must reach contact beyond the obstacle"
     );
+}
+
+#[test]
+fn army_engagement_spreads_three_blocks_but_focus_keeps_the_clicked_target() {
+    let mut app = lab();
+    let mut attackers = vec![];
+    let mut defenders = vec![];
+    for x in [-18.0, 0.0, 18.0] {
+        attackers.extend(block(&mut app, "alice", Vec2::new(x, -25.0), Vec2::Y, 50));
+        defenders.push(block(&mut app, "bob", Vec2::new(x, 15.0), -Vec2::Y, 50));
+    }
+    let clicked = defenders[1][0];
+    for (mode, expected) in [
+        (shared::protocol::AttackMode::EngageLine, 3),
+        (shared::protocol::AttackMode::Focus, 1),
+    ] {
+        order(
+            &mut app,
+            "alice",
+            &attackers,
+            UnitCommand::Attack {
+                target: clicked,
+                mode,
+            },
+        );
+        let targets: std::collections::BTreeSet<_> = attackers
+            .iter()
+            .filter_map(|e| {
+                let member = app.world().get::<FormationMember>(*e)?;
+                match app.world().resource::<CombatFormations>().fronts[&member.group].intent {
+                    Intent::Attack(Enemy::Battalion(id)) => Some(id),
+                    _ => None,
+                }
+            })
+            .collect();
+        assert_eq!(targets.len(), expected);
+        assert!(targets.contains(&app.world().get::<MemberOfBattalion>(clicked).unwrap().0));
+    }
+}
+
+#[test]
+fn a_nearby_soldier_fights_without_returning_to_their_assigned_file() {
+    let mut app = lab();
+    let a = block(&mut app, "alice", Vec2::new(0.0, -8.0), Vec2::Y, 50);
+    let b = block(&mut app, "bob", Vec2::new(0.0, 4.0), -Vec2::Y, 50);
+    // A back-rank member arrives on an exposed flank. A rigid slot would send
+    // them back across their own ranks before they could participate.
+    let point = app.world().get::<PlayerPosition>(b[9]).unwrap().0 + Vec3::X * -1.7;
+    app.world_mut().get_mut::<PlayerPosition>(a[49]).unwrap().0 = point;
+    order(
+        &mut app,
+        "alice",
+        &a,
+        UnitCommand::Attack {
+            target: b[0],
+            mode: shared::protocol::AttackMode::Focus,
+        },
+    );
+    tick(&mut app, 12);
+    assert!(
+        app.world().get::<EngagedWith>(a[49]).is_some(),
+        "a reachable opponent takes priority over rank alignment"
+    );
+    assert!(
+        app.world()
+            .get::<PlayerPosition>(a[49])
+            .unwrap()
+            .0
+            .xz()
+            .distance(point.xz())
+            < 1.0
+    );
+}
+
+#[test]
+fn a_mid_fight_move_clears_combat_and_regroups_every_survivor() {
+    let mut app = lab();
+    let a = block(&mut app, "alice", Vec2::ZERO, Vec2::Y, 50);
+    block(&mut app, "bob", Vec2::Y * 1.65, -Vec2::Y, 50);
+    tick(&mut app, 24);
+    assert!(a
+        .iter()
+        .any(|e| app.world().get::<EngagedWith>(*e).is_some()));
+    order(
+        &mut app,
+        "alice",
+        &a,
+        UnitCommand::Move {
+            target: Vec3::new(0.0, 80.0, -25.0),
+            frontage: None,
+            mode: shared::protocol::MovementMode::Retreat,
+        },
+    );
+    let destinations: Vec<_> = a
+        .iter()
+        .map(|entity| {
+            (
+                *entity,
+                app.world()
+                    .get::<crate::player::orders::MarchOrder>(*entity)
+                    .unwrap()
+                    .destination,
+            )
+        })
+        .collect();
+    tick(&mut app, 900);
+    for (entity, destination) in destinations {
+        assert!(app.world().get::<EngagedWith>(entity).is_none());
+        let actual = app.world().get::<PlayerPosition>(entity).unwrap().0;
+        assert!(
+            actual.xz().distance(destination.xz()) < 0.3,
+            "retreat must reach each soldier's slot: {actual:?} vs {destination:?}"
+        );
+    }
+}
+
+#[test]
+fn an_idle_formation_restores_a_settled_member_displaced_by_a_late_arrival() {
+    let mut app = lab();
+    let people = block(&mut app, "alice", Vec2::ZERO, Vec2::Y, 50);
+    let home = app.world().get::<PlayerPosition>(people[0]).unwrap().0;
+    app.world_mut()
+        .get_mut::<PlayerPosition>(people[0])
+        .unwrap()
+        .0
+        .x -= 0.6;
+    tick(&mut app, 90);
+    let actual = app.world().get::<PlayerPosition>(people[0]).unwrap().0;
+    assert!(
+        actual.xz().distance(home.xz()) < 0.2,
+        "settled soldier remained displaced: {actual:?} vs {home:?}"
+    );
+    let group = app.world().get::<FormationMember>(people[0]).unwrap().group;
+    assert!(
+        !app.world().resource::<CombatFormations>().fronts[&group].active,
+        "restoring spacing must not invent a combat engagement"
+    );
+}
+
+#[test]
+fn a_rear_rank_moves_up_through_a_gap_instead_of_waiting_out_of_range() {
+    let mut app = lab();
+    let a = block(&mut app, "alice", Vec2::ZERO, Vec2::Y, 50);
+    let b = block(&mut app, "bob", Vec2::Y * 1.65, -Vec2::Y, 50);
+    for e in a.iter().chain(&b) {
+        app.world_mut().get_mut::<Health>(*e).unwrap().current = 10000.0;
+    }
+    // Clear the reserve's own lane through the front rows. A supporting soldier is initially
+    // farther than eight metres from the opposing front.
+    for i in [1, 11, 21, 31] {
+        app.world_mut().get_mut::<Health>(a[i]).unwrap().current = 0.0;
+    }
+    let rear = a[41];
+    // Keep this lane open while the reserve advances. Other soldiers should
+    // not race into it first and invalidate the reachability fixture.
+    for e in a.iter().chain(&b).filter(|e| **e != rear) {
+        app.world_mut()
+            .entity_mut(*e)
+            .insert(BattalionStance::HoldLine);
+    }
+    let start = app.world().get::<PlayerPosition>(rear).unwrap().0;
+    let mut fought = false;
+    for _ in 0..100 {
+        tick(&mut app, 6);
+        fought |= app.world().get::<EngagedWith>(rear).is_some();
+    }
+    let end = app.world().get::<PlayerPosition>(rear).unwrap().0;
+    assert!(
+        end.z > start.z + 3.0,
+        "rear rank should move up: {start:?} -> {end:?}"
+    );
+    assert!(fought, "a reserve with an open lane should join the fight");
+}
+
+#[test]
+fn screened_reserves_keep_their_files_until_an_approach_opens() {
+    let mut app = lab();
+    let a = block(&mut app, "alice", Vec2::ZERO, Vec2::Y, 50);
+    let b = block(&mut app, "bob", Vec2::Y * 1.65, -Vec2::Y, 50);
+    for e in a.iter().chain(&b) {
+        app.world_mut().get_mut::<Health>(*e).unwrap().current = 10000.0;
+    }
+    // A stable occupied screen isolates reserve following from front-line
+    // movement that could legitimately expose a local approach.
+    for e in a[..40].iter().chain(&b) {
+        app.world_mut()
+            .entity_mut(*e)
+            .insert(BattalionStance::HoldLine);
+    }
+    let rear: Vec<_> = a[42..48]
+        .iter()
+        .map(|e| (*e, app.world().get::<PlayerPosition>(*e).unwrap().0.xz()))
+        .collect();
+    tick(&mut app, 180);
+    assert!(a[..10]
+        .iter()
+        .any(|e| app.world().get::<EngagedWith>(*e).is_some()));
+    for (entity, start) in rear {
+        let end = app.world().get::<PlayerPosition>(entity).unwrap().0.xz();
+        assert!(
+            (end.x - start.x).abs() < 0.6,
+            "screened rear soldier must not overtake its file: {start:?} -> {end:?}"
+        );
+    }
+}
+
+#[test]
+fn an_open_ground_attack_keeps_rank_spacing_before_contact() {
+    let mut app = lab();
+    let a = block(&mut app, "alice", Vec2::ZERO, Vec2::Y, 50);
+    let b = block(&mut app, "bob", Vec2::Y * 50.0, -Vec2::Y, 50);
+    let starts: Vec<_> = a
+        .iter()
+        .map(|e| app.world().get::<PlayerPosition>(*e).unwrap().0.xz())
+        .collect();
+    order(
+        &mut app,
+        "alice",
+        &a,
+        UnitCommand::Attack {
+            target: b[0],
+            mode: shared::protocol::AttackMode::Focus,
+        },
+    );
+    tick(&mut app, 360);
+    let lead_delta = app.world().get::<PlayerPosition>(a[4]).unwrap().0.xz() - starts[4];
+    assert!(lead_delta.y > 15.0, "the battalion must keep advancing");
+    for (entity, start) in a.iter().zip(starts) {
+        let delta = app.world().get::<PlayerPosition>(*entity).unwrap().0.xz() - start;
+        assert!(
+            delta.distance(lead_delta) < 0.4,
+            "march stretched a rank: {delta:?} vs {lead_delta:?}"
+        );
+    }
 }

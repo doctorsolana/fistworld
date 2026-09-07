@@ -52,6 +52,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
     app.init_resource::<world::simulation_time::SimulationDelta>();
     app.init_resource::<player::combat::fronts::CombatFormations>();
     app.init_resource::<player::combat::fronts::CombatSpace>();
+    app.init_resource::<player::archery::ArrowObstacles>();
     app.init_resource::<super::BusinessEventQueue>();
     app.init_resource::<super::CompanyDividendQueue>();
     app.init_resource::<super::CompanyEscrowRefundQueue>();
@@ -316,6 +317,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             player::orders::advance_marches,
             (
                 player::combat::fronts::rebuild_combat_space,
+                player::archery::update_weapons,
                 player::combat::fronts::advance_battle_fronts,
                 player::combat::steer_skirmishers,
             )
@@ -328,7 +330,12 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             )
                 .chain(),
             player::combat::acquire_targets,
-            player::combat::pursue_attack_orders,
+            (
+                player::combat::pursue_attack_orders,
+                player::archery::shoot_bows,
+                player::archery::advance_arrows,
+            )
+                .chain(),
             (
                 player::siege::advance_catapults,
                 player::siege::resolve_siege_projectiles,

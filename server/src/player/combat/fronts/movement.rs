@@ -7,13 +7,13 @@ use crate::player::{
 use crate::world::village_roads::{NavigationRouteFailed, NavigationRoutePending, TravelRoute};
 #[derive(Default)]
 pub struct PlanningScratch {
-    reservations: Vec<(BattalionId, Face)>,
+    steering: std::collections::HashMap<(u64, Entity), steering::Steering>,
     plans: Vec<(u64, Option<Footprint>)>,
 }
 
 /// Slow formation decisions, cheap continuous movement through the existing
 /// authoritative mover. File queues survive losses; only the affected file
-/// advances. An explicit individual order detaches that soldier immediately.
+/// advances. Individual control requires an explicit membership removal.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn advance_battle_fronts(
     mut commands: Commands,
@@ -28,6 +28,8 @@ pub fn advance_battle_fronts(
     colliders: Option<Res<crate::collision::library::StaticColliders>>,
     derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
     policies: Query<&BattalionStance>,
+    bows: Query<(), With<BowEquipped>>,
+    targets: Query<(&PlayerPosition, &Health)>,
     mut units: Query<(
         &FormationMember,
         Option<&MemberOfBattalion>,
@@ -38,6 +40,7 @@ pub fn advance_battle_fronts(
         &mut PlayerRotation,
         &mut CharacterMotion,
         &mut CharacterActivity,
+        Has<CommandStance>,
     )>,
 ) {
     let Some(clock) = clock.iter().next() else {
@@ -47,6 +50,7 @@ pub fn advance_battle_fronts(
     if now >= *last && now - *last < 0.1 {
         return;
     }
+    let dt = (now - *last).clamp(0.0, 0.25) as f32;
     *last = now;
     // Bounded by the retained tactical roster, not the world's population.
     for (&id, front) in &mut formations.fronts {
@@ -61,48 +65,42 @@ pub fn advance_battle_fronts(
     formations
         .fronts
         .retain(|_, f| f.columns.iter().any(|c| !c.is_empty()));
-    let PlanningScratch {
-        reservations,
-        plans,
-    } = &mut *scratch;
-    reservations.clear();
-    plans.clear();
-    for front in formations.fronts.values() {
-        if let (Intent::Attack(Enemy::Battalion(target)), Some(face)) = (front.intent, front.sector)
-        {
-            reservations.push((target, face));
-        }
-    }
-    // Decisions use a stable snapshot before any front's desired anchor moves.
-    plans.extend(formations.fronts.iter().map(|(&id, f)| {
-        let target = if let Intent::Attack(enemy) = f.intent {
-            space.footprint(enemy, &formations)
-        } else {
-            None
-        };
-        (id, target)
-    }));
-    // Allocate the closest approach first. Entity/command order must not let
-    // a far wing steal the front from the centre and send the other wing on
-    // a needlessly long trip around the rear.
-    let approach_cost = |(id, target): &(u64, Option<Footprint>)| {
-        target.map_or(f32::INFINITY, |shape| {
-            let from = formations.fronts[id].footprint().centre;
-            Face::ALL
-                .into_iter()
-                .map(|face| from.distance_squared(shape.contact(face)))
-                .min_by(f32::total_cmp)
-                .unwrap()
-        })
-    };
-    plans.sort_by(|a, b| {
-        approach_cost(a)
-            .total_cmp(&approach_cost(b))
-            .then(a.0.cmp(&b.0))
+    let PlanningScratch { steering, plans } = &mut *scratch;
+    steering.retain(|(id, entity), _| {
+        formations.fronts.contains_key(id)
+            && units.get(*entity).is_ok_and(|(m, ..)| m.group == *id)
+            && space.body(*entity).is_some()
     });
+    plans.clear();
+    // One enemy outline per battalion; local choices use the shared body grid.
+    plans.extend(formations.fronts.iter().map(|(&id, f)| {
+        (
+            id,
+            if let Intent::Attack(enemy) = f.intent {
+                space.footprint(enemy, &formations).or_else(|| {
+                    let Enemy::Person(target) = enemy else {
+                        return None;
+                    };
+                    targets
+                        .get(target)
+                        .ok()
+                        .filter(|(_, h)| !h.is_dead())
+                        .map(|(p, _)| Footprint {
+                            centre: p.0.xz(),
+                            facing: Vec2::Y,
+                            half_width: 0.5,
+                            half_depth: 0.5,
+                        })
+                })
+            } else {
+                None
+            },
+        )
+    }));
     for &(id, target) in plans.iter() {
         let front = formations.fronts.get_mut(&id).unwrap();
         let members = front.columns.iter().flatten();
+        let ranged = members.clone().any(|e| bows.contains(*e));
         let marching = members
             .clone()
             .any(|e| units.get(*e).is_ok_and(|(_, _, _, _, march, ..)| march));
@@ -111,10 +109,15 @@ pub fn advance_battle_fronts(
                 front.intent = Intent::Hold;
                 front.march_paused = false;
             } else if front.march_paused {
-                let hostile_near = members
-                    .clone()
-                    .filter_map(|e| space.body(*e))
-                    .any(|b| space.nearby(b.point).any(|other| other.side != b.side));
+                let hostile_near = members.clone().filter_map(|e| space.body(*e)).any(|b| {
+                    space
+                        .within(b.point, if ranged { BOW_RANGE } else { 3. })
+                        .any(|other| {
+                            other.side != b.side
+                                && other.point.distance_squared(b.point)
+                                    < if ranged { BOW_RANGE * BOW_RANGE } else { 9. }
+                        })
+                });
                 if !hostile_near {
                     front.active = false;
                     front.march_paused = false;
@@ -134,20 +137,23 @@ pub fn advance_battle_fronts(
                     continue;
                 }
                 let contact = members.clone().filter_map(|e| space.body(*e)).any(|b| {
-                    space.nearby(b.point).any(|other| {
-                        other.side != b.side && b.point.distance_squared(other.point) < 3.0 * 3.0
-                    })
+                    space
+                        .within(b.point, if ranged { BOW_ADVANCE_RANGE } else { 3. })
+                        .any(|other| {
+                            other.side != b.side
+                                && b.point.distance_squared(other.point)
+                                    < if ranged {
+                                        BOW_ADVANCE_RANGE * BOW_ADVANCE_RANGE
+                                    } else {
+                                        9.
+                                    }
+                        })
                 });
                 if !contact {
                     continue;
                 }
-                let mut sum = Vec2::ZERO;
-                let mut count = 0;
-                for (rank, e) in front.columns.iter().flat_map(|c| c.iter().enumerate()) {
-                    if let Some(b) = space.body(*e) {
-                        sum += b.point + front.facing * rank as f32 * RANK_SPACING;
-                        count += 1;
-                    }
+                let occupied = front.occupied_anchor(&space);
+                for e in front.columns.iter().flatten() {
                     commands.entity(*e).insert(PausedFormationMarch).remove::<(
                         MoveTarget,
                         TravelRoute,
@@ -155,118 +161,90 @@ pub fn advance_battle_fronts(
                         NavigationRouteFailed,
                     )>();
                 }
-                front.anchor = sum / count.max(1) as f32;
+                front.anchor = occupied;
                 front.active = true;
                 front.march_paused = true;
             }
         }
-        if let Intent::Attack(enemy) = front.intent {
-            if let Some(enemy_shape) = target {
-                if front.sector.is_none() {
-                    let from = front.footprint().centre;
-                    let chosen = Face::ALL
-                        .into_iter()
-                        .filter(|face| match enemy {
-                            Enemy::Battalion(b) => !reservations.contains(&(b, *face)),
-                            _ => true,
-                        })
-                        .min_by(|a, b| {
-                            from.distance_squared(enemy_shape.contact(*a))
-                                .total_cmp(&from.distance_squared(enemy_shape.contact(*b)))
-                        });
-                    if let Some(face) = chosen {
-                        front.sector = Some(face);
-                        if let Enemy::Battalion(b) = enemy {
-                            reservations.push((b, face));
-                        }
-                        // A flank has less frontage than the enemy's front.
-                        // Re-form once during approach, never on every death.
-                        let files = if matches!(enemy, Enemy::Battalion(_)) {
-                            (1 + (enemy_shape.half_length(face) * 2.0 / FILE_SPACING).floor()
-                                as usize)
-                                .clamp(1, front.columns.len())
-                        } else {
-                            front.columns.len()
-                        };
-                        let facing = -enemy_shape.normal(face);
-                        if files != front.columns.len() || facing.dot(front.facing) < 0.99 {
-                            let right = Vec2::new(facing.y, -facing.x);
-                            let mut roster: Vec<_> =
-                                front.columns.iter().flatten().copied().collect();
-                            roster.sort_by(|a, b| {
-                                let a = space.body(*a).unwrap();
-                                let b = space.body(*b).unwrap();
-                                b.point
-                                    .dot(facing)
-                                    .total_cmp(&a.point.dot(facing))
-                                    .then(a.entity.cmp(&b.entity))
-                            });
-                            front.columns = vec![Vec::new(); files];
-                            for row in roster.chunks_mut(files) {
-                                row.sort_by(|a, b| {
-                                    space
-                                        .body(*a)
-                                        .unwrap()
-                                        .point
-                                        .dot(right)
-                                        .total_cmp(&space.body(*b).unwrap().point.dot(right))
-                                        .then(a.cmp(b))
-                                });
-                                for (file, e) in row.iter().enumerate() {
-                                    front.columns[file].push(*e);
-                                }
-                            }
-                            front.facing = facing;
-                        }
-                    } else {
-                        continue;
-                    } // All four faces occupied: remain a reserve.
+        let threatened = front
+            .columns
+            .iter()
+            .flatten()
+            .filter_map(|e| space.body(*e))
+            .any(|b| {
+                space
+                    .within(b.point, 6.0)
+                    .any(|o| o.side != b.side && o.point.distance_squared(b.point) < 36.0)
+            });
+        if threatened {
+            front.last_threat = now;
+        }
+        let was_active = front.active;
+        front.active = threatened
+            || now - front.last_threat < 2.0
+            || matches!(front.intent, Intent::Attack(_));
+        if matches!(front.intent, Intent::Attack(_)) {
+            if let Some(shape) = target {
+                let actual = front.occupied_anchor(&space);
+                if !threatened && !(ranged && front.ranged_deployed) {
+                    let facing = (shape.centre - actual)
+                        .try_normalize()
+                        .unwrap_or(front.facing);
+                    let turn = front.facing.angle_to(facing).clamp(-dt * 1.5, dt * 1.5);
+                    front.facing = Mat2::from_angle(turn) * front.facing;
                 }
-                let face = front.sector.unwrap();
-                let actual = front
-                    .columns
-                    .iter()
-                    .flatten()
-                    .filter_map(|e| space.body(*e))
-                    .map(|b| b.point)
-                    .sum::<Vec2>()
-                    / front.columns.iter().map(Vec::len).sum::<usize>().max(1) as f32;
-                let half = (front.columns.len() - 1) as f32 * FILE_SPACING * 0.5;
-                if let Some(staging) = enemy_shape.staging_point(face, actual, half) {
-                    front.anchor = staging;
-                    front.staging = true;
-                    // Face the enemy only after reaching the outside corridor.
+                if ranged {
+                    let edge = shape.approach(actual);
+                    let distance = actual.distance(edge);
+                    if distance > BOW_RANGE - 5. {
+                        front.ranged_deployed = false;
+                    }
+                    if !front.ranged_deployed {
+                        if distance > BOW_ADVANCE_RANGE + 3. {
+                            front.anchor =
+                                edge + (actual - edge).normalize_or_zero() * BOW_ADVANCE_RANGE;
+                        } else {
+                            front.anchor = actual;
+                            front.ranged_deployed = true;
+                        }
+                    }
                 } else {
-                    front.anchor = enemy_shape.contact(face);
-                    front.facing = -enemy_shape.normal(face);
-                    front.staging = false;
+                    front.ranged_deployed = false;
+                    front.anchor = shape.approach(actual);
                 }
             } else {
                 front.intent = Intent::Hold;
-                front.sector = None;
-                // Keep the last occupied front; do not chase a despawned person.
+                front.active = threatened || now - front.last_threat < 2.0;
             }
         }
-        if !front.active {
-            front.active = front
-                .columns
-                .iter()
-                .flatten()
-                .filter_map(|e| space.body(*e))
-                .any(|b| space.nearby(b.point).any(|o| o.side != b.side));
+        if was_active && !front.active {
+            // Re-form around the ground actually occupied, not the pre-battle
+            // anchor. Never send survivors marching back through the battlefield.
+            front.anchor = front.occupied_anchor(&space);
         }
-        if !front.active {
-            continue;
-        }
+        let depth = front
+            .columns
+            .iter()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(1)
+            .saturating_sub(1) as f32
+            * RANK_SPACING;
+        let defended_ground = Footprint {
+            centre: front.anchor - front.facing * depth * 0.5,
+            facing: front.facing,
+            half_width: front.columns.len().saturating_sub(1) as f32 * front.spacing * 0.5,
+            half_depth: depth * 0.5,
+        };
         let mut route_group = None;
-        for (entity, home, exposed) in front.posts() {
+        for (entity, home, ahead) in front.posts() {
             if front.intent == Intent::Hold
                 && policies
                     .get(entity)
                     .is_ok_and(|policy| *policy == BattalionStance::HoldLine)
             {
                 commands.entity(entity).remove::<MoveTarget>();
-                if let Ok((_, _, _, _, _, fighting, _, mut motion, mut activity)) =
+                if let Ok((_, _, _, _, _, fighting, _, mut motion, mut activity, _)) =
                     units.get_mut(entity)
                 {
                     motion.set_if_neq(CharacterMotion::STATIONARY);
@@ -276,30 +254,59 @@ pub fn advance_battle_fronts(
                 }
                 continue;
             }
-            // The rank is a home position, not a rail. Only exposed soldiers
-            // step out to meet a local threat; supporting ranks retain space
-            // behind them. A lone flanker never turns the whole battalion.
+            if units
+                .get(entity)
+                .is_ok_and(|(_, _, _, _, march, fighting, ..)| {
+                    (march && !front.march_paused) || fighting
+                })
+            {
+                continue;
+            }
+            let Some(body) = space.body(entity) else {
+                continue;
+            };
+            let approach = steering.entry((id, entity)).or_default();
+            let bow = bows.contains(entity);
+            let local = if front.active && !bow {
+                approach.local_goal(&space, entity, now)
+            } else {
+                approach.released = false;
+                None
+            };
+            let loose = !bow && (matches!(front.intent, Intent::Attack(_)) || local.is_some());
+            let mut keep_file = local.is_none();
             let mut slot = home;
-            if exposed && !front.staging {
-                if let Some(body) = space.body(entity) {
-                    if body.point.distance_squared(home) < 3.0 * 3.0 {
-                        if let Some(enemy) = space
-                            .nearby(body.point)
-                            .filter(|e| {
-                                e.side != body.side && e.point.distance_squared(home) < 3.1 * 3.1
-                            })
-                            .min_by(|a, b| {
-                                a.point
-                                    .distance_squared(body.point)
-                                    .total_cmp(&b.point.distance_squared(body.point))
-                            })
-                        {
-                            let outward = (enemy.point - home).normalize_or_zero();
-                            let approach = enemy.point - outward * geometry::CONTACT_DISTANCE;
-                            slot = home + (approach - home).clamp_length_max(1.1);
-                        }
+            if let Some(goal) = local {
+                // Release reserves when contact is close or an approach opens.
+                // Otherwise follow the actual soldier ahead: a blocked rear
+                // rank must not fan out merely to overtake its own moving file.
+                let leader = ahead.and_then(|e| space.body(e));
+                approach.released = approach.released
+                    || leader.is_none()
+                    || body.point.distance_squared(goal) <= 2.5 * 2.5
+                    || space.approach_clear(entity, body.point, goal);
+                if let Some(leader) = leader.filter(|_| !approach.released) {
+                    slot = leader.point - front.facing * RANK_SPACING;
+                    // A reserve follows meaningful progress, not every tiny
+                    // sideways correction made by the person ahead.
+                    if slot.distance_squared(body.point) < 0.55 * 0.55 {
+                        slot = body.point;
                     }
+                    keep_file = true;
+                } else {
+                    slot = goal;
                 }
+                if front.intent == Intent::Hold {
+                    // Defend the whole battalion's ground, not each home slot.
+                    slot = defended_ground.clamp(slot, 6.0);
+                }
+            } else if let Some(shape) = target.filter(|_| approach.released) {
+                slot = shape.approach(body.point);
+                keep_file = false;
+            } else if target.is_none() && front.active && !bow {
+                // A supporting rank without a reachable local threat waits
+                // where it is, rather than tugging towards an occupied slot.
+                slot = body.point;
             }
             let Ok((
                 _,
@@ -311,6 +318,7 @@ pub fn advance_battle_fronts(
                 mut rotation,
                 mut motion,
                 mut activity,
+                has_stance,
             )) = units.get_mut(entity)
             else {
                 continue;
@@ -368,6 +376,40 @@ pub fn advance_battle_fronts(
                             )>();
                     }
                 }
+                if clear && loose {
+                    let next = steering.entry((id, entity)).or_default().step(
+                        &space,
+                        entity,
+                        position.0.xz(),
+                        slot,
+                        now,
+                        keep_file,
+                        |end| {
+                            navigation_segment_clear(
+                                position.0.xz(),
+                                end,
+                                buildings.as_deref(),
+                                colliders.as_deref(),
+                                derived.as_deref(),
+                            ) && terrain.as_deref().is_none_or(|t| {
+                                crate::player::hero::terrain_segment_walkable(
+                                    t,
+                                    position.0.xz(),
+                                    end,
+                                )
+                            })
+                        },
+                    );
+                    let Some(next) = next else {
+                        if target.is_some() {
+                            commands.entity(entity).remove::<MoveTarget>();
+                        }
+                        motion.set_if_neq(CharacterMotion::STATIONARY);
+                        activity.set_if_neq(CharacterActivity::Idle);
+                        continue;
+                    };
+                    slot = next;
+                }
                 if clear && target.is_none_or(|t| t.0.xz().distance_squared(slot) > 0.04) {
                     let point = Vec3::new(
                         slot.x,
@@ -386,11 +428,16 @@ pub fn advance_battle_fronts(
                 if target.is_some() {
                     commands.entity(entity).remove::<MoveTarget>();
                 }
-                rotation.set_if_neq(PlayerRotation(f32::atan2(-front.facing.x, -front.facing.y)));
+                if !front.active {
+                    rotation
+                        .set_if_neq(PlayerRotation(f32::atan2(-front.facing.x, -front.facing.y)));
+                }
                 motion.set_if_neq(CharacterMotion::STATIONARY);
                 activity.set_if_neq(CharacterActivity::Idle);
             }
-            commands.entity(entity).insert_if_new(CommandStance::Guard);
+            if !has_stance {
+                commands.entity(entity).insert(CommandStance::Guard);
+            }
         }
     }
 }

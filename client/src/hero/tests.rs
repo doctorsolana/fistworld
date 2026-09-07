@@ -303,6 +303,8 @@ fn a_seated_passenger_does_not_walk_when_the_vessel_moves() {
     let walk = AnimationNodeIndex::new(1);
     let sit = AnimationNodeIndex::new(2);
     let anim = HeroAnim {
+        archery: Default::default(),
+        movement: Default::default(),
         combat: Default::default(),
         player: Entity::from_bits(1),
         idle: Some(idle),
@@ -329,6 +331,7 @@ fn a_seated_passenger_does_not_walk_when_the_vessel_moves() {
         false,
         false,
         None,
+        false,
     );
 
     assert_eq!(clip, Some(sit));
@@ -349,6 +352,8 @@ fn farming_uses_harvest_without_leaking_into_the_build_clip() {
     world.spawn((
         HeroVisual { speed: 0.0 },
         HeroAnim {
+            archery: Default::default(),
+            movement: Default::default(),
             combat: Default::default(),
             player: player_entity,
             idle: Some(idle),
@@ -395,6 +400,8 @@ fn a_loaded_stationary_villager_freezes_in_the_carry_pose() {
     world.spawn((
         HeroVisual { speed: 0.0 },
         HeroAnim {
+            archery: Default::default(),
+            movement: Default::default(),
             combat: Default::default(),
             player: player_entity,
             idle: Some(idle),
@@ -454,6 +461,8 @@ fn a_rig_no_view_can_see_stops_evaluating_and_resumes_where_it_left_off() {
     world.spawn((
         HeroVisual { speed: 0.0 },
         HeroAnim {
+            archery: Default::default(),
+            movement: Default::default(),
             combat: Default::default(),
             player: player_entity,
             idle: Some(idle),
@@ -541,6 +550,8 @@ fn an_active_porter_cart_walks_even_before_visual_interpolation_reports_speed() 
     world.spawn((
         HeroVisual { speed: 0.0 },
         HeroAnim {
+            archery: Default::default(),
+            movement: Default::default(),
             combat: Default::default(),
             player: player_entity,
             idle: Some(idle),
@@ -581,4 +592,138 @@ fn an_active_porter_cart_walks_even_before_visual_interpolation_reports_speed() 
     assert!(player.animation(carry).is_none());
     assert!(player.animation(idle).is_none());
     assert_eq!(player.playing_animations().count(), 1);
+}
+
+#[test]
+fn gait_hysteresis_swimming_and_outdoor_rest_select_distinct_clips() {
+    let node = |i| Some(AnimationNodeIndex::new(i));
+    let mut anim = HeroAnim {
+        archery: Default::default(),
+        movement: super::animation::MovementClips {
+            run: node(2),
+            swim: node(3),
+            swim_idle: node(4),
+            lie_down: node(5),
+            lie_idle: node(6),
+            rest_seconds: None,
+        },
+        player: Entity::from_bits(1),
+        idle: node(0),
+        walk: node(1),
+        build: None,
+        chop: None,
+        combat: Default::default(),
+        harvest: None,
+        carry: None,
+        pull: None,
+        sit_idle: None,
+        current_body: node(1),
+        fading_body: None,
+        body_fade_seconds: 0.,
+        paused: false,
+        saved_weights: vec![],
+    };
+    let choose = |anim: &HeroAnim, speed, activity, swim| {
+        desired_body_animation(
+            &HeroVisual { speed },
+            anim,
+            activity,
+            false,
+            false,
+            None,
+            swim,
+        )
+        .0
+    };
+    assert_eq!(choose(&anim, 1.6, None, false), node(1));
+    assert_eq!(choose(&anim, 3.52, None, false), node(2));
+    assert_eq!(choose(&anim, 2.4, None, false), node(1));
+    anim.current_body = node(2);
+    assert_eq!(choose(&anim, 2.4, None, false), node(2));
+    assert_eq!(choose(&anim, 2.1, None, false), node(1));
+    assert_eq!(choose(&anim, 1.6, None, true), node(3));
+    assert_eq!(choose(&anim, 0., None, true), node(4));
+    assert_eq!(
+        choose(&anim, 0., Some(CharacterActivity::LyingDown), false),
+        node(5)
+    );
+    anim.movement.rest_seconds = Some(1.6);
+    assert_eq!(
+        choose(&anim, 0., Some(CharacterActivity::LyingDown), false),
+        node(6)
+    );
+    assert_eq!(
+        choose(&anim, 0., Some(CharacterActivity::Idle), false),
+        node(0)
+    );
+}
+
+#[test]
+fn bevy_advancement_keeps_a_clock_sampled_death_at_its_last_frame() {
+    bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+    let mut world = World::new();
+    let mut time = Time::<()>::default();
+    time.advance_by(std::time::Duration::from_secs_f32(0.25));
+    world.insert_resource(time);
+    let mut clips = Assets::<AnimationClip>::default();
+    let mut clip = AnimationClip::default();
+    clip.set_duration(1.0);
+    let (graph, node) = AnimationGraph::from_clip(clips.add(clip));
+    let mut graphs = Assets::<AnimationGraph>::default();
+    let player = world
+        .spawn((
+            AnimationPlayer::default(),
+            AnimationGraphHandle(graphs.add(graph)),
+        ))
+        .id();
+    world.insert_resource(clips);
+    world.insert_resource(graphs);
+    world.spawn(shared::components::WorldTime::new(30., 30., 2.));
+    world.spawn((
+        HeroVisual { speed: 0. },
+        shared::components::PersonId(42),
+        shared::components::CombatReaction {
+            at: 0.,
+            fatal: true,
+        },
+        HeroAnim {
+            archery: Default::default(),
+            movement: Default::default(),
+            player,
+            idle: None,
+            walk: None,
+            build: None,
+            chop: None,
+            combat: super::combat_animation::CombatClips {
+                fall: Some(node),
+                ..default()
+            },
+            harvest: None,
+            carry: None,
+            pull: None,
+            sit_idle: None,
+            current_body: None,
+            fading_body: None,
+            body_fade_seconds: 0.,
+            paused: false,
+            saved_weights: vec![],
+        },
+    ));
+    for _ in 0..8 {
+        world.run_system_once(drive_hero_locomotion).unwrap();
+        world
+            .run_system_once(bevy::animation::advance_animations)
+            .unwrap();
+        let active = world
+            .get::<AnimationPlayer>(player)
+            .unwrap()
+            .animation(node)
+            .unwrap();
+        assert!(active.is_paused());
+        assert_eq!(
+            active.seek_time(),
+            1.,
+            "a corpse must not wrap back to standing"
+        );
+    }
 }

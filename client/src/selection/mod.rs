@@ -14,6 +14,7 @@ pub mod commands;
 pub mod formation_preview;
 pub mod order;
 pub mod pick;
+mod reshape;
 pub mod ring;
 mod state;
 pub use state::*;
@@ -35,6 +36,10 @@ pub struct SelectionPlugin;
 impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selection>();
+        app.add_systems(
+            OnEnter(GameState::Playing),
+            formation_preview::spawn_preview_label,
+        );
         app.init_resource::<formation_preview::PreviewReadiness>();
         app.insert_gizmo_config(
             formation_preview::FormationGizmos,
@@ -51,6 +56,14 @@ impl Plugin for SelectionPlugin {
             crate::army_roster::refresh_army_roster
                 .in_set(crate::army_roster::ArmyRosterSet)
                 .before(SelectionGestureSet)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
+            reshape::reshape_selected
+                .in_set(SelectionGestureSet)
+                .after(expand_battalion_selection)
+                .before(commands::handle_command_keys)
                 .run_if(in_state(GameState::Playing)),
         );
         app.init_resource::<RightDrag>();
@@ -70,7 +83,7 @@ impl Plugin for SelectionPlugin {
                 pick::pick_on_left_click
                     .after(crate::camera_rts::update_cursor_terrain_hit)
                     .after(crate::hero::sync_hero_transforms),
-                expand_standard_bearer_selection,
+                expand_battalion_selection,
                 commands::handle_command_keys,
                 commands::receive_order_feedback,
                 crate::capture::drive_live_voyage_click_input,

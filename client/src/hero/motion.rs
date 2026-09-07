@@ -1,8 +1,8 @@
 //! Bounded rendering interpolation of authoritative character snapshots.
 
 use bevy::prelude::*;
+use shared::character::locomotion::WALK_CYCLE_SPEED;
 use shared::components::{CharacterMotion, PlayerPosition, PlayerRotation, TimeWarp};
-use shared::player::HERO_MOVE_SPEED;
 
 /// Client-side smoothing/animation state on the hero root.
 #[derive(Component)]
@@ -35,7 +35,7 @@ impl HeroVisual {
     /// creator preview walks in place on its turntable).
     pub fn walking_in_place() -> Self {
         Self {
-            speed: HERO_MOVE_SPEED,
+            speed: WALK_CYCLE_SPEED,
         }
     }
 }

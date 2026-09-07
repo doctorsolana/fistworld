@@ -11,6 +11,7 @@
 //!   commands use village ownership and accounting rules.
 
 pub mod army;
+pub mod archery;
 pub mod boat;
 pub mod business;
 pub mod combat;
@@ -25,3 +26,4 @@ pub mod spawn;
 pub mod trade_routes;
 
 pub mod siege;
+mod swimming;

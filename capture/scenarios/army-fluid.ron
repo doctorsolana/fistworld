@@ -1,0 +1,13 @@
+// Connected drag to two ranks, ordinary move preserving width, then quarter-turn.
+(
+    version: 1, account: "armylab", map: "battle_lab",
+    battalions: 3, soldiers_per_battalion: 50,
+    origin: (-20.0, 0.0, -75.0),
+    deployments: [
+        (target: (-20.0, 0.0, -42.0), facing: (0.0, 1.0), width: 110.8),
+        (target: (-20.0, 0.0, -12.0), facing: (0.0, 1.0), width: 110.8, preserve_shape: true),
+        (target: (20.0, 0.0, -12.0), facing: (1.0, 0.0), width: 73.0),
+    ],
+    camera_focus: (-15.0, 0.0, -28.0), camera_zoom: 150.0,
+    timeout_seconds: 300.0,
+)

@@ -974,14 +974,14 @@ with a player who does nothing but found the hall and put people on the map.
     the occupied envelope. Wall forms are reserved
     planning metadata in this slice, not yet physical fortifications.
 21. Village and Town progression is authoritative and inspectable. A Village
-    requests a placeholder Marketplace; its private opportunity board advertises a Tavern after survival shortages are
+    requests a Marketplace; its private opportunity board advertises a Tavern after survival shortages are
     met, then becomes a Town with at least 30 residents, 50 coin of lifetime
     Moot trade, prosperity 70 and all requirements sustained for three days. A
-    Town requests a placeholder Church and becomes a City with at least 75
+    Town requests a Church and becomes a City with at least 75
     residents, prosperity 75 and all requirements sustained for five days.
-    These generated blockout boxes are semantic buildings with real plots,
-    wood supply, staffing, storage, collision and door-connected roads; authored
-    art can replace them without changing progression. The City population
+    These semantic buildings have real plots, wood supply, staffing, storage,
+    collision and door-connected roads. Marketplace and Church have authored
+    models; Tavern remains a blockout. Art replacement does not change progression. The City population
     gate is provisional; 12/30 are the enacted Village and Town balance.
     The settlement entity itself also carries a replicated physical hall rung:
     Hamlet/Ruins use the Moot Hall, Village uses the Village Hall, and Town/City

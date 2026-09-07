@@ -304,7 +304,10 @@ fn attack_ground_leaves_soldier_orders_alone_and_catapults_are_melee_targets() {
                     units: vec![person],
                     battalions: vec![]
                 },
-                command: UnitCommand::Attack { target: machine }
+                command: UnitCommand::Attack {
+                    target: machine,
+                    mode: shared::protocol::AttackMode::Focus
+                }
             }
         )
         .0,

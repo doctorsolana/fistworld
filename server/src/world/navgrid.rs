@@ -177,16 +177,13 @@ mod tests {
                     BuildingType::PlaceholderTavern,
                     SettlementBuildingKind::Tavern,
                 ),
-                (
-                    BuildingType::PlaceholderChurch,
-                    SettlementBuildingKind::Church,
-                ),
+                (BuildingType::Church, SettlementBuildingKind::Church),
                 (
                     BuildingType::StorageHall,
                     SettlementBuildingKind::StorageHall,
                 ),
                 (
-                    BuildingType::PlaceholderStoneQuarry,
+                    BuildingType::StoneQuarry,
                     SettlementBuildingKind::StoneQuarry,
                 ),
             ] {

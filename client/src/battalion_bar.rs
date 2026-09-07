@@ -351,7 +351,15 @@ fn bind_battalion_cards(
         let next = if n > 0 && n < b.count {
             format!("{n}/{} SELECTED", b.count)
         } else {
-            format!("{} MEN", b.count)
+            format!(
+                "{} {}",
+                b.count,
+                if b.role == shared::components::SoldierRole::Archer {
+                    "BOWS"
+                } else {
+                    "MEN"
+                }
+            )
         };
         if text.0 != next {
             text.0 = next;

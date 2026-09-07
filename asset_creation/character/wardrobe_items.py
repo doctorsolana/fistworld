@@ -83,8 +83,8 @@ BOTTOMS = [
 #
 # `skirt` adds a separate flared piece that DOES hang below the joint, which is what actually makes a
 # tunic read as one. Dropping the body hem alone from 0.30 to 0.27 is 3 cm on a 1.7 m character and
-# is invisible next to a tee. The skirt is still on `torso` -- correct, since a tunic hem hangs from
-# the body rather than following the leg -- and is cut wide enough that a swinging thigh clears it.
+# is invisible next to a tee. Each half of the skirt follows its corresponding thigh;
+# a rigid torso-bound hem intersects the breeches during walk/run strides.
 # APPEND ONLY -- see the note on BOTTOMS.
 TOPS = [
     ("Top_Tee",        "short", "Red",   0.3000, False),   # 0
@@ -158,11 +158,31 @@ HAIR = [
     ], BLACK, 0.036),
 ]
 
+# A tied crown with closely cropped sides; append-only to preserve saved looks.
+HAIR.append(("Hair_Topknot", [
+    ((-.198,-.160,.90),(.198,.163,1.003)),
+    ((-.205,-.04,.822),(.205,.166,.916)),
+    ((-.089,-.070,.988),(.089,.087,1.075)),
+    ((-.063,.055,1.000),(.063,.145,1.055)),
+], BROWN, .040))
+
+# Equipment builders own their geometry; these lists own stable item indices.
+ARMOUR_TOPS = ["Top_PaddedArmour", "Top_LeatherArmour", "Top_MailArmour"]
+ARMOUR_BOTTOMS = ["Bottom_WoolBoots"]
+HEADGEAR = ["Headgear_None", "Headgear_NasalHelmet", "Headgear_IronCap"]
+
 # Slot -> the items in it. Only one per slot may be visible; the game enumerates by these lists.
 SLOTS = {
-    "bottom": [n for n, *_ in BOTTOMS],
-    "top": [n for n, *_ in TOPS],
+    "bottom": [n for n, *_ in BOTTOMS] + ARMOUR_BOTTOMS,
+    "top": [n for n, *_ in TOPS] + ARMOUR_TOPS,
     "hair": [n for n, *_ in HAIR],
+    "headgear": HEADGEAR,
 }
-DEFAULT_OUTFIT = {"bottom": "Bottom_Shorts", "top": "Top_Tee", "hair": "Hair_Tousled"}
-ITEMS = SLOTS["bottom"] + SLOTS["top"] + SLOTS["hair"]
+DEFAULT_OUTFIT = {"bottom": "Bottom_Shorts", "top": "Top_Tee", "hair": "Hair_Tousled", "headgear": "Headgear_None"}
+ITEMS = [item for items in SLOTS.values() for item in items]
+COVERAGE = [(name, ["hair"]) for name in HEADGEAR if name != "Headgear_None"]
+OUTFITS = {
+    "soldier_padded": {"bottom": "Bottom_WoolBoots", "top": "Top_PaddedArmour", "headgear": "Headgear_None"},
+    "soldier_leather": {"bottom": "Bottom_WoolBoots", "top": "Top_LeatherArmour", "headgear": "Headgear_IronCap"},
+    "soldier_mail": {"bottom": "Bottom_WoolBoots", "top": "Top_MailArmour", "headgear": "Headgear_NasalHelmet"},
+}

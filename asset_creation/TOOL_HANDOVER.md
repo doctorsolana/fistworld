@@ -1,5 +1,9 @@
 # Implemented hand-tool and carried-resource reference
 
+Current bow/arrow documentation: [ARCHERY_HANDOVER.md](ARCHERY_HANDOVER.md).
+The character timing/counts and wrist-rotation discussion below are historical;
+[CHARACTER_HANDOVER.md](CHARACTER_HANDOVER.md) owns the current contract.
+
 Follows `ASSET_HANDOVER.md` (buildings, garments and work clips). The tools, `harvest`
 clip, attachment joints, carried-resource orientation and base-origin transform below are
 exported, verified and integrated. Historical failure explanations remain because they

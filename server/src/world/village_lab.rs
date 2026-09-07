@@ -5265,7 +5265,7 @@ fn village_simulation_lab() {
                                 shared::building::BuildingType::PlaceholderTavern => {
                                     SettlementBuildingKind::Tavern
                                 }
-                                shared::building::BuildingType::PlaceholderChurch => {
+                                shared::building::BuildingType::Church => {
                                     SettlementBuildingKind::Church
                                 }
                                 shared::building::BuildingType::Windmill => {
@@ -5277,7 +5277,7 @@ fn village_simulation_lab() {
                                 shared::building::BuildingType::StorageHall => {
                                     SettlementBuildingKind::StorageHall
                                 }
-                                shared::building::BuildingType::PlaceholderStoneQuarry => {
+                                shared::building::BuildingType::StoneQuarry => {
                                     SettlementBuildingKind::StoneQuarry
                                 }
                                 shared::building::BuildingType::LivestockFarm => {

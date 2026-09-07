@@ -7,13 +7,17 @@ Battles happen on the existing map. There is no separate battle scene.
 ## Current controls
 
 - **C** changes how the client interprets clicks. It is not a server ceasefire.
-- Left-click selects a person; click a standard bearer to select their battalion.
-  Drag a box to select owned people. **Shift** adds to a box selection or toggles
-  a clicked group. **Alt-click** selects a bearer individually.
-- In combat mode, right-click an enemy to attack or empty ground to move.
+- Left-click any battalion member to select the whole battalion. Box selection
+  expands every touched battalion too. **Shift** adds to a box selection or toggles
+  a clicked battalion. Remove a member in Army management before controlling them
+  individually; Alt-click does not bypass membership.
+- In combat mode, right-click an enemy to engage its nearby line or empty ground
+  to move. Multiple selected battalions distribute across nearby enemy battalions.
+  **Ctrl/Cmd + right-click** focuses the selected battalions on the clicked target.
   **Right-drag** lays out a frontage: drag left to right when facing the enemy.
-  The gold preview shows each destination and facing. Reverse the drag to reverse
-  facing. **Alt + right-drag** orbits the camera when units are selected.
+  The gold preview shows footprints, slots, facing and file/rank counts.
+  Reverse the drag to reverse facing. **[ / ]** narrows/widens selected battalions
+  in place by two files; **comma / period** turns each in place by 15 degrees. **Alt + right-drag** orbits the camera when units are selected.
 - **X**, then a destination: attack-move. Engage nearby enemies, then resume the
   original march. **R**, then a destination: retreat without acquiring enemies
   during movement. Ordinary movement also obeys the destination over acquisition.
@@ -22,9 +26,9 @@ Battles happen on the existing map. There is no separate battle scene.
   persistent **Hold line** stance disables automatic movement. Escape clears an
   armed command mode.
 - **Ctrl/Cmd + 0–9** saves a control group. The digit recalls it; Shift adds it.
-  Complete battalions retain their identity as membership changes. Partial
-  selections retain only the individual people saved.
-- Battalion cards show complete/partial selection. Shift-click adds or removes a
+  Battalions retain their identity as membership changes; a group saved from any
+  member remembers the battalion. Unassigned troops retain individual identities.
+- Battalion cards show selected battalions. Shift-click adds or removes a
   card's battalion. The Army encyclopedia handles muster, assignment and disbanding.
 
 ## Army management and standing stances
@@ -74,8 +78,8 @@ health, stance and checkbox updates preserve the controls under the pointer.
 | Shared formation route fields | `server/src/player/orders/{navigation,flow}.rs` |
 | Battalion identity/lifecycle and sequential membership | `server/src/player/army.rs`, `army/membership.rs` |
 | Contact/cooldown/damage | `server/src/player/combat.rs` |
-| Cohesion, contact faces, file replacement and local body index | `server/src/player/combat/fronts/` |
-| Independent/partial-selection approaches | `server/src/player/combat/skirmish.rs` |
+| Cohesion, local approaches, file replacement and body index | `server/src/player/combat/fronts/` |
+| Independent unassigned troop approaches | `server/src/player/combat/skirmish.rs` |
 | Clock-sampled combat clips and weapon presentation | `client/src/hero/{combat_animation,attachments}.rs` |
 | Local acquisition and body separation | `server/src/player/combat/{targeting,separation}.rs` |
 | Derived client roster | `client/src/army_roster.rs` |
@@ -83,8 +87,8 @@ health, stance and checkbox updates preserve the controls under the pointer.
 
 `UnitOrder` is one message type over the ordered reliable channel. Move, attack,
 retreat, attack-move and hold therefore apply in receive order. Its selection
-contains durable `BattalionId`s for complete battalions and mapped entities for
-individuals. The server expands, deduplicates and checks ownership, health and
+contains durable `BattalionId`s and mapped entities for unassigned individuals.
+The server also expands a member sent individually, then deduplicates and checks ownership, health and
 availability, with a 1,024-person command limit. It rejects an excessive command
 rather than silently truncating it. `ArmyOrderFeedback` explains accepted/refused
 commands. Membership messages commit each edit before validating the next edit.
@@ -103,13 +107,23 @@ Protocol changes require rebuilding and restarting both binaries.
 
 A multi-battalion order creates a separate block for each battalion. Default blocks
 use ten files, 1.4 m file spacing, 1.7 m rank spacing and a 5 m gap between blocks.
-A frontage drag changes the number of files, up to twenty. Fifty people normally
-form ten files by five ranks; five such battalions occupy an 83 m frontage.
+A frontage drag changes the number of files, up to the surviving roster size
+(maximum 64), with small continuous spacing adjustments between 1.15 and 1.65 m.
+Fifty people can form 25 files by two ranks. The preferred `BattalionFormation`
+lives on the battalion entity, so an ordinary move preserves its file count and
+spacing. Five default 50-person battalions occupy an 83 m frontage.
 
-Blocks preserve their current lateral order. Stronger soldiers occupy forward
-ranks; people within a rank are assigned by lateral position to reduce crossing.
-Stable person IDs resolve ties consistently across server/client entity mapping.
+Blocks preserve their current lateral order. Rank and lateral assignment use the
+last ordered `FormationSeat` offsets, falling back to physical positions for new
+members. Stable person IDs resolve ties across server/client entity mapping.
+This avoids both strength-based reshuffles and assignment changes caused by
+walking replication delay. Short last ranks occupy explicit file indices, so
+quiet regrouping uses the same columns as deployment. Seats are cleared on
+membership changes and updated only at accepted movement boundaries.
 Arrival waits for the mover's completed endpoint before setting the final facing.
+Idle formed troops restore their assigned slots after friendly body separation;
+Hold line still prevents this movement. This avoids permanent spacing errors
+when a late arrival nudges a soldier whose march already completed.
 
 Open-ground legs are certified once. An obstructed battalion shares one reverse
 Dijkstra field, bounded to roughly 128 cells on each axis, with coarser sampling
@@ -126,34 +140,60 @@ route may fail. Units follow individual certified paths around obstructions and
 reform at their destination; rigid formation wheeling, adaptive column transitions,
 charge mechanics and coordinated passage reservations remain future work.
 
-## Flexible battle fronts
+## Individual movement with battalion cohesion
 
-A complete battalion selection installs one persistent formation. Its files are
-queues: when a soldier falls, the next living person in that file advances, without
-sorting all survivors into new ranks. New attack/hold orders preserve physical
-rank order; changing approach direction assigns the new ranks from current positions
-once, avoiding crossing that a row-major reshuffle caused.
+Battalion membership controls selection and orders, independently of the movement
+model. Persistent files retain the preferred quiet deployment shape. They do not
+reserve an enemy face, forbid a rear-rank soldier from fighting, or require the
+battalion to line up before contact. The former rectangular flank allocation and
+three-file bend systems have been removed.
 
-Rank positions are home positions. Exposed front, rear and outside-file soldiers may
-step up to 1.1 m from home to meet a nearby opponent. Supporting ranks keep space
-behind them. A local rear attack turns the threatened soldiers, not the entire
-battalion. Weapon paths cannot pass through a person in front, and movement cannot
-push deeper through an occupied body. Existing contacts stay stable until invalid;
-new contacts prefer opponents with fewer attackers.
+An explicit attack advances the preferred files toward the enemy's occupied
+outline. Within local combat range, soldiers consider up to eight nearby opponents
+and five approach angles; crowded contact points cost more. Exposed soldiers,
+soldiers within 2.5 metres of a contact position, and reserves with a clear approach
+may move independently. Screened reserves follow the actual soldier ahead, with
+normal rank spacing, until an opening becomes available. This prevents deep ranks
+from scattering just to overtake their own files. Existing approaches receive a
+preference and valid fights retain their opponent. Once a soldier takes a local
+approach, that freedom lasts until combat settles or a new order replaces it;
+a briefly obstructed approach must not send them back toward their old file.
+A reachable opponent takes priority over returning to a rank slot.
+Contact-point choices persist for 0.55–0.75 seconds, staggered across soldiers;
+dead or out-of-range opponents invalidate the choice immediately. Subsequent
+choices penalize large changes of approach. Reserves ignore corrections smaller
+than 0.55 metres by the person ahead, avoiding repeated tiny reversals.
 
-Several attacking battalions reserve distinct front/left/right/rear faces of their
-target. Flank attackers approach outside its rectangle and narrow their frontage to
-fit the flank. Further formations wait in reserve when all four faces are occupied.
-This is a geometric allocation, not a tactical AI choosing an optimal encirclement.
-Attack-move retains its original shared march while the front fights, then resumes
-when local enemies are gone.
+`fronts/steering.rs` certifies short steps against nearby bodies and the existing
+terrain/static-collision boundary. Nine directions at two lookahead lengths let
+soldiers sidestep blockers without introducing per-person A*. Direction memory
+holds a chosen passing side for 1.5 seconds. When no local step is clear, a soldier
+waits; they do not repeatedly push toward an occupied slot. An established fight
+has priority in body separation, so an arriving soldier yields to its participants.
+While following a file, steering prefers shorter forward steps to large detours
+and ignores its own formation in the lookahead crowd penalty. Swept body collision
+still applies to every candidate. All positional integration remains in the
+existing mover.
 
-Selecting one person, a few people out of a battalion, or unassigned people gives
-independent orders. They detach from rank control without losing battalion membership,
-choose reachable exposed opponents, and test several local approach angles. Distant
-or obstructed approaches use the existing bounded tactical route planner; full
-formations share their existing reverse field. A complete battalion command brings
-detached members back under formation control.
+Idle Defensive formations defend their occupied footprint plus a six-metre margin;
+rear ranks may cross their own formation to fill an opening. Their local opponent
+search extends to twelve metres so a deep rear rank can see the active front.
+Hold line permits turning and striking but no automatic translation. A local rear
+attack does not rotate the whole defending battalion. After two quiet seconds,
+formations regroup around the ground occupied by their survivors, with no return
+to a distant pre-battle anchor. Attack-move retains its shared march while contact
+interrupts it and resumes when local enemies are gone. Direct move/retreat clears
+the combat movement state and restores explicit deployment control.
+
+Unassigned people, including explicitly removed members, retain individual orders
+and exposed-opponent approach choices through `combat/skirmish.rs`. Distant or
+obstructed approaches use the bounded tactical route planner; formed troops share
+one reverse field. Automatic bombardment responses retain their internal local
+boundary so a distant recruit is not pulled across the map by an impact.
+
+This is local crowd movement and target choice, not strategic flanking AI. There
+may be more supporting soldiers than reachable fighting positions. An army does
+not need every soldier swinging simultaneously to make progress.
 
 ## Melee and performance rules
 
@@ -180,6 +220,13 @@ world clock as damage, including the 0.30 s wind-up. The sword is currently a co
 visual sidearm, not an equipment/stat system. Existing rig distance/visibility LOD
 continues to apply.
 
+The refreshed character asset includes forward and backward fatal falls, selected
+by stable `PersonId` parity. Both last one second and hold their final pose until
+the 1.4-second server removal deadline. The client pauses clock-sampled clips while
+seeking so Bevy cannot wrap a finished death back to standing. The connected
+`battle-animation.ron` scenario verifies these clips with ordinary damage and
+mortality; the asset handover records the authored timing and equipment contracts.
+
 Do not dirty replicated motion, rotation, activity or health on no-op writes.
 Acquisition and separation reuse scratch buffers. The client builds one roster on
 membership/identity/vital changes; walking does not rebuild the battalion bar and
@@ -187,6 +234,11 @@ encyclopedia's membership aggregates. Do not infer a measured FPS gain from thes
 algorithmic improvements.
 
 ## Verification and remaining work
+
+The connected scenario `capture/scenarios/army-fluid.ron` widens three 50-person
+battalions to two ranks, follows with an ordinary move that must preserve the
+shape, then rotates/redeploys them. `battle-3v3.ron` starts selection from one
+member per friendly battalion before issuing a normal army attack.
 
 The connected scenario `capture/scenarios/army-250.ron` stages five real server
 battalions, selects their 250 replicated members and exercises ordinary formation
@@ -204,8 +256,8 @@ and per-person combat state. The mixed scenario sends one independent attacker,
 then two more, into an ongoing clash. See [the verification report](COMBAT-CLASH-VERIFICATION-2026-09.md) for
 observations; scenario assertions alone do not establish visual quality.
 
-Weapon classes, armour, morale/routing/rallying, guards, military wages, diplomacy,
-sieges, ranged line-of-sight attacks, adaptive passage reservations and lossless
+Additional weapon classes, armour, morale/routing/rallying, guards, military wages, diplomacy,
+fortification sieges, adaptive passage reservations and lossless
 strategic army promotion/demotion remain future milestones. They must retain these
 authority, identity, clock and bounded-work contracts.
 
@@ -215,3 +267,10 @@ The first ranged siege weapon is implemented through God placement, ordinary uni
 selection and the ordered command stream. F/RMB ground bombardment and RMB enemy attacks
 use server-owned, non-homing stone trajectories with local splash and friendly fire.
 H stops future shots. See [CATAPULT.md](CATAPULT.md) for tuning and remaining scope.
+
+### Archers — 2026-09-07
+
+Army management can equip archers with finite quivers. V and the Army page toggle
+fire policy. Ranged attacks settle at effective range, use authored draw/release
+timing and authoritative non-homing arrows, and switch to existing sword melee
+when crowded. See [ARCHERY.md](ARCHERY.md) for controls, collision, budgets and limits.

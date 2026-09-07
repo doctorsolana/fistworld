@@ -25,6 +25,7 @@ pub struct StaticColliderInstance {
     pub kind: PropKind,
     pub position: Vec3,
     pub scale: f32,
+    pub rotation: Quat,
     pub cell: (i32, i32),
 }
 

@@ -1,0 +1,17 @@
+// Shipped default character: close geometry, silhouette and normal RTS scale.
+(
+    version: 1, name: "character-base", map: "village_lab",
+    output_dir: "logs/captures/character-base", resolution: (1400, 1000),
+    fixed_delta_seconds: 0.016666667, target: scene, show_window: false,
+    warmup_frames: 300,
+    readiness: (minimum_frames: 90, maximum_frames: 1200,
+        minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+    environment: {"FISTFORCE_CAPTURE_HERO": "default", "FISTFORCE_CAPTURE_CLOUDS": "clear"},
+    shots: [
+        (name: "close-rts", focus: (-15.0, 0.0, -15.0), yaw: 0.0, zoom: 5.0, time_of_day: 0.43),
+        (name: "front", focus: (-15.0, 0.0, -11.6), yaw: 0.0, zoom: 5.0, time_of_day: 0.43, pitch: Some(0.0), eye: 9.80),
+        (name: "side", focus: (-11.6, 0.0, -15.0), yaw: 1.5707963, zoom: 5.0, time_of_day: 0.43, pitch: Some(0.0), eye: 9.80),
+        (name: "back", focus: (-15.0, 0.0, -18.4), yaw: 3.1415927, zoom: 5.0, time_of_day: 0.43, pitch: Some(0.0), eye: 9.80),
+        (name: "gameplay", focus: (-15.0, 0.0, -15.0), yaw: -0.4, zoom: 35.0, time_of_day: 0.43),
+    ],
+)

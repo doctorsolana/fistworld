@@ -1,0 +1,14 @@
+(version: 1, name: "civic-town", map: "village_lab",
+ output_dir: "logs/captures/civic-town", resolution: (1600, 1000), fixed_delta_seconds: 0.016666667,
+ target: scene, show_window: false, warmup_frames: 300,
+ readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+ environment: {"FISTFORCE_CAPTURE_HALLS": "town", "FISTFORCE_CAPTURE_CLOUDS": "clear", "FISTFORCE_CAPTURE_HERO": "default", "FISTFORCE_CAPTURE_HERO_OFFSET": "2.45,-5.20"},
+ shots: [
+ (name: "front-day", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 58.0, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+ (name: "rear", focus: (-15.0, 0.0, -15.0), yaw: 0.65, zoom: 58.0, time_of_day: 0.50, assertions: [settlements_at_least(count: 1)]),
+ (name: "front-night", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 58.0, time_of_day: 0.00, assertions: [settlements_at_least(count: 1)]),
+ (name: "gameplay", focus: (-15.0, 0.0, -15.0), yaw: 2.85, zoom: 60.0, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+ (name: "entrance", focus: (-12.0, 0.0, -23.5), yaw: 2.8, zoom: 15.0, pitch: Some(-0.12), eye: 10.40, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+ (name: "under-eaves", focus: (-3.0, 0.0, -13.0), yaw: 1.4, zoom: 15.0, pitch: Some(-0.85), eye: 11.0, time_of_day: 0.50, assertions: [settlements_at_least(count: 1)])
+ ],
+)

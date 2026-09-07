@@ -28,9 +28,16 @@ pub(crate) struct BattleCapture {
     engaged: BTreeSet<u64>,
     max_contacts: usize,
     max_casualties: usize,
+    spent_arrows: std::collections::BTreeMap<u64, u8>,
+    peak_projectiles: usize,
+    peak_archers_drawing: usize,
+    archers_in_melee: BTreeSet<u64>,
     independent_engaged: BTreeSet<u64>,
     raider_wave: u8,
     accepted_attack: bool,
+    selection_verified: bool,
+    retargeted: bool,
+    metrics_only: bool,
 }
 pub(crate) fn drive_battle_input(
     mut commands: Commands,
@@ -58,6 +65,13 @@ pub(crate) fn drive_battle_input(
     }
     state.input += 1;
 }
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct BattleVisuals<'w, 's> {
+    dressed: Query<'w, 's, (), With<crate::hero::HeroDressed>>,
+    bows: Query<'w, 's, (), With<crate::hero::BowDressed>>,
+    arrows: Query<'w, 's, &'static ArrowProjectile>,
+    archery: crate::hero::ArcheryInspection<'w, 's>,
+}
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn drive_battle_capture(
     mut commands: Commands,
@@ -65,7 +79,7 @@ pub(crate) fn drive_battle_capture(
     roster: Res<ArmyRoster>,
     input: Res<crate::input::InputState>,
     notice: Res<crate::ui::hud::GodNotice>,
-    dressed: Query<(), With<crate::hero::HeroDressed>>,
+    visuals: BattleVisuals,
     mut selection: ResMut<Selection>,
     mut mode: ResMut<crate::combat_mode::CombatMode>,
     mut cameras: Query<&mut CommanderCamera>,
@@ -82,6 +96,9 @@ pub(crate) fn drive_battle_capture(
             Option<&EngagedWith>,
             Option<&CombatSwing>,
             Option<&CombatReaction>,
+            Option<&SoldierRole>,
+            Option<&Quiver>,
+            Option<&BowShot>,
         ),
         With<CharacterKind>,
     >,
@@ -94,6 +111,7 @@ pub(crate) fn drive_battle_capture(
         state.scenario =
             ArmyLabScenario::from_env().filter(|s| s.catapult.is_none() && s.battle.is_some());
         state.started = Some(Instant::now());
+        state.metrics_only = crate::profiling::env_flag("FISTWORLD_BATTLE_METRICS_ONLY");
     }
     let Some(scenario) = state.scenario.clone() else {
         return;
@@ -128,6 +146,12 @@ pub(crate) fn drive_battle_capture(
         }
         state.ticket = None;
         if state.stage == 1 {
+            assert_eq!(
+                selection.len(),
+                scenario.total(),
+                "a member must select their entire battalion"
+            );
+            state.selection_verified = true;
             state.input = 1;
             state.stage = 2;
         }
@@ -158,19 +182,21 @@ pub(crate) fn drive_battle_capture(
     }
     if state.stage == 0 {
         if input.ui_blocking()
-            || dressed.iter().count() < total
+            || visuals.dressed.iter().count() < total
             || people.iter().count() != total
             || roster.soldiers.len() != scenario.total() + battle.independent_attackers
+            || (!scenario.archer_battalions.is_empty() && visuals.bows.is_empty())
             || state.stable < 30
         {
             return;
         }
+        // Start from one ordinary member per block; production selection must
+        // expand these before the actual enemy click is allowed to run.
         selection.set(
             roster
-                .soldiers
-                .values()
-                .filter(|s| s.battalion.is_some())
-                .map(|s| s.entity)
+                .battalions
+                .iter()
+                .filter_map(|b| b.members.get(1).copied())
                 .collect(),
         );
         let target = people
@@ -192,6 +218,29 @@ pub(crate) fn drive_battle_capture(
             total - scenario.total()
         );
     }
+    for (id, _, _, _, _, _, _, swing, _, role, quiver, _) in &people {
+        if role == Some(&SoldierRole::Archer) {
+            if let Some(q) = quiver {
+                let spent = QUIVER_CAPACITY.saturating_sub(q.arrows);
+                let recorded = state.spent_arrows.entry(id.0).or_default();
+                *recorded = (*recorded).max(spent);
+            }
+            if swing.is_some_and(|s| s.impact_at <= now) {
+                state.archers_in_melee.insert(id.0);
+            }
+        }
+    }
+    state.peak_projectiles = state.peak_projectiles.max(
+        visuals
+            .arrows
+            .iter()
+            .filter(|a| a.stopped_at.is_none())
+            .count(),
+    );
+    state.peak_archers_drawing = state
+        .peak_archers_drawing
+        .max(visuals.archery.active_draws());
+    let released_arrows: usize = state.spent_arrows.values().map(|n| usize::from(*n)).sum();
     let mut contacts = 0;
     let mut alive = 0;
     for (person, _, _, health, owner, bat, target, ..) in &people {
@@ -216,6 +265,31 @@ pub(crate) fn drive_battle_capture(
         state.contact_at = Some(now);
         state.next_shot = now;
         info!("Battle lab: first contact");
+    }
+    if !state.retargeted
+        && battle.retarget_after_seconds.is_some_and(|after| {
+            state
+                .contact_at
+                .is_some_and(|at| now - at > f64::from(after))
+        })
+    {
+        if let Some(target) = people
+            .iter()
+            .filter(|(_, _, _, h, owner, ..)| owner.0 != scenario.account && !h.is_dead())
+            .max_by(|a, b| a.1 .0.x.total_cmp(&b.1 .0.x))
+        {
+            selection.set(
+                roster
+                    .battalions
+                    .iter()
+                    .flat_map(|b| b.members.iter().copied())
+                    .collect(),
+            );
+            state.cursor = target.1 .0.xz();
+            state.input = 1;
+            state.retargeted = true;
+            info!("Battle lab: reissuing army attack during contact");
+        }
     }
     if battle.independent_attackers > 0
         && state.raider_wave < 2
@@ -256,12 +330,22 @@ pub(crate) fn drive_battle_capture(
             .contact_at
             .is_some_and(|at| now - at >= f64::from(battle.observe_seconds))
     {
-        let passed = state.accepted_attack
+        let passed = state.selection_verified
+            && state.accepted_attack
             && state.independent_engaged.len() >= battle.independent_attackers
             && state.engaged.len() >= battle.minimum_engaged_battalions
             && state.max_casualties >= 5
-            && state.shots >= 10;
-        std::fs::write(out.join("summary.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":passed,"accepted_attack":state.accepted_attack,"independent_attackers_engaged":state.independent_engaged,"attacking_battalions_engaged":state.engaged,"peak_contacts":state.max_contacts,"casualties":state.max_casualties,"shots":state.shots,"observed_world_seconds":now-state.contact_at.unwrap()})).unwrap()).unwrap();
+            && (scenario.archer_battalions.is_empty()
+                || (released_arrows
+                    >= scenario.archer_battalions.len() * scenario.soldiers_per_battalion
+                    && state.peak_projectiles > 0
+                    && state.peak_archers_drawing > 0))
+            && (scenario.archer_battalions.len() != scenario.battalions
+                || scenario.counterattack_after_seconds.is_none()
+                || !state.archers_in_melee.is_empty())
+            && state.shots >= 10
+            && (battle.retarget_after_seconds.is_none() || state.retargeted);
+        std::fs::write(out.join("summary.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":passed,"metrics_only":state.metrics_only,"retargeted":state.retargeted,"selection_verified":state.selection_verified,"accepted_attack":state.accepted_attack,"independent_attackers_engaged":state.independent_engaged,"attacking_battalions_engaged":state.engaged,"peak_contacts":state.max_contacts,"arrows_released":released_arrows,"peak_projectiles":state.peak_projectiles,"peak_archers_drawing":state.peak_archers_drawing,"archers_in_melee":state.archers_in_melee,"casualties":state.max_casualties,"samples":state.shots,"shots":if state.metrics_only {1} else {state.shots},"observed_world_seconds":now-state.contact_at.unwrap()})).unwrap()).unwrap();
         info!(
             "Battle lab {}: engaged={:?}, casualties={}, shots={}",
             if passed { "PASS" } else { "FAIL" },
@@ -283,10 +367,18 @@ pub(crate) fn drive_battle_capture(
     let Some(scene) = inspection.scene_target.as_ref() else {
         return;
     };
-    let data:Vec<_>=people.iter().map(|(id,p,r,h,o,b,e,s,hit)|serde_json::json!({"person":id.0,"position":p.0.to_array(),"yaw":r.0,"health":h.current,"owner":o.0,"battalion":b.map(|b|b.0.0),"target":e.map(|e|e.0.0),"impact_at":s.map(|s|s.impact_at),"reaction":hit.map(|h|(h.at,h.fatal))})).collect();
+    let data:Vec<_>=people.iter().map(|(id,p,r,h,o,b,e,s,hit,role,quiver,bow)|serde_json::json!({"person":id.0,"position":p.0.to_array(),"yaw":r.0,"health":h.current,"owner":o.0,"battalion":b.map(|b|b.0.0),"target":e.map(|e|e.0.0),"impact_at":s.map(|s|s.impact_at),"reaction":hit.map(|h|(h.at,h.fatal)),"role":role,"arrows":quiver.map(|q|q.arrows),"bow_release_at":bow.map(|b|b.release_at)})).collect();
     std::fs::create_dir_all(&out).expect("battle output");
     let name = format!("{:04}", state.shots);
-    std::fs::write(out.join(format!("{name}.battle.json")),serde_json::to_vec_pretty(&serde_json::json!({"world_seconds":now,"since_order":now-state.order_at,"contacts":contacts,"alive":alive,"people":data})).unwrap()).unwrap();
+    std::fs::write(out.join(format!("{name}.battle.json")),serde_json::to_vec_pretty(&serde_json::json!({"world_seconds":now,"since_order":now-state.order_at,"contacts":contacts,"alive":alive,"people":data,"archery_visuals":visuals.archery.snapshot(),"arrows":visuals.arrows.iter().map(|a|serde_json::json!({"position":a.position(now).to_array(),"launched_at":a.launched_at,"stopped_at":a.stopped_at})).collect::<Vec<_>>()})).unwrap()).unwrap();
+    if state.metrics_only && state.stage >= 2 {
+        // Keep the initial readiness/selection screenshot, then measure the
+        // ordinary renderer without repeated GPU readback and PNG encoding.
+        // Sparse position samples still tie timing logs to the active battle.
+        state.shots += 1;
+        state.next_shot = now + 1.0;
+        return;
+    }
     let mut request = live_capture_request(
         out.join(format!("{name}.png")),
         "connected-battalion-clash",

@@ -260,7 +260,12 @@ def shirt(name, sleeve, colour, hem_z=0.3000, skirt=False):
         # piece front face sits at y -0.0481 and pivots at z 0.26; at the skirt's lowest point, 0.045
         # below the pivot, a 25 deg swing carries that face forward to about y -0.067. The skirt front
         # at -0.0800 clears it, and the sides at +-0.1850 clear the thigh's +-0.1597.
-        pieces.append(((-0.1850, -0.0800, 0.2150), (0.1850, 0.1300, 0.2820), "torso"))
+        # Split riding hem. Each panel follows its own thigh, including the
+        # breeches cuff through a run/sit; a torso-bound box cannot clear both.
+        pieces.extend([
+            ((.001, -.070, .193), (.179, .130, .308), "leg.L"),
+            ((-.179, -.070, .193), (-.001, .130, .308), "leg.R"),
+        ])
     if sleeve == "none":
         pass                    # a jerkin: bare arms are the whole silhouette difference
     elif sleeve == "short":
@@ -269,9 +274,9 @@ def shirt(name, sleeve, colour, hem_z=0.3000, skirt=False):
     else:
         # two segments per arm, overlapping at z 0.45..0.46 so the step is buried
         pieces += [((0.1296, -0.0578, 0.4500), (0.2628, 0.1087, 0.6120), "arm.L"),
-                   ((0.1468, -0.0578, 0.3020), (0.3000, 0.1087, 0.4600), "arm.L"),
+                   ((0.1468, -0.0578, 0.3020), (0.3000, 0.1087, 0.4600), "forearm.L"),
                    ((-0.2628, -0.0578, 0.4500), (-0.1296, 0.1087, 0.6120), "arm.R"),
-                   ((-0.3000, -0.0578, 0.3020), (-0.1468, 0.1087, 0.4600), "arm.R")]
+                   ((-0.3000, -0.0578, 0.3020), (-0.1468, 0.1087, 0.4600), "forearm.R")]
     return build(name, pieces, cloth_material(f"Cloth_{colour}", CLOTH[colour]))
 
 
@@ -301,6 +306,8 @@ for name, sleeve, colour, hem, skirt in W.TOPS:
     shirt(name, sleeve, colour, hem, skirt)
 for name, slabs, tones, cell in W.HAIR:
     hair(name, slabs, tones=tones, cell=cell)
+from build_equipment import build_equipment
+build_equipment(wardrobe, rig)
 
 # --- bake the hair --------------------------------------------------------------------------------
 # The voxel material reads Geometry.Position, i.e. WORLD position, so the pattern is nailed to world
@@ -414,6 +421,13 @@ with open(manifest, "w") as fh:
         fh.write(f'    (name: "{slot}", default: "{W.DEFAULT_OUTFIT[slot]}", items: [')
         fh.write(", ".join(f'"{n}"' for n in names))
         fh.write("]),\n")
+    fh.write("  ],\n")
+    fh.write("  coverage: [\n")
+    for item, slots in W.COVERAGE:
+        fh.write(f'    (item: "{item}", hides_slots: [' + ', '.join(f'"{s}"' for s in slots) + ']),\n')
+    fh.write("  ],\n  outfits: [\n")
+    for name, items in W.OUTFITS.items():
+        fh.write(f'    (name: "{name}", items: {{' + ', '.join(f'"{slot}": "{item}"' for slot, item in items.items()) + '}),\n')
     fh.write("  ],\n")
     # Skin tones carry VALUES, not material names. glTF only exports materials referenced by an
     # exported primitive, so the five non-default Skin_* materials are orphans in the .blend and are

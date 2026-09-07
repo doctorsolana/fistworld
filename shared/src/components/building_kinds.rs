@@ -131,14 +131,14 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::House => Art::LogCabin,
             SettlementBuildingKind::Market => Art::Market,
             SettlementBuildingKind::Tavern => Art::PlaceholderTavern,
-            SettlementBuildingKind::Church => Art::PlaceholderChurch,
+            SettlementBuildingKind::Church => Art::Church,
             SettlementBuildingKind::Windmill => Art::Windmill,
             SettlementBuildingKind::Bakery => Art::Bakery,
             // Dedicated art can replace this semantic mapping without a save
             // migration. Keep its temporary solid box distinct from the
             // walkable open-air marketplace.
             SettlementBuildingKind::StorageHall => Art::StorageHall,
-            SettlementBuildingKind::StoneQuarry => Art::PlaceholderStoneQuarry,
+            SettlementBuildingKind::StoneQuarry => Art::StoneQuarry,
             SettlementBuildingKind::LivestockFarm => Art::LivestockFarm,
         }
     }
@@ -160,8 +160,13 @@ impl SettlementBuildingKind {
             return self.art().definition();
         }
         let mut definition = crate::building::BuildingType::LongCabinL2.definition();
-        definition.footprint = Vec2::new(8.6866, 7.3600);
-        definition.footprint_center = Vec2::ZERO;
+        let cabin = crate::building::BuildingType::CabinL2.definition();
+        let minimum = (definition.footprint_center - definition.footprint * 0.5)
+            .min(cabin.footprint_center - cabin.footprint * 0.5);
+        let maximum = (definition.footprint_center + definition.footprint * 0.5)
+            .max(cabin.footprint_center + cabin.footprint * 0.5);
+        definition.footprint = maximum - minimum;
+        definition.footprint_center = (minimum + maximum) * 0.5;
         definition
     }
 
@@ -374,7 +379,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Farmstead => Vec2::new(0.0, -3.95),
             SettlementBuildingKind::LumberjackHut => Vec2::new(0.0, -3.40),
             SettlementBuildingKind::FishermansHut => Vec2::new(0.0, -4.45),
-            SettlementBuildingKind::House => Vec2::new(0.0, -3.80),
+            SettlementBuildingKind::House => Vec2::new(0.0, -4.30),
             SettlementBuildingKind::Market => Vec2::new(0.0, -6.5),
             SettlementBuildingKind::Tavern => Vec2::new(0.0, -4.0),
             SettlementBuildingKind::Church => Vec2::new(0.0, -6.5),

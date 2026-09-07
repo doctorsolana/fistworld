@@ -305,17 +305,23 @@ pub(super) fn sync_tool_visuals(
     readiness: Query<Ref<shared::components::CombatReady>>,
     mut removed_ready: RemovedComponents<shared::components::CombatReady>,
     existing_visuals: Query<&ToolVisual>,
+    bows: Query<Ref<shared::components::BowEquipped>>,
+    mut removed_bows: RemovedComponents<shared::components::BowEquipped>,
 ) {
     let removed_carts: HashSet<_> = removed_carts.read().collect();
     let removed_ready: HashSet<_> = removed_ready.read().collect();
+    let removed_bows: HashSet<_> = removed_bows.read().collect();
     for (attachment, marker, owner) in attachments.iter() {
         let ready = readiness.get(owner.0).ok();
+        let bow = bows.get(owner.0).ok();
         let Ok((activity, carried, cart)) = characters.get(owner.0) else {
             continue;
         };
         if !marker.is_added()
             && !ready.as_ref().is_some_and(|r| r.is_added())
             && !removed_ready.contains(&owner.0)
+            && !removed_bows.contains(&owner.0)
+            && !bow.as_ref().is_some_and(|b| b.is_added())
             && !activity
                 .as_ref()
                 .is_some_and(|activity| activity.is_changed())
@@ -333,6 +339,7 @@ pub(super) fn sync_tool_visuals(
             },
             cart.is_some() || carried.is_some_and(|load| !load.is_empty()),
         );
+        let desired = desired.filter(|tool| *tool != ToolKind::Sword || bow.is_none());
         let existing = children.get(attachment).ok().and_then(|children| {
             children.iter().find_map(|child| {
                 existing_visuals

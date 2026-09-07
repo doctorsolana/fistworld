@@ -1,0 +1,16 @@
+// Connected load check: five 50-person battalions on each side.
+(
+    version: 1, account: "battlelab", map: "battle_lab",
+    battalions: 5, soldiers_per_battalion: 50,
+    origin: (-20.0, 0.0, -64.0),
+    deployments: [
+        (target: (-20.0, 0.0, -28.0), facing: (0.0, 1.0), width: 83.0),
+    ],
+    camera_focus: (-20.0, 0.0, -36.0), camera_zoom: 125.0,
+    timeout_seconds: 240.0,
+    battle: Some((
+        defender_battalions: 5, defenders_per_battalion: 50,
+        defender_origin: (-20.0, 0.0, -14.0), defender_facing: (0.0, -1.0),
+        observe_seconds: 60.0, minimum_engaged_battalions: 5,
+    )),
+)

@@ -5,7 +5,9 @@ use std::path::Path;
 
 use super::*;
 
+mod civic;
 mod roofs;
+mod rural;
 mod windmill;
 
 fn glb_document(path: &Path) -> serde_json::Value {
@@ -247,10 +249,10 @@ fn flatten_footprint_is_square_and_positive() {
 #[test]
 fn all_house_levels_keep_their_plot_entrances_glass_and_animation_contracts() {
     for (kind, approach, budget) in [
-        (BuildingType::LogCabin, 3.80, 8424),
+        (BuildingType::LogCabin, 4.30, 8424),
         (BuildingType::LongCabin, 3.25, 4656),
-        (BuildingType::CabinL2, 3.90, 8808),
-        (BuildingType::LongCabinL2, 3.00, 11280),
+        (BuildingType::CabinL2, 4.30, 8808),
+        (BuildingType::LongCabinL2, 3.65, 11280),
     ] {
         assert_animated_building_contract(kind, Vec2::new(0.0, -approach), "HouseDoor", 2, budget);
         let document = glb_document(

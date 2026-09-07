@@ -21,6 +21,9 @@ pub(crate) enum ArmyAction {
     Disband,
     CancelDisband,
     Stance(BattalionStance),
+    Role(SoldierRole),
+    Fire(FirePolicy),
+    Rearm,
     Source(bool),
     Toggle(Entity),
     SelectMembers,
@@ -37,6 +40,7 @@ pub(crate) enum BoundText {
     Title,
     Capacity,
     Policy,
+    Equipment,
     Notice,
     Members,
     Available,
@@ -132,6 +136,17 @@ impl<'a> PanelModel<'a> {
         match action {
             ArmyAction::New => (roster.battalions.len() < MAX_BATTALIONS_PER_ACCOUNT)
                 .then_some(ArmyOrder::Muster { members: vec![] }),
+            ArmyAction::Role(role) => Some(ArmyOrder::SetRole {
+                battalion: self.unit?.entity,
+                role,
+            }),
+            ArmyAction::Fire(policy) => Some(ArmyOrder::SetFirePolicy {
+                battalion: self.unit?.entity,
+                policy,
+            }),
+            ArmyAction::Rearm => Some(ArmyOrder::Rearm {
+                battalion: self.unit?.entity,
+            }),
             ArmyAction::Stance(stance) => Some(ArmyOrder::SetStance {
                 battalion: self.unit?.entity,
                 stance,
@@ -203,6 +218,24 @@ impl<'a> PanelModel<'a> {
                 false,
             ),
             ArmyAction::CancelDisband => ("CANCEL".into(), state.confirm_disband, false),
+            ArmyAction::Role(role) => (
+                role.label().to_uppercase(),
+                exists,
+                self.unit.is_some_and(|b| b.role == role),
+            ),
+            ArmyAction::Fire(policy) => (
+                policy.label().to_uppercase(),
+                self.unit.is_some_and(|b| b.role == SoldierRole::Archer),
+                self.unit.is_some_and(|b| b.fire_policy == policy),
+            ),
+            ArmyAction::Rearm => (
+                "REARM QUIVERS".into(),
+                self.unit.is_some_and(|b| {
+                    b.role == SoldierRole::Archer
+                        && b.arrows < b.count * usize::from(QUIVER_CAPACITY)
+                }),
+                false,
+            ),
             ArmyAction::Stance(s) => (
                 s.label().to_uppercase(),
                 exists,
@@ -284,6 +317,9 @@ impl<'a> PanelModel<'a> {
             action,
             ArmyAction::New
                 | ArmyAction::Stance(_)
+                | ArmyAction::Role(_)
+                | ArmyAction::Fire(_)
+                | ArmyAction::Rearm
                 | ArmyAction::Disband
                 | ArmyAction::Add(_)
                 | ArmyAction::Remove(_)

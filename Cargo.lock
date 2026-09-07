@@ -7360,6 +7360,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lightyear",
+ "parry3d",
  "shared",
 ]
 

@@ -23,12 +23,15 @@ pub(crate) use army::{drive_army_capture, drive_army_input, ArmyCapture};
 pub(crate) use battle::{
     drive_battle_capture, drive_battle_input, drive_battle_ray, BattleCapture,
 };
+mod character_fixtures;
+mod civic_fixtures;
 mod history_fixtures;
 mod house_fixtures;
 mod inspection;
 mod live;
 mod performance;
 mod presentation;
+mod rural_fixtures;
 pub(crate) use presentation::{setup_capture_presentation, sync_capture_presentation};
 mod scene_fixtures;
 mod ui_fixtures;
@@ -336,6 +339,7 @@ pub fn run(mut config: CaptureConfig) {
         app.insert_resource(performance::CapturePerformance::new(config.shots.len()));
         app.add_systems(First, performance::measure_frames);
     }
+    app.add_systems(Update, (character_fixtures::stage, character_fixtures::drive).chain());
     app.insert_resource(config);
     ui_tour::install(&mut app);
 
@@ -346,6 +350,8 @@ pub fn run(mut config: CaptureConfig) {
         (
             presentation::setup_capture_presentation,
             house_fixtures::stage_capture_houses,
+            civic_fixtures::stage_capture_civic_halls,
+            rural_fixtures::stage_capture_rural,
         ),
     );
     app.add_systems(
@@ -368,7 +374,7 @@ pub fn run(mut config: CaptureConfig) {
             // Before the camera bake, so the pose photographed in frame N is
             // the pose this system applied in frame N — a continuous flight
             // must not trail its own screenshots by a frame.
-            drive_capture.before(crate::camera_rts::update_commander_camera),
+            drive_capture.before(crate::camera_rts::update_commander_camera).run_if(character_fixtures::ready),
             apply_capture_free_look.after(crate::camera_rts::update_commander_camera),
         ),
     );
