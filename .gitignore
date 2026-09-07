@@ -45,13 +45,19 @@ windows_build/
 BUILD_WINDOWS.md
 client_data/
 
-# Asset-creation working files: renders are regenerable Blender output (~21MB+).
-asset_creation/renders/
+# Regenerable asset review output, including nested building/character renders.
+# Keep runtime assets and editable source .blend files tracked.
+/asset_creation/**/renders/
 /asset_creation/boats/.orbit/
 /asset_creation/boats/.sail_states/
 
+# Assembled inspection scenes; the source assets and preview scripts are tracked.
+/asset_creation/boats/dinghy_occupied_preview.blend
+/asset_creation/houses/door_lineup.blend
+/asset_creation/houses/rural_review.blend
+
 # Blender auto-backups
-*.blend1
+*.blend[0-9]*
 
 # Python bytecode from asset_creation scripts
 __pycache__/

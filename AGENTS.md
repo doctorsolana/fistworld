@@ -8,6 +8,11 @@ preserved.
 Before authoring building or prop assets, read `asset_creation/PROP_PIPELINE.md`,
 including the ground-contact, supported-cargo, structural-joint, hinge and roof-underside checks.
 
+Keep generated screenshots, recordings and assembled Blender review scenes out of Git.
+Use `logs/` or the ignored `asset_creation/**/renders/` directories for review output;
+retain canonical editable `.blend` sources, runtime assets, generators and capture
+scenarios. Only intentionally maintained regression baselines belong in version control.
+
 ## Visual work is not complete until it is seen
 
 For any renderer, terrain, water, asset, camera, animation, visibility, LOD, or retained-UI
