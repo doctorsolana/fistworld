@@ -596,7 +596,41 @@ pub(super) fn mark_chunked_grass_dirty_for_buildings(
         Added<shared::building::PlacedBuilding>,
     >,
     mut state: ResMut<ChunkedGroundCoverState>,
+    squares: Query<
+        (Entity, &shared::components::SettlementCivicSquare),
+        Changed<shared::components::SettlementCivicSquare>,
+    >,
+    mut removed_squares: RemovedComponents<shared::components::SettlementCivicSquare>,
+    mut square_zones: Local<HashMap<Entity, shared::building::BuildZoneEntry>>,
 ) {
+    let mut changed_zones = Vec::new();
+    for entity in removed_squares.read() {
+        if let Some(zone) = square_zones.remove(&entity) {
+            changed_zones.push(zone);
+        }
+    }
+    for (entity, square) in &squares {
+        let zone = shared::building::BuildZoneEntry::from_rotated_rect(
+            square.center.xz(),
+            square.half_extents,
+            square.rotation,
+        );
+        if let Some(previous) = square_zones.insert(entity, zone) {
+            changed_zones.push(previous);
+        }
+        changed_zones.push(zone);
+    }
+    for zone in changed_zones {
+        let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                let coord = ChunkCoord::new(x, z);
+                if state.chunks.contains_key(&coord) {
+                    state.dirty.insert(coord);
+                }
+            }
+        }
+    }
     for (building, position) in added.iter() {
         for zone in shared::building::clearance_zones_for_building(
             position.0,

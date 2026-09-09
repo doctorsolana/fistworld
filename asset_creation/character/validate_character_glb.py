@@ -72,6 +72,7 @@ for name, node in nodes.items():
     }
 clips = {}
 required = {
+    "ride_idle", "ride_walk", "ride_trot", "ride_canter", "ride_gallop", "mount", "dismount",
     "bow_ready",
     "bow_shoot",
     "idle",

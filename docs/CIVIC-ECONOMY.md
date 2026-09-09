@@ -93,8 +93,8 @@ continue posting competing or undercutting asks after a target is met; that good
 the hard limit. A Hall-only settlement now treats 32 Wheat as its minimum planning depth, while a
 completed Marketplace raises the minimum to 96 for processor supply and producer-town trade.
 
-Moot Stewards are the early physical logistics workers. A solvent Hamlet can employ up to
-two. Each resident in that role collects saleable output from businesses, operates a goods
+Moot Stewards are the early physical logistics workers. A small solvent Hamlet can employ up to
+two; paid capacity grows with population. Each resident in that role collects saleable output from businesses, operates a goods
 cart, audits local roads and can build or adopt missing connectors. Producers therefore
 keep farming, fishing or chopping instead of spending their shifts carrying every batch to
 the hall.
@@ -579,21 +579,20 @@ and sold to settle claims instead of remaining trapped in a closed dining room.
 
 ## Civic staffing
 
-The Reeve is the administrative position. Worker and guard slots then depend on tier and
+The Reeve is the administrative position. Guard slots depend on tier; worker capacity also scales with population and
 staffing posture:
 
 | Tier | Available public workers | Available guards |
 |---|---:|---:|
-| Hamlet | 2 | 0 |
-| Village | 2 | 2 |
-| Town | 2 | 2 |
-| City | 2 | 2 |
+| Hamlet | max(2, ceil(residents / 24)), capped at 24 | 0 |
+| Village | Same population rule | 2 |
+| Town | Same population rule | 2 |
 
 | Posture | Worker target | Guard target |
 |---|---:|---:|
 | Essential | First worker only | 0 |
-| Balanced | All tier worker slots | Up to 1 |
-| Full | All tier worker slots | All tier guard slots |
+| Balanced | Population-based capacity | Up to 1 |
+| Full | Population-based capacity | All tier guard slots |
 
 Both founding worker slots are combined Moot Stewards. Each is independently available for
 goods collection and road repair. The collection reservation ledger prevents duplicate stock
@@ -602,13 +601,17 @@ Guards are already real exclusive jobs and
 receive wages, although patrol and combat behaviour remain future work. No resident can
 simultaneously hold a civic and private production job. Reducing posture releases an excess
 steward only after their current delivery or road job finishes; it does not erase cargo,
-unfinished work or wage arrears already earned.
+unfinished work or wage arrears already earned. Civic defense builders share this
+exclusive duty ownership; Hall upgrades retain priority over new wall projects.
 
 Balanced/Full autopilot fills the second slot when the settlement reaches 24 residents or
 saleable workplace stock reaches twenty full cartloads. A surge-hired steward remains until
 the backlog falls below six cartloads, avoiding hire/fire oscillation. The payroll-reserve
 test still applies, so capacity is available at Hamlet tier without forcing a poor or tiny
-foundation to carry three civic salaries.
+foundation to carry three civic salaries. Above the founding scale, one worker per
+24 residents (rounded up, at most 24) prevents a fixed two-cart ceiling from
+stranding a large town's food. Essential posture still targets one worker. The
+shared capacity function also supplies Hall UI and economy vacancy reporting.
 
 An advertised position still needs an eligible resident and the hiring reserve. A posture
 is therefore a target, not a promise that every slot is instantly filled.
@@ -885,3 +888,22 @@ must never invent goods, erase liabilities or create money to rescue a tuning pr
   disappearing into a dead seller account.
 
 These should extend the ownership and ledger model above rather than bypassing it.
+
+### Stock replenishment at town scale
+
+Food businesses plan replenishment against proven sales and the enacted food
+reserve target, accounting for food already in household pantries and stock
+already held/listed by the producer. A profitable, funded shift can rebuild a
+reserve deficit up to physical capacity instead of being capped at just today's
+replacement dispatch. No-demand and genuinely overstocked businesses still stop;
+wages, input costs, treasury/company cash and real delivery remain binding.
+Distress discounts apply to stock the producer actually has to clear. An empty
+distressed producer can still respond to genuine shortages with a higher asking
+price; a stock-clearance discount must not cancel that recovery signal.
+
+The development board measures producer crowding per resident beyond founding
+scale, avoiding an implicit fixed-count ceiling on farms/herders. A full resident
+day of food stranded at businesses suppresses further local extraction expansion
+until collection catches up; funded external orders remain distinct. These rules
+remove scaling contradictions, but do not guarantee that every migration surge
+is economically sustainable. Use the reported food/hunger/retention histories.

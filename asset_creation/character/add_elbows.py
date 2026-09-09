@@ -82,20 +82,7 @@ if not body.data.get("elbow_rig_version"):
             part.free()
             combined.from_mesh(temp)
             bpy.data.meshes.remove(temp)
-    # Faceted recessed elbow pivots cover the inner gap in a flexed arm.
-    deform = combined.verts.layers.deform.verify()
-    from mathutils import Matrix
-
-    for side, (upper_group, _) in groups.items():
-        at = rig.data.bones["forearm." + side].head_local
-        for v in bmesh.ops.create_uvsphere(
-            combined,
-            u_segments=8,
-            v_segments=4,
-            radius=0.064,
-            matrix=Matrix.Translation(at),
-        )["verts"]:
-            v[deform][upper_group] = 1.0
+    # Keep the blocky limb shells without spherical joint fillers.
     bmesh.ops.recalc_face_normals(combined, faces=list(combined.faces))
     combined.to_mesh(body.data)
     combined.free()

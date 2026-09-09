@@ -1047,6 +1047,9 @@ pub(crate) struct RoutePlannerAux<'w, 's> {
     placed_buildings: Query<'w, 's, (&'static PlacedBuilding, &'static BuildingPosition)>,
     changed_buildings: Query<'w, 's, (), Or<(Changed<PlacedBuilding>, Changed<BuildingPosition>)>>,
     removed_buildings: RemovedComponents<'w, 's, PlacedBuilding>,
+    defenses: Query<'w, 's, &'static shared::components::FortificationSegment>,
+    changed_defenses: Query<'w, 's, (), Changed<shared::components::FortificationSegment>>,
+    removed_defenses: RemovedComponents<'w, 's, shared::components::FortificationSegment>,
     active_ambient_routes: Query<
         'w,
         's,
@@ -1639,10 +1642,17 @@ pub fn plan_villager_travel_routes(
         }
     }
 
-    let removed_any = aux.removed_buildings.read().next().is_some();
-    if !building_cache.initialized || !aux.changed_buildings.is_empty() || removed_any {
+    let removed_any = !aux.removed_buildings.is_empty() || !aux.removed_defenses.is_empty();
+    aux.removed_buildings.clear();
+    aux.removed_defenses.clear();
+    if !building_cache.initialized
+        || !aux.changed_buildings.is_empty()
+        || !aux.changed_defenses.is_empty()
+        || removed_any
+    {
         let rebuild_started = Instant::now();
-        let changed_blockers = building_cache.rebuild(aux.placed_buildings.iter());
+        let changed_blockers =
+            building_cache.rebuild(aux.placed_buildings.iter(), aux.defenses.iter());
         // A cabin on the east side of town cannot invalidate a certified
         // migration corridor on the west. Remove only cached polylines that
         // actually touch an added, moved or removed building shell.

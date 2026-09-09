@@ -889,7 +889,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     &lt;label class=&quot;form-label&quot;&gt;
       Regional tradition
       &lt;select id=&quot;regional-style&quot; class=&quot;form-select&quot;&gt;
-        &lt;option value=&quot;auto&quot; selected&gt;Auto from latitude&lt;/option&gt;
+        &lt;option value=&quot;auto&quot; selected&gt;Auto from seed&lt;/option&gt;
         &lt;option value=&quot;north&quot;&gt;Northern&lt;/option&gt;
         &lt;option value=&quot;central&quot;&gt;Central&lt;/option&gt;
         &lt;option value=&quot;south&quot;&gt;Southern&lt;/option&gt;
@@ -904,6 +904,7 @@ html&gt;body{padding:0}&lt;/style&gt;
       &lt;input id=&quot;regional-seed&quot; class=&quot;form-range&quot; type=&quot;range&quot; min=&quot;1&quot; max=&quot;99&quot; value=&quot;23&quot; step=&quot;1&quot;&gt;
     &lt;/label&gt;
   &lt;/div&gt;
+  &lt;p class=&quot;text-small text-muted&quot;&gt;Concept prototype: this diagram uses a separate illustrative generator, not live game simulation. Use tools/town_growth.py for actual Village Lab snapshots.&lt;/p&gt;
   &lt;div class=&quot;viz-row regional-status&quot; aria-live=&quot;polite&quot;&gt;
     &lt;span id=&quot;regional-level&quot; class=&quot;viz-badge&quot;&gt;Level 5 · Regional town&lt;/span&gt;
     &lt;span id=&quot;regional-name&quot;&gt;Southern tradition&lt;/span&gt;
@@ -1438,8 +1439,8 @@ html&gt;body{padding:0}&lt;/style&gt;
       }
       if (!best) return;
       best.angle = Math.atan2(best.roadPoint.y - best.y, best.roadPoint.x - best.x);
-      district.buildings.push(best);
-      counts.set(district.name, (counts.get(district.name) || 0) + 1);
+      best.district.buildings.push(best);
+      counts.set(best.district.name, (counts.get(best.district.name) || 0) + 1);
       placed.push(best);
     });
     return { placed, active: districts.filter(district =&gt; district.unlock &lt;= population) };

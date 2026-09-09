@@ -897,6 +897,7 @@ pub fn update_settlement_economies(
         economy.civic_job_positions = u16::try_from(super::civic::desired_civic_positions(
             settlement.tier,
             policies.copied().unwrap_or_default().staffing_posture,
+            settlement.residents,
         ))
         .unwrap_or(u16::MAX);
         economy.civic_filled_jobs = civic_filled.get(settlement_id).copied().unwrap_or(0);

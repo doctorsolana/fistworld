@@ -1,0 +1,25 @@
+(
+    version: 1,
+    name: "horse-model",
+    map: "village_lab",
+    output_dir: "logs/captures/horse-model",
+    resolution: (1400, 1000),
+    fixed_delta_seconds: 0.016666667,
+    target: scene,
+    show_window: false,
+    warmup_frames: 180,
+    readiness: (minimum_frames: 60, maximum_frames: 1200, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_ASSET": "game_assets/environment/animals/Horse.glb#Scene0",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    // Rest-pose asset review only; this does not assert wild behaviour or riding.
+    // Ground at this village_lab position is 8.885553 m above sea level.
+    shots: [
+        (name: "three-quarter", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 7.5, time_of_day: 0.43),
+        (name: "top", focus: (-15.0, 0.0, -15.0), yaw: 0.0, zoom: 7.5, pitch: Some(1.57079633), eye: 14.0, time_of_day: 0.43),
+        (name: "front", focus: (-15.0, 0.0, -20.0), yaw: 3.14159265, zoom: 7.5, pitch: Some(0.0), eye: 10.035553, time_of_day: 0.43),
+        (name: "side", focus: (-10.0, 0.0, -15.0), yaw: 1.57079633, zoom: 7.5, pitch: Some(0.0), eye: 10.035553, time_of_day: 0.43),
+        (name: "rear", focus: (-15.0, 0.0, -15.0), yaw: 0.5, zoom: 7.5, time_of_day: 0.43),
+    ],
+)

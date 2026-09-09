@@ -267,7 +267,12 @@ pub(super) fn enter_world_offline(
                         shared::components::Settlement {
                             name: name.to_string(),
                             tier,
-                            residents: (i as u32) * 3,
+                            residents: if i == 0 {
+                                // A UI-only override for reviewing population-dependent
+                                // civic capacity; it does not stage a simulated town.
+                                std::env::var("FISTFORCE_CAPTURE_CIVIC_POPULATION")
+                                    .ok().and_then(|value| value.parse().ok()).unwrap_or(0)
+                            } else { (i as u32) * 3 },
                             treasury: 0,
                         },
                         shared::components::SettlementId(i as u64 + 1),
@@ -626,7 +631,8 @@ pub(super) fn enter_world_offline(
                     .iter_mut(world)
                     .find(|s| s.name == "Brackwater")
                 {
-                    settlement.residents = people.len() as u32;
+                    settlement.residents = std::env::var("FISTFORCE_CAPTURE_CIVIC_POPULATION")
+                        .ok().and_then(|value| value.parse().ok()).unwrap_or(people.len() as u32);
                     settlement.treasury = 2_750;
                 }
                 if std::env::var("FISTFORCE_CAPTURE_TRADE").is_ok_and(|value| value == "1") {
@@ -764,12 +770,16 @@ pub(super) fn enter_world_offline(
     // captures can verify the live preview + selector UI without a server.
     if std::env::var("FISTFORCE_CAPTURE_HERO_CREATOR").is_ok_and(|v| v == "1") {
         commands.insert_resource(crate::ui::hero_creator::HeroCreatorOpen(true));
-        if let Ok(preset)=std::env::var("FISTFORCE_CAPTURE_OUTFIT_PRESET") {
+        if let Ok(preset) = std::env::var("FISTFORCE_CAPTURE_OUTFIT_PRESET") {
             commands.queue(move |world: &mut World| {
-                let manifest=&world.resource::<crate::hero::HeroManifest>().0;
-                let mut outfit=shared::components::HeroOutfit::from_manifest(manifest);
-                manifest.apply_outfit(&preset,&mut outfit).expect("capture outfit preset");
-                world.resource_mut::<crate::hero::control::SelectedOutfit>().0=outfit;
+                let manifest = &world.resource::<crate::hero::HeroManifest>().0;
+                let mut outfit = shared::components::HeroOutfit::from_manifest(manifest);
+                manifest
+                    .apply_outfit(&preset, &mut outfit)
+                    .expect("capture outfit preset");
+                world
+                    .resource_mut::<crate::hero::control::SelectedOutfit>()
+                    .0 = outfit;
             });
         }
     }

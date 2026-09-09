@@ -23,8 +23,11 @@ pub(crate) use army::{drive_army_capture, drive_army_input, ArmyCapture};
 pub(crate) use battle::{
     drive_battle_capture, drive_battle_input, drive_battle_ray, BattleCapture,
 };
+mod asset_animation;
+mod asset_fixtures;
 mod character_fixtures;
 mod civic_fixtures;
+mod square_fixtures;
 mod history_fixtures;
 mod house_fixtures;
 mod inspection;
@@ -33,7 +36,9 @@ mod performance;
 mod presentation;
 mod rural_fixtures;
 pub(crate) use presentation::{setup_capture_presentation, sync_capture_presentation};
+mod fortification_fixtures;
 mod scene_fixtures;
+mod town_fixtures;
 mod ui_fixtures;
 mod ui_tour;
 mod world_fixture;
@@ -339,8 +344,12 @@ pub fn run(mut config: CaptureConfig) {
         app.insert_resource(performance::CapturePerformance::new(config.shots.len()));
         app.add_systems(First, performance::measure_frames);
     }
-    app.add_systems(Update, (character_fixtures::stage, character_fixtures::drive).chain());
+    app.add_systems(
+        Update,
+        (character_fixtures::stage, character_fixtures::drive).chain(),
+    );
     app.insert_resource(config);
+    asset_fixtures::install(&mut app);
     ui_tour::install(&mut app);
 
     app.add_systems(PreStartup, configure_capture_window);
@@ -352,6 +361,9 @@ pub fn run(mut config: CaptureConfig) {
             house_fixtures::stage_capture_houses,
             civic_fixtures::stage_capture_civic_halls,
             rural_fixtures::stage_capture_rural,
+            town_fixtures::stage_capture_town,
+            fortification_fixtures::stage,
+            square_fixtures::stage,
         ),
     );
     app.add_systems(
@@ -374,7 +386,10 @@ pub fn run(mut config: CaptureConfig) {
             // Before the camera bake, so the pose photographed in frame N is
             // the pose this system applied in frame N — a continuous flight
             // must not trail its own screenshots by a frame.
-            drive_capture.before(crate::camera_rts::update_commander_camera).run_if(character_fixtures::ready),
+            drive_capture
+                .before(crate::camera_rts::update_commander_camera)
+                .run_if(asset_fixtures::ready)
+                .run_if(character_fixtures::ready),
             apply_capture_free_look.after(crate::camera_rts::update_commander_camera),
         ),
     );
@@ -425,6 +440,7 @@ fn drive_capture(
     mut world_time: Query<&mut WorldTime>,
     mut free_look: ResMut<CaptureFreeLook>,
     inspection: CaptureInspection,
+    town_scenes: town_fixtures::TownSceneReadiness,
     mut completions: ResMut<CaptureCompletions>,
     mut run_status: ResMut<CaptureRunStatus>,
     mut video: ResMut<CaptureVideoControl>,
@@ -451,7 +467,18 @@ fn drive_capture(
                 .unwrap_or_default();
             readiness.minimum_frames = readiness.minimum_frames.max(config.warmup_frames);
             readiness.maximum_frames = readiness.maximum_frames.max(readiness.minimum_frames);
-            match advance_readiness(progress, &readiness, chunk_count) {
+            let outcome = advance_readiness(progress, &readiness, chunk_count);
+            match town_scenes.ready(progress.frames, readiness.maximum_frames) {
+                Ok(false) => return,
+                Ok(true) => {}
+                Err(reason) => {
+                    error!("capture: {reason}");
+                    run_status.failed = true;
+                    app_exit.write(AppExit::error());
+                    return;
+                }
+            }
+            match outcome {
                 ReadinessOutcome::Waiting => return,
                 ReadinessOutcome::TimedOut(reason) => {
                     error!("capture: warmup readiness timed out: {reason}");
@@ -543,7 +570,18 @@ fn drive_capture(
             let mut readiness = current.readiness.clone();
             readiness.minimum_frames = readiness.minimum_frames.max(config.settle_frames);
             readiness.maximum_frames = readiness.maximum_frames.max(readiness.minimum_frames);
-            match advance_readiness(progress, &readiness, chunk_count) {
+            let outcome = advance_readiness(progress, &readiness, chunk_count);
+            match town_scenes.ready(progress.frames, readiness.maximum_frames) {
+                Ok(false) => return,
+                Ok(true) => {}
+                Err(reason) => {
+                    error!("capture: {reason}");
+                    run_status.failed = true;
+                    app_exit.write(AppExit::error());
+                    return;
+                }
+            }
+            match outcome {
                 ReadinessOutcome::Waiting => return,
                 ReadinessOutcome::TimedOut(reason) => {
                     error!("capture: '{}' readiness timed out: {reason}", current.name);
@@ -780,6 +818,14 @@ fn evaluate_assertions(
                 CaptureAssertion::SettlementsAtLeast { count } => {
                     (snapshot.settlements, snapshot.settlements >= count)
                 }
+                CaptureAssertion::SettlementBuildingsAtLeast { count } => (
+                    snapshot.settlement_buildings,
+                    snapshot.settlement_buildings >= count,
+                ),
+                CaptureAssertion::FortificationSectionsAtLeast { count } => (
+                    snapshot.fortification_sections,
+                    snapshot.fortification_sections >= count,
+                ),
                 CaptureAssertion::PlanningRoutesAtMost { count } => {
                     (snapshot.planning_routes, snapshot.planning_routes <= count)
                 }

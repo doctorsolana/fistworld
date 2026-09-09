@@ -179,6 +179,8 @@ pub struct PlayerPermitWorld<'w, 's> {
         ),
     >,
     planned_accesses: Query<'w, 's, &'static PlannedRoadAccess>,
+    defenses: Query<'w, 's, &'static shared::components::SettlementDefenses>,
+    civic_squares: Query<'w, 's, &'static shared::components::SettlementCivicSquare>,
     world_time: Query<'w, 's, &'static WorldTime>,
 }
 
@@ -566,6 +568,13 @@ fn player_plot_snapshot(
             }),
     );
 
+    let nearby_defenses = crate::world::village::nearby_defense_reservations(
+        world.defenses.iter(),
+        position.xz(),
+        360.0,
+    );
+    let defenses = (!nearby_defenses.circuits.is_empty()).then_some(&nearby_defenses);
+    let squares: Vec<_> = world.civic_squares.iter().filter(|square| square.center.xz().distance(position.xz()) < 120.0).collect();
     validate_manual_plot(
         terrain,
         hall,
@@ -578,6 +587,8 @@ fn player_plot_snapshot(
         &blockers,
         world.colliders.as_deref(),
         world.derived.as_deref(),
+        defenses,
+        &squares,
     )
 }
 

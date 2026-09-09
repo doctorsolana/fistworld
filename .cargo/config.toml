@@ -3,3 +3,5 @@
 village-lab = "test -p server village_simulation_lab -- --ignored --nocapture --test-threads=1"
 # Optimised steady-state scale probe: 5,000 residents across 30 towns by default.
 village-scale-lab = "test --release -p server village_scale_lab -- --ignored --nocapture --test-threads=1"
+# Bounded real town growth, periodic accepted-state JSON for report and captures.
+town-growth-lab = "test -p server town_growth_lab -- --ignored --nocapture --test-threads=1"

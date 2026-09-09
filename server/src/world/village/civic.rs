@@ -34,16 +34,18 @@ pub(crate) fn filled_civic_positions(administration: &MootAdministration) -> usi
 pub(crate) fn civic_staffing_targets(
     tier: shared::components::SettlementTier,
     posture: CivicStaffingPosture,
+    residents: u32,
 ) -> (usize, usize) {
-    let (workers, guards) = posture.targets(tier);
+    let (workers, guards) = posture.targets_for_population(tier, residents);
     (usize::from(workers), usize::from(guards))
 }
 
 pub(crate) fn desired_civic_positions(
     tier: shared::components::SettlementTier,
     posture: CivicStaffingPosture,
+    residents: u32,
 ) -> usize {
-    let (workers, guards) = civic_staffing_targets(tier, posture);
+    let (workers, guards) = civic_staffing_targets(tier, posture, residents);
     // The Reeve is the separate administrative position; workers already
     // include the tier's combined Moot Steward slots.
     1 + workers + guards
@@ -984,16 +986,41 @@ mod tests {
     fn staffing_postures_have_distinct_tier_bounded_targets() {
         use shared::components::SettlementTier;
         assert_eq!(
-            civic_staffing_targets(SettlementTier::Village, CivicStaffingPosture::Essential),
+            civic_staffing_targets(SettlementTier::Village, CivicStaffingPosture::Essential, 24),
             (1, 0)
         );
         assert_eq!(
-            civic_staffing_targets(SettlementTier::Village, CivicStaffingPosture::Balanced),
+            civic_staffing_targets(SettlementTier::Village, CivicStaffingPosture::Balanced, 24),
             (2, 1)
         );
         assert_eq!(
-            civic_staffing_targets(SettlementTier::Village, CivicStaffingPosture::Full),
+            civic_staffing_targets(SettlementTier::Village, CivicStaffingPosture::Full, 24),
             (2, 2)
+        );
+    }
+
+    #[test]
+    fn logistics_capacity_can_grow_before_a_tier_promotion() {
+        use shared::components::SettlementTier;
+        let small =
+            civic_staffing_targets(SettlementTier::Hamlet, CivicStaffingPosture::Balanced, 8);
+        let growing =
+            civic_staffing_targets(SettlementTier::Hamlet, CivicStaffingPosture::Balanced, 100);
+        let large =
+            civic_staffing_targets(SettlementTier::City, CivicStaffingPosture::Balanced, 500);
+        assert_eq!(small.0, 2);
+        assert!(growing.0 > small.0 && large.0 > growing.0);
+        assert_eq!(
+            civic_staffing_targets(SettlementTier::City, CivicStaffingPosture::Essential, 500).0,
+            1
+        );
+        assert_eq!(
+            civic_staffing_targets(SettlementTier::Ruins, CivicStaffingPosture::Full, 500).0,
+            0
+        );
+        assert!(
+            civic_staffing_targets(SettlementTier::City, CivicStaffingPosture::Full, u32::MAX).0
+                <= 24
         );
     }
 

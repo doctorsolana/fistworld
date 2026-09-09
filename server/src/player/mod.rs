@@ -10,8 +10,8 @@
 //! - Movement and attacks use the world's navigation/collision proofs; economic
 //!   commands use village ownership and accounting rules.
 
-pub mod army;
 pub mod archery;
+pub mod army;
 pub mod boat;
 pub mod business;
 pub mod combat;
@@ -21,6 +21,7 @@ pub mod hero;
 pub mod market;
 pub mod orders;
 pub mod permits;
+pub mod riding;
 pub mod roster;
 pub mod spawn;
 pub mod trade_routes;

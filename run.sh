@@ -184,11 +184,18 @@ if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || 
         # files, but keep the stress terminal quiet unless explicitly asked.
         STREAM_VILLAGE_LOGS="${FISTWORLD_STREAM_LOGS:-0}"
     else
-        # One seeded village is the default visual debugging fixture. The dual
-        # climate comparison remains available with FISTWORLD_LAB_SCENARIO=dual.
-        export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-secure}"
+        # The default growing town has room inland. The original coastal
+        # regression fixture remains available with FISTWORLD_LAB_SCENARIO=secure.
+        export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-town-growth}"
         export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
-        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:-112,-158}"
+        if [[ "$FISTWORLD_LAB_SCENARIO" == "town-growth" ]]; then
+            export FISTWORLD_TOWN_SEED="${FISTWORLD_TOWN_SEED:-23}"
+            export FISTWORLD_TOWN_PROFILE="${FISTWORLD_TOWN_PROFILE:-steady}"
+            # Matches the validated TOWN_GROWTH_ANCHOR in village_lab_scenario/town_growth.rs.
+            export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--100,120}"
+        else
+            export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:-112,-158}"
+        fi
         export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-190}"
     fi
     export FISTWORLD_VILLAGE_TRACE="${FISTWORLD_VILLAGE_TRACE:-1}"

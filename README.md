@@ -35,6 +35,9 @@ arrival and reusable ship-navigation contract are documented in
 - Autonomous housing, employment, permits and geography-aware construction. Seeded
   planning grammars create organic lanes, radial commons, grids, avenues or clustered
   neighbourhoods without moving completed buildings.
+  Bounded frontage infill encourages small groups of homes, with soft proximity
+  preferences for related workplaces. The [town-growth lab](docs/TOWN-GROWTH-LAB.md)
+  compares actual development under gentle, steady and burst immigration.
 - Physical Wood supply and construction; Farmsteads with two wheat fields, Fisherman's
   Huts with piers, Lumberjack Huts with reachable-tree checks, authored Windmills and
   Bakeries, and repeated housing/food construction driven by measured shortages.
@@ -129,8 +132,8 @@ arrival and reusable ship-navigation contract are documented in
   the same ordered village schedule in the live game and lab, aggregate off-screen village
   production, and summary/detail replication.
 
-The live tier ladder is **Hamlet → Village → Town → City**. Its current executable
-population gates are 12, 30 and a provisional 75 residents, combined with sustained food,
+The live tier ladder is **Moot (Hamlet) → Village → Town**; City is future work.
+Its current population gates are 12 and 30 residents, combined with sustained food,
 prosperity, trade and civic-building requirements. Promotion is now physical: a qualified
 Hamlet must purchase and stage 12 Wood for its Village Hall, while a qualified Village must
 purchase and stage 8 Stone for its Town Hall, importing it by a physical company route when
@@ -275,13 +278,16 @@ simulation:
 FISTWORLD_LAB_SCENARIO=dense-stress FISTWORLD_LAB_WARP=10 FISTWORLD_LAB_MINUTES=180 cargo village-lab
 ```
 
-To watch the same one-village fixture through the real server, network and renderer:
+To watch the inland town-growth fixture through the real server, network and renderer:
 
 ```bash
 ./run.sh testworld
 ```
 
-It starts at 1x. Use the HUD to pause or switch between 1x, 10x, 25x and 100x. Each run
+It starts at 1x over a broad inland meadow, using charter seed 23 and steady
+immigration. Set `FISTWORLD_TOWN_SEED` and `FISTWORLD_TOWN_PROFILE=low|steady|burst`
+to compare growth patterns; see [the town-growth lab](docs/TOWN-GROWTH-LAB.md).
+Use the HUD to pause or switch between 1x, 10x, 25x and 100x. Each run
 prints a timestamped `logs/testworld-*` directory containing its server and client logs.
 God mode also exposes **SPAWN IMMIGRANT BOAT**, which preserves the selected speed and follows
 one real random-coast arrival through sailing, disembarkation and the walk to the Moot queue.

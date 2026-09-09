@@ -58,6 +58,13 @@ pub enum UnitCommand {
     AttackGround {
         target: Vec3,
     },
+    Mount {
+        horse: Entity,
+    },
+    Dismount,
+    RideGait {
+        gait: crate::components::HorseGait,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -87,7 +94,9 @@ impl MapEntities for UnitOrder {
         for unit in &mut self.selection.units {
             *unit = mapper.get_mapped(*unit);
         }
-        if let UnitCommand::Attack { target, .. } = &mut self.command {
+        if let UnitCommand::Attack { target, .. } | UnitCommand::Mount { horse: target } =
+            &mut self.command
+        {
             *target = mapper.get_mapped(*target);
         }
     }

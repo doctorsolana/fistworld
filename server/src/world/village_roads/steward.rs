@@ -268,6 +268,7 @@ pub fn staff_public_positions(
             crate::world::village::civic::civic_staffing_targets(
                 settlement.tier,
                 policies.staffing_posture,
+                settlement.residents,
             );
         let uncollected_bulk = uncollected_bulk_by_settlement
             .get(settlement_id)
@@ -280,7 +281,11 @@ pub fn staff_public_positions(
         };
         let second_steward_needed = settlement.residents >= SECOND_STEWARD_RESIDENTS
             || uncollected_bulk >= second_steward_threshold;
-        let desired_workers = desired_workers.min(1 + usize::from(second_steward_needed));
+        let desired_workers = if second_steward_needed {
+            desired_workers
+        } else {
+            desired_workers.min(1)
+        };
 
         // Old saves and earlier builds called the second slot a City Worker.
         // It now has the same bounded physical responsibilities as the first

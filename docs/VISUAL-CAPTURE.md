@@ -19,6 +19,9 @@ The implementation separates orchestration from fixture data:
   `presentation.rs` owns the offline scene-and-UI render target.
 - `world_fixture.rs`, `scene_fixtures.rs`, `ui_fixtures.rs` and `history_fixtures.rs`
   under `client/src/capture/` stage deterministic inputs for the production systems.
+- `town_fixtures.rs` imports an actual server growth snapshot, including terrain
+  earthworks, through the normal settlement/road rendering systems. See
+  [TOWN-GROWTH-LAB.md](TOWN-GROWTH-LAB.md) and `capture/town_growth.py`.
 - `client/src/capture_artifact.rs` owns scenario RON, readiness, semantic assertions, Bevy
   screenshot observers, PNG/JSON artifacts and baseline comparison.
 
@@ -162,6 +165,7 @@ Supported semantic assertions are:
 - `entities_at_least(count: N)`
 - `villagers_at_least(count: N)`
 - `settlements_at_least(count: N)`
+- `settlement_buildings_at_least(count: N)` (completed building roots, excluding worksites)
 - `planning_routes_at_most(count: N)`
 - `blocked_routes_at_most(count: N)`
 
@@ -728,3 +732,55 @@ and release readable. Inspect these close PNGs as well as the wider fight.
 `army-archer-management.ron` checks the retained Army page, bulk membership,
 transfers and bombardment stances with archer battalions.
 The generic melee contact/casualty pass alone does not prove archery works.
+
+### Horse model proportions
+
+`horse-model.ron` inspects the current rest-pose horse GLB from above, front,
+side, rear and three-quarter views. `FISTFORCE_CAPTURE_ASSET` is a pre-gameplay
+asset review fixture: it loads the ordinary Bevy world asset, skin and materials,
+requires loaded dependencies plus a ready scene instance, and fails on a load
+error or readiness timeout. It does not assert animal behaviour, animations or
+mounting. See `asset_creation/animals/HORSE_HANDOVER.md` for the explicit unfinished
+integration boundary and source/export vertex counts.
+
+The 2026-09-09 narrower-body pass was inspected in Blender and in all five real
+Bevy PNG/JSON pairs under `logs/captures/horse-top-final/`.
+
+For animated horse/rider inspection, generate continuous scenarios:
+
+```sh
+python3 capture/horse_animations.py logs/captures/horse-animation-scenarios
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario logs/captures/horse-animation-scenarios/horse_graze.ron --out logs/captures/horse-animations/graze
+```
+
+These scenarios select named exported clips with `FISTFORCE_CAPTURE_ASSET_CLIP`.
+`FISTFORCE_CAPTURE_RIDER_CLIP` attaches the exported default character outfit to
+`Anchor_Rider`. Readiness waits for both scene instances and animation graphs.
+The fixture advances clip time through continuous shots and samples rider gait
+cycles using the horse's normalized phase. Mount/dismount hold their final pose.
+This remains an offline asset review, not proof of connected mounting behavior.
+
+### Town growth and fortifications
+
+`fortifications.ron` reviews closed palisade/stone meshes, gate clearance and roof
+undersides from five angles, with `fortification_sections_at_least` assertions.
+`ui-civic-capacity.ron` photographs the Hall's population-based public positions
+using an explicitly synthetic UI population; it is not a growth simulation.
+
+`capture/town_growth.py` imports actual server snapshots, including residential
+wards, defense reservations and completed sections. It adds a residential-quarter
+view and, when available, a completed gateway view. Scene readiness includes
+matching section meshes. Inspect the PNG and `.capture.json` for every view.
+
+Connected labs accept `FISTWORLD_LAB_CAPTURE_FORTIFICATIONS=<minimum>` and
+`FISTWORLD_LAB_CAPTURE_ACTIVITY=gate`. The latter waits for a rendered completed
+gate and holds that framing during terrain streaming. Enable server
+`FISTWORLD_LAB_DEFENSE_TRACE=1` to count observed embodied NPC/hero gate crossings;
+teleports and representation changes do not count. Offline fixtures verify
+rendering, while connected movement is separate behavioral evidence.
+
+`civic-square.ron` reviews the terrain-painted public apron, Hall-facing Market
+and adjoining house fronts from three angles. It deliberately stages presentation
+inputs rather than pretending to grow a successful economy. A reserved square
+also excludes decorative ground cover through the shared client build-zone index;
+changed/removed square bounds dirty only their affected grass chunks.

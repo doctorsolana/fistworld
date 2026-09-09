@@ -36,7 +36,8 @@ See [the game code map](../docs/GAME-CODE-MAP.md) for the cross-crate ownership 
 - `village.rs`: public village state/facade. Implementation is split by domain under
   `world/village/`:
   - `population`: settlement choice, migration, visible Moot registration and resident reconciliation
-  - `planning`: demand, permits and geography/layout-aware siting
+  - `planning`: demand, permits and geography/layout-aware siting; `neighborhood`
+    owns bounded frontage infill and soft compatible-neighbor preferences
   - `construction`: physical material supply and building work
   - `employment`: private vacancy matching
   - `commerce`: physical Moot Steward collection work and owner leisure
@@ -191,3 +192,13 @@ generated resource conditions,
 [`docs/VILLAGE-LAB.md`](../docs/VILLAGE-LAB.md).
 The stress launcher writes complete server/client logs quietly by default; set
 `FISTWORLD_STREAM_LOGS=1` only when terminal mirroring is desired.
+
+### Large-town development
+
+`world/village/planning/districts.rs` owns append-only residential wards and bounded
+frontage infill; `reservations.rs` protects nearby accepted defense corridors.
+`world/fortifications/` owns dry-land circuit surveys, material ownership, civic
+construction and opt-in passage diagnostics. Shared section geometry feeds both
+`world/navgrid.rs` and `village_roads/routing.rs`; hero movement and arrow collision
+also enforce completed defenses. See [FORTIFICATIONS](../docs/FORTIFICATIONS.md)
+and [TOWN-GROWTH-LAB](../docs/TOWN-GROWTH-LAB.md) for scope and validation.

@@ -150,6 +150,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             (
                 world::village_roads::ensure_moot_administrations,
                 world::settlement_development::ensure_settlement_developments,
+                super::ensure_civic_squares,
                 // Migrate old named civic rosters before staffing validates
                 // them against durable assignments.
                 world::identity::reconcile_stable_civic_employment,
@@ -201,7 +202,13 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 )
                     .chain()
                     .in_set(VillageEconomySet::SettlementAccounts),
-                super::consider_permits.in_set(VillageEconomySet::Permits),
+                (
+                    super::consider_permits,
+                    world::fortifications::setup_defense_lab,
+                    world::fortifications::plan_settlement_defenses,
+                )
+                    .chain()
+                    .in_set(VillageEconomySet::Permits),
             )
                 .chain(),
             (
@@ -241,6 +248,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 world::village_roads::build_village_roads,
                 world::settlement_development::upgrade_town_roads,
                 world::settlement_development::run_civic_hall_upgrade_projects,
+                world::fortifications::run_fortification_projects,
                 super::post_civic_import_contracts,
                 world::settlement_development::update_settlement_developments,
                 world::settlement_development::sync_civic_hall_levels,
@@ -323,7 +331,8 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             )
                 .chain(),
             player::hero::rebuild_tactical_crowd_grid,
-            player::hero::step_units,
+            (player::hero::step_units, player::riding::tick).chain(),
+            world::fortifications::trace_defense_passages,
             (
                 player::combat::fronts::rebuild_combat_space,
                 player::combat::fronts::assign_formation_contacts,
@@ -332,6 +341,8 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             player::combat::acquire_targets,
             (
                 player::combat::pursue_attack_orders,
+                // Defenses also stop in-flight arrows after their shooter dies.
+                player::archery::sync_defense_arrow_obstacles,
                 player::archery::shoot_bows,
                 player::archery::advance_arrows,
             )

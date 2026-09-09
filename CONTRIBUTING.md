@@ -143,8 +143,10 @@ observed subset. Anything per-person per-frame is a design decision, not a detai
   streaming and client terrain/prop streaming. If it stops being written, the world silently empties
   and colliders collapse to chunk (0,0) — no crash, no log. `streaming_anchor()` warns once on the
   `None` path; keep that warning.
-- Runtime collision must come from the server Rapier world; do not reintroduce terrain-proxy clamps
-  or custom pushout loops in gameplay systems.
+- Runtime collision is server authoritative. Reuse the current terrain/prop query,
+  navigation obstacle grid and exact footprint tests; do not create a competing
+  client collision model or ad-hoc pushout loops. The current server uses Parry
+  terrain queries and spatial obstacle indexes, not a Rapier simulation world.
 - Mutating an `Image` asset creates a new GPU texture, but material bind groups only rebuild on
   **material** asset events — `materials.get_mut(&handle)` after `images.get_mut` or the change is
   invisible until restart.

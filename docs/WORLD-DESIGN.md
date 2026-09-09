@@ -20,7 +20,7 @@ The build order for both lives in [ROADMAP.md](ROADMAP.md).
 > Player merchant timetables and bounded autonomous company merchant trials are live.
 > Non-dev Hero/Dinghy arrival, battalions, flexible melee, archers and catapults are live too;
 > recruitment is still a developer action and military supply/upkeep remain open.
-> World-state persistence, strategic travelling-party promotion, physical walls and clans
+> World-state persistence, strategic travelling-party promotion, closing/siege of walls and clans
 > remain future work. Read §1b as implementation detail and the remaining sections as
 > design unless explicitly marked current. The [plan review](PLAN-REVIEW-2026-09.md)
 > records the next-step recommendations without changing the agreed game direction.
@@ -328,15 +328,33 @@ terrain, existing buildings, roads and reservations before granting a permit.
 Player placement uses the same authoritative access and collision rules. Completed
 buildings retain their accepted positions; later demand does not move them.
 
+Residential placement first tries a bounded set of neighboring frontage plots
+along connected streets, encouraging small seed-selected groups before the usual
+grammar search. Grid frontage pitch fits the reserved upgraded house geometry.
+Related farms, processors and storage gain modest proximity preferences; terrain,
+access and demand remain authoritative. Polycentric search can expand its local
+neighborhoods instead of repeatedly sampling fixed pockets. These rules preserve
+existing buildings. Larger towns retain append-only residential wards with short
+rows, cross streets and frontage infill; further wards follow serviced land.
+These are preferences, not rigid zoning quotas or parcel redevelopment.
+The [town-growth lab](TOWN-GROWTH-LAB.md) exports actual development under controlled
+immigration for the viewer and Bevy captures.
+
 The earlier seed-only `build_cursor`/`damage_bits` proposal is superseded. A durable
 save must retain actual accepted sites, ownership, worksites, upgrades, road geometry
 and progress, adjunct fields/piers and their stable relationships. Recompute derived
 search caches and indexes after loading, not the historical choices that produced a
 town. Deterministic terrain does not make a changing society reconstructible from seed.
 
-The regional traditions and defensive layouts below remain design goals. Extend the
-current planner and explicit reservations when implementing them; do not replace
-existing town state with a precomputed immutable list of plots.
+Regional traditions below remain design goals. The live planner now supports
+bounded round/square/organic/district-fitted defense surveys, paid palisades,
+stone upgrades and open road-aligned gateways; see [FORTIFICATIONS.md](FORTIFICATIONS.md)
+for the implemented boundary. Extend accepted state instead of replacing existing
+towns with a precomputed immutable list of plots.
+
+The current playable ladder is **Moot (Hamlet) → Village → Town**. City remains a
+reserved enum value and future design target; natural promotion stops at Town.
+A public square is reserved near the Hall before urban infill can occupy it.
 
 **The seed chooses a history, not a universal template.** The plan recipe first
 selects a regional tradition (northern, central or southern), then a settlement
@@ -375,11 +393,12 @@ is derived from the already reserved inner wards, civic ground, terrain and gate
 roads, then smoothed into a buildable circuit. A nested outer enclosure must
 remain outside the complete inner circuit by a minimum defensive-belt width at
 every bearing; fitted walls may bulge or pinch around the town but can never
-touch, cross or overlap the older wall. Because both circuits are derived from
-the immutable plan, this still does not move an existing building.
+touch, cross or overlap the older wall. Accepted circuits are immutable and fit around actual accepted property, so
+this does not move an existing building.
 
-Defensive corridors and gate approaches are reserved from founding so a later
-wall never cuts through an existing building. The normal visual growth is a
+The live survey reserves defensive corridors and gate approaches once a town
+has 24 residents and six homes. It fits accepted property and dry terrain,
+including bounded detours around plots, so later walls do not cut through them. The normal visual growth is a
 timber palisade around the old centre after Village-scale security, followed at
 Town scale by a stone inner wall and a larger timber outer enclosure. Gates align
 to persistent arterial roads and later suburbs can grow beyond them. This is a
@@ -793,7 +812,8 @@ with a player who does nothing but found the hall and put people on the map.
     remain server-only, so inspection does not replicate debug strings per NPC.
 15. Producers now stay at their trades: field/pier/tree output returns only to
     bounded workplace storage. The founding Moot Hall has three named positions:
-    one Reeve and up to two Moot Stewards, with at least one founder deliberately
+    one Reeve and up to two founding Moot Stewards (later capacity scales with
+    population and funding), with at least one founder deliberately
     left outside civic work. Each Moot Steward combines market collection and road
     maintenance as one job, walks to an offering business, carries a
     bounded load back and consigns it under that business's stable `BuildingId`.
@@ -967,18 +987,19 @@ with a player who does nothing but found the hall and put people on the map.
     decide the number of farms, houses and businesses. The authored founding
     rings are density preferences rather than city boundaries: compact cabin
     frontage gaps are tried first, then deterministic search bands widen with
-    the occupied envelope. Wall forms are reserved
-    planning metadata in this slice, not yet physical fortifications.
+    the occupied envelope. Accepted defense circuits reserve solid spans and
+    road-aligned gate approaches. Paid civic work constructs palisades from Village
+    and stone replacements from Town; closing gates and siege damage remain future work.
 21. Village and Town progression is authoritative and inspectable. A Village
     requests a Marketplace; its private opportunity board advertises a Tavern after survival shortages are
     met, then becomes a Town with at least 30 residents, 50 coin of lifetime
     Moot trade, prosperity 70 and all requirements sustained for three days. A
-    Town requests a Church and becomes a City with at least 75
-    residents, prosperity 75 and all requirements sustained for five days.
+    Town is the current progression ceiling. City-scale progression remains
+    future work; legacy City values remain readable.
     These semantic buildings have real plots, wood supply, staffing, storage,
     collision and door-connected roads. Marketplace and Church have authored
-    models; Tavern remains a blockout. Art replacement does not change progression. The City population
-    gate is provisional; 12/30 are the enacted Village and Town balance.
+    models; Tavern remains a blockout. Art replacement does not change progression.
+    The enacted Village and Town population gates remain 12/30.
     The settlement entity itself also carries a replicated physical hall rung:
     Hamlet/Ruins use the Moot Hall, Village uses the Village Hall, and Town/City
     use the Town Hall until City Hall art exists. Promotion swaps only the visual,
@@ -988,11 +1009,11 @@ with a player who does nothing but found the hall and put people on the map.
     its Village Hall, and the Village later buys real private Stone for its Town Hall.
     Material piles are visible beside the Hall and one named civic worker walks to the
     stand, faces the building and raises it. Promotion does not occur until that work
-    completes. Town → City still uses the direct gate only because a City Hall asset and
-    recipe have not been authored; future Hall/building upgrades reuse this generic
-    material-project pipeline.
+    completes. Town → City is disabled until its building assets and progression
+    are designed; future Hall upgrades reuse this material-project pipeline.
 22. Public positions are explicit named rosters at the hall. A Hamlet and later
-    rungs expose two combined Moot-Steward worker positions; Village and later
+    rungs expose two founding Moot-Steward positions, growing to one per 24
+    residents (rounded up, capped at 24) under Balanced/Full policy; Village and later
     rungs additionally expose two guard positions. Vacancies remain visible when population is too small, and further
     civic hiring stops at population minus one so a tiny foundation does not
     consume every new arrival. Both founding workers haul goods and maintain roads;
@@ -1167,7 +1188,7 @@ lossless traveller/army promotion contract.
 
 **Deliberately not in this slice:** births, route escorts and bandit risk,
 recipes beyond Flour and Bread, tree
-depletion/regrowth, decline, physical walls and guard patrol/combat behaviour.
+depletion/regrowth, decline, closing/destructible walls and guard patrol/combat behaviour.
 The first boat slice is now live: a new Hero arrives by one-use Dinghy, follows a distinct
 server-authoritative water route, responds physically and visually to shared wind, and
 disembarks onto nearby dry shore. This proves the generic `Vessel` navigation seam; docks,
@@ -1188,7 +1209,8 @@ households can finish Flour at home, Bakeries add efficient Bread, fishing lands
 ready-to-eat Fish, and the shortage response can repeat cabins, Farmsteads and their
 processors when individual owners accept the current signals, but this is not yet a complete regional economy. The seeded
 planner now handles frontage, layouts, farmland, reachable timber, coast geometry,
-roads and civic reservations; future districts/walls extend it rather than replacing it.
+roads, persistent residential wards and civic/defense reservations, with paid
+physical wall construction. These extend accepted development rather than replacing it.
 
 **Where this slice diverges from the design above**, all of it deferred rather
 than decided against:
@@ -1199,7 +1221,7 @@ than decided against:
 - Residency remains durable per person, but bodies and detailed components are interest
   scoped. Strategic people retain identity, household and work joins without paying for
   an embodied routine.
-- Positive progression now reaches Village, Town and City. Regression,
+- Positive progression now reaches Village and Town; City is reserved for later. Regression,
   abandonment and Ruins still have no implementation; promotion requirements
   are the current playable tuning, not a final balance promise.
 
@@ -1675,7 +1697,7 @@ Two smaller corrections to this section's assumptions, both verified against the
   free, which is fine while only god mode can do it and wrong the moment
   ordinary players can.
 - Whole-town replanning that moves accepted plots. The live permit planner already
-  reacts to demand and geography; future districts and walls must respect existing
+  reacts to demand and geography; later districts and walls must respect existing
   buildings, roads and reservations.
 - Any economy client-side — clients render and request; the server owns every
   number (anti-cheat is architecture, not a feature).

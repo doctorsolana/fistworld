@@ -601,6 +601,7 @@ pub fn capture_settlement_history(
             let desired_positions = crate::world::village::civic::desired_civic_positions(
                 settlement.tier,
                 policy.staffing_posture,
+                settlement.residents,
             )
             .min(usize::from(u16::MAX)) as u16;
 

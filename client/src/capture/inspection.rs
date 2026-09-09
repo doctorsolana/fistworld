@@ -19,6 +19,8 @@ pub(crate) struct CaptureInspection<'w, 's> {
     all_entities: Query<'w, 's, Entity>,
     character_kinds: Query<'w, 's, &'static CharacterKind>,
     settlements: Query<'w, 's, (), With<shared::components::Settlement>>,
+    buildings: Query<'w, 's, (), With<shared::components::SettlementBuilding>>,
+    fortifications: Query<'w, 's, &'static shared::components::FortificationSegment>,
     navigation: Query<'w, 's, &'static CharacterNavigationStatus>,
     maps: Query<'w, 's, &'static ActiveMapState>,
     terrain: Option<Res<'w, shared::terrain::WorldTerrain>>,
@@ -42,6 +44,12 @@ impl CaptureInspection<'_, '_> {
                 .filter(|kind| **kind == CharacterKind::Villager)
                 .count(),
             settlements: self.settlements.iter().count(),
+            settlement_buildings: self.buildings.iter().count(),
+            fortification_sections: self
+                .fortifications
+                .iter()
+                .filter(|wall| wall.complete)
+                .count(),
             planning_routes: self
                 .navigation
                 .iter()
@@ -129,6 +137,13 @@ mod tests {
             CharacterKind::Villager,
             CharacterNavigationStatus::RouteBlocked,
         ));
+        world.spawn(shared::components::SettlementBuilding {
+            kind: shared::components::SettlementBuildingKind::House,
+            settlement: "Capture town".into(),
+            owner: None,
+            quality: 0.8,
+            workers: Vec::new(),
+        });
         world.spawn((Camera3d::default(), Transform::from_xyz(12.0, 2.0, 5.0)));
         let camera = CommanderCamera {
             focus: Vec3::new(112.0, 6.0, -158.0),
@@ -158,6 +173,7 @@ mod tests {
         // Camera hooks may create framework entities in addition to this fixture.
         assert!(metadata.world.entity_count >= 4);
         assert_eq!(metadata.world.villagers, 2);
+        assert_eq!(metadata.world.settlement_buildings, 1);
         assert_eq!(metadata.world.planning_routes, 1);
         assert_eq!(metadata.world.blocked_routes, 1);
         assert_eq!(metadata.world.world_day, Some(7));

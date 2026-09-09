@@ -30,6 +30,7 @@ pub(crate) enum LiveLabCaptureState {
         path: PathBuf,
         zoom: f32,
         frames_left: u32,
+        gate_focus: Option<Vec3>,
     },
     AwaitingCapture {
         ticket: u64,
@@ -304,6 +305,8 @@ pub(crate) fn drive_live_voyage_capture(
 /// - `FISTWORLD_LAB_CAPTURE_TARGET=scene` reads the offscreen 3D image; the default is window.
 /// - `FISTWORLD_LAB_CAPTURE_SETTLE_FRAMES` controls render warmup (default 180).
 /// - `FISTWORLD_LAB_CAPTURE_EXIT=1` closes the client after the file is written.
+/// - `FISTWORLD_LAB_CAPTURE_FORTIFICATIONS=N` waits for N completed defense sections.
+/// - `FISTWORLD_LAB_CAPTURE_ACTIVITY=gate` frames a completed gateway near a person.
 pub(crate) fn drive_live_lab_capture(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
@@ -321,6 +324,10 @@ pub(crate) fn drive_live_lab_capture(
     mut readiness: Local<ReadinessProgress>,
     mut completions: ResMut<CaptureCompletions>,
     mut app_exit: MessageWriter<AppExit>,
+    defenses: Query<(
+        &shared::components::FortificationSegment,
+        Option<&crate::settlement::fortifications::FortificationVisual>,
+    )>,
 ) {
     if matches!(*state, LiveLabCaptureState::Uninitialized) {
         let Some(day) = std::env::var("FISTWORLD_LAB_CAPTURE_DAY")
@@ -342,6 +349,34 @@ pub(crate) fn drive_live_lab_capture(
     }
 
     let follow_rest = std::env::var("FISTWORLD_LAB_CAPTURE_ACTIVITY").as_deref() == Ok("rest");
+    let follow_gate = std::env::var("FISTWORLD_LAB_CAPTURE_ACTIVITY").as_deref() == Ok("gate");
+    let gate = follow_gate
+        .then(|| {
+            defenses
+                .iter()
+                .filter(|(wall, visual)| {
+                    wall.complete
+                        && wall.kind == shared::components::FortificationKind::Gate
+                        && crate::settlement::fortifications::visual_matches(wall, *visual)
+                })
+                .map(|(wall, _)| wall.midpoint())
+                .min_by(|a, b| {
+                    let nearest = |point: Vec3| {
+                        resting_people
+                            .iter()
+                            .map(|(_, _, pose)| {
+                                pose.translation().xz().distance_squared(point.xz())
+                            })
+                            .fold(f32::INFINITY, f32::min)
+                    };
+                    nearest(*a).total_cmp(&nearest(*b))
+                })
+        })
+        .flatten();
+    let minimum_defenses = std::env::var("FISTWORLD_LAB_CAPTURE_FORTIFICATIONS")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(0);
     let resting = follow_rest
         .then(|| {
             resting_people
@@ -362,6 +397,20 @@ pub(crate) fn drive_live_lab_capture(
             if clock.day < *day {
                 return;
             }
+            if defenses
+                .iter()
+                .filter(|(wall, visual)| {
+                    wall.complete
+                        && crate::settlement::fortifications::visual_matches(wall, *visual)
+                })
+                .count()
+                < minimum_defenses
+            {
+                return;
+            }
+            if follow_gate && gate.is_none() {
+                return;
+            }
             let Ok(mut camera) = cameras.single_mut() else {
                 return;
             };
@@ -374,6 +423,10 @@ pub(crate) fn drive_live_lab_capture(
                 if matches!(*readiness, ReadinessProgress { frames: 0, .. }) {
                     info!("live character rest capture: PersonId({person}) at {point:?}");
                 }
+            }
+            if let Some(point) = gate {
+                camera.focus = point;
+                camera.focus_target = point;
             }
             camera.zoom = *zoom;
             camera.zoom_target = *zoom;
@@ -391,6 +444,7 @@ pub(crate) fn drive_live_lab_capture(
                 path: path.clone(),
                 zoom: *zoom,
                 frames_left,
+                gate_focus: gate,
             };
             *readiness = ReadinessProgress::default();
         }
@@ -398,12 +452,17 @@ pub(crate) fn drive_live_lab_capture(
             path,
             zoom,
             frames_left,
+            gate_focus,
         } => {
             let Ok(mut camera) = cameras.single_mut() else {
                 return;
             };
             // A replicated/restored commander view may arrive after the clock.
             // Keep the requested framing throughout warmup and terrain streaming.
+            if let Some(point) = *gate_focus {
+                camera.focus = point;
+                camera.focus_target = point;
+            }
             if follow_rest {
                 let Some((person, point)) = resting else {
                     return;

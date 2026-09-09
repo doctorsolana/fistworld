@@ -34,6 +34,15 @@ fn signed_profit(revenue: u64, cost: u64) -> i64 {
     }
 }
 
+/// Household food already contributes to the public reserve target. The
+/// remaining coverage must be kept in circulation by producers; their own
+/// listed stock is deducted separately by the operating plan, exactly once.
+fn food_replacement_buffer_days(target_days: u8, residents: u32, pantry_food: u32) -> f32 {
+    let target = f32::from(target_days.min(shared::economy::MAXIMUM_FOOD_RESERVE_TARGET_DAYS));
+    let pantry_days = pantry_food as f32 / residents.max(1) as f32;
+    (target - pantry_days).clamp(0.0, target)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn marginal_operating_plan(
     day: u32,
@@ -48,6 +57,7 @@ fn marginal_operating_plan(
     responsive_sellers: usize,
     generic_output_demand: u32,
     external_output_bid: Option<u64>,
+    food_buffer_days: f32,
     opening_trial: bool,
 ) -> BusinessOperatingPlan {
     let positions = building.kind.positions();
@@ -137,7 +147,25 @@ fn marginal_operating_plan(
     let desired_dispatch = proven_daily_sales
         .saturating_add(unmet_output_demand)
         .saturating_add(strategy_buffer);
-    let mut output_gap = desired_dispatch.saturating_sub(stock);
+    // Food is collected, sold and eaten at different points in the day. A
+    // morning's listing must cover both the next dispatch and the enacted
+    // reserve which is not already held in household pantries. Base this
+    // bounded stock target on proven sales, not the number of hungry people
+    // at every competing site. Wheat keeps a day's replacement for milling.
+    // A profitable, funded shift can rebuild the buffer up to real capacity;
+    // capping it at one dispatch would leave depleted reserves unable to
+    // recover while daily meals continue. Unsold stock still stops output,
+    // and no observed demand creates no speculative reserve production.
+    let replacement_buffer = if output.is_edible() {
+        (proven_daily_sales as f32 * food_buffer_days.max(0.0)).ceil() as u32
+    } else if output == Good::Wheat {
+        proven_daily_sales
+    } else {
+        0
+    };
+    let mut output_gap = desired_dispatch
+        .saturating_add(replacement_buffer)
+        .saturating_sub(stock);
     if opening_trial && stock == 0 {
         let proving_batch = processing_recipe(building.kind)
             .map_or(one_worker_capacity, |recipe| recipe.output_units);
@@ -233,6 +261,8 @@ pub fn review_automatic_staffing(
             &shared::components::SettlementId,
             &MootMarket,
             Option<&SettlementEconomy>,
+            &Settlement,
+            Option<&SettlementPolicies>,
         ),
         With<Settlement>,
     >,
@@ -271,8 +301,19 @@ pub fn review_automatic_staffing(
     *last_day = Some(day);
     let markets: HashMap<_, _> = halls
         .iter()
-        .map(|(id, market, economy)| (*id, (market, economy)))
+        .map(|(id, market, economy, settlement, policies)| {
+            (
+                *id,
+                (
+                    market,
+                    economy,
+                    settlement.residents,
+                    policies.map_or(3, |policy| policy.food_reserve_target_days),
+                ),
+            )
+        })
         .collect();
+    let mut household_food = HashMap::<shared::components::SettlementId, u32>::new();
     let mut responsive_sellers = HashMap::<(shared::components::SettlementId, Good), usize>::new();
     let mut food_restart_leaders =
         HashMap::<(shared::components::SettlementId, Good), shared::components::BuildingId>::new();
@@ -300,6 +341,10 @@ pub fn review_automatic_staffing(
             procurement,
         ) in read.iter()
         {
+            if building.kind == SettlementBuildingKind::House {
+                let food = household_food.entry(building_of.0).or_default();
+                *food = food.saturating_add(inventory.edible_amount());
+            }
             let responds_to_demand = condition.is_some_and(|condition| {
                 condition.state.accepts_new_workers()
                     || condition.state == BusinessState::Mothballed
@@ -428,7 +473,7 @@ pub fn review_automatic_staffing(
     for (settlement_id, good) in food_restart_leaders.keys().copied() {
         let quote = markets
             .get(&settlement_id)
-            .map_or(good.base_price(), |(market, _)| {
+            .map_or(good.base_price(), |(market, ..)| {
                 market.suggested_price(good)
             });
         food_restart_goods
@@ -608,10 +653,24 @@ pub fn review_automatic_staffing(
         }
 
         let output = business_output(building.kind);
-        let (market, settlement_economy) = markets
-            .get(&building_of.0)
-            .copied()
-            .map_or((None, None), |(market, economy)| (Some(market), economy));
+        let (market, settlement_economy, food_buffer_days) =
+            markets.get(&building_of.0).copied().map_or(
+                (None, None, 0.0),
+                |(market, economy, residents, reserve_days)| {
+                    (
+                        Some(market),
+                        economy,
+                        food_replacement_buffer_days(
+                            reserve_days,
+                            residents,
+                            household_food
+                                .get(&building_of.0)
+                                .copied()
+                                .unwrap_or_default(),
+                        ),
+                    )
+                },
+            );
         let seller = output.map(|_| MarketSeller::Business(*building_id));
         let external_trade = external_trade_demand
             .get(building_id)
@@ -652,6 +711,7 @@ pub fn review_automatic_staffing(
             }),
             generic_output_demand,
             (external_trade.0 > 0).then_some(external_trade.1),
+            food_buffer_days,
             opening_trial,
         );
         let has_unavailable_demand = output.is_some_and(|good| {
@@ -1554,12 +1614,14 @@ mod tests {
             quality: 1.0,
             workers: Vec::new(),
         };
+        let mut inventory = GoodsInventory::new(building.kind.storage_bulk_capacity());
+        inventory.add(Good::Wheat, 2);
         let mut account = BusinessAccount::default();
         account.current_day.sold_units = 2;
         let plan = marginal_operating_plan(
             4,
             &building,
-            &GoodsInventory::new(building.kind.storage_bulk_capacity()),
+            &inventory,
             &account,
             &BusinessSalePolicy::for_good(Good::Wheat),
             &BusinessWagePolicy::default(),
@@ -1569,6 +1631,7 @@ mod tests {
             1,
             0,
             None,
+            1.0,
             false,
         );
         assert_eq!(plan.target_output_units, 2);
@@ -1602,10 +1665,118 @@ mod tests {
             1,
             0,
             None,
+            1.0,
             false,
         );
         assert_eq!(plan.target_output_units, 0);
         assert_eq!(plan.optimal_positions, 0);
+    }
+
+    #[test]
+    fn enacted_food_reserves_count_household_pantries_once() {
+        assert_eq!(food_replacement_buffer_days(3, 100, 200), 1.0);
+        assert_eq!(food_replacement_buffer_days(5, 100, 200), 3.0);
+        assert_eq!(food_replacement_buffer_days(3, 100, 350), 0.0);
+        assert_eq!(food_replacement_buffer_days(3, 100, 0), 3.0);
+    }
+
+    #[test]
+    fn food_shift_replaces_listed_sales_without_accumulating_unsold_output() {
+        let building = SettlementBuilding {
+            kind: SettlementBuildingKind::FishermansHut,
+            settlement: "Workford".into(),
+            owner: None,
+            quality: 1.0,
+            workers: Vec::new(),
+        };
+        let inventory = GoodsInventory::new(building.kind.storage_bulk_capacity());
+        let mut account = BusinessAccount::default();
+        account.previous_day.sold_units = 2;
+        let seller = MarketSeller::Business(shared::components::BuildingId(70));
+        let mut market = MootMarket::founding();
+        market.consign(seller, Good::Food, 2, Good::Food.base_price());
+        let mut wage = BusinessWagePolicy::default();
+        let management =
+            BusinessManagementPolicy::for_strategy(shared::economy::BusinessStrategy::Cautious);
+        let plan_for =
+            |day: u32, market: &MootMarket, wage: &BusinessWagePolicy, reserve_days: f32| {
+                marginal_operating_plan(
+                    day,
+                    &building,
+                    &inventory,
+                    &account,
+                    &BusinessSalePolicy::for_good(Good::Food),
+                    wage,
+                    &management,
+                    Some(market),
+                    Some(seller),
+                    1,
+                    0,
+                    None,
+                    reserve_days,
+                    false,
+                )
+            };
+
+        // Each morning has yesterday's delivery waiting for today's buyers.
+        // Their purchase and the profitable replacement shift leave a stable
+        // buffer, rather than alternating a layoff day with a restart day.
+        for day in 4..8 {
+            let plan = plan_for(day, &market, &wage, 1.0);
+            assert_eq!(plan.optimal_positions, 1);
+            assert_eq!(plan.target_output_units, 2);
+            assert!(plan.marginal_daily_profit > 0);
+            let purchase = market.purchase(Good::Food, 2, u64::MAX, None, None);
+            assert_eq!(purchase.trade.units, 2);
+            market.consign(
+                seller,
+                Good::Food,
+                plan.target_output_units,
+                Good::Food.base_price(),
+            );
+            assert_eq!(market.seller_listed_units(seller, Good::Food), 2);
+        }
+
+        // A higher enacted reserve target funds physical replenishment above
+        // today's dispatch, rather than making recovery mathematically
+        // impossible while daily consumption continues.
+        let high_reserve = plan_for(8, &market, &wage, 3.0);
+        assert!(high_reserve.target_output_units > 2);
+        assert!(high_reserve.optimal_positions > 0);
+
+        // The buffer never overrides the owner's contribution margin.
+        wage.daily_wage = 1_000;
+        assert_eq!(plan_for(8, &market, &wage, 1.0).optimal_positions, 0);
+        wage = BusinessWagePolicy::default();
+
+        // If buyers stop coming, another delivery produces a real two-day
+        // surplus. Production then pauses instead of treating stock as sales.
+        market.consign(seller, Good::Food, 2, Good::Food.base_price());
+        let surplus = plan_for(9, &market, &wage, 1.0);
+        assert_eq!(surplus.optimal_positions, 0);
+        assert_eq!(surplus.target_output_units, 0);
+        market.consign(seller, Good::Food, 4, Good::Food.base_price());
+        assert_eq!(plan_for(10, &market, &wage, 3.0).target_output_units, 0);
+
+        account.previous_day.sold_units = 0;
+        let no_demand = marginal_operating_plan(
+            12,
+            &building,
+            &inventory,
+            &account,
+            &BusinessSalePolicy::for_good(Good::Food),
+            &wage,
+            &management,
+            None,
+            None,
+            1,
+            0,
+            None,
+            3.0,
+            false,
+        );
+        assert_eq!(no_demand.target_output_units, 0);
+        assert_eq!(no_demand.optimal_positions, 0);
     }
 
     #[test]
@@ -1630,6 +1801,7 @@ mod tests {
             1,
             0,
             None,
+            1.0,
             true,
         );
         assert_eq!(
@@ -1667,6 +1839,7 @@ mod tests {
             1,
             0,
             None,
+            1.0,
             true,
         );
         assert_eq!(mill_plan.target_output_units, 1);
@@ -1703,6 +1876,7 @@ mod tests {
             1,
             5,
             None,
+            1.0,
             false,
         );
 
@@ -1836,6 +2010,7 @@ mod tests {
             1,
             0,
             None,
+            1.0,
             false,
         );
 

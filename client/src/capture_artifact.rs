@@ -64,6 +64,8 @@ pub enum CaptureAssertion {
     EntitiesAtLeast { count: usize },
     VillagersAtLeast { count: usize },
     SettlementsAtLeast { count: usize },
+    SettlementBuildingsAtLeast { count: usize },
+    FortificationSectionsAtLeast { count: usize },
     PlanningRoutesAtMost { count: usize },
     BlockedRoutesAtMost { count: usize },
 }
@@ -332,6 +334,8 @@ pub struct CaptureWorldSnapshot {
     pub loaded_chunks: usize,
     pub villagers: usize,
     pub settlements: usize,
+    pub settlement_buildings: usize,
+    pub fortification_sections: usize,
     pub planning_routes: usize,
     pub blocked_routes: usize,
     pub world_day: Option<u32>,

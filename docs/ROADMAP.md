@@ -26,7 +26,7 @@ infrastructure is a phase that cannot be tested.
 | 0 | Let me in | M | non-dev arrival and session reconnect are live; a populated ordinary-world opening remains |
 | 1 | The world remembers | L | in progress — stable identity, settlement directory, founding, picking and panels are live; world-state persistence is not |
 | 2 | The seam | L | in progress — ordinary villagers now demote to aggregate strategic work; the traveller/army promotion contract is not built |
-| 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village → Town → City are live; births and decline are not |
+| 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village → Town are live; City is deferred; births and decline are not |
 | 4 | Prices and the hand cart | M | in progress — player trading, companies, Storage Halls, porter carts and inter-town cargo are live; a personally purchasable hand cart and restart durability remain |
 | 5 | Caravans | L | in progress — civic contracts, player timetables and bounded NPC merchant trials are live; strategic parties, escorts and interception remain |
 | 6 | Command | XL | in progress — selection, battalions, flexible melee and bounded shared formation fields are live; regional routing and narrow-passage coordination remain |
@@ -193,6 +193,17 @@ results establish their original fixtures, not every later balance revision.
       grids, great avenues and neighbourhood clusters bias future frontage while plot
       scoring still rejects slope, water, overlap, roads and reserved civic space.
       Geography and demand decide what is built; the seed influences where it fits.
+      Bounded residential frontage infill favors small seeded groups, using pitch
+      that fits upgraded houses. Related resource/processing/storage plots have
+      soft proximity preferences, and polycentric neighborhoods expand with the
+      search envelope. [Town-growth experiments](TOWN-GROWTH-LAB.md) compare actual
+      development under low, steady and burst immigration without a second generator.
+      Append-only residential wards extend connected streets with short rows,
+      cross streets and infill; 100/250/500-person stress profiles report actual
+      retention and Town progression separately from integrity checks.
+      Reserved defense circuits avoid existing property, with paid physical
+      palisades, stone upgrades and open road-aligned gates; see
+      [FORTIFICATIONS.md](FORTIFICATIONS.md).
       If every grammar sample is occupied, a denser deterministic open-land pass
       preserves growth without moving anything already built. Same-landmass plots
       rank ahead of unreachable high-quality ground, and all building kinds prove
@@ -347,11 +358,10 @@ results establish their original fixtures, not every later balance revision.
       Village Hall before the tier changes.
 - [x] Later tier advancement: a Village with at least 30 residents, a Marketplace,
       Tavern, sufficient Moot trade and prosperity 70 becomes a Town after three
-      sustained days. A Town with at least a provisional 75 residents, a Church and prosperity 75
-      becomes a City after five sustained days. Village → Town additionally buys and stages
-      8 Stone and physically constructs the Town Hall. The current Town → City gate remains
-      direct until City Hall art and its material recipe are authored; the generic Hall
-      project seam is ready for that recipe. Moot/Village/Town Halls, Market and Church
+      sustained days. Village → Town additionally buys and stages 8 Stone and
+      physically constructs the Town Hall. Town is the current progression ceiling;
+      Town → City awaits its own content and material recipe. The generic Hall
+      project seam is ready for that future recipe. Moot/Village/Town Halls, Market and Church
       have authored art. The Tavern runtime still uses its placeholder mapping.
 - [x] Physical civic-hall ladder. The authoritative settlement entity retains its
       identity and state while its replicated Hall level changes Moot Hall → Village
@@ -451,10 +461,9 @@ ordinary residents shed paths, door choreography and work-animation phases.
       deterministic search bands widen as the occupied envelope fills.
 - [x] Prosperity scalar with a panel breakdown: reserve 40, production 30,
       housing 20, employment 10, and hunger penalty down to -30.
-- [x] Hamlet → Village → Town → City advancement with inspectable population,
+- [x] Hamlet → Village → Town advancement with inspectable population,
       food, prosperity, trade and civic-building gates. The enacted gates are 12
-      residents for Village and 30 for Town; City uses a provisional monotonic
-      gate of 75 until its content target is tuned.
+      residents for Village and 30 for Town; City is a future rung.
 - [x] Reconcile observed per-trip production with the distant strategic tick. Both use the
       same quality-scaled rates, worker counts, one-field/two-field Farmstead capacity,
       storage limits, sale policy and market transaction code.
@@ -471,9 +480,9 @@ ordinary residents shed paths, door choreography and work-animation phases.
 - [ ] Births against a food-supported cap, aging and other natural mortality
 - [ ] Further food processing, recipes, nutrition quality and differentiated diets
 - [x] Later tier ladder requirements: Marketplace and Tavern plus sustained trade
-      advance a Village to Town; Church plus sustained regional prosperity advances a
-      Town to City. Authored Hall/Market/Church assets are live; a distinct City Hall and
-      its material recipe remain open. Military stays outside the growth gate.
+      advance a Village to Town. Authored Hall/Market/Church assets are live;
+      City progression, a distinct City Hall and its material recipe remain open.
+      Military stays outside the growth gate.
 - [ ] Hysteresis on every transition
 - [ ] The decline ladder: struggling -> abandoned (recoverable) -> Ruins, where
       only the last needs destruction, deliberate razing, or long physical decay.
@@ -522,7 +531,7 @@ sell it dear. The M&B opening hour.
 - [x] Pull-based 365-day business histories with daily site P&L, contextual company treasury,
       protected/drawable company cash, arrears, prices, wages, production, sales, inputs,
       stock, dividends/capital and policy/state adjustments.
-- [x] Civic accounts and policy: up to two combined Moot Stewards, budget-gated hiring,
+- [x] Civic accounts and policy: population-scaled Moot Stewards (two founding slots), budget-gated hiring,
       explicit arrears for every public role, market-fee and positive-profit revenue,
       paid private procurement, weekly one-lever Reeve review, and pull-based daily
       income/spending/rate/change history.
@@ -737,3 +746,15 @@ capacity-aware refill and persistent Defensive / Hold line policies. Idle Defens
 troops reposition together after nearby catapult impacts; direct orders take priority.
 Hold line keeps troops anchored while allowing attacks within reach. This does not
 implement morale, routs, paid recruitment or strategic/off-screen army simulation.
+
+### Town-scale development — current scope
+
+The live ladder ends at Town: Moot (Hamlet) → Village → Town. City remains a
+future design target and a preserved serialized value. Larger stress profiles
+keep the `city-*` command names for compatibility; their progression target is
+Town, and immigration targets are offered people rather than guaranteed growth.
+
+Residential wards, reserved central public space and paid defenses extend actual
+accepted building history. Open gateways support civic traffic; closing, siege
+destruction and aggregate off-screen wall building remain future work. See
+[TOWN-GROWTH-LAB.md](TOWN-GROWTH-LAB.md) and [FORTIFICATIONS.md](FORTIFICATIONS.md).

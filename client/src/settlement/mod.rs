@@ -16,6 +16,7 @@ mod animation;
 mod buildings;
 mod construction;
 mod debug;
+pub(crate) mod fortifications;
 mod grounds;
 mod lighting;
 mod livestock;
@@ -54,6 +55,7 @@ pub struct SettlementPlugin;
 impl Plugin for SettlementPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(smoke::BakerySmokePlugin);
+        app.add_plugins(fortifications::FortificationPlugin);
         app.init_resource::<BuildingDoorAssets>();
         app.init_resource::<roads::VillageRoadPaintState>();
         app.add_systems(

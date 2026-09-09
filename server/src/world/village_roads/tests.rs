@@ -66,7 +66,7 @@ fn one_static_prop(
     colliders.instances.insert(
         1,
         StaticColliderInstance {
-                rotation: Quat::IDENTITY,
+            rotation: Quat::IDENTITY,
             kind,
             position,
             scale: 1.0,
@@ -1949,6 +1949,70 @@ fn moot_steward_audits_repairs_and_is_paid_from_the_treasury() {
 }
 
 #[test]
+fn a_large_hamlet_funds_more_carts_without_skipping_its_tier_or_payroll_gate() {
+    let mut app = road_test_app();
+    app.add_systems(
+        Update,
+        (
+            crate::world::village::ensure_civic_accounts,
+            ensure_moot_administrations,
+            staff_moot_stewards,
+            staff_public_positions,
+        )
+            .chain(),
+    );
+    let hall = app
+        .world_mut()
+        .spawn((
+            Settlement {
+                name: "Growingford".into(),
+                tier: SettlementTier::Hamlet,
+                residents: 100,
+                treasury: 0,
+            },
+            PlayerPosition(Vec3::ZERO),
+            PlayerRotation(0.0),
+        ))
+        .id();
+    for index in 0..10 {
+        app.world_mut().spawn((
+            CharacterName(format!("Carrier{index}")),
+            VillagerIntent::Resident { settlement: hall },
+            Occupation(None),
+            WorkStatus::LookingForWork,
+            Wallet::new(1_000),
+        ));
+    }
+    app.update();
+    assert_eq!(
+        app.world_mut()
+            .query::<&MootSteward>()
+            .iter(app.world())
+            .count(),
+        0,
+        "population must not authorize unfunded public hires"
+    );
+    app.world_mut()
+        .get_mut::<Settlement>(hall)
+        .unwrap()
+        .treasury = 3_000;
+    app.update();
+    let count = app
+        .world_mut()
+        .query::<&MootSteward>()
+        .iter(app.world())
+        .count();
+    assert!(
+        count > 2,
+        "large populations cannot share the two-cart founding ceiling"
+    );
+    assert_eq!(
+        app.world().get::<Settlement>(hall).unwrap().tier,
+        SettlementTier::Hamlet
+    );
+}
+
+#[test]
 fn a_second_moot_steward_waits_for_a_real_collection_backlog() {
     let mut app = road_test_app();
     app.add_systems(
@@ -3345,6 +3409,7 @@ fn open_market_squares_are_not_published_as_solid_navigation_blocks() {
         markets
             .iter()
             .map(|(building, position)| (building, position)),
+        std::iter::empty(),
     );
 
     assert!(cache.blockers.is_empty());
@@ -3363,8 +3428,67 @@ fn open_market_squares_are_not_published_as_solid_navigation_blocks() {
         cabin
             .iter()
             .map(|(building, position)| (building, position)),
+        std::iter::empty(),
     );
     assert_eq!(cache.blockers.len(), 1);
     assert_eq!(cache.buildings.len(), 1);
     assert!(cache.spatial.point_blocked(Vec2::ZERO));
+}
+
+#[test]
+fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
+    use shared::components::{
+        FortificationKind, FortificationMaterial, FortificationSegment, SettlementId,
+    };
+    let mut wall = FortificationSegment {
+        settlement_id: SettlementId(1),
+        circuit: 0,
+        start: Vec3::new(-8., 0., 0.),
+        end: Vec3::new(8., 0., 0.),
+        kind: FortificationKind::Wall,
+        material: FortificationMaterial::Palisade,
+        complete: false,
+    };
+    let mut cache = NavigationBuildingCache::default();
+    assert!(cache
+        .rebuild(std::iter::empty(), std::iter::once(&wall))
+        .is_empty());
+    wall.complete = true;
+    assert_eq!(
+        cache
+            .rebuild(std::iter::empty(), std::iter::once(&wall))
+            .len(),
+        1
+    );
+    assert!(cache
+        .spatial
+        .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.)));
+    assert!(
+        cache.buildings.is_empty(),
+        "a wall must not invent a house doorway for obstacle escape"
+    );
+    assert!(cache
+        .rebuild(std::iter::empty(), std::iter::once(&wall))
+        .is_empty());
+    wall.kind = FortificationKind::Gate;
+    assert_eq!(
+        cache
+            .rebuild(std::iter::empty(), std::iter::once(&wall))
+            .len(),
+        3
+    );
+    assert!(!cache
+        .spatial
+        .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.)));
+    for post in wall.gate_post_centers() {
+        assert!(cache.spatial.point_blocked(post.xz()));
+    }
+    assert!(cache.buildings.is_empty());
+    assert_eq!(
+        cache.rebuild(std::iter::empty(), std::iter::empty()).len(),
+        2
+    );
+    assert!(!cache
+        .spatial
+        .point_blocked(wall.gate_post_centers()[0].xz()));
 }

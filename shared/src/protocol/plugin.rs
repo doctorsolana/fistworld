@@ -41,6 +41,10 @@ impl Plugin for ProtocolPlugin {
             .replicate();
         app.component::<crate::components::SiegeImpact>()
             .replicate();
+        app.component::<crate::components::Horse>().replicate();
+        app.component::<crate::components::HorseAnimation>()
+            .replicate();
+        app.component::<crate::components::Mounted>().replicate();
         // === PLAYER COMPONENTS ===
         // No .predict(): nothing spawns PredictionTarget or queries Predicted, so
         // prediction registration would be dead weight (lightyear 0.28 requires
@@ -165,6 +169,12 @@ impl Plugin for ProtocolPlugin {
         app.component::<WorkforceRequirements>().replicate();
         app.component::<BuildingDoorDemand>().replicate();
         app.component::<VillageRoad>().replicate();
+        app.component::<crate::components::FortificationSegment>()
+            .replicate();
+        app.component::<crate::components::SettlementCivicSquare>()
+            .replicate();
+        app.component::<crate::components::SettlementDefenses>()
+            .replicate();
         app.component::<Residence>().replicate();
 
         // === HEALTH ===

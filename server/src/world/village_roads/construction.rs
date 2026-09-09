@@ -207,6 +207,8 @@ pub fn plan_requested_roads(
         &shared::components::SettlementId,
         &PlayerPosition,
         Option<&PlayerRotation>,
+        Option<&shared::components::SettlementDefenses>,
+        Option<&shared::components::SettlementCivicSquare>,
     )>,
     roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
     mut builders: Query<
@@ -357,7 +359,7 @@ pub fn plan_requested_roads(
             // old request cannot overwrite that newer Building intent.
             continue;
         }
-        let Ok((settlement, settlement_id, hall_position, hall_rotation)) =
+        let Ok((settlement, settlement_id, hall_position, hall_rotation, _, _)) =
             settlements.get(request.settlement)
         else {
             commands
@@ -530,6 +532,52 @@ pub fn plan_requested_roads(
                         }
                     })
                     .collect();
+                // A later market must not consume an already approved road.
+                // The remainder of the civic square stays open to circulation.
+                for square in settlements
+                    .iter()
+                    .filter_map(|(_, _, _, _, _, square)| square)
+                {
+                    let market_exists = placed_buildings.iter().any(|(building, at)| {
+                        building.building_type == SettlementBuildingKind::Market.art()
+                            && at.0.xz().distance_squared(square.market_position.xz()) < 0.25
+                    });
+                    if !market_exists {
+                        let definition = SettlementBuildingKind::Market.placement_definition();
+                        building_blockers.push(BuildingBlocker {
+                            center: definition.world_footprint_center(
+                                square.market_position,
+                                square.market_rotation,
+                            ),
+                            // Placement still uses this conservative radius;
+                            // an earlier lane must not invalidate the site.
+                            half: Vec2::splat(
+                                definition.root_footprint_radius() + reserved_width * 0.5 + 0.45,
+                            ),
+                            rotation: square.market_rotation,
+                        });
+                    }
+                }
+                // Re-surveying a finished building's connector must preserve
+                // the same future wall gateways that permit approval protected.
+                // Gates stay open; solid reserved spans protect their full future
+                // width even before a mason has made a collision obstacle.
+                for section in settlements
+                    .iter()
+                    .filter_map(|(_, _, _, _, defenses, _)| defenses)
+                    .flat_map(|d| &d.circuits)
+                    .flat_map(|c| &c.sections)
+                    .filter(|section| section.kind == shared::components::FortificationKind::Wall)
+                {
+                    building_blockers.push(BuildingBlocker {
+                        center: section.midpoint().xz(),
+                        half: Vec2::new(
+                            section.length() * 0.5,
+                            shared::components::DEFENSE_CORRIDOR_HALF_WIDTH,
+                        ) + Vec2::splat(reserved_width * 0.5 + 0.45),
+                        rotation: section.rotation(),
+                    });
+                }
                 // A permitted plot owns this ground before its shell exists.
                 // Without reserving it here, a road surveyed during a
                 // population burst can cross a worksite, then become

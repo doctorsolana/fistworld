@@ -454,10 +454,12 @@ pub fn step_units(
         (
             Has<shared::components::CombatReady>,
             Has<shared::components::Catapult>,
+            Option<&shared::components::Mounted>,
         ),
         Or<(
             With<shared::components::CombatReady>,
             With<shared::components::Catapult>,
+            With<shared::components::Mounted>,
         )>,
     >,
     mut reported_route_collisions: Local<HashSet<Entity>>,
@@ -521,7 +523,17 @@ pub fn step_units(
         ambient_direct,
     ) in units.iter_mut()
     {
-        let is_catapult = formations.get(entity).is_ok_and(|(_, catapult)| catapult);
+        let is_catapult = formations
+            .get(entity)
+            .is_ok_and(|(_, catapult, _)| catapult);
+        let mounted = formations
+            .get(entity)
+            .ok()
+            .and_then(|(_, _, mounted)| mounted);
+        if mounted.is_some_and(|m| m.phase != shared::components::RidingPhase::Riding) {
+            continue;
+        }
+        let wide_mover = is_catapult || mounted.is_some();
         let start_position = pos.0;
         let real_dt = simulation_time.real_seconds().max(1.0e-5);
         // Door and pier traversals are authored, collision-exempt movement
@@ -531,10 +543,13 @@ pub fn step_units(
         // Arrival below clears it along with the MoveTarget.
         let authored_traversal =
             door_use.is_some() || pier_traversal.is_some() || obstacle_escape.is_some();
-        if (is_catapult || kind == Some(&CharacterKind::Villager))
+        if (wide_mover || kind.is_some())
             && !authored_traversal
             && (pending.is_some() || failed.is_some())
         {
+            // A hero can request a tactical detour after meeting a defense.
+            // Let that survey finish instead of replacing its pending cursor
+            // with the same rejected direct step every frame.
             // `as_deref_mut()` would call `Mut::deref_mut`, which flags the
             // component Changed BEFORE the guard below decides not to write —
             // and lightyear replicates on the flag, not on the value. Reading
@@ -609,16 +624,22 @@ pub fn step_units(
                 break;
             }
 
-            let speed = if is_catapult {
+            let speed = if let Some(mounted) = mounted {
+                mounted.gait.speed()
+            } else if is_catapult {
                 shared::components::CATAPULT_SPEED
             } else if kind == Some(&CharacterKind::Hero) && !authored_traversal {
-                super::swimming::speed(&terrain, current, HERO_MOVE_SPEED * if on_road { ROAD_SPEED_MULTIPLIER } else { 1.0 })
+                super::swimming::speed(
+                    &terrain,
+                    current,
+                    HERO_MOVE_SPEED * if on_road { ROAD_SPEED_MULTIPLIER } else { 1.0 },
+                )
             } else {
                 HERO_MOVE_SPEED * if on_road { ROAD_SPEED_MULTIPLIER } else { 1.0 }
             };
             let step = (speed * remaining_seconds).min(distance);
             let preferred_direction = to_goal / distance;
-            if is_catapult {
+            if wide_mover {
                 let (yaw, aligned) = shared::components::turn_siege_towards(
                     rot.0,
                     preferred_direction,
@@ -631,7 +652,11 @@ pub fn step_units(
                 if !super::siege::ground_clear(
                     current,
                     current + preferred_direction * step,
-                    shared::components::CATAPULT_CLEARANCE,
+                    if mounted.is_some() {
+                        shared::components::HORSE_CLEARANCE
+                    } else {
+                        shared::components::CATAPULT_CLEARANCE
+                    },
                     Some(&terrain),
                     obstacles.as_deref(),
                     colliders.as_deref(),
@@ -694,17 +719,26 @@ pub fn step_units(
             {
                 break;
             }
-            if (is_catapult || kind == Some(&CharacterKind::Villager))
-                && door_use.is_none()
-                && pier_traversal.is_none()
-                && !route_geometry_is_current
-                && !navigation_segment_clear(
-                    current,
-                    proposed,
-                    building_obstacles,
-                    colliders.as_deref(),
-                    derived.as_deref(),
-                )
+            let defense_blocked = kind == Some(&CharacterKind::Hero)
+                && obstacles.as_deref().is_some_and(|grid| {
+                    grid.segment_blocked_by_type(
+                        current,
+                        proposed,
+                        shared::components::DEFENSE_OBSTACLE_TYPE,
+                    )
+                });
+            if defense_blocked
+                || ((wide_mover || kind == Some(&CharacterKind::Villager))
+                    && door_use.is_none()
+                    && pier_traversal.is_none()
+                    && !route_geometry_is_current
+                    && !navigation_segment_clear(
+                        current,
+                        proposed,
+                        building_obstacles,
+                        colliders.as_deref(),
+                        derived.as_deref(),
+                    ))
             {
                 if use_route
                     && std::env::var_os("FISTWORLD_LAB_ROUTE_DIAGNOSTICS").is_some()
@@ -779,14 +813,18 @@ pub fn step_units(
 
         let next_y = pier_traversal
             .and_then(|pier| pier.deck_height_at(current))
-            .or_else(|| (kind == Some(&CharacterKind::Hero) && !authored_traversal).then(|| super::swimming::surface(&terrain, current)).flatten())
+            .or_else(|| {
+                (kind == Some(&CharacterKind::Hero) && mounted.is_none() && !authored_traversal)
+                    .then(|| super::swimming::surface(&terrain, current))
+                    .flatten()
+            })
             .unwrap_or_else(|| terrain.get_height(current.x, current.y));
         let next_pos = Vec3::new(current.x, next_y, current.y);
 
         // Face travel direction. Bevy yaw 0 looks down -Z; atan2(x, z) of the
         // FORWARD vector gives the yaw whose -Z axis points along it.
         let next_yaw = last_direction
-            .filter(|_| !is_catapult)
+            .filter(|_| !wide_mover)
             .map(|direction| f32::atan2(-direction.x, -direction.y));
 
         if pos.0 != next_pos {
@@ -1140,6 +1178,153 @@ mod tests {
             .world()
             .entity(mover)
             .contains::<NavigationRoutePending>());
+    }
+
+    #[test]
+    fn heroes_respect_defenses_and_open_gates_without_losing_building_exemption() {
+        use shared::components::{
+            FortificationKind, FortificationMaterial, FortificationSegment, SettlementId,
+        };
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default());
+        let mut grid = SpatialObstacleGrid::default();
+        for (start_z, end_z) in [(-4.0, 4.0), (12.0, 16.0), (24.0, 28.0), (36.0, 44.0)] {
+            let wall = FortificationSegment {
+                settlement_id: SettlementId(1),
+                circuit: 0,
+                start: Vec3::new(0.0, 0.0, start_z),
+                end: Vec3::new(0.0, 0.0, end_z),
+                kind: FortificationKind::Wall,
+                material: FortificationMaterial::Palisade,
+                complete: true,
+            };
+            grid.insert(wall.navigation_obstacle().unwrap());
+        }
+        grid.insert(shared::spatial::ObstacleEntry {
+            center: Vec2::new(0.0, -20.0),
+            half_extents: Vec2::new(0.5, 4.0),
+            rotation: 0.0,
+            obstacle_type: 0,
+        });
+        app.insert_resource(grid);
+        app.add_systems(Update, step_units);
+        app.world_mut().spawn(TimeWarp::clamped(100.0));
+        let mut movers = Vec::new();
+        for z in [0.0, 20.0, -20.0, 40.0] {
+            let mover = app
+                .world_mut()
+                .spawn((
+                    CharacterKind::Hero,
+                    PlayerPosition(Vec3::new(-2.0, 0.0, z)),
+                    PlayerRotation(0.0),
+                    RegionCoord::default(),
+                    MoveTarget(Vec3::new(2.0, 0.0, z)),
+                ))
+                .id();
+            if z == 40.0 {
+                app.world_mut()
+                    .entity_mut(mover)
+                    .insert(NavigationObstacleEscape);
+            }
+            movers.push(mover);
+        }
+        app.update();
+        for (index, mover) in movers.iter().enumerate() {
+            let x = app.world().get::<PlayerPosition>(*mover).unwrap().0.x;
+            if index == 0 || index == 3 {
+                assert_eq!(
+                    x, -2.0,
+                    "ordinary and escaping heroes cannot cross a solid defense"
+                );
+                assert!(app.world().get::<NavigationRoutePending>(*mover).is_some());
+            } else {
+                assert!(
+                    x > 0.0,
+                    "the gateway and ordinary building exception remain traversable"
+                );
+            }
+        }
+        // A yielded survey must keep its request, not move through the wall or
+        // continually replace the planner's in-progress request on later ticks.
+        app.update();
+        assert_eq!(
+            app.world().get::<PlayerPosition>(movers[0]).unwrap().0.x,
+            -2.0
+        );
+    }
+
+    #[test]
+    fn heroes_cross_an_open_gate_but_not_its_isolated_completed_posts() {
+        use crate::collision::building_index::BuildingSpatialIndex;
+        use crate::world::navgrid::{sync_obstacle_grid, ObstacleGridState};
+        use shared::components::{
+            FortificationKind, FortificationMaterial, FortificationSegment, SettlementId,
+        };
+
+        for material in [
+            FortificationMaterial::Palisade,
+            FortificationMaterial::Stone,
+        ] {
+            for complete in [false, true] {
+                let mut app = App::new();
+                app.insert_resource(WorldTerrain::default());
+                app.init_resource::<BuildingSpatialIndex>();
+                app.init_resource::<SpatialObstacleGrid>();
+                app.init_resource::<ObstacleGridState>();
+                app.add_systems(Update, (sync_obstacle_grid, step_units).chain());
+                app.world_mut().spawn(TimeWarp::clamped(100.0));
+                let gate = FortificationSegment {
+                    settlement_id: SettlementId(1),
+                    circuit: 0,
+                    start: Vec3::new(-4.0, 0.0, 0.0),
+                    end: Vec3::new(4.0, 0.0, 0.0),
+                    kind: FortificationKind::Gate,
+                    material,
+                    complete,
+                };
+                app.world_mut().spawn(gate.clone());
+                // The two neighboring sections are only reservations. The
+                // gateway's own posts must become solid independently of them.
+                for (start, end) in [(-8.0, -4.0), (4.0, 8.0)] {
+                    app.world_mut().spawn(FortificationSegment {
+                        start: Vec3::new(start, 0.0, 0.0),
+                        end: Vec3::new(end, 0.0, 0.0),
+                        kind: FortificationKind::Wall,
+                        complete: false,
+                        ..gate.clone()
+                    });
+                }
+                let mut movers = Vec::new();
+                // Gate endpoints describe the clear span. Both authored posts
+                // occupy ground just outside those endpoints, at +/-4.24 m.
+                for x in [0.0, -4.24, 4.24] {
+                    movers.push(
+                        app.world_mut()
+                            .spawn((
+                                CharacterKind::Hero,
+                                PlayerPosition(Vec3::new(x, 0.0, -2.0)),
+                                PlayerRotation(0.0),
+                                RegionCoord::default(),
+                                MoveTarget(Vec3::new(x, 0.0, 2.0)),
+                            ))
+                            .id(),
+                    );
+                }
+                app.update();
+                for (index, mover) in movers.iter().enumerate() {
+                    let z = app.world().get::<PlayerPosition>(*mover).unwrap().0.z;
+                    if complete && index != 0 {
+                        assert_eq!(z, -2.0, "a {material:?} gate post must block the hero before its neighboring walls finish");
+                        assert!(
+                            app.world().get::<NavigationRoutePending>(*mover).is_some(),
+                            "a blocked hero must request a detour"
+                        );
+                    } else {
+                        assert!(z > 0.0, "the open gate and pending posts must remain traversable: material={material:?}, complete={complete}, mover={index}, z={z}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

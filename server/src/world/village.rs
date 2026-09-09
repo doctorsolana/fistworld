@@ -92,11 +92,14 @@ use movement::stable_name_hash;
 pub use objectives::sync_character_objectives;
 #[cfg(test)]
 pub(crate) use planning::find_site;
-pub use planning::{consider_permits, find_fishing_site, PermitPlanningDiagnostics, FREEBOARD};
+#[cfg(test)]
+pub(crate) use planning::SettlementUrbanPlan;
+pub use planning::{ensure_civic_squares, consider_permits, find_fishing_site, PermitPlanningDiagnostics, FREEBOARD};
 #[cfg(test)]
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
 pub(crate) use planning::{
-    road_access_blockers_for_plot, validate_manual_plot, ManualPlotApproval, RoadAccessBlocker,
+    nearby_defense_reservations, road_access_blockers_for_plot, validate_manual_plot,
+    ManualPlotApproval, RoadAccessBlocker,
 };
 pub use population::{
     advance_immigration_departures, arrive_at_settlement, recount_residents, seek_settlement,
@@ -215,6 +218,8 @@ pub struct PermitPlanningResources<'w, 's> {
     derived: Option<Res<'w, DerivedColliderLibrary>>,
     diagnostics: Option<ResMut<'w, PermitPlanningDiagnostics>>,
     planned_road_accesses: Query<'w, 's, &'static PlannedRoadAccess>,
+    defenses: Query<'w, 's, &'static shared::components::SettlementDefenses>,
+    civic_squares: Query<'w, 's, &'static shared::components::SettlementCivicSquare>,
     hall_upgrades: Query<
         'w,
         's,

@@ -17,9 +17,8 @@ use shared::components::{
 };
 use shared::economy::{
     CivicAccount, Good, GoodsInventory, MarketSeller, MootMarket, SettlementEconomy,
-    CITY_MIN_PROSPERITY, CITY_MIN_RESIDENTS, CITY_REQUIRED_DAYS, TOWN_HALL_STONE_REQUIRED,
-    TOWN_MIN_MARKET_VOLUME, TOWN_MIN_PROSPERITY, TOWN_MIN_RESIDENTS, TOWN_REQUIRED_DAYS,
-    VILLAGE_HALL_WOOD_REQUIRED, VILLAGE_MIN_PROSPERITY, VILLAGE_MIN_RESIDENTS,
+    TOWN_HALL_STONE_REQUIRED, TOWN_MIN_MARKET_VOLUME, TOWN_MIN_PROSPERITY, TOWN_MIN_RESIDENTS,
+    TOWN_REQUIRED_DAYS, VILLAGE_HALL_WOOD_REQUIRED, VILLAGE_MIN_PROSPERITY, VILLAGE_MIN_RESIDENTS,
     VILLAGE_REQUIRED_SECURE_DAYS,
 };
 
@@ -464,7 +463,7 @@ pub fn run_civic_hall_upgrade_projects(
                 development.progress_days = 0;
                 development.next_gate = match destination_tier {
                     SettlementTier::Village => SettlementProgressGate::Marketplace,
-                    SettlementTier::Town => SettlementProgressGate::Church,
+                    SettlementTier::Town => SettlementProgressGate::Complete,
                     _ => development.next_gate,
                 };
                 info!(
@@ -588,7 +587,7 @@ fn spawn_civic_hall_worksite(
     ));
 }
 
-/// Keep the promotion ledger current and promote only after all visible
+/// Keep the promotion ledger current and open Hall projects only after all
 /// requirements remain true for the advertised number of whole days.
 pub fn update_settlement_developments(
     mut commands: Commands,
@@ -596,7 +595,7 @@ pub fn update_settlement_developments(
     mut settlements: Query<(
         Entity,
         &shared::components::SettlementId,
-        &mut Settlement,
+        &Settlement,
         &SettlementEconomy,
         &MootMarket,
         &mut SettlementDevelopment,
@@ -619,7 +618,7 @@ pub fn update_settlement_developments(
     for (
         _settlement_entity,
         settlement_id,
-        mut settlement,
+        settlement,
         economy,
         market,
         mut development,
@@ -758,25 +757,12 @@ pub fn update_settlement_developments(
                     TOWN_REQUIRED_DAYS,
                 )
             }
-            SettlementTier::Town => {
-                let church_built =
-                    has_building(&buildings, *settlement_id, SettlementBuildingKind::Church);
-                let gate = if settlement.residents < CITY_MIN_RESIDENTS {
-                    SettlementProgressGate::Population
-                } else if !church_built {
-                    SettlementProgressGate::Church
-                } else if economy.prosperity < CITY_MIN_PROSPERITY {
-                    SettlementProgressGate::Prosperity
-                } else {
-                    SettlementProgressGate::Sustaining
-                };
-                (
-                    gate,
-                    gate == SettlementProgressGate::Sustaining,
-                    CITY_REQUIRED_DAYS,
-                )
+            // Town is the highest implemented rung. Preserve loaded City
+            // settlements, but do not award the reserved future tier from
+            // population and a Church alone.
+            SettlementTier::Town | SettlementTier::City => {
+                (SettlementProgressGate::Complete, false, 0)
             }
-            SettlementTier::City => (SettlementProgressGate::Complete, false, 0),
         };
 
         if development.next_gate != gate {
@@ -796,47 +782,28 @@ pub fn update_settlement_developments(
             development.progress_days = progress_days;
         }
 
-        if required_days > 0 && development.progress_days >= required_days {
-            if settlement.tier == SettlementTier::Village {
-                spawn_civic_hall_worksite(
-                    &mut commands,
-                    *settlement_id,
-                    &settlement.name,
-                    hall_position.0,
-                    hall_rotation.map_or(0.0, |rotation| rotation.0),
-                    CivicHallLevel::Town,
-                    Good::Stone,
-                    TOWN_HALL_STONE_REQUIRED,
-                    day,
-                );
-                development.progress_days = 0;
-                development.required_days = TOWN_HALL_STONE_REQUIRED as u16;
-                development.next_gate = SettlementProgressGate::CivicHallMaterials;
-                info!(
+        if settlement.tier == SettlementTier::Village
+            && required_days > 0
+            && development.progress_days >= required_days
+        {
+            spawn_civic_hall_worksite(
+                &mut commands,
+                *settlement_id,
+                &settlement.name,
+                hall_position.0,
+                hall_rotation.map_or(0.0, |rotation| rotation.0),
+                CivicHallLevel::Town,
+                Good::Stone,
+                TOWN_HALL_STONE_REQUIRED,
+                day,
+            );
+            development.progress_days = 0;
+            development.required_days = TOWN_HALL_STONE_REQUIRED as u16;
+            development.next_gate = SettlementProgressGate::CivicHallMaterials;
+            info!(
                     "Settlement '{}' sustained the Town requirements and opened a {}-Stone Town Hall worksite",
                     settlement.name, TOWN_HALL_STONE_REQUIRED
                 );
-                continue;
-            }
-            let previous = settlement.tier;
-            settlement.tier = match settlement.tier {
-                SettlementTier::Town => SettlementTier::City,
-                other => other,
-            };
-            if settlement.tier != previous {
-                development.progress_days = 0;
-                development.next_gate = match settlement.tier {
-                    SettlementTier::Town => SettlementProgressGate::Church,
-                    SettlementTier::City => SettlementProgressGate::Complete,
-                    _ => development.next_gate,
-                };
-                info!(
-                    "Settlement '{}' advanced from {} to {}",
-                    settlement.name,
-                    previous.label(),
-                    settlement.tier.label()
-                );
-            }
         }
     }
 }
@@ -1319,12 +1286,12 @@ mod tests {
     }
 
     #[test]
-    fn town_promotion_reaches_city_after_real_amenity_and_sustained_pull() {
+    fn natural_progression_stops_at_town_and_preserves_legacy_cities() {
         let mut app = development_test_app();
         app.add_systems(Update, update_settlement_developments);
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
         let economy = SettlementEconomy {
-            prosperity: CITY_MIN_PROSPERITY,
+            prosperity: 100.0,
             ..Default::default()
         };
         let settlement = app
@@ -1334,8 +1301,8 @@ mod tests {
                 Settlement {
                     name: "Bellcross".into(),
                     tier: SettlementTier::Town,
-                    residents: CITY_MIN_RESIDENTS,
-                    treasury: 0,
+                    residents: 500,
+                    treasury: 100_000,
                 },
                 economy,
                 MootMarket::founding(),
@@ -1355,12 +1322,33 @@ mod tests {
             BuildingOf(SettlementId(72)),
         ));
 
-        for day in 1..=CITY_REQUIRED_DAYS {
+        for day in 1..=30 {
             app.world_mut()
                 .entity_mut(clock)
                 .get_mut::<WorldTime>()
                 .unwrap()
-                .day = u32::from(day);
+                .day = day;
+            app.update();
+        }
+        assert_eq!(
+            app.world().get::<Settlement>(settlement).unwrap().tier,
+            SettlementTier::Town,
+            "a prosperous, populous Town with a Church must not unlock the future City tier"
+        );
+        let development = app
+            .world()
+            .get::<SettlementDevelopment>(settlement)
+            .unwrap();
+        assert_eq!(development.next_gate, SettlementProgressGate::Complete);
+        assert_eq!(development.progress_days, 0);
+        assert_eq!(development.required_days, 0);
+
+        app.world_mut()
+            .get_mut::<Settlement>(settlement)
+            .unwrap()
+            .tier = SettlementTier::City;
+        for day in 31..=40 {
+            app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = day;
             app.update();
         }
         assert_eq!(

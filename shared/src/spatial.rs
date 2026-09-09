@@ -192,6 +192,23 @@ impl SpatialObstacleGrid {
     /// Conservative swept disc: expand each rotated box by the mover radius.
     /// Broad-phase cells are expanded too, including stationary placement.
     pub fn segment_blocked_with_clearance(&self, start: Vec2, end: Vec2, radius: f32) -> bool {
+        self.segment_blocked_filtered(start, end, radius, None)
+    }
+
+    /// Exact same spatial broad phase and slab proof, restricted to one
+    /// obstacle category. This keeps special movement rules out of the grid
+    /// and does not allocate or scan unrelated world geometry.
+    pub fn segment_blocked_by_type(&self, start: Vec2, end: Vec2, obstacle_type: u32) -> bool {
+        self.segment_blocked_filtered(start, end, 0.0, Some(obstacle_type))
+    }
+
+    fn segment_blocked_filtered(
+        &self,
+        start: Vec2,
+        end: Vec2,
+        radius: f32,
+        obstacle_type: Option<u32>,
+    ) -> bool {
         let min = Self::world_to_cell(start.min(end) - Vec2::splat(radius));
         let max = Self::world_to_cell(start.max(end) + Vec2::splat(radius));
 
@@ -204,6 +221,9 @@ impl SpatialObstacleGrid {
                     let Some(entry) = self.obstacles.get(idx) else {
                         continue;
                     };
+                    if obstacle_type.is_some_and(|kind| entry.obstacle_type != kind) {
+                        continue;
+                    }
                     let Some(basis) = self.obstacle_inverse_basis.get(idx) else {
                         continue;
                     };
@@ -366,6 +386,29 @@ mod tests {
         // that same solid boundary is rejected.
         assert!(!grid.segment_blocked(world(Vec2::new(-2.0, 0.0)), world(Vec2::new(-3.0, 0.0))));
         assert!(grid.segment_blocked(world(Vec2::new(-3.0, 0.0)), world(Vec2::new(-2.0, 0.0))));
+    }
+
+    #[test]
+    fn typed_segments_use_the_exact_rotated_proof_without_other_obstacles() {
+        let mut grid = SpatialObstacleGrid::new();
+        let rotation = 0.7;
+        grid.insert(ObstacleEntry {
+            center: Vec2::ZERO,
+            half_extents: Vec2::new(4.0, 0.2),
+            rotation,
+            obstacle_type: 17,
+        });
+        let world = |point| crate::rotation::local_to_world_xz(point, rotation);
+        let a = world(Vec2::new(3.5, -2.0));
+        let b = world(Vec2::new(3.5, 2.0));
+        assert!(grid.segment_blocked(a, b));
+        assert!(grid.segment_blocked_by_type(a, b, 17));
+        assert!(!grid.segment_blocked_by_type(a, b, 18));
+        assert!(!grid.segment_blocked_by_type(
+            world(Vec2::new(4.1, -2.0)),
+            world(Vec2::new(4.1, 2.0)),
+            17
+        ));
     }
 
     #[test]

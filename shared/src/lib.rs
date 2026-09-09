@@ -16,6 +16,7 @@ pub mod protocol;
 pub mod region;
 pub mod rng;
 pub mod rotation;
+pub mod settlement_snapshot;
 pub mod spatial;
 pub mod terrain;
 pub mod water;

@@ -1,5 +1,9 @@
 //! Settlement layout grammar, candidate ranking and resumable land-site searches.
 
+use super::districts::SettlementUrbanPlan;
+use super::neighborhood::{
+    affinity_score, house_frontage_candidates, house_frontage_pitch, PlotNeighbor,
+};
 use super::road_access::{
     direct_road_access_is_coarsely_clear, nearest_completed_road_frontage,
     planned_road_access_path, RoadAccessBlocker,
@@ -102,7 +106,10 @@ pub(super) struct PlannedPlotCandidate {
 }
 
 pub(super) fn plan_axis(plan: &shared::components::SettlementDevelopment) -> (Vec2, Vec2) {
-    let fraction = (plan.plan_seed.rotate_right(29) & 0xffff) as f32 / 65_535.0;
+    // Small explicit review seeds need the same full-width entropy as a
+    // foundation hash. Keep the public seed; decode geometry from mixed bits.
+    let seed = shared::worldgen::splitmix64(plan.plan_seed);
+    let fraction = (seed.rotate_right(29) & 0xffff) as f32 / 65_535.0;
     let angle = fraction * std::f32::consts::TAU;
     let axis = Vec2::new(angle.cos(), angle.sin());
     (axis, Vec2::new(-axis.y, axis.x))
@@ -114,7 +121,7 @@ pub(super) fn plan_center_offset(
     side: Vec2,
 ) -> Vec2 {
     use shared::components::SettlementCenterStyle as Center;
-    let handedness = if plan.plan_seed.rotate_right(17) & 1 == 0 {
+    let handedness = if shared::worldgen::splitmix64(plan.plan_seed).rotate_right(17) & 1 == 0 {
         1.0
     } else {
         -1.0
@@ -143,7 +150,8 @@ pub(super) fn planned_plot_candidate(
 
     let (axis, side) = plan_axis(plan);
     let centre = plan_center_offset(plan, axis, side);
-    let handedness = if plan.plan_seed & 1 == 0 { 1.0 } else { -1.0 };
+    let seed = shared::worldgen::splitmix64(plan.plan_seed);
+    let handedness = if seed & 1 == 0 { 1.0 } else { -1.0 };
     let side_sign = if bearing & 1 == 0 { 1.0 } else { -1.0 };
 
     match plan.layout {
@@ -151,15 +159,14 @@ pub(super) fn planned_plot_candidate(
             // Three gently wandering lanes. Houses occupy alternating verges
             // instead of forming a ring around the hall.
             let branch = bearing % 3;
-            let branch_angle = (plan.plan_seed.rotate_right(7) & 0xffff) as f32 / 65_535.0
+            let branch_angle = (seed.rotate_right(7) & 0xffff) as f32 / 65_535.0
                 * std::f32::consts::TAU
                 + branch as f32 * std::f32::consts::TAU / 3.0
                 + (radius * 0.085 + branch as f32).sin() * 0.18;
             let direction = Vec2::new(branch_angle.cos(), branch_angle.sin());
             let normal = Vec2::new(-direction.y, direction.x);
-            let bend = normal
-                * (radius * 0.11 + bearing as f32 + (plan.plan_seed & 31) as f32 * 0.03).sin()
-                * 5.5;
+            let bend =
+                normal * (radius * 0.11 + bearing as f32 + (seed & 31) as f32 * 0.03).sin() * 5.5;
             let frontage = centre + direction * radius + bend;
             let setback = 8.5 + (bearing / 6) as f32 * 3.0;
             PlannedPlotCandidate {
@@ -169,7 +176,7 @@ pub(super) fn planned_plot_candidate(
         }
         Style::Radial => {
             // Buildings front the sides of several spokes, not the Moot Hall.
-            let branches = 5 + (plan.plan_seed.rotate_right(13) & 1) as usize;
+            let branches = 5 + (seed.rotate_right(13) & 1) as usize;
             let branch = (bearing / 2) % branches;
             let angle =
                 axis.y.atan2(axis.x) + branch as f32 * std::f32::consts::TAU / branches as f32;
@@ -184,15 +191,18 @@ pub(super) fn planned_plot_candidate(
         Style::Grid => {
             // Seed-rotated orthogonal streets. Each sample is a building set
             // back from the nearest grid line with its facade parallel to it.
-            const BLOCK: f32 = 26.0;
-            const FRONTAGE_STEP: f32 = 11.0;
+            let frontage_step = house_frontage_pitch();
             const SETBACK: f32 = 9.0;
+            // Opposing rear yards must fit too: a 26 m block with two 9 m
+            // setbacks left only 8 m between rows and rejected one whole side.
+            let block =
+                SETBACK * 2.0 + frontage_step + (seed.rotate_right(43) & 255) as f32 / 255.0 * 3.0;
             let along = base.dot(axis);
             let across = base.dot(side);
             if bearing & 1 == 0 {
-                let street_across = (across / BLOCK).round() * BLOCK;
+                let street_across = (across / block).round() * block;
                 let frontage = centre
-                    + axis * ((along / FRONTAGE_STEP).round() * FRONTAGE_STEP)
+                    + axis * ((along / frontage_step).round() * frontage_step)
                     + side * street_across;
                 let verge = if (across - street_across).abs() > 0.5 {
                     (across - street_across).signum()
@@ -204,10 +214,10 @@ pub(super) fn planned_plot_candidate(
                     frontage,
                 }
             } else {
-                let street_along = (along / BLOCK).round() * BLOCK;
+                let street_along = (along / block).round() * block;
                 let frontage = centre
                     + axis * street_along
-                    + side * ((across / FRONTAGE_STEP).round() * FRONTAGE_STEP);
+                    + side * ((across / frontage_step).round() * frontage_step);
                 let verge = if (along - street_along).abs() > 0.5 {
                     (along - street_along).signum()
                 } else {
@@ -238,26 +248,31 @@ pub(super) fn planned_plot_candidate(
             }
         }
         Style::Polycentric => {
-            // Three persistent neighbourhood centres. Workplaces sit in the
-            // looser outer clusters while homes/civic buildings fill the near
-            // neighbourhoods.
-            let district = bearing % 3;
-            let district_angle =
-                axis.y.atan2(axis.x) + handedness * district as f32 * std::f32::consts::TAU / 3.0;
+            // Persistent neighbourhood centres with expanding local streets.
+            // Previously the outward search only rotated 9/14 m pockets, so
+            // mature clusters inevitably exhausted them and lost their grammar
+            // in the generic radial fallback despite nearby open ground.
+            let districts = 3 + ((seed.rotate_right(21) & 1) as usize);
+            let district = bearing % districts;
+            let district_angle = axis.y.atan2(axis.x)
+                + handedness * district as f32 * std::f32::consts::TAU / districts as f32;
             let district_direction = Vec2::new(district_angle.cos(), district_angle.sin());
             let district_distance = match kind {
                 SettlementBuildingKind::Farmstead
+                | SettlementBuildingKind::LivestockFarm
                 | SettlementBuildingKind::LumberjackHut
+                | SettlementBuildingKind::StoneQuarry
                 | SettlementBuildingKind::FishermansHut => 44.0,
                 _ => 30.0,
             };
             let district_centre = centre + district_direction * district_distance;
             let orbit_angle = district_angle
                 + std::f32::consts::FRAC_PI_2
-                + (bearing / 3) as f32 * 0.75
-                + radius * 0.035;
-            let orbit = Vec2::new(orbit_angle.cos(), orbit_angle.sin())
-                * (9.0 + ((radius / 6.0) as usize & 1) as f32 * 5.0);
+                + (bearing / districts) as f32 * 0.75
+                + (radius * 0.035).sin() * 0.22;
+            let growth = (radius - kind.preferred_ring().0).max(0.0);
+            let openness = 0.62 + (seed.rotate_right(35) & 255) as f32 / 255.0 * 0.18;
+            let orbit = Vec2::new(orbit_angle.cos(), orbit_angle.sin()) * (9.0 + growth * openness);
             PlannedPlotCandidate {
                 local: district_centre + orbit,
                 frontage: district_centre,
@@ -293,6 +308,7 @@ pub(in crate::world::village) fn find_site_with_plan(
         hall,
         kind,
         occupied,
+        &[],
         roads,
         planned_accesses,
         access_blockers,
@@ -302,6 +318,9 @@ pub(in crate::world::village) fn find_site_with_plan(
         minimum_radius_hint,
         maximum_search_rings,
         None,
+        None,
+        None,
+        &[],
     )
 }
 
@@ -311,6 +330,7 @@ pub(super) fn find_site_with_plan_diagnostics(
     hall: Vec3,
     kind: SettlementBuildingKind,
     occupied: &[(Vec3, f32)],
+    neighbors: &[PlotNeighbor],
     roads: &[&VillageRoad],
     planned_accesses: &[PlannedRoadAccess],
     access_blockers: &[RoadAccessBlocker],
@@ -320,6 +340,9 @@ pub(super) fn find_site_with_plan_diagnostics(
     minimum_radius_hint: Option<f32>,
     maximum_search_rings: Option<usize>,
     mut rejections: Option<&mut SiteSearchRejections>,
+    urban: Option<&SettlementUrbanPlan>,
+    defenses: Option<&shared::components::SettlementDefenses>,
+    squares: &[&shared::components::SettlementCivicSquare],
 ) -> Option<(Vec3, f32)> {
     macro_rules! reject {
         ($field:ident) => {
@@ -406,36 +429,116 @@ pub(super) fn find_site_with_plan_diagnostics(
     };
     let mut best_resource_plots: Vec<(f32, Vec3, f32)> = Vec::new();
     let mut resource_rings_since_proof = 0_usize;
+    let mut frontage_candidates = development
+        .filter(|_| kind == SettlementBuildingKind::House)
+        .map(|plan| {
+            let connected_roads: Vec<_> = roads
+                .iter()
+                .copied()
+                .filter(|road| {
+                    road.is_complete()
+                        && road.built_points().iter().any(|point| {
+                            connected_road_keys
+                                .contains(&crate::world::village_roads::road_point_key(*point))
+                        })
+                })
+                .collect();
+            house_frontage_candidates(
+                plan,
+                hall,
+                neighbors,
+                &connected_roads,
+                min_radius,
+                max_radius,
+            )
+        })
+        .unwrap_or_default();
+    if kind == SettlementBuildingKind::House {
+        if let Some(urban) = urban {
+            // Grow complete quarters around the established village. The
+            // older 2–5-house rule remains a founding/infill fallback.
+            let mut district_candidates = urban.candidates(hall, occupied, roads);
+            district_candidates.retain(|candidate| {
+                candidate.local.length() >= min_radius
+                    && candidate.local.length() <= MAX_SETTLEMENT_SEARCH_RADIUS
+            });
+            district_candidates.append(&mut frontage_candidates);
+            frontage_candidates = district_candidates;
+        }
+    }
+
+    let own_square = squares
+        .iter()
+        .copied()
+        .filter(|square| square.center.xz().distance(hall.xz()) < 80.0)
+        .min_by(|a, b| {
+            a.center
+                .xz()
+                .distance_squared(hall.xz())
+                .total_cmp(&b.center.xz().distance_squared(hall.xz()))
+        });
+    if let Some(square) = own_square {
+        let mut civic_candidates =
+            super::civic_square::civic_frontage_candidates(square, hall, kind);
+        civic_candidates.append(&mut frontage_candidates);
+        frontage_candidates = civic_candidates;
+    }
 
     let mut radius = min_radius;
     let mut rings_scanned = 0_usize;
+    let mut candidates = Vec::with_capacity(FALLBACK_BEARINGS);
     while radius <= max_radius {
-        'candidate: for i in 0..bearings {
-            reject!(sampled);
-            // Offset each ring's bearings so successive rings do not line every
-            // building up on the same spokes.
-            let seeded_turn = development.map_or(0.0, |plan| {
-                ((plan.plan_seed.rotate_right(9) & 0xffff) as f32 / 65_535.0) * 0.92
+        let frontage_pass = !frontage_candidates.is_empty();
+        candidates.clear();
+        if frontage_pass {
+            candidates.append(&mut frontage_candidates);
+        } else {
+            candidates.extend((0..bearings).map(|i| {
+                // Offset each ring's bearings so successive rings do not line every
+                // building up on the same spokes.
+                let seeded_turn = development.map_or(0.0, |plan| {
+                    ((shared::worldgen::splitmix64(plan.plan_seed).rotate_right(9) & 0xffff) as f32
+                        / 65_535.0)
+                        * 0.92
+                });
+                let ring_turn = (radius / RING_STEP) * 0.5;
+                let turn = if development.is_none() {
+                    // The open-land fallback refines each bounded outward ring to
+                    // 48 bearings, closing the broad gaps left between the twelve
+                    // preferred grammar directions without creating one large
+                    // synchronous search.
+                    i as f32 / bearings as f32 + ring_turn / SEEDED_BEARINGS as f32
+                } else {
+                    (i as f32 + ring_turn + seeded_turn) / SEEDED_BEARINGS as f32
+                };
+                let angle = turn * std::f32::consts::TAU;
+                let base = Vec2::new(angle.cos(), angle.sin()) * radius;
+                development.map_or(
+                    PlannedPlotCandidate {
+                        local: base,
+                        frontage: Vec2::ZERO,
+                    },
+                    |plan| planned_plot_candidate(plan, kind, radius, i, base),
+                )
+            }));
+        }
+        if !frontage_pass
+            && matches!(
+                kind,
+                SettlementBuildingKind::Bakery | SettlementBuildingKind::StorageHall
+            )
+        {
+            candidates.sort_by(|a, b| {
+                let hall2 = Vec2::new(hall.x, hall.z);
+                let score = |point| {
+                    affinity_score(kind, point, neighbors)
+                        + urban.map_or(0.0, |urban| urban.land_use_score(kind, point))
+                };
+                score(hall2 + b.local).total_cmp(&score(hall2 + a.local))
             });
-            let ring_turn = (radius / RING_STEP) * 0.5;
-            let turn = if development.is_none() {
-                // The open-land fallback refines each bounded outward ring to
-                // 48 bearings, closing the broad gaps left between the twelve
-                // preferred grammar directions without creating one large
-                // synchronous search.
-                i as f32 / bearings as f32 + ring_turn / SEEDED_BEARINGS as f32
-            } else {
-                (i as f32 + ring_turn + seeded_turn) / SEEDED_BEARINGS as f32
-            };
-            let angle = turn * std::f32::consts::TAU;
-            let base = Vec2::new(angle.cos(), angle.sin()) * radius;
-            let planned = development.map_or(
-                PlannedPlotCandidate {
-                    local: base,
-                    frontage: Vec2::ZERO,
-                },
-                |plan| planned_plot_candidate(plan, kind, radius, i, base),
-            );
+        }
+        'candidate: for planned in candidates.iter().copied() {
+            reject!(sampled);
             let local = planned.local;
             let x = hall.x + local.x;
             let z = hall.z + local.y;
@@ -461,8 +564,29 @@ pub(super) fn find_site_with_plan_diagnostics(
             {
                 continue;
             }
-            let frontage = completed_road_frontage.unwrap_or(planned_frontage);
+            // An infill plot continues a short existing frontage, including
+            // one legal street extension past its end. Snapping its direction
+            // back to the nearest endpoint would turn each new facade into a
+            // fan. The same access proof below still reserves its real road.
+            let frontage = if frontage_pass {
+                planned_frontage
+            } else {
+                completed_road_frontage.unwrap_or(planned_frontage)
+            };
             let rotation = rotation_facing_frontage(candidate2, frontage);
+            if defenses.is_some_and(|defenses| {
+                super::reservations::plot_intersects_defenses(defenses, kind, candidate, rotation)
+            }) {
+                reject!(occupied);
+                continue;
+            }
+            if squares
+                .iter()
+                .any(|square| square.blocks_plot(kind, candidate, rotation))
+            {
+                reject!(occupied);
+                continue;
+            }
             let earthwork_effort = if kind == SettlementBuildingKind::Farmstead {
                 let Some(effort) = farmstead_earthwork_effort(terrain, candidate, rotation) else {
                     reject!(earthworks);
@@ -707,7 +831,10 @@ pub(super) fn find_site_with_plan_diagnostics(
                 // huts continue outward until a clean frontage exists.
                 let score =
                     quality * 100.0 - travel / max_radius.max(1.0) * 9.0 - earthwork_effort * 12.0
-                        + if direct_land { 1_000.0 } else { 0.0 };
+                        + if direct_land { 1_000.0 } else { 0.0 }
+                        + affinity_score(kind, candidate2, neighbors);
+                let score =
+                    score + urban.map_or(0.0, |urban| urban.land_use_score(kind, candidate2));
                 best_resource_plots.push((score, candidate, rotation));
                 best_resource_plots.sort_by(|a, b| {
                     b.0.total_cmp(&a.0)
@@ -738,6 +865,15 @@ pub(super) fn find_site_with_plan_diagnostics(
                 // mature-city tick cost.
                 return Some((candidate, rotation));
             }
+        }
+        if frontage_pass {
+            // The durable civic anchor is the Market site. A temporary blocked
+            // approach must not silently build the Market elsewhere and leave
+            // the public square permanently unused.
+            if kind == SettlementBuildingKind::Market && own_square.is_some() {
+                return None;
+            }
+            continue;
         }
         if resource_scored {
             resource_rings_since_proof += 1;
@@ -801,6 +937,7 @@ pub(super) fn find_site_with_plan_diagnostics(
             hall,
             kind,
             occupied,
+            neighbors,
             roads,
             planned_accesses,
             access_blockers,
@@ -810,8 +947,175 @@ pub(super) fn find_site_with_plan_diagnostics(
             minimum_radius_hint,
             maximum_search_rings,
             rejections,
+            None,
+            defenses,
+            squares,
         );
     }
 
     selected
+}
+
+#[cfg(test)]
+mod neighborhood_integration_tests {
+    use super::*;
+    use shared::components::{SettlementDevelopment, SettlementLayoutStyle};
+
+    #[test]
+    fn grid_can_fill_adjacent_frontages_and_opposing_rear_yards() {
+        let mut plan = SettlementDevelopment::from_foundation("Grid", Vec3::ZERO, 0);
+        plan.plan_seed = 0;
+        plan.layout = SettlementLayoutStyle::Grid;
+        plan.center = shared::components::SettlementCenterStyle::Square;
+        let (axis, side) = plan_axis(&plan);
+        let locations = [
+            Vec2::new(0.0, 1.0),
+            Vec2::new(13.0, 1.0),
+            Vec2::new(0.0, 28.0),
+        ]
+        .map(|base| {
+            planned_plot_candidate(
+                &plan,
+                SettlementBuildingKind::House,
+                30.0,
+                0,
+                axis * base.x + side * base.y,
+            )
+            .local
+        });
+        for (i, location) in locations.iter().enumerate() {
+            assert!(locations[..i].iter().all(|other| other.distance(*location) >= SettlementBuildingKind::House.clearance() * 2.0),
+                "nominally adjacent grid slots must not fail their own house reservations: {locations:?}");
+        }
+    }
+
+    #[test]
+    fn house_infill_uses_real_access_and_cannot_overwrite_reserved_ground() {
+        let terrain = WorldTerrain::default();
+        let hall = Vec3::new(1720.0, terrain.get_height(1720.0, 0.0), 0.0);
+        let house = PlotNeighbor {
+            kind: SettlementBuildingKind::House,
+            position: hall + Vec3::X * 40.0,
+            rotation: 0.0,
+        };
+        let other_house = PlotNeighbor {
+            position: hall + Vec3::X * 68.0,
+            ..house
+        };
+        let neighbors = [house, other_house];
+        let mut plan = SettlementDevelopment::from_foundation("Infill", hall, 0);
+        plan.plan_seed = 2;
+        let door = SettlementBuildingKind::Hall.entrance_position(hall, 0.0);
+        let mut street_points = vec![Vec2::new(door.x, door.z)];
+        street_points.extend((0..=20).map(|i| Vec2::new(hall.x + i as f32 * 4.0, -12.0)));
+        let road = VillageRoad {
+            settlement: "Infill".into(),
+            builder: "Mara".into(),
+            built_through: street_points.len() as u16,
+            points: street_points,
+            width: crate::world::village_roads::VILLAGE_ROAD_WIDTH,
+            reserved_width: shared::components::RoadClass::Lane.initial_reserved_width(),
+            surface: default(),
+            class: default(),
+            stone_committed: 0,
+        };
+        let mut occupied = vec![
+            (hall, SettlementBuildingKind::Hall.clearance()),
+            (house.position, house.kind.clearance()),
+            (other_house.position, other_house.kind.clearance()),
+        ];
+        let blockers: Vec<_> = neighbors
+            .iter()
+            .flat_map(|neighbor| {
+                super::super::road_access::road_access_blockers_for_plot(
+                    neighbor.kind,
+                    neighbor.position,
+                    neighbor.rotation,
+                )
+            })
+            .collect();
+        let find = |occupied: &[(Vec3, f32)], context: &[PlotNeighbor]| {
+            find_site_with_plan_diagnostics(
+                &terrain,
+                hall,
+                house.kind,
+                occupied,
+                context,
+                &[&road],
+                &[],
+                &blockers,
+                Some(&plan),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &[],
+            )
+            .expect("the open existing street has legal adjacent frontage")
+        };
+        let (first, rotation) = find(&occupied, &neighbors);
+        let (without_context, _) = find(&occupied, &[]);
+        assert!(first.distance(house.position) >= house.kind.clearance() * 2.0);
+        assert!(
+            first.distance(house.position) < 14.0,
+            "prefer adjacent frontage over unrelated open ring samples"
+        );
+        assert!((first.z - house.position.z).abs() < 0.01);
+        assert!(
+            rotation.abs() < 0.01,
+            "new homes retain the same street-facing facade"
+        );
+        assert!(
+            without_context.z.abs() > first.z.abs() + 0.5
+                || without_context.distance(house.position) > first.distance(house.position) + 0.5,
+            "typed infill should improve actual accepted adjacency over grammar alone: infill={first:?}, grammar={without_context:?}"
+        );
+        let reversed = [other_house, house];
+        assert_eq!((first, rotation), find(&occupied, &reversed));
+
+        // Fields and other reservations need not themselves be a house to
+        // invalidate a promising infill candidate. The shared proof remains
+        // authoritative over the new neighbourhood preference.
+        occupied.push((first, 8.0));
+        let (next, _) = find(&occupied, &neighbors);
+        assert!(next.distance(first) >= 8.0 + house.kind.clearance());
+        assert!(next.distance(house.position) >= house.kind.clearance() * 2.0);
+    }
+
+    #[test]
+    fn polycentric_grammar_keeps_room_for_outer_neighborhoods_before_fallback() {
+        for seed in [3, 7, 19, 41] {
+            let mut plan = SettlementDevelopment::from_foundation("Growth", Vec3::ZERO, 0);
+            plan.plan_seed = seed;
+            plan.layout = SettlementLayoutStyle::Polycentric;
+            let mut accepted: Vec<Vec2> = Vec::new();
+            for radius in (72..=180).step_by(6) {
+                for bearing in 0..12 {
+                    let candidate = planned_plot_candidate(
+                        &plan,
+                        SettlementBuildingKind::House,
+                        radius as f32,
+                        bearing,
+                        Vec2::ZERO,
+                    );
+                    if candidate.local.length() > 75.0
+                        && accepted
+                            .iter()
+                            .all(|other| other.distance(candidate.local) >= house_frontage_pitch())
+                    {
+                        accepted.push(candidate.local);
+                    }
+                }
+            }
+            assert!(
+                accepted.len() >= 18,
+                "seed {seed} exhausts its founding pockets instead of offering outer streets: {}",
+                accepted.len()
+            );
+            assert!(accepted.iter().any(|point| point.length() > 110.0));
+        }
+    }
 }

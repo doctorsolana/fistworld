@@ -13,8 +13,9 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 
 use shared::components::{
-    MarketLevel, PlayerPosition, PlayerRotation, RoadSurface, SettlementBuilding,
-    SettlementBuildingKind, VillageRoad,
+    BuildingOf, MarketLevel, PlayerPosition, PlayerRotation, RoadSurface, Settlement,
+    SettlementBuilding, SettlementBuildingKind, SettlementCivicSquare, SettlementId,
+    SettlementTier, VillageRoad,
 };
 use shared::terrain::{
     apply_terrain_paint_op_to_weights, terrain_paint_op_chunk_coords,
@@ -73,6 +74,18 @@ struct SquarePaintSnapshot {
 }
 
 impl SquarePaintSnapshot {
+    fn from_civic(square: &SettlementCivicSquare, level: MarketLevel) -> Self {
+        Self {
+            center: square.center.xz(),
+            half_extents: square.half_extents,
+            rotation: -square.rotation,
+            surface: match level {
+                MarketLevel::Earthen => RoadSurface::Dirt,
+                MarketLevel::Paved => RoadSurface::Stone,
+            },
+        }
+    }
+
     fn from_market(position: Vec3, rotation_y: f32, level: MarketLevel) -> Self {
         // Both market levels share one 12 x 12 footprint (BAKERY_WINDMILL_HANDOVER.md, 1a), so the
         // earthen definition describes the paved square's ground as well.
@@ -151,7 +164,11 @@ pub(super) fn paint_village_roads_into_terrain(
         &PlayerPosition,
         &PlayerRotation,
         Option<&MarketLevel>,
+        Option<&BuildingOf>,
     )>,
+    civic_squares: Query<(Entity, &SettlementId, &Settlement, &SettlementCivicSquare)>,
+    mut removed_civic_squares: RemovedComponents<SettlementCivicSquare>,
+    mut removed_settlements: RemovedComponents<Settlement>,
     mut removed_buildings: RemovedComponents<SettlementBuilding>,
     mut state: ResMut<VillageRoadPaintState>,
     mut terrain_paint: ResMut<TerrainPaintState>,
@@ -182,14 +199,22 @@ pub(super) fn paint_village_roads_into_terrain(
 
     // Market squares. The table is a handful of entities, and a snapshot compares four numbers,
     // so a plain equality check each frame is cheaper than change detection over three components.
-    for entity in removed_buildings.read() {
+    for entity in removed_buildings
+        .read()
+        .chain(removed_civic_squares.read())
+        .chain(removed_settlements.read())
+    {
         if let Some(previous) = state.squares.remove(&entity) {
             mark_square_chunks_dirty(&previous, &mut state.dirty_chunks);
         }
     }
-    for (entity, building, position, rotation, level) in markets.iter() {
+    let mut civic_finishes = HashMap::new();
+    for (entity, building, position, rotation, level, owner) in markets.iter() {
         if building.kind != SettlementBuildingKind::Market {
             continue;
+        }
+        if let Some(owner) = owner {
+            civic_finishes.insert(owner.0, level.copied().unwrap_or_default());
         }
         let next = SquarePaintSnapshot::from_market(
             position.0,
@@ -203,6 +228,30 @@ pub(super) fn paint_village_roads_into_terrain(
             "market square paint: {:?} centre {:?} half {:?} rot {:.2}",
             next.surface, next.center, next.half_extents, next.rotation
         );
+        if let Some(previous) = state.squares.insert(entity, next.clone()) {
+            mark_square_chunks_dirty(&previous, &mut state.dirty_chunks);
+        }
+        mark_square_chunks_dirty(&next, &mut state.dirty_chunks);
+    }
+
+    // The protected common remains grass while it is only a land reservation.
+    // Its ground joins the actual Market's finish; the reserved pedestrian space
+    // uses the road compositor, so no raised slab flickers over roads or terrain.
+    for (entity, id, settlement, square) in &civic_squares {
+        let finish = civic_finishes
+            .get(id)
+            .copied()
+            .or_else(|| (settlement.tier >= SettlementTier::Town).then_some(MarketLevel::Earthen));
+        let Some(finish) = finish else {
+            if let Some(previous) = state.squares.remove(&entity) {
+                mark_square_chunks_dirty(&previous, &mut state.dirty_chunks);
+            }
+            continue;
+        };
+        let next = SquarePaintSnapshot::from_civic(square, finish);
+        if state.squares.get(&entity) == Some(&next) {
+            continue;
+        }
         if let Some(previous) = state.squares.insert(entity, next.clone()) {
             mark_square_chunks_dirty(&previous, &mut state.dirty_chunks);
         }
@@ -731,6 +780,100 @@ mod tests {
         assert_eq!(
             app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)].weights,
             base
+        );
+    }
+
+    #[test]
+    fn civic_apron_tracks_market_finish_and_removal_without_touching_other_ground() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        app.init_resource::<TerrainPaintState>();
+        app.init_resource::<VillageRoadPaintState>();
+        app.init_resource::<PerfHitchStats>();
+        app.add_systems(Update, paint_village_roads_into_terrain);
+        let map = build_weightmap_from_weights(
+            vec![[255, 0, 0, 0]; 64 * 64],
+            64,
+            &mut app.world_mut().resource_mut::<Assets<Image>>(),
+        );
+        app.world_mut()
+            .resource_mut::<TerrainPaintState>()
+            .weightmaps
+            .insert(ChunkCoord::new(0, 0), map);
+        let square = SettlementCivicSquare {
+            center: Vec3::new(32.0, 0.0, 32.0),
+            half_extents: Vec2::splat(14.0),
+            rotation: 0.0,
+            market_position: Vec3::new(32.0, 0.0, 26.0),
+            market_rotation: std::f32::consts::PI,
+        };
+        let hall = app
+            .world_mut()
+            .spawn((
+                SettlementId(1),
+                Settlement {
+                    name: "Square".into(),
+                    tier: SettlementTier::Hamlet,
+                    residents: 8,
+                    treasury: 0,
+                },
+                square.clone(),
+            ))
+            .id();
+        let apron = |world: &World| {
+            pixel(
+                &world.resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)],
+                32,
+                42,
+            )
+        };
+        app.update();
+        assert_eq!(
+            apron(app.world()),
+            [255, 0, 0, 0],
+            "a reservation alone is not paved"
+        );
+        let market = app
+            .world_mut()
+            .spawn((
+                BuildingOf(SettlementId(1)),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::Market,
+                    settlement: "Square".into(),
+                    owner: None,
+                    quality: 1.0,
+                    workers: Vec::new(),
+                },
+                PlayerPosition(square.market_position),
+                PlayerRotation(square.market_rotation),
+                MarketLevel::Earthen,
+            ))
+            .id();
+        app.update();
+        assert!(
+            apron(app.world())[1] > 200,
+            "the pedestrian apron joins the earthen market"
+        );
+        app.world_mut()
+            .entity_mut(market)
+            .insert(MarketLevel::Paved);
+        app.update();
+        assert!(
+            apron(app.world())[3] > 240,
+            "the funded market finish extends into its apron"
+        );
+        app.world_mut()
+            .entity_mut(hall)
+            .remove::<SettlementCivicSquare>();
+        app.update();
+        assert_eq!(apron(app.world()), [255, 0, 0, 0]);
+        assert!(
+            pixel(
+                &app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)],
+                32,
+                26
+            )[3] > 240,
+            "removing the civic reservation does not erase the actual market"
         );
     }
 

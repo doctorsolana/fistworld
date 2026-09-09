@@ -412,7 +412,19 @@ The current village simulation uses these rules as hard boundaries:
   `village_roads/routing.rs`, the Moot Steward's civic repair duty in
   `village_roads/steward.rs`, and width/dryness
   geometry in `village_roads/geometry.rs`. Keep extending those seams instead of growing
-  either facade into a monolith.
+  either facade into a monolith. Persistent residential wards and reserved public
+  ground live behind `planning/districts.rs` and `planning/reservations.rs`.
+- **Defenses share one geometric contract.** `shared/components/fortifications.rs`
+  defines immutable accepted circuits and region-scoped physical sections.
+  `world/fortifications/` owns surveying, paid hauling/construction and diagnostic
+  passage tracing. Completed walls feed both the authoritative obstacle grid and
+  the village route cache. Hero movement and combat separation enforce these
+  walls even where ordinary building collision has exemptions. Archery maintains
+  a changed-section spatial cache for wall bodies and overhead gate beams.
+  `client/settlement/fortifications/` renders one closed mesh per section and
+  bounds mesh construction to eight sections per frame. Reservations alone do
+  not block walking. Gates currently stay open; closing and destruction need
+  their own authoritative state. See [FORTIFICATIONS.md](FORTIFICATIONS.md).
 - **UI chrome is a shared foundation, not screen-local behavior.** `ui/styles.rs` owns the
   palette, `ui/foundation.rs` owns semantic layers, type scale, buttons, disabled/focus state
   and live-panel refresh safety, `ui/modal.rs` owns the one-scrim modal structure, and

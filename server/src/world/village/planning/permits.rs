@@ -4,11 +4,13 @@ use super::demand::{
     development_pipeline_has_capacity, has_planned_food_extractor, next_civic_need,
     processing_upstream_is_complete, should_try_complementary_fishing,
 };
+use super::districts::SettlementUrbanPlan;
 use super::fishing::{advance_incremental_fishing_search, find_incremental_fishing_site};
 use super::funding::{
     debit_company_expansion, CompanyExpansionFunds, NPC_PERSONAL_INVESTMENT_RESERVE,
 };
 use super::market_signals::accumulate_business_signals;
+use super::neighborhood::PlotNeighbor;
 use super::plots::{
     find_site_with_plan_diagnostics, SiteSearchRejections, MAX_SETTLEMENT_SEARCH_RADIUS,
 };
@@ -59,6 +61,7 @@ pub fn consider_permits(
         Option<&SettlementPolicies>,
         Option<&MootMarket>,
         Option<&shared::components::SettlementOpportunityBoard>,
+        Option<&SettlementUrbanPlan>,
     )>,
     economies: Query<&SettlementEconomy>,
     developments: Query<&shared::components::SettlementDevelopment>,
@@ -233,6 +236,7 @@ pub fn consider_permits(
         policies,
         market,
         current_board,
+        current_urban_plan,
     ) in settlements.iter_mut()
     {
         let policies = policies.copied().unwrap_or_default();
@@ -782,19 +786,32 @@ pub fn consider_permits(
             continue;
         }
 
-        // Occupied ground, so a new building does not land on an old one.
-        let mut occupied: Vec<(Vec3, f32)> = placed
+        // Accepted and pending plots supply both hard reservations and soft
+        // neighbourhood preferences. Their actual positions never get replanned.
+        let neighbors: Vec<_> = placed
             .iter()
             .filter(|(_, building_of, _, _)| building_of.0 == *settlement_id)
-            .map(|(building, _, position, _)| (position.0, building.kind.clearance()))
+            .map(|(building, _, position, rotation)| PlotNeighbor {
+                kind: building.kind,
+                position: position.0,
+                rotation: rotation.map_or(0.0, |rotation| rotation.0),
+            })
+            .chain(pending.iter().filter_map(|(under, _)| {
+                (under.settlement == settlement_entity).then_some(PlotNeighbor {
+                    kind: under.kind,
+                    position: under.position,
+                    rotation: under.rotation,
+                })
+            }))
+            .collect();
+        // Occupied ground, so a new building does not land on an old one.
+        let mut occupied: Vec<(Vec3, f32)> = neighbors
+            .iter()
+            .map(|neighbor| (neighbor.position, neighbor.kind.clearance()))
             .chain(std::iter::once((
                 hall.0,
                 SettlementBuildingKind::Hall.clearance(),
             )))
-            .chain(pending.iter().filter_map(|(under, _)| {
-                (under.settlement == settlement_entity)
-                    .then_some((under.position, under.kind.clearance()))
-            }))
             .collect();
 
         // A Farmstead owns more ground than its cabin. Reserve the separate
@@ -867,6 +884,31 @@ pub fn consider_permits(
             .iter()
             .filter_map(|(road, road_of)| (road_of.0 == *settlement_id).then_some(road))
             .collect();
+        let nearby_defenses = super::reservations::nearby_defense_reservations(
+            planning.defenses.iter(),
+            hall.0.xz(),
+            MAX_SETTLEMENT_SEARCH_RADIUS + 40.0,
+        );
+        let defenses = (!nearby_defenses.circuits.is_empty()).then_some(&nearby_defenses);
+        let civic_squares: Vec<_> = planning.civic_squares.iter()
+            .filter(|square| square.center.xz().distance(hall.0.xz()) < MAX_SETTLEMENT_SEARCH_RADIUS + 40.0).collect();
+        let mut urban_plan = current_urban_plan.cloned().unwrap_or_default();
+        if missing == SettlementBuildingKind::House {
+            if let Ok(charter) = developments.get(settlement_entity) {
+                if urban_plan.extend_for_housing(
+                    terrain,
+                    charter,
+                    hall.0,
+                    &neighbors,
+                    &village_roads,
+                    &occupied,
+                ) {
+                    commands
+                        .entity(settlement_entity)
+                        .insert(urban_plan.clone());
+                }
+            }
+        }
         let existing_accesses: Vec<_> = planning
             .planned_road_accesses
             .iter()
@@ -892,6 +934,12 @@ pub fn consider_permits(
                     road_access_blockers_for_plot(under.kind, under.position, under.rotation)
                 }),
         );
+        if let Some(defenses) = defenses {
+            access_blockers.extend(super::reservations::defense_access_blockers(defenses));
+        }
+        if missing != SettlementBuildingKind::Market {
+            access_blockers.extend(super::civic_square::civic_market_access_blockers(&civic_squares, missing, None));
+        }
         let search_signature = FailedSiteSearch {
             kind: missing,
             occupied_plots: occupied.len(),
@@ -968,6 +1016,7 @@ pub fn consider_permits(
                 hall.0,
                 kind,
                 &occupied,
+                &neighbors,
                 &village_roads,
                 &existing_accesses,
                 &access_blockers,
@@ -984,6 +1033,9 @@ pub fn consider_permits(
                     .flatten(),
                 bounded_resource_search.then_some(1),
                 Some(&mut primary_rejections),
+                Some(&urban_plan),
+                defenses,
+                &civic_squares,
             )
             .map(|(position, rotation)| (kind, position, rotation))
         });
@@ -1111,6 +1163,20 @@ pub fn consider_permits(
                 .insert((settlement_entity, missing), permit_round.saturating_add(4));
             continue;
         };
+        // Shoreline selection uses its own bounded search. Keep defense land
+        // reservations authoritative for that path as well as ordinary plots.
+        if defenses.is_some_and(|defenses| {
+            super::reservations::plot_intersects_defenses(defenses, kind, position, rotation)
+        }) {
+            if kind == SettlementBuildingKind::FishermansHut {
+                advance_incremental_fishing_search(&mut clock, settlement_entity);
+            }
+            continue;
+        }
+        if civic_squares.iter().any(|square| square.blocks_plot(kind, position, rotation)) {
+            if kind == SettlementBuildingKind::FishermansHut { advance_incremental_fishing_search(&mut clock, settlement_entity); }
+            continue;
+        }
         if !processing_upstream_is_complete(kind, &completed) {
             // Alternative-site selection can provisionally pretend an
             // unavailable request exists to discover the next useful plot.

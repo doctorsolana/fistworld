@@ -42,6 +42,8 @@ pub(crate) fn validate_manual_plot(
     access_blockers: &[RoadAccessBlocker],
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
+    defenses: Option<&shared::components::SettlementDefenses>,
+    squares: &[&shared::components::SettlementCivicSquare],
 ) -> Result<ManualPlotApproval, String> {
     if !requested_position.is_finite() || !requested_rotation.is_finite() {
         return Err("That plot position is not valid.".into());
@@ -49,6 +51,17 @@ pub(crate) fn validate_manual_plot(
     let ground = terrain.get_height(requested_position.x, requested_position.z);
     let position = Vec3::new(requested_position.x, ground, requested_position.z);
     let rotation = requested_rotation.rem_euclid(std::f32::consts::TAU);
+    if defenses.is_some_and(|defenses| {
+        super::reservations::plot_intersects_defenses(defenses, kind, position, rotation)
+    }) {
+        return Err("This plot overlaps the reserved city wall or gate corridor.".into());
+    }
+    if squares
+        .iter()
+        .any(|square| square.blocks_plot(kind, position, rotation))
+    {
+        return Err("This plot overlaps the reserved civic square.".into());
+    }
     let distance = Vec2::new(position.x - hall.x, position.z - hall.z).length();
     if distance > MAX_SETTLEMENT_SEARCH_RADIUS {
         return Err(format!(
@@ -239,6 +252,21 @@ pub(crate) fn validate_manual_plot(
         Vec2::new(hall_door.x, hall_door.z),
         roads,
     );
+    let mut reserved_blockers;
+    let access_blockers = if let Some(defenses) = defenses {
+        reserved_blockers = access_blockers.to_vec();
+        reserved_blockers.extend(super::reservations::defense_access_blockers(defenses));
+        reserved_blockers.as_slice()
+    } else {
+        access_blockers
+    };
+    let mut civic_blockers = access_blockers.to_vec();
+    civic_blockers.extend(super::civic_square::civic_market_access_blockers(
+        squares,
+        kind,
+        Some((position, rotation)),
+    ));
+    let access_blockers = civic_blockers.as_slice();
     let road_access = planned_road_access_path(
         terrain,
         hall,

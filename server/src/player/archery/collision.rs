@@ -18,6 +18,8 @@ pub struct ArrowObstacles {
     version: Option<u64>,
     buildings: Vec<IndexedBuilding>,
     cells: HashMap<(i32, i32), Vec<usize>>,
+    defenses: Vec<shared::components::FortificationSegment>,
+    defense_cells: HashMap<(i32, i32), Vec<usize>>,
 }
 impl Default for ArrowObstacles {
     fn default() -> Self {
@@ -55,11 +57,49 @@ impl Default for ArrowObstacles {
             version: None,
             buildings: Vec::new(),
             cells: HashMap::new(),
+            defenses: Vec::new(),
+            defense_cells: HashMap::new(),
         }
     }
 }
 fn cell(p: Vec2) -> (i32, i32) {
     ((p.x / 16.).floor() as i32, (p.y / 16.).floor() as i32)
+}
+
+/// Update once on construction, upgrade or removal, including when every archer
+/// has died but their arrows are still in flight.
+pub fn sync_defense_arrow_obstacles(
+    mut obstacles: ResMut<ArrowObstacles>,
+    walls: Query<&shared::components::FortificationSegment>,
+    changed: Query<(), Changed<shared::components::FortificationSegment>>,
+    mut removed: RemovedComponents<shared::components::FortificationSegment>,
+) {
+    let removed = removed.read().count() > 0;
+    if changed.is_empty() && !removed {
+        return;
+    }
+    obstacles.defenses.clear();
+    obstacles.defense_cells.clear();
+    for wall in walls.iter().filter(|wall| wall.complete) {
+        let index = obstacles.defenses.len();
+        // A turned gateway's jamb/lintel corners extend beyond its endpoints.
+        // Sum the local extents for a conservative broad phase at every yaw.
+        let margin = Vec2::splat(
+            wall.material.gate_post_width() + 0.1 + wall.material.thickness().max(0.9) * 0.5,
+        );
+        let lo = cell(wall.start.xz().min(wall.end.xz()) - margin);
+        let hi = cell(wall.start.xz().max(wall.end.xz()) + margin);
+        for x in lo.0..=hi.0 {
+            for z in lo.1..=hi.1 {
+                obstacles
+                    .defense_cells
+                    .entry((x, z))
+                    .or_default()
+                    .push(index);
+            }
+        }
+        obstacles.defenses.push(wall.clone());
+    }
 }
 impl ArrowObstacles {
     pub fn sync(&mut self, index: Option<&BuildingSpatialIndex>) {
@@ -117,6 +157,11 @@ impl ArrowObstacles {
         let hi = cell(a.xz().max(b.xz()));
         for x in lo.0..=hi.0 {
             for z in lo.1..=hi.1 {
+                if let Some(entries) = self.defense_cells.get(&(x, z)) {
+                    for &index in entries {
+                        accept(super::defenses::hit(&self.defenses[index], a, b));
+                    }
+                }
                 if let Some(entries) = self.cells.get(&(x, z)) {
                     for &i in entries {
                         let building = &self.buildings[i];

@@ -162,6 +162,18 @@ impl CivicStaffingPosture {
             Self::Full => (workers, guards),
         }
     }
+
+    /// Advertised capacity; actual public hires still require treasury funding
+    /// and available workers. Food circulation must scale before tier promotion.
+    pub fn targets_for_population(self, tier: SettlementTier, residents: u32) -> (u8, u8) {
+        let (workers, guards) = self.targets(tier);
+        let workers = if workers == 0 || self == Self::Essential {
+            workers
+        } else {
+            workers.max(residents.div_ceil(24).min(24) as u8)
+        };
+        (workers, guards)
+    }
 }
 
 /// Why the automatic Reeve last changed an enacted policy.

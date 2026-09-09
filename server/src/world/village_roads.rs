@@ -2188,6 +2188,7 @@ impl NavigationBuildingCache {
     fn rebuild<'a>(
         &mut self,
         placed: impl Iterator<Item = (&'a PlacedBuilding, &'a BuildingPosition)>,
+        defenses: impl Iterator<Item = &'a shared::components::FortificationSegment>,
     ) -> Vec<BuildingBlocker> {
         let previous = std::mem::take(&mut self.blockers);
         self.buildings.clear();
@@ -2219,17 +2220,35 @@ impl NavigationBuildingCache {
             self.blockers.push(navigation.blocker);
             self.buildings.push(navigation);
         }
+        for obstacle in defenses.flat_map(|section| section.ground_obstacles()) {
+            self.blockers.push(BuildingBlocker {
+                center: obstacle.center,
+                half: obstacle.half_extents,
+                rotation: obstacle.rotation,
+            });
+            self.spatial.insert(obstacle);
+        }
         self.initialized = true;
-        let same = |a: &BuildingBlocker, b: &BuildingBlocker| {
-            a.center == b.center && a.half == b.half && a.rotation.to_bits() == b.rotation.to_bits()
+        // Hundreds of wall sections must not turn a geometry revision into
+        // quadratic comparison work. Exact float-bit keys preserve old semantics.
+        let key = |b: &BuildingBlocker| {
+            (
+                b.center.x.to_bits(),
+                b.center.y.to_bits(),
+                b.half.x.to_bits(),
+                b.half.y.to_bits(),
+                b.rotation.to_bits(),
+            )
         };
+        let before: HashSet<_> = previous.iter().map(key).collect();
+        let after: HashSet<_> = self.blockers.iter().map(key).collect();
         previous
             .iter()
-            .filter(|old| !self.blockers.iter().any(|new| same(old, new)))
+            .filter(|old| !after.contains(&key(old)))
             .chain(
                 self.blockers
                     .iter()
-                    .filter(|new| !previous.iter().any(|old| same(old, new))),
+                    .filter(|new| !before.contains(&key(new))),
             )
             .copied()
             .collect()

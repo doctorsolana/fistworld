@@ -2010,13 +2010,12 @@ fn place_detail_model(
             let public_jobs = place.administration.as_ref().map_or_else(
                 || "Administration starting".to_string(),
                 |office| {
-                    let (worker_target, guard_target) = place.policies.as_ref().map_or(
-                        (
-                            place.tier.public_worker_positions(),
-                            place.tier.public_guard_positions(),
-                        ),
-                        |policy| policy.staffing_posture.targets(place.tier),
+                    let posture = place.policies.as_ref().map_or(
+                        shared::components::CivicStaffingPosture::Balanced,
+                        |policy| policy.staffing_posture,
                     );
+                    let (worker_target, guard_target) =
+                        posture.targets_for_population(place.tier, place.residents);
                     let stewards = if office.city_workers.is_empty() {
                         office
                             .lead_steward
@@ -2030,7 +2029,10 @@ fn place_detail_model(
                         "Reeve {} / Moot Stewards {} ({}/{}) / guards {}/{}",
                         office.reeve.as_deref().unwrap_or("vacant"),
                         stewards,
-                        office.city_workers.len(),
+                        office
+                            .city_workers
+                            .len()
+                            .max(usize::from(office.lead_steward.is_some())),
                         worker_target,
                         office.guards.len(),
                         guard_target,

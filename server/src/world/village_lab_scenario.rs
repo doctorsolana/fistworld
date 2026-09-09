@@ -23,6 +23,11 @@ use shared::worldgen::WorldBiome;
 
 use crate::world::village;
 
+mod town_growth;
+pub(crate) use town_growth::{
+    choose_town_growth_site, town_growth_seed, GrowthProfile, TOWN_GROWTH_FOUNDERS,
+};
+
 pub(crate) const SECURE_VILLAGERS: usize = 8;
 pub(crate) const POOR_VILLAGERS: usize = 8;
 pub(crate) const TRIPLE_STRESS_VILLAGERS_PER_VILLAGE: usize = 200;
@@ -127,6 +132,8 @@ fn merchant_beacon_market_plot(
                 &[],
                 colliders,
                 derived,
+                None,
+            &[],
             ) {
                 return Some(approval);
             }
@@ -257,6 +264,8 @@ pub(crate) fn maintain_merchant_beacon_supply(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabScenario {
     Secure,
+    /// Central inland, fixed charter and controlled real migration waves.
+    TownGrowth,
     InlandMeadow,
     PolicyComparison,
     Poor,
@@ -286,6 +295,7 @@ impl LabScenario {
             .as_str()
         {
             "secure" | "food-secure" | "meadow" | "coast" | "coastal" | "port" => Self::Secure,
+            "town-growth" => Self::TownGrowth,
             "inland-meadow" | "grain" | "grain-only" | "no-fishing" => Self::InlandMeadow,
             "policy-comparison" | "policy-compare" | "twin-meadow" | "twin" => {
                 Self::PolicyComparison
@@ -309,7 +319,7 @@ impl LabScenario {
             "dense" | "dense-stress" | "thousand" | "1000" => Self::DenseStress,
             "skirmish" | "battle" | "battlefield" | "war" => Self::Skirmish,
             value => panic!(
-                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, merchant-beacon, regional-economy, triple-stress, dense-stress, or skirmish"
+                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, town-growth, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, merchant-beacon, regional-economy, triple-stress, dense-stress, or skirmish"
             ),
         }
     }
@@ -339,7 +349,10 @@ impl LabScenario {
     }
 
     pub(crate) fn includes_inland_meadow(self) -> bool {
-        matches!(self, Self::InlandMeadow | Self::TradeComparison)
+        matches!(
+            self,
+            Self::TownGrowth | Self::InlandMeadow | Self::TradeComparison
+        )
     }
 
     pub(crate) fn is_policy_comparison(self) -> bool {
@@ -414,6 +427,7 @@ impl LabScenario {
     pub(crate) fn residents_per_village(self) -> usize {
         let default = match self {
             Self::EconomySoak => 0,
+            Self::TownGrowth => TOWN_GROWTH_FOUNDERS,
             Self::RegionalEconomy => SECURE_VILLAGERS,
             Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE,
             Self::DenseStress => DENSE_STRESS_VILLAGERS,
@@ -1442,6 +1456,9 @@ fn merchant_beacon_arrival_waves(founders_per_village: usize) -> Vec<LabArrivalW
 /// one-shot count to zero when only recurring arrivals are wanted.
 pub(crate) fn lab_arrival_waves() -> Vec<LabArrivalWave> {
     let scenario = LabScenario::from_environment();
+    if scenario == LabScenario::TownGrowth {
+        return GrowthProfile::from_environment().waves();
+    }
     if scenario.is_economy_soak() {
         return economy_soak_arrival_waves();
     }
@@ -1661,6 +1678,8 @@ fn spawn_ux_fixture_building(
             access_blockers,
             colliders.as_deref(),
             derived,
+            None,
+        &[],
         ) else {
             continue;
         };
@@ -2560,9 +2579,13 @@ pub(crate) fn stage_rendered_lab_once(
     let secure = scenario
         .includes_secure()
         .then(|| choose_secure_site(&terrain));
-    let inland_meadow = scenario
-        .includes_inland_meadow()
-        .then(|| choose_inland_meadow_site(&terrain));
+    let inland_meadow = scenario.includes_inland_meadow().then(|| {
+        if scenario == LabScenario::TownGrowth {
+            choose_town_growth_site(&terrain)
+        } else {
+            choose_inland_meadow_site(&terrain)
+        }
+    });
     let policy_comparison = scenario
         .is_policy_comparison()
         .then(|| choose_policy_comparison_sites(&terrain));
@@ -2630,7 +2653,7 @@ pub(crate) fn stage_rendered_lab_once(
         );
     }
     if let Some((hall, trees, farmland)) = inland_meadow {
-        spawn_runtime_village(
+        let settlement_entity = spawn_runtime_village(
             &mut commands,
             &terrain,
             &mut villager_seed,
@@ -2640,6 +2663,16 @@ pub(crate) fn stage_rendered_lab_once(
             residents_per_village,
             initial_tier,
         );
+        if scenario == LabScenario::TownGrowth {
+            commands.entity(settlement_entity).insert(
+                shared::components::SettlementDevelopment::from_seed(town_growth_seed(), 0),
+            );
+            info!(
+                "Town growth charter seed={} profile={:?}",
+                town_growth_seed(),
+                GrowthProfile::from_environment()
+            );
+        }
         info!(
             "Rendered lab staged inland Lab Meadow at ({:.1}, {:.1}) — farmland {:.0}%, trees {}, fishing none",
             hall.x,

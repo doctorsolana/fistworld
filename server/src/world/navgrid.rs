@@ -7,6 +7,7 @@
 //! the authored doors.
 
 use bevy::prelude::*;
+use shared::components::FortificationSegment;
 use shared::physics::CHARACTER_NAV_RADIUS;
 use shared::spatial::{ObstacleEntry, SpatialObstacleGrid};
 
@@ -38,8 +39,15 @@ pub fn sync_obstacle_grid(
     mut grid: ResMut<SpatialObstacleGrid>,
     mut state: ResMut<ObstacleGridState>,
     building_index: Res<BuildingSpatialIndex>,
+    walls: Query<&FortificationSegment>,
+    changed_walls: Query<(), Changed<FortificationSegment>>,
+    mut removed_walls: RemovedComponents<FortificationSegment>,
 ) {
-    if state.last_building_version == Some(building_index.version) {
+    let walls_removed = removed_walls.read().count() > 0;
+    if state.last_building_version == Some(building_index.version)
+        && changed_walls.is_empty()
+        && !walls_removed
+    {
         return;
     }
 
@@ -63,6 +71,12 @@ pub fn sync_obstacle_grid(
             rotation: building.rotation,
             obstacle_type: building.building_type as u32,
         });
+    }
+
+    for wall in &walls {
+        for obstacle in wall.ground_obstacles() {
+            grid.insert(obstacle);
+        }
     }
 
     if !buildings.is_empty() {
@@ -102,6 +116,49 @@ mod tests {
             app.world().resource::<SpatialObstacleGrid>().version,
             version
         );
+    }
+
+    #[test]
+    fn defenses_block_only_completed_solid_sections_and_invalidate_on_removal() {
+        use shared::components::{FortificationKind, FortificationMaterial, SettlementId};
+        let mut app = navigation_app();
+        let wall = app
+            .world_mut()
+            .spawn(FortificationSegment {
+                settlement_id: SettlementId(1),
+                circuit: 0,
+                start: Vec3::new(-10.0, 0.0, 0.0),
+                end: Vec3::new(-4.0, 0.0, 0.0),
+                kind: FortificationKind::Wall,
+                material: FortificationMaterial::Palisade,
+                complete: false,
+            })
+            .id();
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<SpatialObstacleGrid>()
+            .point_blocked(Vec2::new(-7.0, 0.0)));
+        app.world_mut()
+            .get_mut::<FortificationSegment>(wall)
+            .unwrap()
+            .complete = true;
+        app.update();
+        let grid = app.world().resource::<SpatialObstacleGrid>();
+        assert!(grid.segment_blocked(Vec2::new(-7.0, -3.0), Vec2::new(-7.0, 3.0)));
+        assert!(!grid.segment_blocked(Vec2::new(0.0, -3.0), Vec2::new(0.0, 3.0)));
+        let version = grid.version;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SpatialObstacleGrid>().version,
+            version
+        );
+        app.world_mut().despawn(wall);
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<SpatialObstacleGrid>()
+            .point_blocked(Vec2::new(-7.0, 0.0)));
     }
 
     #[test]

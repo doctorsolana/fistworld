@@ -1,0 +1,27 @@
+(
+    version: 1,
+    name: "fortifications",
+    map: "village_lab",
+    output_dir: "logs/captures/fortifications",
+    resolution: (1600, 1000),
+    fixed_delta_seconds: 0.016666667,
+    target: scene, show_window: false, warmup_frames: 180,
+    readiness: (minimum_frames: 90, maximum_frames: 1800, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_FORTIFICATIONS": "review",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "overview", focus: (-100.0, 0.0, 121.0), yaw: -0.45, zoom: 75.0, time_of_day: 0.43,
+         assertions: [fortification_sections_at_least(count: 6)]),
+        (name: "timber-gate", focus: (-100.0, 0.0, 108.0), yaw: 0.35, zoom: 24.0, time_of_day: 0.43,
+         assertions: [fortification_sections_at_least(count: 6)]),
+        (name: "stone-gate", focus: (-100.0, 0.0, 134.0), yaw: -0.5, zoom: 30.0, time_of_day: 0.43,
+         assertions: [fortification_sections_at_least(count: 6)]),
+        (name: "reverse", focus: (-100.0, 0.0, 121.0), yaw: 2.7, zoom: 70.0, time_of_day: 0.43,
+         assertions: [fortification_sections_at_least(count: 6)]),
+        (name: "under-gateway", focus: (-100.0, 0.0, 123.0), yaw: 3.14159265, zoom: 20.0,
+         pitch: Some(-0.04), eye: 17.8, time_of_day: 0.43,
+         assertions: [fortification_sections_at_least(count: 6)]),
+    ],
+)

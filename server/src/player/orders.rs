@@ -160,6 +160,34 @@ pub(super) fn apply_local_unit_order(
     units: Vec<Entity>,
     command: UnitCommand,
 ) -> (usize, String) {
+    let riding_verb = matches!(
+        command,
+        UnitCommand::Mount { .. } | UnitCommand::Dismount | UnitCommand::RideGait { .. }
+    );
+    if riding_verb || units.iter().any(|e| world.get::<Mounted>(*e).is_some()) {
+        let (riders, foot): (Vec<_>, Vec<_>) = units
+            .into_iter()
+            .partition(|e| riding_verb || world.get::<Mounted>(*e).is_some());
+        let mut accepted = 0;
+        let mut message = String::new();
+        for entity in riders {
+            match super::riding::order(world, account, entity, command) {
+                Ok(()) => accepted += 1,
+                Err(reason) => message = reason.into(),
+            }
+        }
+        if !foot.is_empty() {
+            let (count, detail) = apply_local_unit_order(world, account, foot, command);
+            accepted += count;
+            if message.is_empty() {
+                message = detail;
+            }
+        }
+        if message.is_empty() {
+            message = "Riding order accepted".into();
+        }
+        return (accepted, message);
+    }
     let order = UnitOrder {
         selection: UnitSelection::default(),
         command,
@@ -539,6 +567,9 @@ pub(super) fn apply_local_unit_order(
                 }
             }
         }
+        UnitCommand::Mount { .. } | UnitCommand::Dismount | UnitCommand::RideGait { .. } => {
+            unreachable!("riding commands handled above")
+        }
         UnitCommand::AttackGround { .. } => {}
         UnitCommand::Hold => {
             for block in current_blocks {
@@ -562,6 +593,9 @@ pub(super) fn apply_local_unit_order(
         UnitCommand::Attack { .. } => "Attacking with",
         UnitCommand::Hold => "Holding with",
         UnitCommand::AttackGround { .. } => "Bombarding with",
+        UnitCommand::Mount { .. } | UnitCommand::Dismount | UnitCommand::RideGait { .. } => {
+            unreachable!("riding commands handled above")
+        }
     };
     let omitted = requested.saturating_sub(accepted);
     let suffix = if omitted > 0 {

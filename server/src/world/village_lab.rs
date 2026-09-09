@@ -7,6 +7,8 @@
 //!
 //! `cargo village-lab`
 
+mod town_growth;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
@@ -46,8 +48,9 @@ use crate::world::village::{
 };
 use crate::world::village_lab_scenario::{
     choose_greenwood_site, choose_inland_meadow_site, choose_policy_comparison_sites,
-    choose_poor_site, choose_secure_site, choose_stone_site, lab_arrival_offset, lab_arrival_waves,
-    LabArrivalTarget, LabScenario, MerchantTradeBeacon,
+    choose_poor_site, choose_secure_site, choose_stone_site, choose_town_growth_site,
+    lab_arrival_offset, lab_arrival_waves, town_growth_seed, LabArrivalTarget, LabScenario,
+    MerchantTradeBeacon,
 };
 use crate::world::village_roads::{
     self, NavigationRouteFailed, NavigationRoutePending, PlannedRoadAccess, RoadBuilderRoutine,
@@ -1146,7 +1149,7 @@ fn env_f32(name: &str, fallback: f32) -> f32 {
         .unwrap_or(fallback)
 }
 
-fn configure_lab(app: &mut App) {
+pub(crate) fn configure_lab(app: &mut App) {
     app.init_resource::<Time>();
     app.init_resource::<VillageClock>();
     app.init_resource::<SettlementEconomyRuntime>();
@@ -1292,7 +1295,7 @@ fn configure_lab(app: &mut App) {
     );
 }
 
-fn spawn_lab_village(
+pub(crate) fn spawn_lab_village(
     world: &mut World,
     name: &str,
     resident_prefix: &str,
@@ -1447,9 +1450,13 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
         let secure = scenario
             .includes_secure()
             .then(|| choose_secure_site(terrain));
-        let inland_meadow = scenario
-            .includes_inland_meadow()
-            .then(|| choose_inland_meadow_site(terrain));
+        let inland_meadow = scenario.includes_inland_meadow().then(|| {
+            if scenario == LabScenario::TownGrowth {
+                choose_town_growth_site(terrain)
+            } else {
+                choose_inland_meadow_site(terrain)
+            }
+        });
         let policy_comparison = scenario
             .is_policy_comparison()
             .then(|| choose_policy_comparison_sites(terrain));
@@ -1550,15 +1557,24 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             farmland * 100.0,
             trees,
         );
-        spawn_lab_village(
+        let settlement_entity = spawn_lab_village(
             world,
             "Lab Meadow",
-            "MeadowResident",
+            if scenario == LabScenario::TownGrowth {
+                "SecureResident"
+            } else {
+                "MeadowResident"
+            },
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
             initial_tier,
         );
+        if scenario == LabScenario::TownGrowth {
+            world.entity_mut(settlement_entity).insert(
+                shared::components::SettlementDevelopment::from_seed(town_growth_seed(), 0),
+            );
+        }
     }
 
     if let Some((frugal, mutual)) = policy_comparison {

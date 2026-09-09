@@ -194,10 +194,17 @@ pub(crate) fn review_automatic_price(
     ) {
         desired = desired.max(sustainable);
     }
-    if matches!(
-        condition,
-        BusinessState::Distressed | BusinessState::Insolvent
-    ) {
+    // A clearance discount can realise value from existing stock. Applied to
+    // an empty workplace it instead cancels every scarcity increase above,
+    // leaving a distressed producer unable to quote a profitable restart even
+    // when buyers are waiting. Empty shelves keep the normal demand-led price
+    // decision; funding, inputs and the operating margin still govern work.
+    if total_stock > 0
+        && matches!(
+            condition,
+            BusinessState::Distressed | BusinessState::Insolvent
+        )
+    {
         desired = price_step(desired, sale.max_daily_price_change_bps, false);
     }
     sale.asking_unit_price = desired.max(sale.minimum_unit_price).max(1);
@@ -1157,6 +1164,64 @@ mod tests {
             8,
             MarketPriceSignals::default(),
         ));
+    }
+
+    #[test]
+    fn distressed_empty_shelves_can_answer_real_demand_without_a_phantom_clearance() {
+        for condition in [BusinessState::Distressed, BusinessState::Insolvent] {
+            let mut account = BusinessAccount::default();
+            let mut sale = BusinessSalePolicy::for_good(Good::Bread);
+            sale.asking_unit_price = 26;
+            for _ in 0..3 {
+                let previous = sale.asking_unit_price;
+                review_automatic_price(
+                    &mut account,
+                    &mut sale,
+                    condition,
+                    0,
+                    Good::Bread,
+                    MarketPriceSignals {
+                        unavailable_units: 4,
+                        ..default()
+                    },
+                    25,
+                    500,
+                );
+                assert!(
+                    sale.asking_unit_price > previous,
+                    "scarcity must not be cancelled by discounting nonexistent stock"
+                );
+            }
+
+            // No goods and no buyers do not justify a synthetic price rise.
+            let no_demand_price = sale.asking_unit_price;
+            review_automatic_price(
+                &mut account,
+                &mut sale,
+                condition,
+                0,
+                Good::Bread,
+                MarketPriceSignals::default(),
+                25,
+                500,
+            );
+            assert_eq!(sale.asking_unit_price, no_demand_price);
+
+            // Real inventory still receives the distressed owner's clearance
+            // markdown, including when it would sell below replacement cost.
+            sale.asking_unit_price = 180;
+            review_automatic_price(
+                &mut account,
+                &mut sale,
+                condition,
+                8,
+                Good::Bread,
+                MarketPriceSignals::default(),
+                25,
+                500,
+            );
+            assert!(sale.asking_unit_price < 180);
+        }
     }
 
     #[test]

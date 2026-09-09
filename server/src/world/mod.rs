@@ -11,6 +11,7 @@
 
 pub mod bootstrap;
 pub mod dev;
+pub mod fortifications;
 pub mod identity;
 pub mod immigration;
 pub mod map_state;

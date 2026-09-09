@@ -1,53 +1,51 @@
-"""Idempotently add recessed joint cores to the canonical rigid body.
+"""Remove legacy joint filler spheres, preserving the closed blocky limb shells.
 
-Closed limb shells can still expose daylight when their flat end caps rotate.
-Small faceted spherical cores bridge wrists, ankles and neck without welding
-the separately weighted shells or changing the existing skeleton.
+The user prefers visible bending gaps to protruding joint caps. Retained as the
+idempotent migration entry point for older canonical sources; never adds geometry.
 """
-
 from pathlib import Path
-
 import bmesh
 import bpy
-from mathutils import Matrix
+from mathutils import Vector
 
 body = bpy.data.objects["Character_Base"]
-if body.data.get("joint_core_version", 0) < 2:
-    rig = bpy.data.objects["Rig"]
-    bm = bmesh.new()
-    bm.from_mesh(body.data)
-    # The first repair appended cores after the canonical 426 vertices. Store
-    # this boundary so future fitting adjustments replace, never stack, them.
-    base_count = body.data.get(
-        "joint_core_base_vertices",
-        426 if body.data.get("joint_cores_v1") else len(bm.verts),
-    )
-    bm.verts.ensure_lookup_table()
-    if len(bm.verts) > base_count:
-        bmesh.ops.delete(bm, geom=list(bm.verts)[base_count:], context="VERTS")
-    deform = bm.verts.layers.deform.verify()
-    for bone_name, owner, radius in (
-        ("hand.L", "arm.L", 0.067),
-        ("hand.R", "arm.R", 0.067),
-        ("foot.L", "leg.L", 0.073),
-        ("foot.R", "leg.R", 0.073),
-        ("head", "torso", 0.059),
-    ):
-        center = rig.data.bones[bone_name].head_local
-        created = bmesh.ops.create_uvsphere(
-            bm,
-            u_segments=8,
-            v_segments=4,
-            radius=radius,
-            matrix=Matrix.Translation(center),
-        )["verts"]
-        group = body.vertex_groups[owner].index
-        for vertex in created:
-            vertex[deform][group] = 1.0
-    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
-    assert all(edge.is_manifold for edge in bm.edges)
-    bm.to_mesh(body.data)
-    bm.free()
-    body.data["joint_core_base_vertices"] = base_count
-    body.data["joint_core_version"] = 2
+rig = bpy.data.objects["Rig"]
+bm = bmesh.new()
+bm.from_mesh(body.data)
+remaining = set(bm.verts)
+remove = []
+# Match whole disconnected legacy spheres by topology, centre and radius.
+# Do not use vertex offsets: the elbow migration reordered the original mesh.
+cores = [("hand.L", .067), ("hand.R", .067), ("foot.L", .073),
+         ("foot.R", .073), ("head", .059),
+         ("forearm.L", .064), ("forearm.R", .064)]
+while remaining:
+    seed = remaining.pop()
+    component = {seed}
+    stack = [seed]
+    while stack:
+        for edge in stack.pop().link_edges:
+            for neighbor in edge.verts:
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    component.add(neighbor)
+                    stack.append(neighbor)
+    if len(component) != 26:
+        continue
+    low = Vector(tuple(min(v.co[a] for v in component) for a in range(3)))
+    high = Vector(tuple(max(v.co[a] for v in component) for a in range(3)))
+    for name, radius in cores:
+        if name not in rig.data.bones:
+            continue
+        if ((low + high) * .5 - rig.data.bones[name].head_local).length < 1e-5 and all(
+            abs(d - 2 * radius) < 1e-5 for d in high - low
+        ):
+            remove.extend(component)
+            break
+bmesh.ops.delete(bm, geom=remove, context="VERTS")
+assert all(edge.is_manifold for edge in bm.edges)
+bm.to_mesh(body.data)
+bm.free()
+body.data["joint_fillers_removed"] = True
+print(f"Removed {len(remove)} legacy joint filler vertices", flush=True)
 bpy.ops.wm.save_as_mainfile(filepath=str(Path(__file__).with_name("humanoid.blend")))

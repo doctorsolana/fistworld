@@ -32,6 +32,8 @@ pub(super) fn nearest_completed_road_frontage(
         .min_by(|a, b| {
             a.distance_squared(candidate)
                 .total_cmp(&b.distance_squared(candidate))
+                .then_with(|| a.x.total_cmp(&b.x))
+                .then_with(|| a.y.total_cmp(&b.y))
         })
         .filter(|frontage| frontage.distance_squared(candidate) <= 48.0 * 48.0)
 }
@@ -608,6 +610,8 @@ mod road_access_tests {
             &[],
             None,
             None,
+            None,
+            &[],
         )
         .expect("a dry nearby player plot should reserve a real Hall connector");
         assert!(approval.road_access.len() >= 2);
@@ -629,6 +633,8 @@ mod road_access_tests {
             &[],
             None,
             None,
+            None,
+            &[],
         )
         .unwrap_err();
         assert!(rejection.contains("charter"));

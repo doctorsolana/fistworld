@@ -29,6 +29,6 @@
       (name: "Deep", rgb: (0.0620, 0.0260, 0.0130)),
     ],
   ),
-  body_clips: ["bow_ready", "bow_shoot", "build", "carry", "chop", "combat_fall", "combat_fall_back", "combat_guard", "combat_recoil", "combat_strike", "harvest", "idle", "lie_down", "lie_idle", "pull", "run", "sit_down", "sit_idle", "swim", "swim_idle", "talk", "walk"],
+  body_clips: ["bow_ready", "bow_shoot", "build", "carry", "chop", "combat_fall", "combat_fall_back", "combat_guard", "combat_recoil", "combat_strike", "harvest", "idle", "lie_down", "lie_idle", "pull", "run", "sit_down", "sit_idle", "swim", "swim_idle", "talk", "walk", "ride_idle", "ride_walk", "ride_trot", "ride_canter", "ride_gallop", "mount", "dismount"],
   face_clips: ["face_angry", "face_happy", "face_idle", "face_sad", "face_surprised"],
 )

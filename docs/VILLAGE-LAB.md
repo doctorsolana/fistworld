@@ -4,6 +4,10 @@ For the economic invariants behind treasury, market fees, profit levies, relief,
 reserves and policy changes reported by the lab, see
 [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 
+For a shorter seed/immigration comparison with an interactive timeline of actual
+town layouts and optional Bevy views, use the [town-growth lab](TOWN-GROWTH-LAB.md).
+It reuses this lab's production schedule and physical immigration/construction.
+
 The Village Lab is the deterministic, headless integration test for the whole
 early-village loop. Its default is one small fixed-seed settlement so actors,
 stock and failures remain easy to follow between runs. The 1.12-kilometre
@@ -200,6 +204,7 @@ cargo village-lab
 # Watch one real 100-person immigration line form immediately at 10x. The
 # crowd spawns as one god-mode-style burst southwest of the Moot Hall; all
 # arrivals still walk, queue at distinct FIFO places and register one by one.
+FISTWORLD_LAB_SCENARIO=secure \
 FISTWORLD_LAB_DAY_TWO_ARRIVALS=100 \
 FISTWORLD_LAB_ARRIVAL_DAY=1 \
 FISTWORLD_LAB_ARRIVAL_OFFSET=-15,-12 \
@@ -865,10 +870,12 @@ transition. This is visual-only; replicated identity, selection and every
 server task continue at full fidelity. The headless timings above remain the
 authoritative simulation measurement.
 
-This starts the `secure` scenario at 1x, skips the login screens with the local
-`LabObserver` profile, and focuses the camera on the same eight-founder Lab
-Meadow on every run; the default day-2 wave adds eight more. Both map and
-placement use seed 3. Use WASD to pan, the
+The default `testworld` now starts the `town-growth` inland scenario at 1x,
+skips the login screens with the local `LabObserver` profile, and focuses the
+camera at `(-100, 120)`. It starts with eight founders, charter seed 23 and
+steady immigration. Terrain keeps the village_lab seed-3 recipe; the charter
+seed is independent. See [TOWN-GROWTH-LAB.md](TOWN-GROWTH-LAB.md) for seed/profile
+comparisons and time-scrubbable reports. Use WASD to pan, the
 mouse wheel to zoom, right-drag to orbit, and the HUD speed buttons to pause or
 switch between 1x, 10x, 25x and 100x whenever you want. The launcher prints a
 timestamped `logs/testworld-*` directory containing `server.log` and
@@ -895,10 +902,11 @@ as the headless test:
 FISTWORLD_LAB_SCENARIO=dual ./run.sh testworld
 FISTWORLD_LAB_SCENARIO=poor FISTWORLD_LAB_WARP=10 ./run.sh testworld
 
-# This is now the default; set it explicitly when documenting a reproduction.
-FISTWORLD_LAB_DAY_TWO_ARRIVALS=8 FISTWORLD_LAB_WARP=10 ./run.sh testworld
+# The original coastal fixture and its eight-person day-2 wave.
+FISTWORLD_LAB_SCENARIO=secure FISTWORLD_LAB_DAY_TWO_ARRIVALS=8 FISTWORLD_LAB_WARP=10 ./run.sh testworld
 
 # Replay the day-7 twelve-person wave used by the construction/pathfinding stress test.
+FISTWORLD_LAB_SCENARIO=secure \
 FISTWORLD_LAB_DAY_TWO_ARRIVALS=12 \
 FISTWORLD_LAB_ARRIVAL_DAY=7 \
 FISTWORLD_LAB_WARP=100 \
@@ -907,6 +915,7 @@ FISTWORLD_LAB_WARP=100 \
 # Run the same 3-per-day soak visibly and save a real rendered survey image
 # when authoritative WorldTime reaches HUD day 12. The client exits after the
 # PNG is safely on disk; both process logs remain in the normal testworld folder.
+FISTWORLD_LAB_SCENARIO=secure \
 FISTWORLD_LAB_DAY_TWO_ARRIVALS=0 \
 FISTWORLD_LAB_DAILY_ARRIVALS=3 \
 FISTWORLD_LAB_DAILY_ARRIVAL_DAYS=12 \
@@ -918,6 +927,7 @@ FISTWORLD_LAB_CAPTURE_EXIT=1 \
 
 # Reproduce a mature-town immigration burst: four arrivals per day establish
 # roughly sixty residents, then forty people enter together from 130 m away.
+FISTWORLD_LAB_SCENARIO=secure \
 FISTWORLD_LAB_DAILY_ARRIVALS=4 \
 FISTWORLD_LAB_DAILY_ARRIVAL_DAYS=13 \
 FISTWORLD_LAB_DAY_TWO_ARRIVALS=40 \
@@ -1271,10 +1281,10 @@ with god mode:
 CITYSIM_MAP_ID=village_lab ./run.sh
 ```
 
-Current deterministic hall sites are approximately `(112, -158)` for Lab
-Meadow and `(-278, -428)` for Lab Coldbarrow. Site selection remains
-environment-driven, so treat those coordinates as debugging aids rather than a
-save-file contract.
+The inland `town-growth` hall uses the validated anchor `(-100, 120)`.
+The original `secure` Lab Meadow is approximately `(112, -158)`, and Lab
+Coldbarrow is approximately `(-278, -428)`. These are development fixtures,
+not a save-file contract.
 
 The map is defined in `client/assets/maps/village_lab/map.ron`. Shared site
 selection and rendered staging live in

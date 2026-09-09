@@ -160,7 +160,15 @@ impl SettlementDevelopment {
         }
         seed ^= u64::from(position.x.to_bits()).rotate_left(17);
         seed ^= u64::from(position.z.to_bits()).rotate_left(41);
-        let choose = |shift: u32, count: u64| (seed.rotate_right(shift) % count) as u8;
+        Self::from_seed(seed, day)
+    }
+
+    /// Reproduce a charter directly in diagnostics without changing its rules.
+    pub fn from_seed(seed: u64, day: u32) -> Self {
+        // Small hand-entered seeds deserve the same trait variation as hashed
+        // foundation names. Preserve the original seed as the replay identity.
+        let traits = crate::worldgen::splitmix64(seed);
+        let choose = |shift: u32, count: u64| (traits.rotate_right(shift) % count) as u8;
         let layout = match choose(0, 5) {
             0 => SettlementLayoutStyle::Organic,
             1 => SettlementLayoutStyle::Radial,
@@ -218,7 +226,7 @@ pub enum SettlementTier {
     Village,
     /// Trade and defence.
     Town,
-    /// Leisure: something past survival.
+    /// Reserved for future progression; retained for existing wire/save values.
     City,
 }
 
@@ -239,8 +247,7 @@ impl SettlementTier {
             SettlementTier::Ruins => Some("refounding"),
             SettlementTier::Hamlet => Some("food security: fed, grown here or bought in"),
             SettlementTier::Village => Some("external trade and administration: a working market"),
-            SettlementTier::Town => Some("regional pull: diverse work and real amenities"),
-            SettlementTier::City => None,
+            SettlementTier::Town | SettlementTier::City => None,
         }
     }
 

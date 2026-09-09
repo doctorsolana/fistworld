@@ -20,7 +20,7 @@ see [ARCHERY.md](../docs/ARCHERY.md) for gameplay and connected verification.
 | `character/locomotion_clips.py` | Run, moving/idle swim, lying down/rest |
 | `character/animation_pose.py` | Reset every pose channel before binding an action |
 | `character/add_elbows.py`, `archery_clips.py` | Articulated forearms, left bow socket and baked shooting poses |
-| `character/repair_joints.py` | Replaceable recessed wrist/ankle/neck cores |
+| `character/repair_joints.py` | Remove legacy protruding joint fillers |
 | `character/wardrobe_items.py` | Append-only slot/item order, coverage and named outfits |
 | `character/build_wardrobe_v2.py` | Civilian clothes/hair and generated manifest |
 | `character/build_equipment.py`, `equipment_mesh.py` | Closed, rigidly weighted equipment meshes |
@@ -32,7 +32,7 @@ see [ARCHERY.md](../docs/ARCHERY.md) for gameplay and connected verification.
 
 ## Animation names and runtime use
 
-There are **27 clips: 22 body and 5 face**. Existing names remain stable.
+There are **34 clips: 29 body and 5 face**. Existing names remain stable.
 
 | Clip | Duration | Consumer |
 |---|---:|---|
@@ -52,6 +52,13 @@ There are **27 clips: 22 body and 5 face**. Existing names remain stable.
 | `combat_fall_back` | 1 s, held | Backward fatal fall for odd `PersonId` |
 | `lie_down` | 1½ s | Entry into authoritative `CharacterActivity::LyingDown` |
 | `lie_idle` | 3 s loop | Settled outdoor rest; subtle breathing |
+| `ride_idle` | 2 s loop | Horse asset preview; seat relative |
+| `ride_walk`, `ride_trot`, `ride_canter`, `ride_gallop` | 1 s normalized cycle | Horse asset preview; sample using horse phase |
+| `mount`, `dismount` | 1¼ s | Horse asset preview; hold final pose |
+
+Riding clips are exported and available by name, but the normal gameplay driver
+and mounting controls remain unfinished. See `animals/HORSE_HANDOVER.md` for
+seat alignment and the explicit integration boundary.
 
 The two death clips share the server's fatal timestamp. Clock-sampled clips are
 paused while explicitly seeking: speed zero alone still allows Bevy to wrap an
@@ -107,19 +114,20 @@ version; rebuild/restart both after this change.
 
 ## Measured render budget
 
-The exported GLB is about **2.0 MiB**, including every wardrobe option and all
-27 clips. Only the selected outfit is rendered. Counts below include the body;
+The exported GLB is about **2.21 MiB**, including every wardrobe option and all
+34 clips. Only the selected outfit is rendered. Counts below include the body;
 GPU vertices include the splits required by flat normals and colours.
 
 | Outfit | GPU vertices | Triangles | Rendered primitives |
 |---|---:|---:|---:|
-| Default civilian | 3,536 | 1,864 | 5 |
-| Padded soldier | 5,096 | 2,584 | 5 |
-| Leather soldier | 4,776 | 2,460 | 5 |
-| Mail soldier | 5,712 | 2,916 | 5 |
+| Default civilian | 2,752 | 1,528 | 5 |
+| Padded soldier | 4,312 | 2,248 | 5 |
+| Leather soldier | 3,992 | 2,124 | 5 |
+| Mail soldier | 4,928 | 2,580 | 5 |
 
-Joint contact cores add geometry to the original body. The extra catalogue
-options add asset data without rendering all their meshes on every character.
+Removing the seven legacy joint fillers saves 784 exported vertices and 336
+triangles per character. Catalogue options add asset data without rendering
+all their meshes on every character.
 Regenerate these figures with `validate_character_glb.py` after geometry changes.
 
 ## Build and verification
@@ -218,3 +226,8 @@ order/movement tests plus the real renderer fixture.
    rotation: imported animated poses already use Blender's Z-up space.
 9. **Preserve contacts.** Inspect wrist/ankle joins, floor contact, resting head and
    clothing, swimming eye height, and held-tool blade direction across a full cycle.
+
+Joint appearance: the user explicitly prefers gaps between bending blocky limbs
+to spherical caps. `repair_joints.py` removes legacy wrist, ankle, neck and elbow
+filler islands; `add_elbows.py` must not recreate them. Keep the limb shells and
+existing rig/animation names intact.

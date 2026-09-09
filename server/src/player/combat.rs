@@ -124,7 +124,11 @@ pub fn pursue_attack_orders(
             &mut CharacterAttributes,
             &mut CharacterMotion,
         ),
-        (Without<OfflineHero>, Without<AboardBoat>, Without<shared::components::BowEquipped>),
+        (
+            Without<OfflineHero>,
+            Without<AboardBoat>,
+            Without<shared::components::BowEquipped>,
+        ),
     >,
     mut targets: Query<
         (&PlayerPosition, &mut Health),

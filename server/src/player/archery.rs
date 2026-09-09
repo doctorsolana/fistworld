@@ -11,9 +11,11 @@ use super::{
 use bevy::prelude::*;
 use shared::components::*;
 mod collision;
+mod defenses;
 mod equipment;
 mod flight;
 mod shooting;
+pub use collision::sync_defense_arrow_obstacles;
 pub use collision::ArrowObstacles;
 pub(crate) use equipment::safe_to_equip;
 pub use equipment::{apply_equipment_order, inherit_equipment};

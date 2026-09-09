@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<title>Town growth · Simulation atlas</title>
+<style>
+:root{color-scheme:light;--ink:#302c23;--muted:#756b59;--paper:#f1e8d4;--panel:#faf5e8;--line:#d8c9a9;--gold:#8b6330;--house:#ad6647;--food:#879646;--industry:#617b88;--civic:#a17c34}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.5 system-ui,sans-serif}header{padding:25px 32px 20px;border-bottom:1px solid var(--line);display:flex;gap:28px;justify-content:space-between;align-items:center;background:var(--panel)}h1{font:34px/1.1 Georgia,serif;margin:3px 0 8px}h2{font:22px Georgia,serif;margin:0 0 15px}.eyebrow{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--gold);font-weight:700}p{margin:5px 0;color:var(--muted)}header p{max-width:690px}a{color:#7b4d25}.badge{border:1px solid var(--line);border-radius:4px;padding:8px 12px;font-size:12px;white-space:nowrap;background:#eee5d1}.badge.bad{border-color:#b7614c;color:#873e2d;background:#f8ded0}.badge.good{color:#476340;background:#e3ebd5;border-color:#a5b88e}main{display:grid;grid-template-columns:290px minmax(0,1fr);min-height:calc(100vh - 147px)}aside{padding:23px;border-right:1px solid var(--line);background:#f7f0df}.controls{display:grid;gap:15px}label{display:block;font-size:11px;letter-spacing:.5px;color:var(--muted);font-weight:650}select,button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid #c9b997;border-radius:4px;padding:8px 10px}select{display:block;width:100%;margin-top:5px}button{cursor:pointer}button:hover{background:#e9dcc2}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #8b6330;outline-offset:3px}input[type=range]{width:100%;accent-color:#8b6330}.timeline-label{font:21px Georgia,serif;display:block;color:var(--ink);margin-bottom:4px}.minor{font-size:11px;color:var(--muted)}.check{display:flex;align-items:center;gap:8px;font-weight:400;font-size:12px;letter-spacing:0}.check input{accent-color:var(--gold)}.divider{border-top:1px solid var(--line);margin:23px 0}.legend{display:grid;grid-template-columns:1fr 1fr;gap:8px 5px;font-size:11px}.swatch{display:inline-block;width:11px;height:11px;margin-right:7px;vertical-align:-1px;border-radius:1px}.content{padding:22px 25px;min-width:0}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}.stat{padding:13px 17px;background:var(--panel);border:1px solid var(--line);border-radius:5px}.stat b{display:block;font:27px Georgia,serif}.stat span{font-size:11px;color:var(--muted)}.map-frame{position:relative;border:1px solid #cabb9a;background:#e9e2cc;border-radius:6px;overflow:hidden}.map-tools{position:absolute;top:12px;right:12px;display:flex;gap:5px;z-index:1}.map-tools button{padding:6px 9px;font-size:11px}#map{width:100%;height:560px;display:block;touch-action:none;cursor:grab}#map.dragging{cursor:grabbing}.feature{cursor:pointer}.feature:hover{filter:brightness(1.15)}.map-footer{display:flex;justify-content:space-between;gap:16px;padding:10px 13px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--muted)}.below{display:grid;grid-template-columns:1.15fr 1fr;gap:23px;margin-top:22px}.panel{min-width:0}.panel h2{font-size:19px;margin-bottom:10px}table{border-collapse:collapse;width:100%;font-size:12px}td,th{padding:7px 0;border-bottom:1px solid var(--line);text-align:left;font-weight:400}td:last-child{text-align:right;font-variant-numeric:tabular-nums}#feature-detail{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.6 ui-monospace,monospace;max-height:330px;overflow:auto;background:#fbf5e7;padding:12px;border:1px solid var(--line);border-radius:4px;margin:0}#notice{padding:11px 14px;margin-bottom:15px;background:#f7dfcd;border:1px solid #d2aa8f;border-radius:4px;color:#7a3c25;font-size:12px}#notice[hidden]{display:none}#case-notes{margin-top:13px;font-size:11px;overflow-wrap:anywhere}.case-list{font-size:11px;display:grid;gap:6px;margin-top:10px}.case-item{display:flex;justify-content:space-between;gap:6px}.case-item strong{font-weight:500}.case-item .failed{color:#9b3f29}footer{margin-top:21px;border-top:1px solid var(--line);padding-top:12px;font-size:11px;color:var(--muted)}#empty{position:absolute;inset:45% 15%;text-align:center;color:var(--muted)}@media(max-width:1000px){header{padding:20px}main{grid-template-columns:235px minmax(0,1fr)}aside{padding:18px}.content{padding:18px}.summary{grid-template-columns:repeat(2,1fr)}.below{grid-template-columns:1fr}#map{height:480px}}@media(max-width:650px){header{display:block}header .badge{display:inline-block;margin-top:12px}main{display:block}aside{border-right:0;border-bottom:1px solid var(--line)}.controls{grid-template-columns:1fr 1fr}.divider,.legend,.case-list,#case-notes{display:none}#map{height:400px}.summary{gap:7px}.stat{padding:10px}}
+</style>
+</head>
+<body>
+<header><div><div class="eyebrow">Fistworld · Simulation atlas</div><h1>How a town takes shape</h1><p>Recorded buildings, roads and farmland from the real server lab. Follow the same settlement as arrivals become residents and construction takes place.</p></div><div id="overall" class="badge">Loading recorded cases</div></header>
+<main>
+<aside>
+<div class="controls">
+<div><label id="seed-label" for="seed">CHARTER SEED</label><select id="seed" aria-labelledby="seed-label"></select></div>
+<div><label id="profile-label" for="profile">ARRIVAL PROFILE</label><select id="profile" aria-labelledby="profile-label"></select></div>
+<div><label id="settlement-label" for="settlement">SETTLEMENT</label><select id="settlement" aria-labelledby="settlement-label"></select></div>
+<label><span id="day-label" class="timeline-label">Day —</span><span id="time-label" class="minor">Recorded snapshot</span><input id="day" type="range" min="0" max="0" value="0" aria-label="Recorded simulation time"></label>
+<label class="check"><input id="pending" type="checkbox" checked>Show planned construction</label>
+<label class="check"><input id="doors" type="checkbox" checked>Show door positions</label>
+<label class="check"><input id="labels" type="checkbox">Show building labels</label>
+<label class="check"><input id="districts" type="checkbox">Show residential ward plans</label>
+<label class="check"><input id="squares" type="checkbox" checked>Show civic square reservations</label>
+<label class="check"><input id="defenses" type="checkbox" checked>Show walls and gate reservations</label>
+</div>
+<div class="divider"></div>
+<div class="legend"><span><i class="swatch" style="background:var(--house)"></i>Homes</span><span><i class="swatch" style="background:var(--food)"></i>Food production</span><span><i class="swatch" style="background:var(--industry)"></i>Industry / storage</span><span><i class="swatch" style="background:var(--civic)"></i>Civic / trade</span><span><i class="swatch" style="background:#d1c177"></i>Fields / pasture</span><span><i class="swatch" style="border:1px dashed #756b59"></i>Pending work</span></div>
+<p id="case-notes"></p><div class="divider"></div><div class="eyebrow">Experiment cases</div><div id="case-list" class="case-list"></div>
+</aside>
+<section class="content">
+<div id="notice" role="status" hidden></div>
+<p id="growth-outcome" style="margin:0 0 15px"></p>
+<div class="summary"><div class="stat"><b id="residents">—</b><span>Residents · all settlements</span></div><div class="stat"><b id="housed">—</b><span>People housed</span></div><div class="stat"><b id="completed">—</b><span>Completed buildings</span></div><div class="stat"><b id="neighbors">—</b><span>Homes with a neighbor within 18 m</span></div></div>
+<div class="map-frame"><div class="map-tools"><button id="zoom-in" aria-label="Zoom in">+</button><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit town</button></div><svg id="map" role="img" aria-label="Recorded town geometry" xmlns="http://www.w3.org/2000/svg"></svg><div id="empty" hidden>No recorded geometry is available for this case.</div><div class="map-footer"><span>Drag to pan · scroll to zoom · click a building to inspect</span><span id="scale">Ground plane · metres</span></div></div>
+<div class="below"><section class="panel"><h2>What the simulation measured</h2><table id="metrics"><tbody></tbody></table><p class="minor">Timing is the measured headless lab run, not a client frame-rate benchmark.</p><p class="minor">Render this snapshot in Bevy, from the repository root:</p><pre id="capture-command" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px"></pre></section><section class="panel"><h2 id="detail-title">Recorded settlement</h2><pre id="feature-detail">Select a recorded feature.</pre><p class="minor">Footprints are the server’s reserved geometry. Terrain shading and decorative models are not reconstructed here; Bevy captures provide the 3D visual check.</p></section></div>
+<footer id="provenance"></footer>
+</section>
+</main>
+<script id="town-growth-data" type="application/json">__TOWN_GROWTH_DATA__</script>
+<script>
+"use strict";
+(() => {
+  const data = JSON.parse(document.getElementById("town-growth-data").textContent);
+  const byId = id => document.getElementById(id);
+  const cases = data.cases;
+  const NS = "http://www.w3.org/2000/svg";
+  const map = byId("map");
+  let selectedCase, snapshots = [], frame, view, fitted, drag;
+  const pretty = value => String(value ?? "—").replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("_", " ");
+  const finite = value => typeof value === "number" && Number.isFinite(value);
+  const xz = position => [position[0], position[2]];
+  const sameId = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function element(tag, attributes = {}, text) {
+    const node = document.createElementNS(NS, tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+  function selectOptions(node, values, current) {
+    node.replaceChildren(...values.map(([value, label]) => {
+      const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
+    }));
+    if (values.some(([value]) => value === current)) node.value = current;
+  }
+  function detail(title, value) {
+    byId("detail-title").textContent = title;
+    byId("feature-detail").textContent = JSON.stringify(value, null, 2);
+  }
+  function interactive(node, title, value) {
+    node.classList.add("feature"); node.appendChild(element("title", {}, title));
+    node.addEventListener("click", () => detail(title, value));
+    return node;
+  }
+  function corners(entry) {
+    const c = entry.footprint_center, size = entry.footprint, rotation = entry.rotation;
+    if (!c || !size || ![...c, ...size, rotation].every(finite)) return [];
+    const co = Math.cos(rotation), si = Math.sin(rotation);
+    // shared::rotation::local_to_world_xz: positive Bevy Y rotation turns +X toward -Z.
+    return [[-1,-1],[1,-1],[1,1],[-1,1]].map(([x,z]) => {
+      x *= size[0] / 2; z *= size[1] / 2;
+      return [c[0] + x * co + z * si, c[1] - x * si + z * co];
+    });
+  }
+  function scope(snapshot) {
+    const index = Number(byId("settlement").value);
+    const selected = snapshot.settlements[index];
+    const belongs = entry => !selected || sameId(entry.settlement_id, selected.id);
+    const attached = entry => !selected || entry.component.settlement === selected.name;
+    return {settlements: selected ? [selected] : snapshot.settlements,
+      buildings: snapshot.buildings.filter(belongs), roads: snapshot.roads.filter(belongs),
+      districts: (snapshot.districts ?? []).filter(belongs), fortifications: (snapshot.fortifications ?? []).filter(belongs),
+      fields: snapshot.fields.filter(attached), pastures: snapshot.pastures.filter(attached), piers: snapshot.piers.filter(attached)};
+  }
+  function districtShape(district) {
+    return {footprint_center:district.center, footprint:district.half_extents.map(value=>value*2),
+            rotation:-Math.atan2(district.axis[1],district.axis[0])};
+  }
+  function squareShape(square) {
+    return {footprint_center:xz(square.center),footprint:square.half_extents.map(value=>value*2),rotation:square.rotation};
+  }
+  function bounds() {
+    const points = [];
+    for (const snapshot of snapshots) {
+      const scoped = scope(snapshot);
+      points.push(...scoped.settlements.map(settlement => xz(settlement.position)));
+      points.push(...scoped.piers.map(pier => xz(pier.position)));
+      for (const entry of [...scoped.buildings, ...scoped.fields, ...scoped.pastures, ...scoped.piers]) points.push(...corners(entry));
+      for (const entry of scoped.roads) points.push(...entry.road.points);
+      for (const district of scoped.districts) points.push(...corners(districtShape(district)));
+      for (const town of scoped.settlements) if (town.civic_square) points.push(...corners(squareShape(town.civic_square)));
+      for (const section of scoped.fortifications) points.push(xz(section.start),xz(section.end));
+      for (const town of scoped.settlements) for (const circuit of town.defenses?.circuits ?? []) points.push(...circuit.boundary);
+    }
+    const valid = points.filter(point => point.length === 2 && point.every(finite));
+    if (!valid.length) return [0, 0, 100, 100];
+    const xs = valid.map(point => point[0]), zs = valid.map(point => point[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minZ = Math.min(...zs), maxZ = Math.max(...zs);
+    const width = Math.max(65, maxX - minX + 30), height = Math.max(65, maxZ - minZ + 30);
+    return [(minX + maxX - width) / 2, (minZ + maxZ - height) / 2, width, height];
+  }
+  function setView(next) {
+    view = next; map.setAttribute("viewBox", view.join(" "));
+    byId("scale").textContent = `${Math.round(view[2])} × ${Math.round(view[3])} m · ground plane`;
+  }
+  function zoom(factor) {
+    if (!view) return;
+    const width = Math.max(15, Math.min(fitted[2] * 8, view[2] * factor));
+    const height = view[3] * width / view[2];
+    setView([view[0] + (view[2] - width) / 2, view[1] + (view[3] - height) / 2, width, height]);
+  }
+  function buildingColor(kind) {
+    if (kind === "House") return "#ad6647";
+    if (["Farmstead", "LivestockFarm", "FishermansHut", "Bakery", "Windmill"].includes(kind)) return "#879646";
+    if (["LumberjackHut", "StoneQuarry", "StorageHall"].includes(kind)) return "#617b88";
+    return "#a17c34";
+  }
+  function drawRect(entry, fill, title, pending = false) {
+    const shape = corners(entry);
+    if (!shape.length) return;
+    const node = element("polygon", {points: shape.map(point => point.join(",")).join(" "), fill,
+      "fill-opacity": pending ? 0.2 : 0.85, stroke: "#4c4638", "stroke-width": 0.35,
+      "stroke-dasharray": pending ? "1.5 1" : "none"});
+    map.appendChild(interactive(node, title, entry));
+  }
+  function draw() {
+    map.replaceChildren();
+    frame = snapshots[Number(byId("day").value)];
+    byId("empty").hidden = Boolean(frame);
+    if (!frame) { byId("day-label").textContent = "No snapshot"; byId("time-label").textContent = "No recorded simulation time"; return; }
+    const scoped = scope(frame), pending = byId("pending").checked;
+    byId("day-label").textContent = `Day ${frame.day}`;
+    byId("time-label").textContent = `${(frame.elapsed_world_seconds / 60).toFixed(1)} simulated minutes · ${Number(byId("day").value) + 1} / ${snapshots.length}`;
+    if (byId("squares").checked) for (const town of scoped.settlements) if (town.civic_square) {
+      const shape = corners(squareShape(town.civic_square));
+      map.appendChild(interactive(element("polygon",{points:shape.map(point=>point.join(",")).join(" "),
+        fill:"#d4b55c","fill-opacity":0.18,stroke:"#a6853c","stroke-width":0.7,"stroke-dasharray":"2 1"}),
+        `${town.name} civic square · reserved public space`,town.civic_square));
+    }
+    if (byId("districts").checked) for (const district of scoped.districts) {
+      const shape = corners(districtShape(district));
+      map.appendChild(interactive(element("polygon", {points:shape.map(point=>point.join(",")).join(" "),
+        fill:"#8c739b","fill-opacity":0.08,stroke:"#8c739b","stroke-width":0.6,"stroke-dasharray":"3 2"}),
+        `Residential ward ${district.id} · street preference, not reserved building lots`,district));
+    }
+    if (byId("defenses").checked) {
+      const sectionLine = (section, planned) => interactive(element("line",{
+        x1:section.start[0],y1:section.start[2],x2:section.end[0],y2:section.end[2],
+        stroke:section.kind === "Gate" ? "#396f68" : section.material === "Stone" ? "#55575c" : "#6f4b32",
+        "stroke-width":planned ? 1.1 : 2,"stroke-dasharray":planned ? "2 2" : "none"}),
+        `${planned ? "Reserved" : "Built"} ${pretty(section.material)} ${pretty(section.kind)} · circuit ${section.circuit}`,section);
+      if (pending) for (const town of scoped.settlements) for (const circuit of town.defenses?.circuits ?? [])
+        for (const section of circuit.sections) map.appendChild(sectionLine(section,true));
+      for (const section of scoped.fortifications) if (section.complete) map.appendChild(sectionLine(section,false));
+    }
+    for (const entry of scoped.fields) drawRect(entry, "#d1c177", "Farm field");
+    for (const entry of scoped.pastures) drawRect(entry, "#bcc087", "Livestock pasture");
+    for (const entry of scoped.piers) map.appendChild(interactive(element("circle",{cx:entry.position[0],cy:entry.position[2],r:1.5,fill:"#927354",stroke:"#544327","stroke-width":0.3}),"Fishing pier origin (symbol)",entry));
+    for (const entry of scoped.roads) {
+      const road = entry.road, completed = Math.min(road.built_through, road.points.length);
+      const path = points => points.map((point, i) => `${i ? "L" : "M"}${point[0]},${point[1]}`).join(" ");
+      if (pending && completed < road.points.length) map.appendChild(interactive(element("path", {d:path(road.points),fill:"none",stroke:"#9d8c6d","stroke-width":road.width,"stroke-dasharray":"2 2",opacity:0.45}), "Planned road", entry));
+      if (completed > 1) map.appendChild(interactive(element("path", {d:path(road.points.slice(0,completed)),fill:"none",stroke:road.surface === "Stone" ? "#aaa89b" : "#c0a77d","stroke-width":road.width,"stroke-linecap":"round","stroke-linejoin":"round"}), `${pretty(road.surface)} road`, entry));
+    }
+    for (const entry of scoped.buildings) {
+      if (entry.construction && !pending) continue;
+      const title = `${pretty(entry.kind)}${entry.construction ? " · under construction" : " · completed"}`;
+      drawRect(entry, buildingColor(entry.kind), title, Boolean(entry.construction));
+      if (byId("doors").checked && entry.door) map.appendChild(element("circle", {cx:entry.door[0],cy:entry.door[2],r:0.55,fill:"#30372c",stroke:"#faf0c8","stroke-width":0.2,"pointer-events":"none"}));
+      if (byId("labels").checked) map.appendChild(element("text", {x:entry.footprint_center[0],y:entry.footprint_center[1]-entry.footprint[1]/2-1,"font-size":2,"text-anchor":"middle",fill:"#302c23","pointer-events":"none"}, pretty(entry.kind)));
+    }
+    for (const settlement of scoped.settlements) {
+      if (settlement.footprint) drawRect(settlement, "#a17c34", `${settlement.name} · civic hall`);
+      else map.appendChild(interactive(element("circle", {cx:settlement.position[0],cy:settlement.position[2],r:2.5,fill:"#a17c34",stroke:"#544327","stroke-width":0.4}), `${settlement.name} · hall origin (symbol)`, settlement));
+      map.appendChild(element("text", {x:settlement.position[0],y:settlement.position[2]-8,"font-size":3.5,"font-family":"Georgia,serif","text-anchor":"middle",fill:"#4e3c20"}, settlement.name));
+    }
+    const m = frame.metrics;
+    byId("capture-command").textContent = frame.capture_command;
+    byId("residents").textContent = m.residents ?? "—";
+    byId("housed").textContent = m.housed ?? "—";
+    byId("completed").textContent = m.completed_buildings ?? "—";
+    byId("neighbors").textContent = `${m.houses_with_neighbor ?? "—"} / ${m.houses ?? "—"}`;
+    const metrics = [
+      ["Official tier",scoped.settlements.map(town => pretty(town.tier)).join(", ")],
+      ["Next progression gate",scoped.settlements.map(town => `${pretty(town.development.next_gate)} (${town.development.progress_days} / ${town.development.required_days})`).join(", ")],
+      ["Arrivals spawned",m.arrivals_spawned], ["Pending buildings",m.pending_buildings],
+      ["Residential ward plans",scoped.districts.length],
+      ["Completed wall / gate sections",`${scoped.fortifications.filter(section=>section.complete&&section.kind==="Wall").length} / ${scoped.fortifications.filter(section=>section.complete&&section.kind==="Gate").length}`],
+      ["Completed / pending roads",`${m.completed_roads} / ${m.pending_roads}`],
+      ["Roadless / disconnected buildings",`${m.roadless_buildings} / ${m.disconnected_buildings}`],
+      ["Road length",`${Number(m.road_length).toFixed(1)} m`],
+      ["Mean nearest-home distance",m.mean_house_neighbor_distance == null ? "Requires two homes" : `${m.mean_house_neighbor_distance.toFixed(1)} m`],
+      ["Same-resource neighbor pairs",m.same_resource_neighbor_pairs],
+      ["Permit planning p95 / max",`${Number(m.permit_planning_p95_ms).toFixed(3)} / ${Number(m.permit_planning_max_ms).toFixed(3)} ms`],
+      ["Server update p95 / max",`${Number(m.update_p95_ms).toFixed(2)} / ${Number(m.update_max_ms).toFixed(2)} ms`]];
+    if ("food_inventory" in m) metrics.splice(3, 0,
+      ["Beds / unhoused residents",`${m.housing_capacity} / ${m.unhoused}`],
+      ["Physical edible stock / reserve",`${m.food_inventory} / ${Number(m.food_reserve_days).toFixed(1)} days`],
+      ["Food produced / consumed per day",`${Number(m.recent_food_production).toFixed(1)} / ${Number(m.recent_food_consumption).toFixed(1)}`],
+      ["Unmet food portions",m.unmet_food],
+      ["Prosperity",Number(m.mean_prosperity).toFixed(1)],
+      ["Home clusters / largest cluster",`${m.residential_clusters} / ${m.largest_residential_cluster} homes`],
+      ["Outermost home from Hall",`${Number(m.outermost_house_distance).toFixed(1)} m`]);
+    byId("metrics").firstElementChild.replaceChildren(...metrics.map(([label,value]) => {
+      const tr = document.createElement("tr");
+      for (const text of [label,value]) {const td=document.createElement("td");td.textContent=text;tr.appendChild(td);}return tr;
+    }));
+    detail("Recorded settlement", scoped.settlements.length === 1 ? scoped.settlements[0] : scoped.settlements);
+  }
+  function updateCase() {
+    selectedCase = cases.find(item => String(item.seed) === byId("seed").value && item.profile === byId("profile").value);
+    snapshots = selectedCase?.snapshots ?? [];
+    const last = snapshots.at(-1);
+    selectOptions(byId("settlement"), [["-1","All settlements"], ...(last?.settlements ?? []).map((settlement,index) => [String(index),settlement.name])], "-1");
+    byId("day").max = String(Math.max(0,snapshots.length-1));byId("day").value=byId("day").max;byId("day").disabled=!snapshots.length;
+    for (const id of ["residents","housed","completed","neighbors"]) byId(id).textContent="—";
+    byId("metrics").firstElementChild.replaceChildren();
+    byId("capture-command").textContent="No snapshot available.";
+    const errors = selectedCase?.errors ?? [];
+    const growth = selectedCase?.growth;
+    byId("growth-outcome").textContent = growth ? `Offered population: ${growth.offered_population_target ?? "unrecorded"}. Peak residents: ${growth.peak_residents}; final housing: ${growth.final_housed ?? "unrecorded"} / ${growth.final_residents}. ${growth.town_tier_reached ? "Town or above reached through simulation." : "Town tier not reached."} ${growth.days_since_last_completed_building} recorded days since the latest completed building.` : "";
+    const notice = byId("notice");notice.hidden=selectedCase?.status === "passed" && !errors.length;
+    notice.textContent = `Case ${pretty(selectedCase?.status)}. ${selectedCase?.error ?? ""} ${errors.join(" ")} ${snapshots.length ? "Available snapshots are retained; this is not a passing result." : "No town output can be shown."}`;
+    const notes = byId("case-notes");notes.replaceChildren(document.createTextNode(`Charter seed changes the town plan. Terrain and founder identity seeds stay fixed across cases. ${selectedCase?.minutes ?? "—"} simulated minutes at ${selectedCase?.warp ?? "—"}× warp; ${selectedCase?.wall_seconds ?? "—"} s wall time. `));
+    if (selectedCase?.log) {const link=document.createElement("a");link.href=selectedCase.log;link.textContent="Open lab log";notes.appendChild(link);}
+    fitted=bounds();setView([...fitted]);draw();
+    if (!last) detail("Case status",selectedCase);
+  }
+  function updateSeed() {
+    selectOptions(byId("profile"), cases.filter(item=>String(item.seed)===byId("seed").value).map(item=>[item.profile,`${pretty(item.profile)} · ${pretty(item.status)}`]),byId("profile").value);
+    updateCase();
+  }
+  const passed = cases.filter(item=>item.status === "passed").length;
+  byId("overall").textContent = `${passed} / ${cases.length} integrity checks passed`;
+  byId("overall").classList.add(passed===cases.length ? "good" : "bad");
+  for (const item of cases) {
+    const row=document.createElement("div");row.className="case-item";
+    const label=document.createElement("strong");label.textContent=`${item.seed} · ${item.profile}`;
+    const status=document.createElement("span");status.textContent=pretty(item.status);if(item.status!=="passed")status.className="failed";
+    row.append(label,status);byId("case-list").appendChild(row);
+  }
+  const revision=data.experiment.revision?.slice(0,12) ?? "unrecorded";
+  byId("provenance").textContent=`Actual server snapshots · runner checkout ${revision}${data.experiment.working_tree_dirty ? " with working-tree edits" : ""}${data.experiment.test_binary_sha256 ? ` · prebuilt test binary SHA-256 ${data.experiment.test_binary_sha256.slice(0,16)} (build provenance verified separately)` : ""} · report built ${data.generated_at}. This is a diagnostic export, not a save file or the older concept generator.`;
+  byId("seed").addEventListener("change",updateSeed);byId("profile").addEventListener("change",updateCase);
+  byId("settlement").addEventListener("change",()=>{fitted=bounds();setView([...fitted]);draw();});
+  for(const id of ["day","pending","doors","labels","districts","squares","defenses"])byId(id).addEventListener("input",draw);
+  byId("fit").addEventListener("click",()=>setView([...fitted]));byId("zoom-in").addEventListener("click",()=>zoom(0.8));byId("zoom-out").addEventListener("click",()=>zoom(1.25));
+  map.addEventListener("wheel",event=>{event.preventDefault();zoom(event.deltaY>0?1.1:0.9);},{passive:false});
+  map.addEventListener("pointerdown",event=>{if(event.button!==0)return;drag={x:event.clientX,y:event.clientY,view:[...view]};});
+  map.addEventListener("pointermove",event=>{if(!drag||Math.hypot(event.clientX-drag.x,event.clientY-drag.y)<3)return;map.setPointerCapture(event.pointerId);map.classList.add("dragging");const rect=map.getBoundingClientRect();const scale=Math.min(rect.width/drag.view[2],rect.height/drag.view[3]);setView([drag.view[0]-(event.clientX-drag.x)/scale,drag.view[1]-(event.clientY-drag.y)/scale,drag.view[2],drag.view[3]]);});
+  const endDrag=()=>{drag=null;map.classList.remove("dragging");};map.addEventListener("pointerup",endDrag);map.addEventListener("pointercancel",endDrag);
+  selectOptions(byId("seed"),[...new Set(cases.map(item=>String(item.seed)))].map(seed=>[seed,seed]));updateSeed();
+})();
+</script>
+</body>
+</html>

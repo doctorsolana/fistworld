@@ -97,6 +97,9 @@ pub struct DevelopmentMarketSignals {
     /// for carts; recent dispatched bulk and free depot space are capacity
     /// already available to clear it.
     pub stranded_output_bulk: u32,
+    /// Edible stock still at workplaces, before public collection. Hunger with
+    /// a full day's food here is a circulation problem, not another field.
+    pub uncollected_food: u32,
     pub stranded_output_value: u64,
     pub recent_logistics_bulk: u32,
     pub active_storage_free_bulk: u32,
@@ -356,6 +359,14 @@ fn food_pressure(
     production_gap.max(reserve_gap)
 }
 
+/// Competition is density in the customer base, not a lifetime site quota.
+/// Preserve the founding-town caution while letting a ten-times larger town
+/// support ten times the extractors when its measured shortage is the same.
+fn extractor_crowding_penalty(count: usize, residents: u32, per_site: f32) -> f32 {
+    let customer_scale = (residents as f32 / 24.0).max(1.0);
+    count as f32 * per_site / customer_scale
+}
+
 /// Capacity pressure for one kind of food extractor.
 ///
 /// The other extractor may satisfy local residents, while committed exports
@@ -440,6 +451,29 @@ fn opportunity_score(
     let residents = signals.residents.max(1) as usize;
     let pressure = food_pressure(signals, economy, policies);
     let shelter_pressure = housing_pressure(signals);
+    let extractor_export = match kind {
+        SettlementBuildingKind::Farmstead => signals
+            .recent_wheat_export_demand
+            .max(signals.merchant_export_demand(Good::Wheat)),
+        SettlementBuildingKind::FishermansHut => signals.merchant_export_demand(Good::Food),
+        SettlementBuildingKind::LivestockFarm => signals
+            .merchant_export_demand(Good::Meat)
+            .saturating_add(signals.merchant_export_demand(Good::Wool)),
+        _ => 0,
+    };
+    if matches!(
+        kind,
+        SettlementBuildingKind::Farmstead
+            | SettlementBuildingKind::FishermansHut
+            | SettlementBuildingKind::LivestockFarm
+    ) && signals.uncollected_food >= signals.residents.max(1)
+        && extractor_export == 0
+    {
+        // More empty shells cannot make existing private food reach the Hall.
+        // Reopen investment as soon as collections clear the physical backlog;
+        // funded external orders remain independent of local distribution.
+        return 5.0;
+    }
     let emergency_food_entry = matches!(
         kind,
         SettlementBuildingKind::Farmstead
@@ -498,8 +532,8 @@ fn opportunity_score(
             // current bottleneck.
             (12.0 + pressure.min(capacity_pressure) * 70.0
                 - backlog * 30.0
-                - signals.farms as f32 * 5.0)
-                .max(5.0)
+                - extractor_crowding_penalty(signals.farms, signals.residents, 5.0))
+            .max(5.0)
         }
         SettlementBuildingKind::FishermansHut => {
             if signals.farms + signals.fishers + signals.livestock_farms == 0 && pressure >= 0.5 {
@@ -511,7 +545,9 @@ fn opportunity_score(
             // Wheat-processing bottleneck, while repeated huts steadily make
             // the next shoreline claim less compelling. Geography makes the
             // final decision: inland applicants simply cannot secure a plot.
-            (14.0 + pressure.min(capacity_pressure) * 70.0 - signals.fishers as f32 * 8.0).max(5.0)
+            (14.0 + pressure.min(capacity_pressure) * 70.0
+                - extractor_crowding_penalty(signals.fishers, signals.residents, 8.0))
+            .max(5.0)
         }
         SettlementBuildingKind::LivestockFarm => {
             if signals.farms + signals.fishers + signals.livestock_farms == 0 && pressure >= 0.5 {
@@ -525,8 +561,8 @@ fn opportunity_score(
             let byproduct_bonus =
                 ((wool_value as f32 / Good::Wool.base_price() as f32) - 1.0).clamp(0.0, 1.0) * 12.0;
             (12.0 + pressure.min(capacity_pressure) * 66.0 + byproduct_bonus
-                - signals.livestock_farms as f32 * 7.0)
-                .max(5.0)
+                - extractor_crowding_penalty(signals.livestock_farms, signals.residents, 7.0))
+            .max(5.0)
         }
         SettlementBuildingKind::Windmill => {
             let upstream_exists = signals.farms > 0 || signals.wheat_stock > 0;
@@ -1043,6 +1079,128 @@ pub fn investor_score(
 mod tests {
     use super::*;
     use shared::economy::TOWN_HALL_STONE_REQUIRED;
+
+    #[test]
+    fn a_large_towns_food_shortage_keeps_the_same_per_capita_investment_signal() {
+        let opportunity = |scale: u32, supplied: bool| {
+            let residents = 24 * scale;
+            let output = if supplied { residents } else { residents / 2 };
+            let signals = DevelopmentMarketSignals {
+                residents,
+                houses: (6 * scale) as usize,
+                livestock_farms: (2 * scale) as usize,
+                anticipated_meat_output: output * 3,
+                recent_meat_output: output * 2,
+                ..Default::default()
+            };
+            let economy = SettlementEconomy {
+                observed_days: 5,
+                recent_food_production: output as f32,
+                reserve_days: if supplied { 3.0 } else { 0.0 },
+                ..Default::default()
+            };
+            private_opportunities(
+                signals,
+                Some(&economy),
+                None,
+                &SettlementPolicies::default(),
+            )
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::LivestockFarm)
+            .unwrap()
+        };
+        let village = opportunity(1, false);
+        let city = opportunity(10, false);
+        assert!(
+            (village.score - city.score).abs() < 0.001,
+            "equal per-capita shortages must not become a hidden city-scale farm ceiling"
+        );
+        assert!(
+            city.score > 15.0,
+            "a starving city's food investment must remain open"
+        );
+        let supplied = opportunity(10, true);
+        assert!(
+            supplied.score <= 15.0,
+            "demonstrated capacity still closes oversupply"
+        );
+        assert!(
+            investor_score(supplied, BusinessStrategy::Opportunistic, 1.0, None, 0, 23)
+                .is_infinite()
+        );
+    }
+
+    #[test]
+    fn hungry_towns_collect_a_days_existing_food_before_adding_extractors() {
+        let economy = SettlementEconomy {
+            observed_days: 5,
+            unmet_food: 40,
+            recent_food_production: 20.0,
+            reserve_days: 0.0,
+            ..Default::default()
+        };
+        let demand = DevelopmentMarketSignals {
+            residents: 100,
+            houses: 25,
+            farms: 4,
+            livestock_farms: 5,
+            ..Default::default()
+        };
+        let score = |signals| {
+            private_opportunities(
+                signals,
+                Some(&economy),
+                None,
+                &SettlementPolicies::default(),
+            )
+        };
+        let before = score(demand);
+        let stranded = score(DevelopmentMarketSignals {
+            uncollected_food: 100,
+            ..demand
+        });
+        for kind in [
+            SettlementBuildingKind::Farmstead,
+            SettlementBuildingKind::FishermansHut,
+            SettlementBuildingKind::LivestockFarm,
+        ] {
+            assert!(
+                before
+                    .iter()
+                    .find(|entry| entry.kind == kind)
+                    .unwrap()
+                    .score
+                    > 15.0
+            );
+            assert!(
+                stranded
+                    .iter()
+                    .find(|entry| entry.kind == kind)
+                    .unwrap()
+                    .score
+                    <= 15.0,
+                "food waiting for carts must not trigger duplicate {kind:?} shells"
+            );
+        }
+        let exporting = score(DevelopmentMarketSignals {
+            uncollected_food: 100,
+            recent_wheat_export_demand: 50,
+            ..demand
+        });
+        assert!(
+            exporting
+                .iter()
+                .find(|entry| entry.kind == SettlementBuildingKind::Farmstead)
+                .unwrap()
+                .score
+                > 15.0
+        );
+        assert_eq!(
+            score(demand),
+            before,
+            "cleared backlog reopens normal investment"
+        );
+    }
 
     #[test]
     fn town_hall_stone_shortage_advertises_exactly_one_initial_quarry() {

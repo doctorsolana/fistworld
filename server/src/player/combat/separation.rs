@@ -8,6 +8,68 @@ pub struct SeparationScratch {
     pushes: HashMap<Entity, Vec2>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heroes_cannot_be_shoved_through_defenses_but_gate_and_building_rules_survive() {
+        use shared::components::{
+            FortificationKind, FortificationMaterial, FortificationSegment, SettlementId,
+        };
+        let mut app = App::new();
+        let mut grid = shared::spatial::SpatialObstacleGrid::default();
+        for (start_z, end_z) in [(-4.0, 4.0), (12.0, 16.0), (24.0, 28.0)] {
+            let wall = FortificationSegment {
+                settlement_id: SettlementId(1),
+                circuit: 0,
+                start: Vec3::new(0.0, 0.0, start_z),
+                end: Vec3::new(0.0, 0.0, end_z),
+                kind: FortificationKind::Wall,
+                material: FortificationMaterial::Palisade,
+                complete: true,
+            };
+            grid.insert(wall.navigation_obstacle().unwrap());
+        }
+        grid.insert(shared::spatial::ObstacleEntry {
+            center: Vec2::new(0.0, -20.0),
+            half_extents: Vec2::new(0.5, 4.0),
+            rotation: 0.0,
+            obstacle_type: 0,
+        });
+        app.insert_resource(grid);
+        app.add_systems(Update, separate_melee_bodies);
+        let mut heroes = Vec::new();
+        for z in [0.0, 20.0, -20.0] {
+            for (x, hero) in [(-0.55, true), (-0.65, false)] {
+                let entity = app
+                    .world_mut()
+                    .spawn((
+                        if hero {
+                            CharacterKind::Hero
+                        } else {
+                            CharacterKind::Villager
+                        },
+                        PlayerPosition(Vec3::new(x, 0.0, z)),
+                        shared::region::RegionCoord::default(),
+                        CommandedBy("test".into()),
+                    ))
+                    .id();
+                if hero {
+                    heroes.push(entity);
+                }
+            }
+        }
+        app.update();
+        assert_eq!(
+            app.world().get::<PlayerPosition>(heroes[0]).unwrap().0.x,
+            -0.55
+        );
+        assert!(app.world().get::<PlayerPosition>(heroes[1]).unwrap().0.x > -0.55);
+        assert!(app.world().get::<PlayerPosition>(heroes[2]).unwrap().0.x > -0.55);
+    }
+}
+
 /// Melee bodies never overlap: any two combatants closer than two body radii
 /// are pushed apart, half each, capped per tick. This is what makes a fight
 /// a FRONT LINE - the second rank physically cannot occupy the first rank's
@@ -173,17 +235,20 @@ pub fn separate_melee_bodies(
         }
         let current = Vec2::new(position.0.x, position.0.z);
         let next = current + push;
-        // A shove must not put a villager inside a wall - that would hand
-        // them to the route-failure machinery mid-fight. Heroes are as
-        // collision-exempt here as they are in step_units.
-        if *kind == CharacterKind::Villager
-            && !crate::player::hero::navigation_segment_clear(
-                current,
-                next,
-                obstacles.as_deref(),
-                colliders.as_deref(),
-                derived.as_deref(),
-            )
+        // Heroes retain their ordinary-building exception. Defenses are solid
+        // for every combatant, including displacement by neighboring bodies.
+        let defense_blocked = obstacles.as_deref().is_some_and(|grid| {
+            grid.segment_blocked_by_type(current, next, shared::components::DEFENSE_OBSTACLE_TYPE)
+        });
+        if defense_blocked
+            || (*kind == CharacterKind::Villager
+                && !crate::player::hero::navigation_segment_clear(
+                    current,
+                    next,
+                    obstacles.as_deref(),
+                    colliders.as_deref(),
+                    derived.as_deref(),
+                ))
         {
             continue;
         }

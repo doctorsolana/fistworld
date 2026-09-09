@@ -26,6 +26,11 @@ pub(super) fn accumulate_business_signals(
     // operating. Hiding a liquidator's full store makes the permit
     // system construct a replacement into the same unresolved glut.
     if let Some(inventory) = inventory {
+        if building.kind != SettlementBuildingKind::House {
+            signals.uncollected_food = signals
+                .uncollected_food
+                .saturating_add(inventory.edible_amount());
+        }
         signals.wheat_stock = signals
             .wheat_stock
             .saturating_add(inventory.amount(Good::Wheat));

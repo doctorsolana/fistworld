@@ -1,0 +1,22 @@
+(
+    version: 1,
+    name: "ui-civic-capacity",
+    map: "village_lab",
+    output_dir: "logs/captures/ui-civic-capacity",
+    resolution: (1600, 1000),
+    fixed_delta_seconds: 0.016666667,
+    target: window, show_window: false, warmup_frames: 300,
+    readiness: (minimum_frames: 90, maximum_frames: 1800, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_SETTLEMENT": "village",
+        "FISTFORCE_CAPTURE_CIVIC_POPULATION": "100",
+        "FISTFORCE_CAPTURE_ENCYCLOPEDIA": "places",
+        "FISTFORCE_CAPTURE_SELECT_PLACE": "Brackwater",
+        "FISTFORCE_CAPTURE_SELECT_BUILDING": "hall",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "hall-capacity", focus: (-100.0, 0.0, 120.0), yaw: -0.45, zoom: 210.0, time_of_day: 0.5,
+         assertions: [settlements_at_least(count: 1)]),
+    ],
+)

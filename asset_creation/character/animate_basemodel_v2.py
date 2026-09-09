@@ -573,6 +573,8 @@ from locomotion_clips import build_locomotion_clips
 build_locomotion_clips(globals())
 from archery_clips import build_archery_clips
 build_archery_clips(globals())
+from riding_clips import build_riding_clips
+build_riding_clips(globals())
 
 for a in bpy.data.actions:
     a.use_fake_user = True
