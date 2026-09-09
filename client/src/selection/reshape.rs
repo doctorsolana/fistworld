@@ -54,7 +54,8 @@ pub fn reshape_selected(
         facing = Mat2::from_angle(-(turn as f32) * 15.0_f32.to_radians()) * facing;
         let files = (i32::from(battalion.formation.files) + width * 2)
             .clamp(2.min(living) as i32, living as i32) as usize;
-        let depth = (living.div_ceil(files) - 1) as f32 * shared::formation::RANK_SPACING;
+        let depth =
+            (living.div_ceil(files) - 1) as f32 * shared::formation::rank_spacing(battalion.role);
         let target = centre + Vec3::new(facing.x, 0.0, facing.y) * depth * 0.5;
         sender.send::<ReliableChannel>(UnitOrder {
             selection: UnitSelection {

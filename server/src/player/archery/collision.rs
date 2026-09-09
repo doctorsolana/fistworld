@@ -208,18 +208,90 @@ fn ray(a: Vec3, b: Vec3) -> Ray {
     )
 }
 /// A continuous body hit, not a distance check at the next projectile position.
-pub fn body_hit(a: Vec3, b: Vec3, feet: Vec3) -> Option<f32> {
+/// Maximum horizontal extent of the mounted compound below, including its head.
+/// Projectile broad phase must include this even when the rider root is in the
+/// next cell. This is a hit envelope, separate from navigation's turning room.
+pub const MOUNTED_HORIZONTAL_EXTENT: f32 = 1.6;
+
+pub fn body_hit(a: Vec3, b: Vec3, feet: Vec3, mounted_yaw: Option<f32>) -> Option<f32> {
     use parry3d::query::RayCast;
-    let shape = Capsule::new(Point3::new(0., 0.35, 0.), Point3::new(0., 1.55, 0.), 0.32);
-    shape.cast_local_ray(&ray(a - feet, b - feet), 1., true)
+    let Some(yaw) = mounted_yaw else {
+        // Keep the established infantry capsule exactly unchanged.
+        let shape = Capsule::new(Point3::new(0., 0.35, 0.), Point3::new(0., 1.55, 0.), 0.32);
+        return shape.cast_local_ray(&ray(a - feet, b - feet), 1., true);
+    };
+    let inverse = Quat::from_rotation_y(-yaw);
+    let ray = ray(inverse * (a - feet), inverse * (b - feet));
+    // Horse.glb is 2.85 m long, 0.68 m wide and faces local -Z. The rider
+    // socket is 1.77 m high and 0.12 m behind the root. Fixed local capsules
+    // approximate the body/neck/head, rider and legs without creating a solid
+    // cylinder through the empty space beneath the belly. This uses one unit
+    // health pool and does not simulate bone-by-bone animated hitboxes.
+    let capsules = [
+        ([0., 1.38, 0.88], [0., 1.38, -0.40], 0.36),
+        ([0., 1.49, -0.46], [0., 2.17, -0.92], 0.25),
+        ([0., 2.24, -1.01], [0., 1.98, -1.32], 0.20),
+        ([0., 1.88, 0.12], [0., 2.55, 0.12], 0.27),
+        ([-0.23, 0.16, -0.49], [-0.23, 1.20, -0.49], 0.12),
+        ([0.23, 0.16, -0.49], [0.23, 1.20, -0.49], 0.12),
+        ([-0.22, 0.16, 0.89], [-0.22, 1.20, 0.89], 0.12),
+        ([0.22, 0.16, 0.89], [0.22, 1.20, 0.89], 0.12),
+        ([-0.33, 1.02, 0.10], [-0.30, 1.72, 0.12], 0.13),
+        ([0.33, 1.02, 0.10], [0.30, 1.72, 0.12], 0.13),
+    ];
+    capsules
+        .into_iter()
+        .filter_map(|(a, b, radius)| {
+            Capsule::new(Point3::from(a), Point3::from(b), radius).cast_local_ray(&ray, 1., true)
+        })
+        .min_by(f32::total_cmp)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn swept_arrow_hits_body_but_clears_overhead() {
-        assert!(body_hit(Vec3::new(-5., 1., 0.), Vec3::new(5., 1., 0.), Vec3::ZERO).is_some());
-        assert!(body_hit(Vec3::new(-5., 2.1, 0.), Vec3::new(5., 2.1, 0.), Vec3::ZERO).is_none());
+        assert!(body_hit(
+            Vec3::new(-5., 1., 0.),
+            Vec3::new(5., 1., 0.),
+            Vec3::ZERO,
+            None
+        )
+        .is_some());
+        assert!(body_hit(
+            Vec3::new(-5., 2.1, 0.),
+            Vec3::new(5., 2.1, 0.),
+            Vec3::ZERO,
+            None
+        )
+        .is_none());
+    }
+    #[test]
+    fn mounted_envelope_covers_torso_horse_and_yaw_without_filling_empty_air() {
+        for yaw in [0., std::f32::consts::FRAC_PI_2, -1.1] {
+            let rotate = Quat::from_rotation_y(yaw);
+            let hit = |a, b| body_hit(rotate * a, rotate * b, Vec3::ZERO, Some(yaw));
+            assert!(
+                hit(Vec3::new(-3., 2.4, 0.12), Vec3::new(3., 2.4, 0.12)).is_some(),
+                "rider torso"
+            );
+            assert!(
+                hit(Vec3::new(-3., 1.38, 0.85), Vec3::new(3., 1.38, 0.85)).is_some(),
+                "horse rump"
+            );
+            assert!(
+                hit(Vec3::new(-3., 2.1, -1.3), Vec3::new(3., 2.1, -1.3)).is_some(),
+                "horse head"
+            );
+            assert!(
+                hit(Vec3::new(-3., 0.4, 0.), Vec3::new(3., 0.4, 0.)).is_none(),
+                "air below belly"
+            );
+            assert!(
+                hit(Vec3::new(0.8, 1.4, -3.), Vec3::new(0.8, 1.4, 3.)).is_none(),
+                "air beside narrow body"
+            );
+        }
     }
     #[test]
     fn rotated_convex_wall_stops_a_ray() {

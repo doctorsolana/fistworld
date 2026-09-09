@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|realworld|multi] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|cavalryworld|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -386,7 +386,7 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         ;;
-    battle5v5|archerworld)
+    battle5v5|archerworld|cavalryworld)
         cd "$(dirname "${BASH_SOURCE[0]}")"
         # This fixture needs a fresh server. Do not terminate an unrelated
         # running game or connect its client to the wrong world.
@@ -402,14 +402,20 @@ case $MODE in
         export FISTFORCE_AUTOCONNECT=battlelab FISTWORLD_AUTOSPAWN_HERO=1
         export FISTWORLD_AUTOSPAWN_AT=-32,-72 FISTFORCE_COMBAT_MODE=1
         export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--20,-36}"
-        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-125}"
+        BATTLE_DEFAULT_ZOOM=125
+        if [[ "$MODE" == "cavalryworld" ]]; then BATTLE_DEFAULT_ZOOM=85; fi
+        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-$BATTLE_DEFAULT_ZOOM}"
         export FISTFORCE_START_YAW="${FISTFORCE_START_YAW:-0}"
         export BEVY_ASSET_ROOT="$PWD/client/assets"
         export RUST_LOG="${RUST_LOG:-info}"
         BATTLE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$PWD/logs/$MODE-$(date +%Y%m%d-%H%M%S)}"
         mkdir -p "$BATTLE_LOG_DIR"
         BATTLE_SCENARIO="battle-5v5"
-        if [[ "$MODE" == "archerworld" ]]; then
+        if [[ "$MODE" == "cavalryworld" ]]; then
+            BATTLE_SCENARIO="battle-cavalry"
+            echo -e "${YELLOW}Two 8-rider cavalry wings and 8 infantry versus 32 enemy infantry.${NC}"
+            echo -e "${YELLOW}Select I or III for cavalry. Right-click to move or attack; drag RMB to set line width and facing.${NC}"
+        elif [[ "$MODE" == "archerworld" ]]; then
             BATTLE_SCENARIO="battle-mixed-archers"
             echo -e "${YELLOW}Two infantry battalions and one archer battalion versus three enemy battalions.${NC}"
             echo -e "${YELLOW}Right-click an enemy to attack; Army management controls equipment and firing policy.${NC}"
@@ -534,7 +540,7 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|realworld|multi|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|cavalryworld|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
@@ -551,6 +557,7 @@ case $MODE in
         echo "  battleworld - Open battlefield sandbox for recruiting troops and making battalions"
         echo "  archerworld - Mixed infantry and archers with an enemy countercharge"
         echo "  battle5v5 - Build and open a manual battle with five 50-person battalions per side"
+        echo "  cavalryworld - Mounted cavalry wings and infantry support against enemy infantry"
         echo "  realworld - Watch a logged 32-villager stress village on big_world"
         echo "  multi   - Start server + 2 clients for multiplayer testing"
         echo "  windows - Build & run Windows client with GPU (for WSL2)"

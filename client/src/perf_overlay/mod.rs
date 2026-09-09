@@ -126,7 +126,7 @@ pub fn handle_toggle_perf_overlay(
 
 /// Sample frame times and maintain rolling percentile stats.
 pub fn update_client_perf_snapshot(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     config: Res<ClientPerfConfig>,
     mut snapshot: ResMut<ClientPerfSnapshot>,
 ) {
@@ -173,7 +173,7 @@ pub fn update_client_perf_snapshot(
 
 /// Emit periodic machine-readable client perf summary.
 pub fn emit_client_perf_summary(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     config: Res<ClientPerfConfig>,
     mut snapshot: ResMut<ClientPerfSnapshot>,
 ) {
@@ -212,6 +212,33 @@ fn percentile_sorted(sorted: &[f32], percentile: f32) -> f32 {
     let clamped = percentile.clamp(0.0, 1.0);
     let index = ((max_index as f32) * clamped).round() as usize;
     sorted[index.min(max_index)]
+}
+
+#[cfg(test)]
+mod frame_time_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn frame_percentiles_use_wall_time_even_when_simulation_delta_is_clamped() {
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<Time>()
+            .init_resource::<ClientPerfConfig>()
+            .init_resource::<ClientPerfSnapshot>();
+        app.add_systems(Update, update_client_perf_snapshot);
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_millis(800));
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(250));
+        app.update();
+        let snapshot = app.world().resource::<ClientPerfSnapshot>();
+        assert_eq!(snapshot.p99_ms, 800.);
+        assert_eq!(snapshot.hitch_count_window, 1);
+        assert_eq!(snapshot.total_samples, 1);
+    }
 }
 
 // =============================================================================

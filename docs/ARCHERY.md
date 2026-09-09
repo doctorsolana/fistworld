@@ -60,7 +60,8 @@ hold-line rules own the resulting melee.
 ## Ownership and cost
 
 - `shared/components/archery.rs`: equipment, ammunition, fire policy, animation and
-  projectile wire data; pure ballistic math. Protocol ID is `0x1234567890ABCDFC`.
+  projectile wire data; pure ballistic math. The current protocol ID lives in
+  `shared/src/protocol/config.rs`; client and server must be rebuilt together.
 - `server/player/archery`: equipment validation, weapon transitions, staggered
   target decisions, shared baked collision shapes and swept flight/damage.
 - `client/hero/archery.rs`: the existing cached body/bow animation graphs.
@@ -78,6 +79,11 @@ Rearming currently represents preparing fresh equipment away from battle. Supply
 costs, armour/shield penetration, mounted archery, skill progression and individual
 fire-policy controls for detached troops remain future work. Detached archers can
 still receive move/hold/attack orders; the fire-policy buttons target battalions.
+
+Mounted melee targets use one combined horse/rider health pool. Arrow impact and
+friendly-fire tests share a rotated compound volume covering the horse and the
+elevated rider, including a wider projectile broad phase. Infantry retain their
+original capsule. See [CAVALRY.md](CAVALRY.md) for mounted-unit limitations.
 
 ## Verification
 

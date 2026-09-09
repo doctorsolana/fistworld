@@ -19,6 +19,8 @@ pub(crate) struct CaptureInspection<'w, 's> {
     all_entities: Query<'w, 's, Entity>,
     character_kinds: Query<'w, 's, &'static CharacterKind>,
     settlements: Query<'w, 's, (), With<shared::components::Settlement>>,
+    horses: Query<'w, 's, (), With<shared::components::Horse>>,
+    horse_rigs: Query<'w, 's, (), With<crate::animals::HorseRig>>,
     buildings: Query<'w, 's, (), With<shared::components::SettlementBuilding>>,
     fortifications: Query<'w, 's, &'static shared::components::FortificationSegment>,
     navigation: Query<'w, 's, &'static CharacterNavigationStatus>,
@@ -43,6 +45,8 @@ impl CaptureInspection<'_, '_> {
                 .iter()
                 .filter(|kind| **kind == CharacterKind::Villager)
                 .count(),
+            horses: self.horses.iter().count(),
+            horse_rigs: self.horse_rigs.iter().count(),
             settlements: self.settlements.iter().count(),
             settlement_buildings: self.buildings.iter().count(),
             fortification_sections: self

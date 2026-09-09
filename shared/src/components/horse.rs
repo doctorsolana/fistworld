@@ -3,7 +3,18 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub const HORSE_SCENE: &str = "game_assets/environment/animals/Horse.glb#Scene0";
-pub const HORSE_CLEARANCE: f32 = 1.15;
+pub const HORSE_CLEARANCE: f32 = 1.55;
+/// Conservative circular ground body for local army separation (horse length2.85m).
+pub const HORSE_BODY_RADIUS: f32 = 1.45;
+
+/// Horses can wheel promptly, while still turning before advancing into a new lane.
+pub fn turn_horse_towards(yaw: f32, direction: Vec2, dt: f32) -> (f32, bool) {
+    let goal = f32::atan2(-direction.x, -direction.y);
+    let delta = (goal - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    let step = delta.clamp(-3.5 * dt, 3.5 * dt);
+    (yaw + step, (delta - step).abs() < 0.22)
+}
 pub const HORSE_MOUNT_REACH: f32 = 2.5;
 pub const HORSE_TRANSITION_SECONDS: f64 = 1.25;
 pub const HORSE_DISMOUNT_OFFSET: Vec3 = Vec3::new(-0.95, 0.0, 0.0);
@@ -117,4 +128,42 @@ pub struct Mounted {
     pub gait: HorseGait,
     pub phase: RidingPhase,
     pub since: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn horse_snapshots_roundtrip_with_identity_and_animation_phase() {
+        let horse = Horse {
+            id: u64::MAX,
+            rider: Some(super::super::PersonId(u64::MAX)),
+        };
+        assert_eq!(
+            bincode::deserialize::<Horse>(&bincode::serialize(&horse).unwrap()).unwrap(),
+            horse
+        );
+        for activity in [
+            HorseActivity::Idle,
+            HorseActivity::Graze,
+            HorseActivity::Alert,
+            HorseActivity::Moving(HorseGait::Walk),
+            HorseActivity::Moving(HorseGait::Trot),
+            HorseActivity::Moving(HorseGait::Canter),
+            HorseActivity::Moving(HorseGait::Gallop),
+        ] {
+            let animation = HorseAnimation {
+                activity,
+                since: 98765.25,
+            };
+            assert_eq!(
+                bincode::deserialize::<HorseAnimation>(&bincode::serialize(&animation).unwrap())
+                    .unwrap(),
+                animation
+            );
+            assert_eq!(animation.sample(0.), 0.);
+            let sample = animation.sample(animation.since + 123.456);
+            assert!((0.0..activity.duration()).contains(&sample));
+        }
+    }
 }

@@ -23,11 +23,14 @@ pub(crate) use army::{drive_army_capture, drive_army_input, ArmyCapture};
 pub(crate) use battle::{
     drive_battle_capture, drive_battle_input, drive_battle_ray, BattleCapture,
 };
+mod cavalry_visuals;
+mod wildlife;
+mod wildlife_live;
+pub(crate) use wildlife_live::drive as drive_wildlife_capture;
 mod asset_animation;
 mod asset_fixtures;
 mod character_fixtures;
 mod civic_fixtures;
-mod square_fixtures;
 mod history_fixtures;
 mod house_fixtures;
 mod inspection;
@@ -35,6 +38,7 @@ mod live;
 mod performance;
 mod presentation;
 mod rural_fixtures;
+mod square_fixtures;
 pub(crate) use presentation::{setup_capture_presentation, sync_capture_presentation};
 mod fortification_fixtures;
 mod scene_fixtures;
@@ -283,6 +287,7 @@ pub fn run(mut config: CaptureConfig) {
     crate::app_wiring::setup_plugins(&mut app, asset_path);
     crate::app_wiring::setup_resources(&mut app);
     crate::app_wiring::setup_systems(&mut app);
+    app.insert_resource(crate::animation_clock::AnimationClock::exact());
 
     app.world_mut()
         .resource_mut::<crate::perf_overlay::PerfOverlayEnabled>()
@@ -366,6 +371,14 @@ pub fn run(mut config: CaptureConfig) {
             square_fixtures::stage,
         ),
     );
+    app.add_systems(Update, (wildlife::stage, wildlife::drive).chain());
+    app.add_systems(
+        Update,
+        (cavalry_visuals::stage, cavalry_visuals::prepare)
+            .chain()
+            .before(crate::animals::AnimalsPresentation)
+            .before(drive_capture),
+    );
     app.add_systems(
         Update,
         (
@@ -389,7 +402,9 @@ pub fn run(mut config: CaptureConfig) {
             drive_capture
                 .before(crate::camera_rts::update_commander_camera)
                 .run_if(asset_fixtures::ready)
-                .run_if(character_fixtures::ready),
+                .run_if(character_fixtures::ready)
+                .run_if(wildlife::ready)
+                .run_if(cavalry_visuals::ready),
             apply_capture_free_look.after(crate::camera_rts::update_commander_camera),
         ),
     );
@@ -811,6 +826,15 @@ fn evaluate_assertions(
                 }
                 CaptureAssertion::EntitiesAtLeast { count } => {
                     (snapshot.entity_count, snapshot.entity_count >= count)
+                }
+                CaptureAssertion::HorsesAtLeast { count } => {
+                    (snapshot.horses, snapshot.horses >= count)
+                }
+                CaptureAssertion::HorseRigsAtLeast { count } => {
+                    (snapshot.horse_rigs, snapshot.horse_rigs >= count)
+                }
+                CaptureAssertion::HorseRigsAtMost { count } => {
+                    (snapshot.horse_rigs, snapshot.horse_rigs <= count)
                 }
                 CaptureAssertion::VillagersAtLeast { count } => {
                     (snapshot.villagers, snapshot.villagers >= count)

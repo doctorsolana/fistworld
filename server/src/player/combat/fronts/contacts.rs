@@ -15,6 +15,7 @@ pub struct Body {
     pub battalion: Option<BattalionId>,
     pub formation: Option<u64>,
     pub facing: Vec2,
+    pub radius: f32,
 }
 #[derive(Resource, Default)]
 pub struct CombatSpace {
@@ -27,6 +28,14 @@ pub struct CombatSpace {
 }
 fn cell(p: Vec2) -> (i32, i32) {
     ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)
+}
+impl Body {
+    pub fn contact_distance(&self, other: &Self) -> f32 {
+        (self.radius + other.radius + 0.15).max(super::geometry::CONTACT_DISTANCE)
+    }
+    pub fn melee_reach(&self, other: &Self) -> f32 {
+        (self.radius + other.radius + 0.5).max(MELEE_REACH)
+    }
 }
 impl CombatSpace {
     pub fn body(&self, e: Entity) -> Option<&Body> {
@@ -56,32 +65,43 @@ impl CombatSpace {
         };
         let delta = b.point - a.point;
         let d2 = delta.length_squared();
-        if d2 > MELEE_REACH * MELEE_REACH || d2 < 0.01 {
+        if d2 > a.melee_reach(b).powi(2) || d2 < 0.01 {
             return false;
         }
-        !self.nearby(a.point).any(|other| {
+        !self.within((a.point + b.point) * 0.5, delta.length() * 0.5 + HORSE_BODY_RADIUS).any(|other| {
             if other.entity == a.entity || other.entity == b.entity {
                 return false;
             }
             let t = (other.point - a.point).dot(delta) / d2;
-            t > 0.05 && t < 0.95 && other.point.distance_squared(a.point + delta * t) < 0.42 * 0.42
+            t > 0.05
+                && t < 0.95
+                && other.point.distance_squared(a.point + delta * t) < (other.radius + 0.07).powi(2)
         })
     }
     pub fn movement_clear(&self, entity: Entity, current: Vec2, next: Vec2) -> bool {
         let delta = next - current;
         let d2 = delta.length_squared().max(0.000001);
-        !self.nearby(current).any(|other| {
-            if other.entity == entity {
-                return false;
-            }
-            let old = current.distance_squared(other.point);
-            // Let existing penetration resolve outward, never deepen it.
-            if old < 0.72 * 0.72 && next.distance_squared(other.point) > old {
-                return false;
-            }
-            let t = ((other.point - current).dot(delta) / d2).clamp(0.0, 1.0);
-            other.point.distance_squared(current + delta * t) < 0.72 * 0.72
-        })
+        let radius = self
+            .body(entity)
+            .map_or(super::super::BODY_RADIUS, |b| b.radius);
+        !self
+            .within(
+                current,
+                radius + shared::components::HORSE_BODY_RADIUS + delta.length(),
+            )
+            .any(|other| {
+                if other.entity == entity {
+                    return false;
+                }
+                let old = current.distance_squared(other.point);
+                let clearance = radius + other.radius + 0.02;
+                // Let existing penetration resolve outward, never deepen it.
+                if old < clearance * clearance && next.distance_squared(other.point) > old {
+                    return false;
+                }
+                let t = ((other.point - current).dot(delta) / d2).clamp(0.0, 1.0);
+                other.point.distance_squared(current + delta * t) < clearance * clearance
+            })
     }
     pub fn enemy_members(&self, enemy: Enemy) -> impl Iterator<Item = &Body> {
         let indices: &[usize] = match enemy {
@@ -147,6 +167,7 @@ pub fn rebuild_combat_space(
             Option<&MemberOfBattalion>,
             Option<&FormationMember>,
             Option<&Health>,
+            Has<Mounted>,
         ),
         (
             With<CharacterKind>,
@@ -168,7 +189,8 @@ pub fn rebuild_combat_space(
     for entries in space.by_battalion.values_mut() {
         entries.clear();
     }
-    for (entity, position, rotation, owner, party, battalion, formation, health) in &people {
+    for (entity, position, rotation, owner, party, battalion, formation, health, mounted) in &people
+    {
         if health.is_some_and(|h| h.is_dead()) {
             continue;
         }
@@ -192,6 +214,11 @@ pub fn rebuild_combat_space(
             battalion: battalion.map(|m| m.0),
             formation: formation.map(|m| m.group),
             facing: Vec2::new(-rotation.0.sin(), -rotation.0.cos()),
+            radius: if mounted {
+                HORSE_BODY_RADIUS
+            } else {
+                super::super::BODY_RADIUS
+            },
         };
         let index = space.bodies.len();
         space.by_entity.insert(entity, index);
@@ -248,7 +275,7 @@ pub fn assign_formation_contacts(
             continue;
         }
         let target = space
-            .nearby(body.point)
+            .within(body.point, (body.radius + HORSE_BODY_RADIUS + 0.5).max(MELEE_REACH))
             .filter(|other| {
                 other.side != body.side && loads.get(&other.entity).copied().unwrap_or(0) < 2
             })

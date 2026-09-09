@@ -10,6 +10,8 @@ pub struct FiringWorld<'w, 's> {
     buildings: Option<Res<'w, BuildingSpatialIndex>>,
     props: Option<Res<'w, StaticColliders>>,
     terrain: Option<Res<'w, WorldTerrain>>,
+    mounts: Query<'w, 's, (), With<Mounted>>,
+    mounted_poses: Query<'w, 's, &'static PlayerRotation, With<Mounted>>,
     bodies: Query<
         'w,
         's,
@@ -18,18 +20,19 @@ pub struct FiringWorld<'w, 's> {
             Option<&'static CharacterMotion>,
             &'static Health,
             Option<&'static PersonId>,
+            Has<Mounted>,
         ),
     >,
 }
 impl FiringWorld<'_, '_> {
     fn aim(&self, from: Vec3, target: Entity) -> Option<Vec3> {
-        let (position, motion, health, _) = self.bodies.get(target).ok()?;
+        let (position, motion, health, _, mounted) = self.bodies.get(target).ok()?;
         if health.is_dead() || from.xz().distance_squared(position.0.xz()) > BOW_RANGE * BOW_RANGE {
             return None;
         }
         arrow_velocity(
             from,
-            position.0 + Vec3::Y * 1.15,
+            position.0 + Vec3::Y * if mounted { 2.25 } else { 1.15 },
             motion.map_or(Vec3::ZERO, |m| m.velocity),
         )
     }
@@ -48,6 +51,11 @@ impl FiringWorld<'_, '_> {
             stopped_at: None,
         };
         let steps = (duration * ARROW_SPEED / 1.5).ceil() as usize;
+        let body_search_radius = if self.mounts.is_empty() {
+            3.
+        } else {
+            1.5 + collision::MOUNTED_HORIZONTAL_EXTENT
+        };
         for i in 0..steps {
             let a = flight.position(f64::from(duration) * i as f64 / steps as f64);
             let b = flight.position(f64::from(duration) * (i + 1) as f64 / steps as f64);
@@ -61,12 +69,18 @@ impl FiringWorld<'_, '_> {
             }
             // Do not intentionally shoot through allies. Enemies intercept the
             // actual arrow normally, so dense enemy ranks do not block firing.
-            if self.space.within(a.xz(), 3.).any(|other| {
+            if self.space.within(a.xz(), body_search_radius).any(|other| {
                 other.entity != e
                     && other.side == body.side
-                    && self.bodies.get(other.entity).is_ok_and(|(p, _, h, _)| {
-                        !h.is_dead() && collision::body_hit(a, b, p.0).is_some()
-                    })
+                    && self
+                        .bodies
+                        .get(other.entity)
+                        .is_ok_and(|(p, _, h, _, mounted)| {
+                            let mounted_yaw = mounted.then_some(
+                                self.mounted_poses.get(other.entity).map_or(0., |r| r.0),
+                            );
+                            !h.is_dead() && collision::body_hit(a, b, p.0, mounted_yaw).is_some()
+                        })
             }) {
                 return false;
             }
@@ -95,7 +109,14 @@ pub fn shoot_bows(
             Option<&CombatReaction>,
             Option<&BowShot>,
         ),
-        (With<BowEquipped>, Without<OfflineHero>, Without<AboardBoat>),
+        (
+            With<BowEquipped>,
+            Without<OfflineHero>,
+            Without<AboardBoat>,
+            // Mounted bow combat is not implemented. This also keeps the
+            // mounted collision poses disjoint from mutable archer facing.
+            Without<Mounted>,
+        ),
     >,
     mut candidates: Local<Vec<(Entity, f32)>>,
 ) {
@@ -236,7 +257,7 @@ pub fn shoot_bows(
                 },
                 CombatReady,
             ));
-            if let Ok((_, _, _, Some(id))) = field.bodies.get(target) {
+            if let Ok((_, _, _, Some(id), ..)) = field.bodies.get(target) {
                 commands.entity(e).insert(EngagedWith(*id));
             }
             break;

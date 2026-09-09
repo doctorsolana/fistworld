@@ -49,7 +49,7 @@ pub(super) const MAX_MOTION_EXTRAPOLATION_SECONDS: f64 = 0.08;
 /// keeps its maximum spatial guess constant: 10x may move a villager ten
 /// times faster, but it must not draw them ten times farther beyond a queue
 /// place while waiting for the next snapshot.
-pub(super) fn visual_time_factor(warp: f32) -> f32 {
+pub(crate) fn visual_time_factor(warp: f32) -> f32 {
     if warp.is_finite() {
         warp.max(1.0)
     } else {
@@ -57,7 +57,7 @@ pub(super) fn visual_time_factor(warp: f32) -> f32 {
     }
 }
 
-pub(super) fn extrapolated_motion_target(
+pub(crate) fn extrapolated_motion_target(
     position: Vec3,
     velocity: Vec3,
     snapshot_age: f64,
@@ -67,7 +67,7 @@ pub(super) fn extrapolated_motion_target(
     position + velocity * snapshot_age.clamp(0.0, horizon) as f32
 }
 
-pub(super) fn visual_position_blend(real_seconds: f32, time_factor: f32) -> f32 {
+pub(crate) fn visual_position_blend(real_seconds: f32, time_factor: f32) -> f32 {
     // ~12/world-second: at every warp, the visual body trails the
     // authoritative body by the same WORLD distance instead of the same real
     // time. This is particularly visible in tightly spaced Moot queues.

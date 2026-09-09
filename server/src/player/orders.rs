@@ -164,10 +164,14 @@ pub(super) fn apply_local_unit_order(
         command,
         UnitCommand::Mount { .. } | UnitCommand::Dismount | UnitCommand::RideGait { .. }
     );
-    if riding_verb || units.iter().any(|e| world.get::<Mounted>(*e).is_some()) {
+    let legacy_rider = |world: &World, e: Entity| {
+        world.get::<Mounted>(e).is_some()
+            && world.get::<SoldierRole>(e) != Some(&SoldierRole::Cavalry)
+    };
+    if riding_verb || units.iter().any(|e| legacy_rider(world, *e)) {
         let (riders, foot): (Vec<_>, Vec<_>) = units
             .into_iter()
-            .partition(|e| riding_verb || world.get::<Mounted>(*e).is_some());
+            .partition(|e| riding_verb || legacy_rider(world, *e));
         let mut accepted = 0;
         let mut message = String::new();
         for entity in riders {
@@ -350,17 +354,24 @@ pub(super) fn apply_local_unit_order(
                 .map(|(key, soldiers)| FormationGroup {
                     key,
                     shape: shapes.get(&key).map_or(default(), |(_, s)| *s),
+                    role: soldiers
+                        .iter()
+                        .filter_map(|s| world.get::<SoldierRole>(s.entity))
+                        .copied()
+                        .find(|r| *r == SoldierRole::Cavalry)
+                        .unwrap_or_default(),
                     soldiers,
                 })
                 .collect(),
             target,
             frontage,
         );
-        if blocks
-            .iter()
-            .flat_map(|b| &b.slots)
-            .any(|(_, point)| !destination_allowed(world, *point))
-        {
+        if blocks.iter().any(|b| {
+            b.slots.iter().any(|(_, point)| {
+                !destination_allowed(world, *point)
+                    || !crate::world::wildlife::clear(world, *point, *point, b.clearance)
+            })
+        }) {
             return (0, "Formation overlaps water, an obstacle or the map edge; choose clear ground or a narrower frontage".into());
         }
         blocks
@@ -493,7 +504,7 @@ pub(super) fn apply_local_unit_order(
                     .xz();
                 let group = world
                     .resource_mut::<navigation::FormationRoutes>()
-                    .register(points, goal);
+                    .register_with_clearance(points, goal, block.clearance);
                 for (entity, destination) in block.slots {
                     let seat = FormationSeat(destination.xz() - block.centre.xz());
                     if world.get::<FormationSeat>(entity) != Some(&seat) {

@@ -437,14 +437,57 @@ benchmarks. Use `army-250.ron` as the separate march/redeployment regression.
 
 For a separate timing run, set `FISTWORLD_BATTLE_METRICS_ONLY=1` on the client,
 along with `FISTFORCE_CLIENT_PERF=1`; enable `CITYSIM_NET_DEBUG=1` on the server.
-The driver still takes its initial readiness/selection screenshot, then records
-one position sample per simulated second without GPU readbacks or PNG encoding.
+The driver still takes its initial readiness/selection screenshot (two initial
+views for cavalry), then records one JSON position sample per simulated second
+without recurring GPU readbacks or PNG encoding. The cavalry contact camera
+still moves to its close view; use the separate phase statistics below.
 Its summary marks `metrics_only`, distinguishes `samples` from `shots`, and keeps
 the gameplay assertions. This mode is not a replacement for visual verification.
 Exclude startup/pipeline warmup from timing interpretation, retain the render
 settings and concurrent machine workload, and use the server's measured phase
 costs rather than treating its scheduled 16.7 ms tick interval as CPU time.
 `battle-5v5.ron` extends the same check to 500 soldiers.
+
+`summary.json.frame_timing` records raw `Time<Real>` frame intervals for approach,
+normal combat and the cavalry close view, plus an overall distribution. It
+includes frames while screenshot tickets are pending, but excludes readiness and
+the initial screenshots. Each nonempty phase includes sample count, summed wall
+seconds, mean FPS, mean/p50/p95/p99/maximum milliseconds and frames over 35 ms.
+The ordinary `ClientPerf` snapshot also uses raw real time, so the simulation's
+delta clamp cannot hide a long frame. These are complete frame intervals,
+including VSync/software pacing, capture overhead and scheduling by the OS;
+they do not isolate GPU execution or main-thread CPU work.
+`frame_timing.replicated_clock` separately counts rendered frames in which the
+replicated absolute world clock stays unchanged while warp is positive, its
+longest unchanged wall interval and its largest forward step. This diagnoses
+packet-paced presentation separately from rendering FPS; explicit pauses reset
+the comparison and do not count as clock stalls.
+`frame_timing.presentation_clock` records the same diagnostics for the cosmetic
+animation clock after its update, making visible any difference between packet
+arrival cadence and actual animation time. `frame_timing.window_focus` counts
+focused/unfocused/unknown window states for exactly the accepted timing samples.
+
+For paired timing runs, finish compilation first, keep the same binary profile
+and scenario, and force `FISTFORCE_NO_SETTINGS_FILE=1`,
+`FISTFORCE_DISPLAY_MODE=windowed`, `FISTFORCE_RESOLUTION=1600x900`,
+`FISTFORCE_RENDER_SCALE=1`, `FISTFORCE_VSYNC=0` and `FISTFORCE_FRAME_CAP=0`.
+Confirm actual render dimensions in the initial `.capture.json`: fullscreen on
+Retina can use a larger native target than the requested logical resolution.
+Compare matching phase/sample population rather than averaging overlapping
+600-frame `ClientPerf` windows. For minimal extra diagnostics,
+`FISTFORCE_PROFILE_HITCHES=1` enables frame summaries without the mesh census
+enabled by `FISTFORCE_CLIENT_PERF=1`; leave detailed census/network tracing for a
+separate diagnostic run. Record other machine workloads alongside results.
+
+Use `FISTWORLD_BATTLE_BENCHMARK=1` for explicitly uncoupling a connected battle
+test from Winit's unfocused-window wait policy. This flag applies continuous
+event-loop updates only when a connected battle scenario is active, and the
+summary records `benchmark: true`. It leaves ordinary VSync and frame-cap
+settings in force, so an uncapped comparison also needs `FISTFORCE_VSYNC=0` and
+`FISTFORCE_FRAME_CAP=0`. `FISTWORLD_BATTLE_METRICS_ONLY=1` by itself preserves
+normal event-loop pacing. Compare focus counts and use the same benchmark flag
+on both builds; a background-window timing result is not directly comparable to
+a focused or continuous-mode run.
 
 ### Crowded combat and mid-fight orders
 
@@ -784,3 +827,51 @@ and adjoining house fronts from three angles. It deliberately stages presentatio
 inputs rather than pretending to grow a successful economy. A reserved square
 also excludes decorative ground cover through the shared client build-zone index;
 changed/removed square bounds dirty only their affected grass chunks.
+
+## Wildlife captures
+
+`capture/scenarios/wild-horses.ron` is a continuous four-horse fixture using the
+production wildlife consumer. The `horses_at_least` and `horse_rigs_at_least`
+assertions verify records and ready animation rigs; both counts are preserved in
+`world.horses` and `world.horse_rigs` in capture metadata. The fixture waits for
+all four rigs before its normal terrain readiness gate.
+
+`FISTWORLD_WILDLIFE_CAPTURE_DIR` enables a connected natural-herd smoke test.
+It observes grazing and authoritative position changes, captures the herd,
+checks zero rigs at wide zoom, and returns to the same horse identities. See
+[WILDLIFE.md](WILDLIFE.md) for commands and the boundary between offline
+presentation proof and connected behavioral proof.
+
+## Cavalry captures
+
+`./run.sh cavalryworld` opens the manual mounted-unit lab. It supplies
+`capture/scenarios/battle-cavalry.ron` only to the server: two eight-rider wings
+and eight infantry against 32 infantry. For automatic verification, use the
+connected battle recipe above with this scenario on both binaries,
+`FISTFORCE_AUTOCONNECT=battlelab`, and a fresh ignored `FISTWORLD_ARMY_CAPTURE_DIR`.
+
+The continuous connected run requires all 16 rider/horse visual pairs ready,
+every rider travelling at least 10 m, mounted speed above 3.5 m/s, a mounted melee
+impact, accepted ordinary attack input, whole-battalion selection, all three
+battalions engaging and casualties. It records an initial close view and close
+combat views. `.battle.json` adds `cavalry_visuals`; `summary.json` records paired
+readiness, per-person travel, speed and riders with impacts. Inspect these along
+with each selected PNG and `.capture.json`.
+
+For deterministic presentation and the retained Army page:
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" ./target/debug/capture --scenario capture/scenarios/cavalry-visuals.ron
+BEVY_ASSET_ROOT="$PWD/client/assets" ./target/debug/capture --scenario capture/scenarios/ui-army-cavalry.ron
+```
+
+`cavalry-visuals.ron` stages two production-mounted riders, samples their gait,
+zooms to the static mounted representation and returns to the same identities.
+`horse_rigs_at_most(count: 0)` proves the wide view removed animated horse rigs;
+the fixture also requires visible proxies and riders. Each probe adds a
+`.cavalry.json` with pairing, representation and clip evidence. This is rendering
+proof; it does not simulate horse movement or damage on the client.
+
+`ui-army-cavalry.ron` uses a role-only roster fixture at 1280×720 to check cavalry
+labels, equipment controls and compatible reinforcements in the actual Army page.
+See [CAVALRY.md](CAVALRY.md) for gameplay scope and limitations.

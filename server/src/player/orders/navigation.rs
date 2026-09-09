@@ -27,9 +27,6 @@ pub struct FormationRoutes {
     cursor: usize,
 }
 impl FormationRoutes {
-    pub fn register(&mut self, points: Vec<Vec2>, goal: Vec2) -> u64 {
-        self.register_with_clearance(points, goal, 0.0)
-    }
     pub fn register_with_clearance(
         &mut self,
         points: Vec<Vec2>,
@@ -71,6 +68,8 @@ pub fn advance_marches(
         Has<NavigationRoutePending>,
         Has<AttackOrder>,
         Has<crate::player::combat::fronts::PausedFormationMarch>,
+        Has<Mounted>,
+        Has<crate::player::combat::SkirmishOrder>,
     )>,
 ) {
     let Some(mut routes) = routes else {
@@ -125,10 +124,10 @@ pub fn advance_marches(
             });
         }
     }
-    for (entity, march, position, mut rotation, target, route, pending, fighting, paused) in
+    for (entity, march, position, mut rotation, target, route, pending, fighting, paused, mounted, skirmish) in
         &mut units
     {
-        if fighting || paused {
+        if (fighting && !(mounted && skirmish)) || paused {
             continue;
         }
         if target.is_none() && position.0.xz().distance_squared(march.destination.xz()) < 0.2 * 0.2

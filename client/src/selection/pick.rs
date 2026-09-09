@@ -158,6 +158,22 @@ pub(super) fn selectable_ray_distance(
                 ray_vs_vertical_segment(ray_origin, ray_dir, base, selectable.height)?;
             (gap <= pick_radius_at(selectable.radius, distance)).then_some(distance)
         }
+        SelectableShape::Mounted { rotation } => {
+            // Separate volumes avoid claiming empty air above the horse's head
+            // while still accepting a click on either the horse or its rider.
+            let horse = ray_vs_oriented_box(
+                ray_origin,
+                ray_dir,
+                base + Vec3::Y,
+                rotation,
+                Vec3::new(0.55, 1.0, 1.5),
+            );
+            let rider = ray_vs_vertical_segment(ray_origin, ray_dir, base + Vec3::Y * 1.5, 1.8)
+                .and_then(|(distance, gap)| {
+                    (gap <= pick_radius_at(0.55, distance)).then_some(distance)
+                });
+            horse.into_iter().chain(rider).min_by(f32::total_cmp)
+        }
         SelectableShape::Footprint {
             half_extents,
             centre_offset,
@@ -194,7 +210,9 @@ pub(super) fn selectable_base(
     match selectable.shape {
         // Characters are network-smoothed, so click the body on screen rather
         // than its last authoritative snapshot.
-        SelectableShape::Person => visual.map_or(position.0, |visual| visual.translation),
+        SelectableShape::Person | SelectableShape::Mounted { .. } => {
+            visual.map_or(position.0, |visual| visual.translation)
+        }
         // Static authored building roots sit at ground level, while primitive
         // fallback meshes are centred vertically. PlayerPosition is the shared
         // ground anchor for both and therefore the only unambiguous base.
@@ -394,6 +412,69 @@ mod tests {
     }
 
     #[test]
+    fn mounted_selection_accepts_horse_and_rider_but_not_empty_air() {
+        let mounted = Selectable::mounted(0.);
+        for (origin, direction) in [
+            (Vec3::new(0., 10., 1.3), Vec3::NEG_Y),
+            (Vec3::new(0., 2.9, 5.), Vec3::NEG_Z),
+        ] {
+            assert!(selectable_ray_distance(&mounted, Vec3::ZERO, origin, direction).is_some());
+        }
+        assert!(selectable_ray_distance(
+            &mounted,
+            Vec3::ZERO,
+            Vec3::new(5., 2.9, 1.3),
+            Vec3::NEG_X,
+        )
+        .is_none());
+        let mut world = click_test_world(Vec3::new(0., 10., 1.3));
+        let rider = world
+            .spawn((
+                mounted,
+                PlayerPosition(Vec3::ZERO),
+                Transform::default(),
+                CharacterActivity::Idle,
+            ))
+            .id();
+        click_world(&mut world);
+        assert_eq!(world.resource::<Selection>().primary(), Some(rider));
+    }
+
+    #[test]
+    fn dismount_restores_person_selection_bounds() {
+        let mut world = World::new();
+        let rider = world
+            .spawn((
+                shared::components::CharacterKind::Villager,
+                PlayerPosition(Vec3::ZERO),
+                shared::components::Mounted {
+                    horse: 1,
+                    gait: default(),
+                    phase: shared::components::RidingPhase::Riding,
+                    since: 0.,
+                },
+            ))
+            .id();
+        world
+            .run_system_once(super::super::tag_characters_selectable)
+            .unwrap();
+        assert_eq!(
+            *world.get::<Selectable>(rider).unwrap(),
+            Selectable::mounted(0.)
+        );
+        world
+            .entity_mut(rider)
+            .remove::<shared::components::Mounted>();
+        world
+            .run_system_once(super::super::tag_characters_selectable)
+            .unwrap();
+        assert_eq!(
+            *world.get::<Selectable>(rider).unwrap(),
+            Selectable::person()
+        );
+    }
+
+    #[test]
     fn real_drag_selects_the_owned_hero_at_half_render_resolution() {
         let mut world = World::new();
         let mut mouse = ButtonInput::<MouseButton>::default();
@@ -548,18 +629,19 @@ pub(super) fn pick_on_left_click(
                 continue;
             }
             let base = selectable_base(selectable, position, visual);
-            if matches!(selectable.shape, SelectableShape::Person)
-                && projected_person_overlaps_rect(
-                    camera,
-                    &camera_transform,
-                    window_size,
-                    base,
-                    selectable.radius,
-                    selectable.height,
-                    min,
-                    max,
-                )
-            {
+            if matches!(
+                selectable.shape,
+                SelectableShape::Person | SelectableShape::Mounted { .. }
+            ) && projected_person_overlaps_rect(
+                camera,
+                &camera_transform,
+                window_size,
+                base,
+                selectable.radius,
+                selectable.height,
+                min,
+                max,
+            ) {
                 // Sorted by depth so the order is stable and front-most first,
                 // which is what `primary()` should name.
                 hits.push((

@@ -23,6 +23,9 @@ pub struct ArmyLabScenario {
     pub management: bool,
     #[serde(default)]
     pub archer_battalions: Vec<usize>,
+    /// Lab-provisioned mounted troops; horse supply/stables remain separate.
+    #[serde(default)]
+    pub cavalry_battalions: Vec<usize>,
     #[serde(default)]
     pub counterattack_after_seconds: Option<f32>,
 }
@@ -66,6 +69,10 @@ impl ArmyLabScenario {
             .archer_battalions
             .iter()
             .all(|i| *i < result.battalions));
+        assert!(result
+            .cavalry_battalions
+            .iter()
+            .all(|i| { *i < result.battalions && !result.archer_battalions.contains(i) }));
         assert!(result
             .counterattack_after_seconds
             .is_none_or(|s| s.is_finite() && s >= 0.));
@@ -116,6 +123,20 @@ mod tests {
         assert_eq!(scenario.total(), 250);
         assert_eq!(scenario.battalions, 5);
         assert_eq!(scenario.deployments.len(), 2);
+    }
+
+    #[test]
+    fn cavalry_lab_provisions_two_mounted_wings_with_infantry_support() {
+        let scenario: ArmyLabScenario =
+            ron::from_str(include_str!("../../capture/scenarios/battle-cavalry.ron")).unwrap();
+        assert_eq!(scenario.total(), 24);
+        assert_eq!(scenario.cavalry_battalions, [0, 2]);
+        assert!(scenario.archer_battalions.is_empty());
+        let battle = scenario.battle.unwrap();
+        assert_eq!(
+            battle.defender_battalions * battle.defenders_per_battalion,
+            32
+        );
     }
 }
 

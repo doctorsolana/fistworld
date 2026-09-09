@@ -3,6 +3,7 @@
 //! `main.rs` is a thin wrapper around [`run`]; the modules live here so other binaries
 //! in this crate (notably `src/bin/capture.rs`) can reuse the rendering stack.
 
+pub(crate) mod animation_clock;
 pub mod app_wiring;
 pub mod army_roster;
 pub mod audio;
@@ -83,3 +84,5 @@ pub fn run() -> AppExit {
 }
 
 pub mod siege;
+
+pub mod animals;

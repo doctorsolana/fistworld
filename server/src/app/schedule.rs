@@ -77,6 +77,8 @@ fn configure_server_fixed_schedule(app: &mut App) {
             collision::building_index::sync_building_spatial_index,
             collision::streaming::update_static_collider_streaming,
             world::navgrid::sync_obstacle_grid,
+            world::wildlife::populate,
+            world::wildlife::update_observation,
             world::regions::tick_strategic_world,
             world::village::strategic::advance_strategic_travel,
             world::village::strategic::advance_strategic_company_deliveries,

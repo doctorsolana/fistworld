@@ -55,6 +55,7 @@ fn animation_setup_test_app() -> App {
             handle,
             body: HashMap::new(),
             face: HashMap::new(),
+            riding: Default::default(),
         }),
         ..default()
     });
@@ -304,6 +305,7 @@ fn a_seated_passenger_does_not_walk_when_the_vessel_moves() {
     let sit = AnimationNodeIndex::new(2);
     let anim = HeroAnim {
         archery: Default::default(),
+        riding: Default::default(),
         movement: Default::default(),
         combat: Default::default(),
         player: Entity::from_bits(1),
@@ -353,6 +355,7 @@ fn farming_uses_harvest_without_leaking_into_the_build_clip() {
         HeroVisual { speed: 0.0 },
         HeroAnim {
             archery: Default::default(),
+            riding: Default::default(),
             movement: Default::default(),
             combat: Default::default(),
             player: player_entity,
@@ -401,6 +404,7 @@ fn a_loaded_stationary_villager_freezes_in_the_carry_pose() {
         HeroVisual { speed: 0.0 },
         HeroAnim {
             archery: Default::default(),
+            riding: Default::default(),
             movement: Default::default(),
             combat: Default::default(),
             player: player_entity,
@@ -462,6 +466,7 @@ fn a_rig_no_view_can_see_stops_evaluating_and_resumes_where_it_left_off() {
         HeroVisual { speed: 0.0 },
         HeroAnim {
             archery: Default::default(),
+            riding: Default::default(),
             movement: Default::default(),
             combat: Default::default(),
             player: player_entity,
@@ -551,6 +556,7 @@ fn an_active_porter_cart_walks_even_before_visual_interpolation_reports_speed() 
         HeroVisual { speed: 0.0 },
         HeroAnim {
             archery: Default::default(),
+            riding: Default::default(),
             movement: Default::default(),
             combat: Default::default(),
             player: player_entity,
@@ -599,6 +605,7 @@ fn gait_hysteresis_swimming_and_outdoor_rest_select_distinct_clips() {
     let node = |i| Some(AnimationNodeIndex::new(i));
     let mut anim = HeroAnim {
         archery: Default::default(),
+        riding: Default::default(),
         movement: super::animation::MovementClips {
             run: node(2),
             swim: node(3),
@@ -688,6 +695,7 @@ fn bevy_advancement_keeps_a_clock_sampled_death_at_its_last_frame() {
         },
         HeroAnim {
             archery: Default::default(),
+            riding: Default::default(),
             movement: Default::default(),
             player,
             idle: None,

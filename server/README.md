@@ -202,3 +202,12 @@ construction and opt-in passage diagnostics. Shared section geometry feeds both
 `world/navgrid.rs` and `village_roads/routing.rs`; hero movement and arrow collision
 also enforce completed defenses. See [FORTIFICATIONS](../docs/FORTIFICATIONS.md)
 and [TOWN-GROWTH-LAB](../docs/TOWN-GROWTH-LAB.md) for scope and validation.
+
+### Wildlife
+
+`world/wildlife/` owns natural horse placement, habitat validation and observation
+budgets. Only active or ridden horses participate in collider streaming.
+`player/riding/` owns mounted-pair commands, cavalry equipment and lifecycle;
+ambient behavior lives in wildlife. Issued mounts share session IDs but do not
+consume the ambient population budget. See [the wildlife contract](../docs/WILDLIFE.md)
+and [cavalry lab](../docs/CAVALRY.md).

@@ -1,48 +1,75 @@
-//! Bounded wild behaviour and mount cleanup. Wandering uses short, certified
-//! ground segments; ridden routes use the ordinary shared tactical planner.
+//! Mounted-pair lifecycle. Ambient animals belong to world::wildlife.
 use super::*;
-use crate::world::simulation_time::SimulationTime;
-use bevy::ecs::system::SystemState;
-use std::collections::HashMap;
+use shared::region::RegionCoord;
+use std::collections::{HashMap, HashSet};
 
-pub fn tick(
-    world: &mut World,
-    mut timing: Local<Option<SystemState<SimulationTime<'static, 'static>>>>,
-) {
-    let state = timing.get_or_insert_with(|| SystemState::new(world));
-    let time = state.get(world).expect("riding simulation time");
-    let dt = time.world_seconds();
-    let real_dt = time.real_seconds().max(1e-5);
+#[derive(Default)]
+pub struct MountScratch {
+    riders: HashMap<PersonId, (Entity, Mounted)>,
+    horses: Vec<(Entity, Horse, Vec3)>,
+    ids: HashSet<u64>,
+}
+
+pub fn tick(world: &mut World, mut scratch: Local<MountScratch>) {
+    // Wildlife is independent of mounted-pair reconciliation. The usual case
+    // (no riders yet) needs no scratch allocations or per-animal updates.
+    if world.query::<&Mounted>().iter(world).next().is_none()
+        && world
+            .query::<&Horse>()
+            .iter(world)
+            .all(|h| h.rider.is_none())
+        && world.query::<&super::cavalry::CavalryMount>().iter(world).next().is_none()
+    {
+        return;
+    }
     let now = now(world);
-    let riders: HashMap<_, _> = world
-        .query::<(Entity, &PersonId, &Mounted)>()
-        .iter(world)
-        .map(|(e, p, m)| (*p, (e, *m)))
-        .collect();
-    let horses: Vec<_> = world
-        .query::<(Entity, &Horse, &PlayerPosition)>()
-        .iter(world)
-        .map(|(e, h, p)| (e, *h, p.0))
-        .collect();
+    let MountScratch {
+        riders,
+        horses,
+        ids,
+    } = &mut *scratch;
+    riders.clear();
+    horses.clear();
+    ids.clear();
+    riders.extend(
+        world
+            .query::<(Entity, &PersonId, &Mounted)>()
+            .iter(world)
+            .map(|(e, p, m)| (*p, (e, *m))),
+    );
+    horses.extend(
+        world
+            .query::<(Entity, &Horse, &PlayerPosition)>()
+            .iter(world)
+            .map(|(e, h, p)| (e, *h, p.0)),
+    );
+    ids.extend(horses.iter().map(|(_, h, _)| h.id));
     // Replicated mounts are a pair. Never leave a rider suspended after a
     // horse despawn, and never leave a horse leased after death/disconnection.
     for &(rider, mounted) in riders.values() {
-        if !horses.iter().any(|(_, h, _)| h.id == mounted.horse) {
+        if !ids.contains(&mounted.horse) {
             stop(world, rider);
             world
                 .entity_mut(rider)
                 .remove::<(Mounted, DismountLanding)>();
+            if world.get::<SoldierRole>(rider) == Some(&SoldierRole::Cavalry) {
+                world.entity_mut(rider).insert(SoldierRole::Infantry);
+            }
         }
     }
-    for (entity, horse, at) in horses {
+    for &(entity, horse, at) in horses.iter() {
         if let Some(person) = horse.rider {
             let rider = riders.get(&person).copied().filter(|(e, m)| {
                 m.horse == horse.id
                     && world.get::<OfflineHero>(*e).is_none()
                     && world.get::<Health>(*e).is_none_or(|h| !h.is_dead())
                     && world.get::<AboardBoat>(*e).is_none()
+                    && (world.get::<super::cavalry::CavalryMount>(entity).is_none() || world.get::<CommandedBy>(*e).is_some())
             });
             if let Some((rider, mut mounted)) = rider {
+                if world.get::<SoldierRole>(rider) == Some(&SoldierRole::Cavalry) {
+                    world.entity_mut(rider).insert_if_new(CombatReady);
+                }
                 if now - mounted.since >= HORSE_TRANSITION_SECONDS {
                     match mounted.phase {
                         RidingPhase::Mounting => {
@@ -115,65 +142,17 @@ pub fn tick(
                     .remove::<(Mounted, DismountLanding)>();
             }
             release(world, entity, now);
-        }
-        let Some(wild) = world.get::<WildHorse>(entity) else {
-            continue;
-        };
-        let (home, next, serial, target) =
-            (wild.home, wild.next_decision, wild.serial, wild.target);
-        if let Some(target) = target {
-            let delta = (target - at).xz();
-            let distance = delta.length();
-            let step = (HorseGait::Walk.speed() * dt).min(distance);
-            let next = grounded(
-                world,
-                at + Vec3::new(delta.x, 0., delta.y).normalize_or_zero() * step,
-            );
-            if distance < 0.04 || !clear(world, at, next, HORSE_CLEARANCE) {
-                world.get_mut::<WildHorse>(entity).unwrap().target = None;
-                world.entity_mut(entity).insert(CharacterMotion::STATIONARY);
-                set_activity(world, entity, HorseActivity::Idle, now);
-            } else {
-                let yaw = (-delta.x).atan2(-delta.y);
-                world.entity_mut(entity).insert((
-                    PlayerPosition(next),
-                    PlayerRotation(yaw),
-                    RegionCoord::from_world_pos(next),
-                ));
-                world
-                    .get_mut::<CharacterMotion>(entity)
-                    .unwrap()
-                    .set_if_neq(CharacterMotion::new((next - at) / real_dt));
-                set_activity(world, entity, HorseActivity::Moving(HorseGait::Walk), now);
-            }
-        } else if now >= next {
-            // Deterministic per-horse sequence; one candidate, no unbounded search.
-            let serial = serial.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let activity = match serial % 4 {
-                0 => HorseActivity::Alert,
-                1 => HorseActivity::Idle,
-                _ => HorseActivity::Graze,
-            };
-            let mut destination = None;
-            if serial % 4 == 1 {
-                let angle = (serial >> 32) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
-                let candidate = grounded(
-                    world,
-                    home + Vec3::new(angle.cos() * 4., 0., angle.sin() * 4.),
-                );
-                if clear(world, at, candidate, HORSE_CLEARANCE) {
-                    destination = Some(candidate);
-                }
-            }
-            let mut wild = world.get_mut::<WildHorse>(entity).unwrap();
-            wild.serial = serial;
-            wild.target = destination;
-            wild.next_decision = now + 8. + (serial % 5) as f64;
-            set_activity(world, entity, activity, now);
+        } else if world.get::<super::cavalry::CavalryMount>(entity).is_some() {
+            world.despawn(entity);
         }
     }
 }
+
 fn release(world: &mut World, horse: Entity, now: f64) {
+    if world.get::<super::cavalry::CavalryMount>(horse).is_some() {
+        world.despawn(horse);
+        return;
+    }
     world.get_mut::<Horse>(horse).unwrap().rider = None;
     world.entity_mut(horse).insert(CharacterMotion::STATIONARY);
     if let Some(mut wild) = world.get_mut::<WildHorse>(horse) {

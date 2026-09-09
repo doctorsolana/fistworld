@@ -18,6 +18,7 @@ struct Candidate {
     point: Vec2,
     side: Side,
     range: f32,
+    radius: f32,
 }
 
 #[derive(Default)]
@@ -61,7 +62,10 @@ impl AcquisitionScratch {
                         continue;
                     }
                     let distance = candidate.point.distance_squared(other.point);
-                    if distance > candidate.range * candidate.range {
+                    let range = if candidate.range > 0. && candidate.range < ACQUISITION_RANGE {
+                        (candidate.radius + other.radius + 0.5).max(MELEE_REACH)
+                    } else { candidate.range };
+                    if distance > range * range {
                         continue;
                     }
                     if nearest.is_none_or(|(id, best)| {
@@ -100,6 +104,7 @@ pub fn acquire_targets(
     identities: Query<&PersonId>,
     policies: Query<&BattalionStance>,
     bows: Query<(), With<BowEquipped>>,
+    mounts: Query<(), With<Mounted>>,
     mut scratch: Local<AcquisitionScratch>,
 ) {
     scratch.candidates.clear();
@@ -121,19 +126,20 @@ pub fn acquire_targets(
         } else {
             continue;
         };
+        let hold_reach = if mounts.contains(entity) { HORSE_BODY_RADIUS * 2. + 0.5 } else { MELEE_REACH };
         let range = if engaged || formed || bows.contains(entity) {
             0.0
         } else {
             match stance {
                 Some(CommandStance::Move | CommandStance::Retreat) => 0.0,
-                Some(CommandStance::Hold | CommandStance::Guard) => MELEE_REACH,
+                Some(CommandStance::Hold | CommandStance::Guard) => hold_reach,
                 Some(CommandStance::AttackMove) => ACQUISITION_RANGE,
                 None if moving => 0.0,
                 None if policies
                     .get(entity)
                     .is_ok_and(|s| *s == BattalionStance::HoldLine) =>
                 {
-                    MELEE_REACH
+                    hold_reach
                 }
                 None => ACQUISITION_RANGE,
             }
@@ -143,6 +149,7 @@ pub fn acquire_targets(
             point: position.0.xz(),
             side,
             range,
+            radius: if mounts.contains(entity) { HORSE_BODY_RADIUS } else { super::BODY_RADIUS },
         });
     }
     if scratch.candidates.len() < 2 {
@@ -176,6 +183,7 @@ mod tests {
                 point: Vec2::new(i as f32 * 40.0, 0.0),
                 side: Side::Account(i as usize % 2),
                 range: ACQUISITION_RANGE,
+                radius: super::super::BODY_RADIUS,
             });
         }
         scratch.index();
@@ -200,6 +208,7 @@ mod tests {
                 point: Vec2::new(x, 0.0),
                 side: Side::Account(i),
                 range: ACQUISITION_RANGE,
+                radius: super::super::BODY_RADIUS,
             });
         }
         scratch.index();

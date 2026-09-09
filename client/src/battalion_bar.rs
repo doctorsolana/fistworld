@@ -354,10 +354,10 @@ fn bind_battalion_cards(
             format!(
                 "{} {}",
                 b.count,
-                if b.role == shared::components::SoldierRole::Archer {
-                    "BOWS"
-                } else {
-                    "MEN"
+                match b.role {
+                    shared::components::SoldierRole::Archer => "BOWS",
+                    shared::components::SoldierRole::Cavalry => "RIDERS",
+                    shared::components::SoldierRole::Infantry => "MEN",
                 }
             )
         };

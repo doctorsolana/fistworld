@@ -31,12 +31,14 @@ pub struct HeroGraph {
     pub(super) body: HashMap<String, AnimationNodeIndex>,
     /// Face clip nodes by manifest clip name.
     pub(super) face: HashMap<String, AnimationNodeIndex>,
+    pub(super) riding: super::riding::RidingNodes,
 }
 
 /// Link from the hero root to the AnimationPlayer entity inside its scene.
 #[derive(Component)]
 pub(super) struct HeroAnim {
     pub(super) archery: super::archery::ArcheryClips,
+    pub(super) riding: super::riding::RidingClips,
     pub(super) movement: MovementClips,
     pub(super) player: Entity,
     pub(super) idle: Option<AnimationNodeIndex>,
@@ -163,7 +165,16 @@ pub(super) fn setup_hero_animation(
         // Mask groups are derived from the LIVE rig rather than a hardcoded
         // bone table: a renamed or added bone lands in the body group
         // automatically instead of silently escaping every mask.
-        let Some((player_entity, _)) = players.iter().next() else {
+        let Some((player_entity, _)) = players.iter().find(|(entity, _)| {
+            let mut ancestor = *entity;
+            while let Ok(parent) = parents.get(ancestor) {
+                ancestor = parent.parent();
+                if rig_roots.contains(ancestor) {
+                    return true;
+                }
+            }
+            false
+        }) else {
             return;
         };
         let mut graph = AnimationGraph::new();
@@ -185,7 +196,18 @@ pub(super) fn setup_hero_animation(
             } else {
                 MASK_GROUP_BODY
             };
-            graph.add_target_to_mask_group(AnimationTargetId::from_iter(path.iter()), group);
+            let target = AnimationTargetId::from_iter(path.iter());
+            graph.add_target_to_mask_group(target, group);
+            if group == MASK_GROUP_BODY {
+                graph.add_target_to_mask_group(
+                    target,
+                    if super::riding::lower_bone(leaf) {
+                        super::riding::MASK_LOWER
+                    } else {
+                        super::riding::MASK_UPPER
+                    },
+                );
+            }
             targets += 1;
             if let Ok(children) = children_q.get(node) {
                 for child in children.iter() {
@@ -232,10 +254,12 @@ pub(super) fn setup_hero_animation(
             body.len(),
             face.len()
         );
+        let riding = super::riding::RidingNodes::build(&mut graph, gltf);
         assets.graph = Some(HeroGraph {
             handle: graphs.add(graph),
             body,
             face,
+            riding,
         });
     }
     let hero_graph = assets.graph.clone().expect("graph built above");
@@ -285,6 +309,7 @@ pub(super) fn setup_hero_animation(
         // world teardown). Cosmetic animation setup must never crash the
         // client on either stale entity.
         commands.entity(rig_root).try_insert(HeroAnim {
+            riding: super::riding::RidingClips::new(hero_graph.riding.clone()),
             archery: super::archery::ArcheryClips {
                 ready: hero_graph.body.get("bow_ready").copied(),
                 shoot: hero_graph.body.get("bow_shoot").copied(),
@@ -450,6 +475,7 @@ pub(super) fn drive_hero_locomotion(
     view_visibilities: Query<&ViewVisibility>,
     mut tally: Local<RigAnimationTally>,
     clocks: Query<&shared::components::WorldTime>,
+    presentation: Option<Res<crate::animation_clock::AnimationClock>>,
     combat: Query<(
         Has<shared::components::CombatReady>,
         Option<&shared::components::CombatSwing>,
@@ -457,6 +483,8 @@ pub(super) fn drive_hero_locomotion(
         Option<&shared::components::PersonId>,
     )>,
     bows: Query<Option<&shared::components::BowShot>, With<shared::components::BowEquipped>>,
+    mounts: Query<(&shared::components::Mounted, &super::mounted::MountedVisual)>,
+    horses: Query<&shared::components::HorseAnimation>,
 ) {
     let census = *tally
         .enabled
@@ -482,8 +510,11 @@ pub(super) fn drive_hero_locomotion(
             };
         }
     }
-    let now = clocks.iter().next().map_or(0.0, |c| {
-        f64::from(c.day) * f64::from(c.cycle_duration()) + f64::from(c.seconds_in_cycle)
+    let now = clocks.iter().next().map_or(0., |clock| {
+        presentation.as_ref().map_or_else(
+            || crate::animation_clock::seconds(clock),
+            |presentation| presentation.sample(clock),
+        )
     });
     for (entity, visual, mut anim, inherited, activity, carried, cart, motion, parts, transform) in
         heroes.iter_mut()
@@ -561,6 +592,19 @@ pub(super) fn drive_hero_locomotion(
             anim.paused = false;
         }
 
+        let mount = mounts.get(entity).ok().and_then(|(mounted, visual)| {
+            horses.get(visual.horse).ok().map(|horse| (mounted, horse))
+        });
+        let (ready, swing, reaction, _) = combat.get(entity).unwrap_or((false, None, None, None));
+        let riding_pose = anim.riding.drive(
+            &mut player,
+            time.delta_secs(),
+            now,
+            mount,
+            ready,
+            swing,
+            reaction,
+        );
         let carting = cart.is_some();
         let swimming = !carting
             && transform
@@ -589,7 +633,7 @@ pub(super) fn drive_hero_locomotion(
             motion.copied(),
             swimming,
         );
-        let combat_pose = (!swimming)
+        let combat_pose = (!swimming && mount.is_none())
             .then(|| {
                 combat
                     .get(entity)
@@ -606,7 +650,8 @@ pub(super) fn drive_hero_locomotion(
                     })
             })
             .flatten();
-        let archery_pose = (!swimming
+        let archery_pose = (mount.is_none()
+            && !swimming
             && !carrying
             && !carting
             && !motion.is_some_and(|m| m.is_moving())
@@ -621,7 +666,10 @@ pub(super) fn drive_hero_locomotion(
                 .and_then(|shot| anim.archery.sample(now, shot))
         })
         .flatten();
-        let combat_pose = archery_pose.or(combat_pose);
+        let combat_pose = riding_pose
+            .map(|(clip, seek)| (clip, Some(seek)))
+            .or(archery_pose)
+            .or(combat_pose);
         if let Some((clip, seek)) = combat_pose {
             desired = Some(clip);
             speed = if seek.is_some() { 0.0 } else { 1.0 };

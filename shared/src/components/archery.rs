@@ -7,12 +7,14 @@ pub enum SoldierRole {
     #[default]
     Infantry,
     Archer,
+    Cavalry,
 }
 impl SoldierRole {
     pub fn label(self) -> &'static str {
         match self {
             Self::Infantry => "Infantry",
             Self::Archer => "Archers",
+            Self::Cavalry => "Cavalry",
         }
     }
 }
@@ -154,7 +156,11 @@ mod tests {
             bincode::deserialize::<ArrowProjectile>(&bincode::serialize(&p).unwrap()).unwrap(),
             p
         );
-        for role in [SoldierRole::Infantry, SoldierRole::Archer] {
+        for role in [
+            SoldierRole::Infantry,
+            SoldierRole::Archer,
+            SoldierRole::Cavalry,
+        ] {
             assert_eq!(
                 bincode::deserialize::<SoldierRole>(&bincode::serialize(&role).unwrap()).unwrap(),
                 role

@@ -66,18 +66,23 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                 Ok(s) => s,
                 Err(e) => return (0, e.into()),
             };
-            // Re-forming detached archers must not silently replace their bows.
-            // A mixed muster becomes infantry, subject to the same equipment
-            // boundary as an explicit role change or transfer.
-            let role = if !soldiers.is_empty()
-                && soldiers
-                    .iter()
-                    .all(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Archer))
+            // Homogeneous detached troops retain their equipment, including mounts.
+            let first_role = soldiers
+                .first()
+                .and_then(|e| world.get::<SoldierRole>(*e))
+                .copied()
+                .unwrap_or_default();
+            let role = if soldiers
+                .iter()
+                .all(|e| world.get::<SoldierRole>(*e).copied().unwrap_or_default() == first_role)
             {
-                SoldierRole::Archer
+                first_role
             } else {
                 SoldierRole::Infantry
             };
+            if role != SoldierRole::Cavalry && soldiers.iter().any(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Cavalry)) {
+                return (0, "Keep cavalry in a cavalry battalion or command it separately".into());
+            }
             let changing: Vec<_> = soldiers
                 .iter()
                 .copied()
@@ -176,6 +181,14 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                 .get::<FirePolicy>(battalion)
                 .copied()
                 .unwrap_or_default();
+            if role == SoldierRole::Cavalry
+                && soldiers.iter().any(|e| world.get::<Mounted>(*e).is_none())
+            {
+                return (0, "Only mounted troops can join a cavalry battalion".into());
+            }
+            if role != SoldierRole::Cavalry && soldiers.iter().any(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Cavalry)) {
+                return (0, "Keep cavalry in a cavalry battalion or command it separately".into());
+            }
             let changing: Vec<_> = soldiers
                 .iter()
                 .copied()

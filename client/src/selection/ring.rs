@@ -150,6 +150,7 @@ pub(super) fn sync_selection_ring(
             Option<&Transform>,
             Option<&shared::components::CommandedBy>,
             Has<shared::components::Catapult>,
+            Has<shared::components::Mounted>,
         ),
         Without<SelectionRing>,
     >,
@@ -189,14 +190,19 @@ pub(super) fn sync_selection_ring(
 
     // Where every ring belongs this frame, and whether that unit takes orders.
     // Empty past the hide distance, so the whole pool simply hides.
-    let wanted: Vec<(Vec3, bool, bool)> = if zoom > RING_HIDE_ZOOM {
+    let wanted: Vec<(Vec3, bool, bool, f32)> = if zoom > RING_HIDE_ZOOM {
         Vec::new()
     } else {
         selection
             .entities
             .iter()
             .filter_map(|entity| positions.get(*entity).ok())
-            .map(|(position, visual, commanded, siege)| {
+            .map(|(position, visual, commanded, siege, mounted)| {
+                let unit_scale = if mounted {
+                    scale_factor.max(1.9)
+                } else {
+                    scale_factor
+                };
                 let commandable = super::can_command(commanded, my_account.as_deref());
                 // Follow the SMOOTHED transform, not the replicated position.
                 // `PlayerPosition` is a staircase at network rate while the body
@@ -217,12 +223,12 @@ pub(super) fn sync_selection_ring(
                         if siege {
                             3.12
                         } else {
-                            SHOULDER_OUTER * scale_factor
+                            SHOULDER_OUTER * unit_scale
                         },
                     );
                 }
                 point.y += RING_LIFT;
-                (point, commandable, siege)
+                (point, commandable, siege, unit_scale)
             })
             .collect()
     };
@@ -263,8 +269,8 @@ pub(super) fn sync_selection_ring(
     for (index, (_entity, mut transform, mut visibility, children)) in rings.iter_mut().enumerate()
     {
         match wanted.get(index) {
-            Some((point, commandable, siege)) => {
-                let scale = Vec3::splat(if *siege { 1.0 } else { scale_factor });
+            Some((point, commandable, siege, unit_scale)) => {
+                let scale = Vec3::splat(if *siege { 1.0 } else { *unit_scale });
                 if transform.translation != *point {
                     transform.translation = *point;
                 }

@@ -331,7 +331,12 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             )
                 .chain(),
             player::hero::rebuild_tactical_crowd_grid,
-            (player::hero::step_units, player::riding::tick).chain(),
+            (
+                player::hero::step_units,
+                player::riding::tick,
+                world::wildlife::tick,
+            )
+                .chain(),
             world::fortifications::trace_defense_passages,
             (
                 player::combat::fronts::rebuild_combat_space,

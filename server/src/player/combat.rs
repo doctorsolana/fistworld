@@ -112,6 +112,7 @@ pub fn pursue_attack_orders(
     skirmishers: Query<(), With<SkirmishOrder>>,
     policies: Query<&shared::components::BattalionStance>,
     directed: Query<(), With<crate::player::army::DirectedAttack>>,
+    mounted: Query<(), With<shared::components::Mounted>>,
     mut attackers: Query<
         (
             Entity,
@@ -203,7 +204,15 @@ pub fn pursue_attack_orders(
         }
         let distance = Vec2::new(position.0.x, position.0.z)
             .distance(Vec2::new(target_position.0.x, target_position.0.z));
-        if distance > MELEE_REACH
+        let radius = |e| {
+            if mounted.contains(e) {
+                shared::components::HORSE_BODY_RADIUS
+            } else {
+                BODY_RADIUS
+            }
+        };
+        let reach = (radius(attacker) + radius(order.target) + 0.5).max(MELEE_REACH);
+        if distance > reach
             || space.as_ref().is_some_and(|s| {
                 s.body(attacker).is_some()
                     && s.body(order.target).is_some()
@@ -378,6 +387,32 @@ mod tests {
             ))
             .id();
         (attacker, target)
+    }
+
+    #[test]
+    fn mounted_opponents_trade_blows_without_pushing_their_horses_inside_each_other() {
+        use shared::components::{Mounted, HorseGait, RidingPhase};
+        let mut app = App::new();
+        app.init_resource::<fronts::CombatSpace>();
+        app.add_systems(Update, (fronts::rebuild_combat_space, pursue_attack_orders).chain());
+        let (a, b) = spawn_duel(&mut app);
+        for (entity, id, owner) in [(a, 1, "alice"), (b, 2, "bob")] {
+            app.world_mut().entity_mut(entity).insert((
+                Mounted { horse: id, gait: HorseGait::Gallop, phase: RidingPhase::Riding, since: 0. },
+                PlayerRotation(0.), CommandedBy(owner.into()),
+            ));
+        }
+        app.world_mut().get_mut::<PlayerPosition>(b).unwrap().0 = Vec3::X * 3.2;
+        app.update();
+        let space = app.world().resource::<fronts::CombatSpace>();
+        assert!(space.clear_strike(a, b));
+        assert!(!space.movement_clear(a, Vec2::ZERO, Vec2::X * 0.5));
+        for _ in 0..8 {
+            advance_world_seconds(&mut app, 0.25);
+            app.update();
+        }
+        assert!(app.world().get::<Health>(b).unwrap().current < shared::components::CHARACTER_MAX_HEALTH);
+        assert_eq!(app.world().get::<PlayerPosition>(b).unwrap().0.x, 3.2);
     }
 
     #[test]

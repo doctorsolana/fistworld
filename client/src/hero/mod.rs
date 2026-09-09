@@ -20,7 +20,10 @@ mod appearance;
 mod attachments;
 mod carts;
 mod combat_animation;
-mod motion;
+mod mounted;
+mod riding;
+pub(crate) use mounted::MountedVisual;
+pub(crate) mod motion;
 
 use crate::states::GameState;
 use animation::{drive_hero_locomotion, setup_hero_animation};
@@ -70,6 +73,30 @@ impl Plugin for HeroPlugin {
         )));
         app.insert_resource(HeroManifest(manifest));
         app.init_resource::<HeroAssets>();
+        app.init_resource::<crate::animation_clock::AnimationClock>();
+        app.add_systems(
+            Update,
+            crate::animation_clock::update
+                .in_set(crate::animation_clock::AnimationClockUpdate)
+                .before(crate::animals::AnimalsPresentation)
+                .before(drive_hero_locomotion)
+                .before(archery::drive_bows)
+                .before(arrows::animate),
+        );
+        app.add_systems(
+            Update,
+            mounted::bind_riders
+                .after(setup_hero_animation)
+                .after(crate::animals::AnimalsPresentation)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            PostUpdate,
+            mounted::follow_sockets
+                .after(bevy::app::AnimationSystems)
+                .before(bevy::transform::TransformSystems::Propagate)
+                .run_if(in_state(GameState::Playing)),
+        );
         app.init_resource::<CarriedLoadAssets>();
         app.init_resource::<PorterCartAssets>();
         app.init_resource::<ToolAssets>();
@@ -118,7 +145,7 @@ impl Plugin for HeroPlugin {
                     (
                         recover_stale_porter_cart_animation,
                         setup_porter_cart_animation,
-                        drive_hero_locomotion,
+                        drive_hero_locomotion.after(mounted::bind_riders),
                         drive_porter_cart_motion,
                         archery::setup_bows,
                         archery::drive_bows,

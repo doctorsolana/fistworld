@@ -2,10 +2,10 @@
 //! a local approach; the formation is a preference, never an attack-side reservation.
 use bevy::prelude::*;
 #[cfg(test)]
-use shared::formation::FILE_SPACING;
+use shared::formation::{FILE_SPACING, RANK_SPACING};
 use shared::{
     components::*,
-    formation::{FormationBlock, FormationSoldier, RANK_SPACING},
+    formation::{FormationBlock, FormationSoldier},
 };
 use std::collections::BTreeMap;
 
@@ -44,6 +44,8 @@ pub struct BattleFront {
     pub facing: Vec2,
     pub columns: Vec<Vec<Entity>>,
     pub spacing: f32,
+    pub rank_spacing: f32,
+    pub clearance: f32,
     /// Delay re-forming until local combat has stayed quiet.
     pub last_threat: f64,
     pub intent: Intent,
@@ -62,7 +64,8 @@ impl BattleFront {
             let lateral = (file as f32 - (self.columns.len() - 1) as f32 * 0.5) * self.spacing;
             for (rank, e) in column.iter().enumerate() {
                 if let Some(body) = space.body(*e) {
-                    sum += body.point - right * lateral + self.facing * rank as f32 * RANK_SPACING;
+                    sum += body.point - right * lateral
+                        + self.facing * rank as f32 * self.rank_spacing;
                     count += 1;
                 }
             }
@@ -83,7 +86,7 @@ impl BattleFront {
                 column.iter().enumerate().map(move |(rank, e)| {
                     (
                         *e,
-                        self.anchor + right * x - self.facing * rank as f32 * RANK_SPACING,
+                        self.anchor + right * x - self.facing * rank as f32 * self.rank_spacing,
                         rank.checked_sub(1).map(|i| column[i]),
                     )
                 })
@@ -130,6 +133,8 @@ pub fn install(world: &mut World, block: FormationBlock, intent: Intent) {
                 anchor: block.centre.xz(),
                 facing: block.facing,
                 spacing: block.spacing,
+                rank_spacing: block.rank_spacing,
+                clearance: block.clearance,
                 last_threat: 0.0,
                 columns,
                 intent,
@@ -182,7 +187,7 @@ pub fn current_block(
                             (file as f32 - (front.columns.len() - 1) as f32 * 0.5) * front.spacing;
                         positions.push(
                             s.position.xz() - right * lateral
-                                + front.facing * rank as f32 * RANK_SPACING,
+                                + front.facing * rank as f32 * front.rank_spacing,
                         );
                     }
                 }
@@ -196,6 +201,8 @@ pub fn current_block(
                 facing: front.facing,
                 files: front.columns.len(),
                 spacing: front.spacing,
+                rank_spacing: front.rank_spacing,
+                clearance: front.clearance,
                 file_indices,
                 slots,
             };
@@ -208,9 +215,17 @@ pub fn current_block(
         .sum::<Vec2>()
         .try_normalize()
         .unwrap_or(Vec2::Y);
-    let shape = shared::formation::deployment_shape(soldiers.len(), preferred, None);
+    let role = soldiers
+        .iter()
+        .filter_map(|s| world.get::<SoldierRole>(s.entity))
+        .copied()
+        .find(|r| *r == SoldierRole::Cavalry)
+        .unwrap_or_default();
+    let rank_spacing = shared::formation::rank_spacing(role);
+    let clearance = shared::formation::clearance(role);
+    let shape = shared::formation::deployment_shape(soldiers.len(), preferred, None, role);
     let count = usize::from(shape.files);
-    let depth = soldiers.len().div_ceil(count).saturating_sub(1) as f32 * RANK_SPACING;
+    let depth = soldiers.len().div_ceil(count).saturating_sub(1) as f32 * rank_spacing;
     let centre = shared::formation::centre(soldiers.iter().map(|s| s.position))
         + Vec3::new(facing.x, 0.0, facing.y) * depth * 0.5;
     let right = Vec2::new(facing.y, -facing.x);
@@ -237,6 +252,8 @@ pub fn current_block(
         facing,
         files: count,
         spacing: shape.spacing,
+        rank_spacing,
+        clearance,
         file_indices: (0..ordered.len()).map(|i| i % count).collect(),
         slots: ordered
             .into_iter()

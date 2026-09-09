@@ -159,3 +159,16 @@ See [CATAPULT.md](CATAPULT.md).
 `army/membership.rs` owns membership and policy inheritance. Shared `BattalionStance`
 is separate from active tactical objectives. Connected verification uses
 `capture/scenarios/army-management.ron`; the offline UI fixture is `ui-army.ron`.
+
+## Wildlife
+
+- Horse identity, clips and dimensions: `shared/src/components/horse.rs`.
+- Meadow habitat and initial herds: `server/src/world/wildlife/population.rs`.
+- Observation budgets and wandering: `server/src/world/wildlife/behavior.rs`.
+- Horse rigs, snapshot smoothing and animation: `client/src/animals/`.
+- Cavalry equipment and paired lifecycle: `server/src/player/riding/`.
+- Rider socket and masked mounted animation: `client/src/hero/mounted.rs` and `animation.rs`.
+- Cavalry formation dimensions: `shared/src/formation.rs`; connected fixture:
+  `capture/scenarios/battle-cavalry.ron`. See [CAVALRY.md](CAVALRY.md).
+- Connected verification: `client/src/capture/wildlife_live.rs`; contract and
+  launch recipes in [WILDLIFE.md](WILDLIFE.md).

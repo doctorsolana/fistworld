@@ -29,3 +29,5 @@ pub(crate) mod village_lab_scenario;
 pub mod village_roads;
 
 pub mod army_lab;
+
+pub mod wildlife;

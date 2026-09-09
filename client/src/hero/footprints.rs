@@ -133,6 +133,7 @@ pub fn stamp_footprints(
         &HeroVisual,
         Option<&CharacterActivity>,
         Has<AboardBoat>,
+        Has<shared::components::Mounted>,
     )>,
     mut trackers: ResMut<StrideTrackers>,
     mut pool: ResMut<FootprintPool>,
@@ -167,7 +168,7 @@ pub fn stamp_footprints(
     let focus = camera.focus;
 
     let mut seen: Vec<Entity> = Vec::new();
-    for (entity, transform, visual, activity, aboard) in walkers.iter() {
+    for (entity, transform, visual, activity, aboard, mounted) in walkers.iter() {
         let pos = transform.translation();
         if shared::character::locomotion::swimming_at(
             terrain.get_height(pos.x, pos.z),
@@ -175,6 +176,7 @@ pub fn stamp_footprints(
             pos.y,
             aboard,
         ) || aboard
+            || mounted
             || matches!(
                 activity,
                 Some(

@@ -1718,3 +1718,11 @@ Two smaller corrections to this section's assumptions, both verified against the
   tune in Phase 2).
 - Whether NPC clan AI needs plans beyond one-step goals (only if Phase 6
   feels static).
+
+## Wild horses — initial world integration
+
+Small horse herds now graze and wander on dry meadow grass. Individuals belong to
+the server and retain their identity when the camera leaves; distant animals
+remain inexpensive stationary records. They are ambient wildlife in this pass.
+Stables, ownership and cavalry are the next separate gameplay decisions, and
+horses do not yet feed livestock production or combat. See [WILDLIFE.md](WILDLIFE.md).

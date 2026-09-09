@@ -163,7 +163,12 @@ pub(crate) fn find_enemy_under_cursor(
     let mut best: Option<(Entity, f32)> = None;
     for (entity, selectable, position, visual, commanded, activity, catapult) in candidates.iter() {
         // People only: combat mode must not paint buildings or boats red.
-        if !catapult && selectable.shape != SelectableShape::Person {
+        if !catapult
+            && !matches!(
+                selectable.shape,
+                SelectableShape::Person | SelectableShape::Mounted { .. }
+            )
+        {
             continue;
         }
         if activity.is_some_and(|activity| *activity == CharacterActivity::Indoors) {
@@ -202,7 +207,11 @@ pub(super) fn sync_attack_rings(
     camera: Query<&crate::camera_rts::CommanderCamera>,
     // Current-frame smoothed Transform, same reasoning as the selection ring.
     victims: Query<
-        (&PlayerPosition, Option<&Transform>),
+        (
+            &PlayerPosition,
+            Option<&Transform>,
+            Has<shared::components::Mounted>,
+        ),
         (
             Or<(
                 With<shared::components::CharacterKind>,
@@ -271,21 +280,26 @@ pub(super) fn sync_attack_rings(
             }
         }
     }
-    let placed: Vec<(Vec3, bool)> = if zoom > RING_HIDE_ZOOM {
+    let placed: Vec<(Vec3, bool, f32)> = if zoom > RING_HIDE_ZOOM {
         Vec::new()
     } else {
         wanted
             .iter()
             .filter_map(|(entity, ordered)| {
-                let (position, visual) = victims.get(*entity).ok()?;
+                let (position, visual, mounted) = victims.get(*entity).ok()?;
+                let unit_scale = if mounted {
+                    scale_factor.max(1.9)
+                } else {
+                    scale_factor
+                };
                 let mut point = visual
                     .map(|visual| visual.translation)
                     .unwrap_or(position.0);
                 if let Some(terrain) = terrain.as_deref() {
-                    point.y = ground_under_ring(terrain, point, SHOULDER_OUTER * scale_factor);
+                    point.y = ground_under_ring(terrain, point, SHOULDER_OUTER * unit_scale);
                 }
                 point.y += RING_LIFT;
-                Some((point, *ordered))
+                Some((point, *ordered, unit_scale))
             })
             .collect()
     };
@@ -318,16 +332,16 @@ pub(super) fn sync_attack_rings(
     let pulse = 1.0 + PULSE_DEPTH * (time.elapsed_secs() * PULSE_RATE).sin();
     for (index, (mut transform, mut visibility, children)) in rings.iter_mut().enumerate() {
         match placed.get(index) {
-            Some((point, ordered)) => {
+            Some((point, ordered, unit_scale)) => {
                 if transform.translation != *point {
                     transform.translation = *point;
                 }
                 // Ordered rings breathe; the hover preview holds still so the
                 // moment of commitment is visible as motion starting.
                 let scale = Vec3::splat(if *ordered {
-                    scale_factor * pulse
+                    *unit_scale * pulse
                 } else {
-                    scale_factor
+                    *unit_scale
                 });
                 if transform.scale != scale {
                     transform.scale = scale;

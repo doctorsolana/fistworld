@@ -23,13 +23,16 @@ pub(super) fn attach(
 }
 pub(super) fn animate(
     clock: Query<&WorldTime>,
+    presentation: Option<Res<crate::animation_clock::AnimationClock>>,
     mut arrows: Query<(&ArrowProjectile, &mut Transform, &mut Visibility), With<ArrowVisual>>,
 ) {
     let Some(clock) = clock.iter().next() else {
         return;
     };
-    let now = f64::from(clock.day) * f64::from(clock.cycle_duration())
-        + f64::from(clock.seconds_in_cycle);
+    let now = presentation.as_ref().map_or_else(
+        || crate::animation_clock::seconds(clock),
+        |presentation| presentation.sample(clock),
+    );
     for (arrow, mut transform, mut visibility) in &mut arrows {
         transform.translation = arrow.position(now);
         transform.rotation = Quat::from_rotation_arc(Vec3::Z, arrow.direction(now));

@@ -177,11 +177,15 @@ pub(super) fn setup_bows(
 }
 pub(super) fn drive_bows(
     clocks: Query<&WorldTime>,
+    presentation: Option<Res<crate::animation_clock::AnimationClock>>,
     characters: Query<(&HeroAnim, Option<&BowShot>)>,
     mut bows: Query<(&BowAnimator, &mut AnimationPlayer)>,
 ) {
-    let now = clocks.iter().next().map_or(0., |c| {
-        f64::from(c.day) * f64::from(c.cycle_duration()) + f64::from(c.seconds_in_cycle)
+    let now = clocks.iter().next().map_or(0., |clock| {
+        presentation.as_ref().map_or_else(
+            || crate::animation_clock::seconds(clock),
+            |presentation| presentation.sample(clock),
+        )
     });
     for (bow, mut player) in &mut bows {
         let Ok((hero, shot)) = characters.get(bow.owner) else {

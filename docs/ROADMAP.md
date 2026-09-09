@@ -21,6 +21,12 @@ infrastructure is a phase that cannot be tested.
 
 ## Status at a glance
 
+Wildlife foundation: meadow horse herds, server-owned individual identity, bounded
+nearby wandering and client rig LOD are implemented. Mounted melee cavalry is
+available in the connected battle lab, with mounted formations and rider animation.
+Stables, horse acquisition and charge momentum remain future work. See
+[WILDLIFE.md](WILDLIFE.md) and [CAVALRY.md](CAVALRY.md).
+
 | Phase | Name | Size | State |
 |---|---|---|---|
 | 0 | Let me in | M | non-dev arrival and session reconnect are live; a populated ordinary-world opening remains |

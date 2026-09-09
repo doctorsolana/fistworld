@@ -3,7 +3,7 @@ use super::*;
 use std::collections::HashMap;
 #[derive(Default)]
 pub struct SeparationScratch {
-    participants: Vec<(Entity, Vec2, bool, bool)>,
+    participants: Vec<(Entity, Vec2, bool, bool, f32)>,
     cells: HashMap<(i32, i32), Vec<usize>>,
     pushes: HashMap<Entity, Vec2>,
 }
@@ -101,6 +101,7 @@ pub fn separate_melee_bodies(
             Option<&WarParty>,
             Option<&CommandedBy>,
             Option<&Health>,
+            Has<shared::components::Mounted>,
         ),
         (
             With<CharacterKind>,
@@ -111,7 +112,7 @@ pub fn separate_melee_bodies(
     >,
 ) {
     // Combatants only, hashed into coarse cells so the pair pass is local.
-    const CELL: f32 = 2.0;
+    const CELL: f32 = 3.2;
     let SeparationScratch {
         participants,
         cells,
@@ -122,7 +123,7 @@ pub fn separate_melee_bodies(
         indices.clear();
     }
     pushes.clear();
-    for (entity, _, position, _, war_party, commanded, health) in bodies.iter() {
+    for (entity, _, position, _, war_party, commanded, health, mounted) in bodies.iter() {
         if health.is_some_and(|h| h.is_dead()) || (war_party.is_none() && commanded.is_none()) {
             continue;
         }
@@ -151,12 +152,17 @@ pub fn separate_melee_bodies(
             Vec2::new(position.0.x, position.0.z),
             fixed,
             engaged,
+            if mounted {
+                shared::components::HORSE_BODY_RADIUS
+            } else {
+                BODY_RADIUS
+            },
         ));
     }
     if participants.len() < 2 {
         return;
     }
-    for (index, (_, point, _, _)) in participants.iter().enumerate() {
+    for (index, (_, point, _, _, _)) in participants.iter().enumerate() {
         cells
             .entry((
                 (point.x / CELL).floor() as i32,
@@ -166,9 +172,8 @@ pub fn separate_melee_bodies(
             .push(index);
     }
 
-    let min_distance = BODY_RADIUS * 2.0;
     cells.retain(|_, indices| !indices.is_empty());
-    for (index, (entity, point, fixed, engaged)) in participants.iter().enumerate() {
+    for (index, (entity, point, fixed, engaged, radius)) in participants.iter().enumerate() {
         let cell = (
             (point.x / CELL).floor() as i32,
             (point.y / CELL).floor() as i32,
@@ -183,7 +188,7 @@ pub fn separate_melee_bodies(
                     if *other_index <= index {
                         continue;
                     }
-                    let (other, other_point, other_fixed, other_engaged) =
+                    let (other, other_point, other_fixed, other_engaged, other_radius) =
                         participants[*other_index];
                     // Arriving allies yield to an established fight. Two
                     // fighters still resolve overlap symmetrically.
@@ -192,6 +197,7 @@ pub fn separate_melee_bodies(
                     if fixed && other_fixed {
                         continue;
                     }
+                    let min_distance = radius + other_radius;
                     let offset = *point - other_point;
                     let distance = offset.length();
                     if distance >= min_distance - SEPARATION_SLACK {
@@ -225,7 +231,7 @@ pub fn separate_melee_bodies(
         return;
     }
 
-    for (entity, kind, mut position, mut region, _, _, _) in bodies.iter_mut() {
+    for (entity, kind, mut position, mut region, _, _, _, mounted) in bodies.iter_mut() {
         let Some(push) = pushes.get(&entity) else {
             continue;
         };
@@ -240,7 +246,17 @@ pub fn separate_melee_bodies(
         let defense_blocked = obstacles.as_deref().is_some_and(|grid| {
             grid.segment_blocked_by_type(current, next, shared::components::DEFENSE_OBSTACLE_TYPE)
         });
-        if defense_blocked
+        if (mounted
+            && !crate::player::siege::ground_clear(
+                current,
+                next,
+                shared::components::HORSE_CLEARANCE,
+                terrain.as_deref(),
+                obstacles.as_deref(),
+                colliders.as_deref(),
+                derived.as_deref(),
+            ))
+            || defense_blocked
             || (*kind == CharacterKind::Villager
                 && !crate::player::hero::navigation_segment_clear(
                     current,

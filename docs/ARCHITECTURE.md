@@ -19,7 +19,7 @@ capture artifact architecture live in [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md).
 > scheduling, region-scoped settlement detail, a global settlement directory and an
 > aggregate off-screen economy. Stable companies now add 1,000-share cap tables, one
 > treasury, site cost centres and settlement-local physical branches. Player heroes, boats,
-> tactical battalions, formation orders, melee, archers and catapults are live.
+> tactical battalions, formation orders, melee, archers, lab cavalry and catapults are live.
 > Strategic armies, political control and world-state persistence remain future work.
 > Do not read an unmarked future rule as working code.
 
@@ -456,3 +456,22 @@ in the shared Navigation chain: weapon selection before formation steering, firi
 and impacts after movement and melee. Shared launch/shot timelines drive cached
 client bow graphs and arrow scenes. The coarse ranged body grid supplements the
 existing melee grid. See [ARCHERY.md](ARCHERY.md) for contracts and limits.
+
+### Wildlife
+
+`world::wildlife` owns seed-ordered meadow-herd placement and bounded observed
+wandering; `client::animals` owns the shared horse graph and a 32-rig budget.
+Offscreen horses retain their identity and ground position without behavioral
+updates and must not anchor collider streaming. This is a stationary offscreen
+policy; breeding, migration and disk durability are future contracts. See
+[WILDLIFE.md](WILDLIFE.md) for limits and capture recipes.
+
+### Cavalry
+
+`player::riding` pairs cavalry soldiers with provisioned horse equipment. Cavalry
+orders use the ordinary authoritative movement/combat pipeline with role-aware
+shared formation dimensions and body clearance. Mounted-pair reconciliation reuses
+scratch indices. Issued horses share wildlife IDs but have separate population and
+rig budgets. `client::hero::mounted` owns socket attachment and masked riding/melee
+animation; the person root remains at ground level for selection. See
+[CAVALRY.md](CAVALRY.md) for the lab launch and current gameplay limits.

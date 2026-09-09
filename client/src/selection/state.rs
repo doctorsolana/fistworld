@@ -23,6 +23,9 @@ pub struct Selectable {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SelectableShape {
     Person,
+    Mounted {
+        rotation: f32,
+    },
     Footprint {
         half_extents: Vec2,
         centre_offset: Vec2,
@@ -56,6 +59,15 @@ impl Selectable {
             radius: 0.55,
             height: 1.7,
             shape: SelectableShape::Person,
+        }
+    }
+
+    /// The horse and rider are one command target, owned by the rider entity.
+    pub fn mounted(rotation: f32) -> Self {
+        Self {
+            radius: 1.5,
+            height: 3.3,
+            shape: SelectableShape::Mounted { rotation },
         }
     }
 
@@ -432,16 +444,45 @@ pub(super) fn tag_construction_sites_selectable(
 pub(super) fn tag_characters_selectable(
     mut commands: Commands,
     characters: Query<
-        Entity,
+        (
+            Entity,
+            Option<&shared::components::Mounted>,
+            Option<&shared::components::PlayerRotation>,
+            Option<&Selectable>,
+        ),
         (
             With<shared::components::CharacterKind>,
             With<shared::components::PlayerPosition>,
-            Without<Selectable>,
+            Or<(
+                Without<Selectable>,
+                Changed<shared::components::Mounted>,
+                Changed<shared::components::PlayerRotation>,
+            )>,
+        ),
+    >,
+    mut removed: RemovedComponents<shared::components::Mounted>,
+    unmounted: Query<
+        (),
+        (
+            With<shared::components::CharacterKind>,
+            Without<shared::components::Mounted>,
         ),
     >,
 ) {
-    for entity in characters.iter() {
-        commands.entity(entity).insert(Selectable::person());
+    for (entity, mounted, rotation, current) in &characters {
+        let desired = if mounted.is_some() {
+            Selectable::mounted(rotation.map_or(0., |r| r.0))
+        } else {
+            Selectable::person()
+        };
+        if current != Some(&desired) {
+            commands.entity(entity).insert(desired);
+        }
+    }
+    for entity in removed.read() {
+        if unmounted.contains(entity) {
+            commands.entity(entity).insert(Selectable::person());
+        }
     }
 }
 

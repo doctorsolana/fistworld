@@ -3,9 +3,11 @@
 //! frontage or making every ally chase the clicked person through the ranks.
 use super::{
     fronts::{CombatSpace, Enemy},
-    AttackOrder, MELEE_REACH,
+    AttackOrder,
 };
 use crate::player::hero::{navigation_segment_clear, MoveTarget};
+use crate::player::orders::{FormationRoutes, MarchOrder};
+use crate::world::village_roads::{TravelRoute, NavigationRoutePending, NavigationRouteFailed};
 use bevy::prelude::*;
 use shared::components::*;
 use std::collections::HashMap;
@@ -26,12 +28,15 @@ pub fn steer_skirmishers(
     health: Query<&Health>,
     bows: Query<(), With<BowEquipped>>,
     mut last: Local<f64>,
+    mut routes: Option<ResMut<FormationRoutes>>,
     units: Query<(
         Entity,
         &SkirmishOrder,
         &PlayerPosition,
         Option<&AttackOrder>,
         Option<&MoveTarget>,
+        Has<Mounted>,
+        Option<&MarchOrder>,
     )>,
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
     buildings: Option<Res<shared::spatial::SpatialObstacleGrid>>,
@@ -49,12 +54,12 @@ pub fn steer_skirmishers(
     }
     *last = now;
     loads.clear();
-    for (_, _, _, attack, _) in &units {
+    for (_, _, _, attack, _, _, _) in &units {
         if let Some(a) = attack {
             *loads.entry(a.target).or_default() += 1;
         }
     }
-    for (entity, order, position, attack, moving) in &units {
+    for (entity, order, position, attack, moving, mounted, march) in &units {
         if bows.contains(entity) {
             continue;
         }
@@ -62,6 +67,7 @@ pub fn steer_skirmishers(
             continue;
         };
         if attack.is_some_and(|a| space.clear_strike(entity, a.target)) {
+            if mounted && march.is_some() { commands.entity(entity).remove::<(MarchOrder, TravelRoute, NavigationRoutePending, NavigationRouteFailed)>(); }
             continue;
         }
         candidates.clear();
@@ -104,21 +110,18 @@ pub fn steer_skirmishers(
                     direction.x * angle.cos() - direction.y * angle.sin(),
                     direction.x * angle.sin() + direction.y * angle.cos(),
                 );
-                let goal = opponent.point + side * 1.6;
+                let goal = opponent.point + side * body.contact_distance(opponent);
                 if !space.approach_clear(entity, body.point, goal) {
                     continue;
                 }
-                if !navigation_segment_clear(
-                    body.point,
-                    goal,
-                    buildings.as_deref(),
-                    colliders.as_deref(),
-                    derived.as_deref(),
-                ) || terrain.as_deref().is_some_and(|t| {
-                    !crate::player::hero::terrain_segment_walkable(t, body.point, goal)
-                }) {
-                    continue;
-                }
+                let clear = if mounted {
+                    crate::player::siege::ground_clear(body.point, goal, HORSE_CLEARANCE, terrain.as_deref(), buildings.as_deref(), colliders.as_deref(), derived.as_deref())
+                } else {
+                    navigation_segment_clear(body.point, goal, buildings.as_deref(), colliders.as_deref(), derived.as_deref())
+                        && terrain.as_deref().is_none_or(|t| crate::player::hero::terrain_segment_walkable(t, body.point, goal))
+                };
+                if !clear { continue; }
+
                 chosen = Some((*enemy, goal));
                 break 'opponents;
             }
@@ -133,10 +136,14 @@ pub fn steer_skirmishers(
             let outward = (body.point - opponent.point)
                 .try_normalize()
                 .unwrap_or(Vec2::X);
-            (enemy, opponent.point + outward * 1.6)
+            (
+                enemy,
+                opponent.point + outward * body.contact_distance(opponent),
+            )
         });
         {
             if direct {
+                if mounted && march.is_some() { commands.entity(entity).remove::<MarchOrder>(); }
                 commands
                     .entity(entity)
                     .insert_if_new(DirectCombatApproach)
@@ -157,7 +164,7 @@ pub fn steer_skirmishers(
             if body
                 .point
                 .distance_squared(space.body(enemy).unwrap().point)
-                > MELEE_REACH * MELEE_REACH
+                > body.melee_reach(space.body(enemy).unwrap()).powi(2)
                 || !space.clear_strike(entity, enemy)
             {
                 if moving.is_none_or(|m| m.0.xz().distance_squared(goal) > 0.1) {
@@ -168,6 +175,13 @@ pub fn steer_skirmishers(
                             .map_or(position.0.y, |t| t.get_height(goal.x, goal.y)),
                         goal.y,
                     )));
+                }
+            }
+            if mounted && !direct && march.is_none_or(|m| m.destination.xz().distance_squared(goal) > 0.75 * 0.75) {
+                if let Some(routes) = routes.as_mut() {
+                    let group = routes.register_with_clearance(vec![body.point, goal], goal, HORSE_CLEARANCE);
+                    let destination = Vec3::new(goal.x, terrain.as_deref().map_or(position.0.y, |t| t.get_height(goal.x, goal.y)), goal.y);
+                    commands.entity(entity).insert(MarchOrder { destination, facing: (goal - body.point).normalize_or_zero(), group });
                 }
             }
             commands.entity(entity).insert_if_new(CombatReady);

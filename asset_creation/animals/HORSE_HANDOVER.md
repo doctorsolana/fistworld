@@ -79,12 +79,17 @@ sequence beside a trotting rider. Space plays the sequence.
 
 ## Gameplay integration boundary
 
-Shared horse contracts and server `player/riding` are preliminary integration
-work. Normal horse spawning, client rendering/animation selection and mounting
-controls still need integration and a connected client/server rehearsal. The
-offline fixture demonstrates asset rendering and socket attachment, not playable
-riding. Recheck navigation clearance against the enlarged horse footprint when
-implementing gameplay. Do not describe mounting as connected-game verified.
+Natural meadow spawning, region-scoped replication, bounded wandering and the
+production client horse animation consumer are integrated. See
+[the wildlife contract](../../docs/WILDLIFE.md). The model and clips are unchanged.
+
+The humanoid riding clips and server `player/riding` now support mounted sword
+cavalry in the connected [battle lab](../../docs/CAVALRY.md). The production driver
+keeps seated lower-body animation during masked upper-body melee, preserves the
+face layer and follows the actual socket. Stable acquisition, tack and wild-horse
+mount controls remain future work. Navigation clearance is 1.55 m for the enlarged
+resting footprint. The offline rider fixture still demonstrates asset attachment
+only; connected combat is verified through `battle-cavalry.ron`.
 
 ## Latest validation (2026-09-09)
 

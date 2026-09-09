@@ -140,6 +140,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     app.add_plugins(ui::DebugTimeMenuPlugin);
     app.add_plugins(ui::HudPlugin);
     app.add_plugins(crate::hero::HeroPlugin);
+    app.add_plugins(crate::animals::AnimalsPlugin);
     app.add_plugins(crate::boat::BoatPlugin);
     app.add_plugins(crate::siege::SiegePlugin);
     app.add_plugins(crate::selection::SelectionPlugin);

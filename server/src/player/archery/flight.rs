@@ -15,7 +15,13 @@ pub fn advance_arrows(
         &mut RegionCoord,
     )>,
     mut people: Query<
-        (Entity, &PlayerPosition, &mut Health),
+        (
+            Entity,
+            &PlayerPosition,
+            &mut Health,
+            Option<&PlayerRotation>,
+            Has<Mounted>,
+        ),
         (
             Or<(With<CharacterKind>, With<Catapult>)>,
             Without<OfflineHero>,
@@ -36,9 +42,13 @@ pub fn advance_arrows(
     for entries in cells.values_mut() {
         entries.clear();
     }
-    for (e, p, h) in &people {
+    let mut padding: f32 = 0.5;
+    for (e, p, h, _, mounted) in &people {
         if !h.is_dead() {
             cells.entry(cell(p.0.xz())).or_default().push(e);
+            if mounted {
+                padding = collision::MOUNTED_HORIZONTAL_EXTENT;
+            }
         }
     }
     cells.retain(|_, v| !v.is_empty());
@@ -86,8 +96,8 @@ pub fn advance_arrows(
                     first = Some((t, None));
                 }
             }
-            let lo = cell(a.xz().min(b.xz()) - Vec2::splat(0.5));
-            let hi = cell(a.xz().max(b.xz()) + Vec2::splat(0.5));
+            let lo = cell(a.xz().min(b.xz()) - Vec2::splat(padding));
+            let hi = cell(a.xz().max(b.xz()) + Vec2::splat(padding));
             for x in lo.0..=hi.0 {
                 for z in lo.1..=hi.1 {
                     if let Some(entries) = cells.get(&(x, z)) {
@@ -95,13 +105,14 @@ pub fn advance_arrows(
                             if other == flight.shooter {
                                 continue;
                             }
-                            let Ok((_, p, h)) = people.get(other) else {
+                            let Ok((_, p, h, rotation, mounted)) = people.get(other) else {
                                 continue;
                             };
                             if h.is_dead() {
                                 continue;
                             }
-                            if let Some(t) = collision::body_hit(a, b, p.0) {
+                            let mounted_yaw = mounted.then_some(rotation.map_or(0., |r| r.0));
+                            if let Some(t) = collision::body_hit(a, b, p.0, mounted_yaw) {
                                 if first.is_none_or(|(old, _)| t < old) {
                                     first = Some((t, Some(other)));
                                 }
@@ -121,7 +132,7 @@ pub fn advance_arrows(
         if let Some((at, victim)) = hit {
             arrow.stopped_at = Some(at);
             if let Some(victim) = victim {
-                if let Ok((_, _, mut health)) = people.get_mut(victim) {
+                if let Ok((_, _, mut health, _, _)) = people.get_mut(victim) {
                     let fatal = health.take_damage(32.);
                     commands
                         .entity(victim)

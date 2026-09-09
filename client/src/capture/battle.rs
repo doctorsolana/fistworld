@@ -1,5 +1,7 @@
 //! Continuous, connected clash inspection. The only injected state is selection
 //! and ordinary mouse input; soldiers, damage and movement come from the server.
+mod cavalry;
+mod timing;
 use super::{inspection::CaptureInspection, live::live_capture_request};
 use crate::{
     army_roster::ArmyRoster,
@@ -25,6 +27,7 @@ pub(crate) struct BattleCapture {
     contact_at: Option<f64>,
     next_shot: f64,
     shots: usize,
+    png_shots: usize,
     engaged: BTreeSet<u64>,
     max_contacts: usize,
     max_casualties: usize,
@@ -38,6 +41,10 @@ pub(crate) struct BattleCapture {
     selection_verified: bool,
     retargeted: bool,
     metrics_only: bool,
+    benchmark: bool,
+    cavalry: cavalry::CavalryMetrics,
+    cavalry_close_done: bool,
+    frame_timing: timing::FrameTiming,
 }
 pub(crate) fn drive_battle_input(
     mut commands: Commands,
@@ -71,6 +78,13 @@ pub(crate) struct BattleVisuals<'w, 's> {
     bows: Query<'w, 's, (), With<crate::hero::BowDressed>>,
     arrows: Query<'w, 's, &'static ArrowProjectile>,
     archery: crate::hero::ArcheryInspection<'w, 's>,
+    cavalry: cavalry::CavalryInspection<'w, 's>,
+    creator: ResMut<'w, crate::ui::hero_creator::HeroCreatorOpen>,
+    camera_poses: Query<'w, 's, &'static Transform, With<Camera3d>>,
+    real_time: Res<'w, Time<Real>>,
+    warps: Query<'w, 's, &'static TimeWarp>,
+    animation_clock: Res<'w, crate::animation_clock::AnimationClock>,
+    windows: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
 }
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn drive_battle_capture(
@@ -79,7 +93,7 @@ pub(crate) fn drive_battle_capture(
     roster: Res<ArmyRoster>,
     input: Res<crate::input::InputState>,
     notice: Res<crate::ui::hud::GodNotice>,
-    visuals: BattleVisuals,
+    mut visuals: BattleVisuals,
     mut selection: ResMut<Selection>,
     mut mode: ResMut<crate::combat_mode::CombatMode>,
     mut cameras: Query<&mut CommanderCamera>,
@@ -112,6 +126,13 @@ pub(crate) fn drive_battle_capture(
             ArmyLabScenario::from_env().filter(|s| s.catapult.is_none() && s.battle.is_some());
         state.started = Some(Instant::now());
         state.metrics_only = crate::profiling::env_flag("FISTWORLD_BATTLE_METRICS_ONLY");
+        state.benchmark =
+            state.scenario.is_some() && crate::profiling::env_flag("FISTWORLD_BATTLE_BENCHMARK");
+        if state.benchmark {
+            // Explicit timing-only opt-in, scoped to an active connected
+            // battle. VSync and the normal software frame cap remain intact.
+            commands.insert_resource(bevy::winit::WinitSettings::continuous());
+        }
     }
     let Some(scenario) = state.scenario.clone() else {
         return;
@@ -119,6 +140,28 @@ pub(crate) fn drive_battle_capture(
     if state.stage == 4 {
         return;
     }
+    let timing_active = state.stage >= 2;
+    let sampled_frame = state
+        .frame_timing
+        .record(timing_active, visuals.real_time.delta_secs_f64());
+    if sampled_frame {
+        state
+            .frame_timing
+            .record_focus(visuals.windows.single().ok().map(|window| window.focused));
+    }
+    state.frame_timing.record_clock(
+        timing_active,
+        visuals.warps.iter().next().is_none_or(|warp| warp.0 > 0.),
+        clocks.iter().next().map(|clock| {
+            f64::from(clock.day) * f64::from(clock.cycle_duration())
+                + f64::from(clock.seconds_in_cycle)
+        }),
+        clocks
+            .iter()
+            .next()
+            .map(|clock| visuals.animation_clock.sample(clock)),
+        visuals.real_time.delta_secs_f64(),
+    );
     let battle = scenario.battle.as_ref().unwrap();
     let total = scenario.total()
         + battle.defender_battalions * battle.defenders_per_battalion
@@ -137,6 +180,13 @@ pub(crate) fn drive_battle_capture(
         state.stage = 4;
         return;
     }
+    // This opt-in rehearsal stages soldiers without requiring a player hero.
+    // Close the real creator modal before inspecting the composed scene/input.
+    if visuals.creator.0 {
+        visuals.creator.0 = false;
+        state.stable = 0;
+        return;
+    }
     if let Some(ticket) = state.ticket {
         let Some(done) = completions.take(ticket) else {
             return;
@@ -146,6 +196,10 @@ pub(crate) fn drive_battle_capture(
         }
         state.ticket = None;
         if state.stage == 1 {
+            if !scenario.cavalry_battalions.is_empty() && !state.cavalry_close_done {
+                state.cavalry_close_done = true;
+                return;
+            }
             assert_eq!(
                 selection.len(),
                 scenario.total(),
@@ -165,13 +219,42 @@ pub(crate) fn drive_battle_capture(
         return;
     };
     let mut focus = Vec3::from_array(scenario.camera_focus);
+    let cavalry_close =
+        state.stage == 1 && !scenario.cavalry_battalions.is_empty() && !state.cavalry_close_done;
+    let cavalry_contact_close = !scenario.cavalry_battalions.is_empty()
+        && state
+            .contact_at
+            .is_some_and(|at| (2.0..6.0).contains(&(now - at)));
+    if cavalry_close || cavalry_contact_close {
+        focus = visuals.cavalry.focus().unwrap_or(focus);
+    }
     focus.y = terrain.get_height(focus.x, focus.z);
     camera.focus = focus;
     camera.focus_target = focus;
-    camera.zoom = scenario.camera_zoom;
-    camera.zoom_target = scenario.camera_zoom;
-    camera.yaw = 0.0;
-    camera.yaw_target = 0.0;
+    camera.zoom = if cavalry_close {
+        12.0
+    } else if cavalry_contact_close {
+        18.0
+    } else {
+        scenario.camera_zoom
+    };
+    camera.zoom_target = camera.zoom;
+    camera.yaw = if cavalry_close || cavalry_contact_close {
+        2.2
+    } else {
+        0.0
+    };
+    camera.yaw_target = camera.yaw;
+    camera.tilt =
+        crate::camera_rts::commander_tilt_for_zoom(camera.zoom, camera.zoom_min, camera.zoom_max);
+    let timing_phase = if cavalry_contact_close {
+        timing::Phase::CloseUp
+    } else if state.contact_at.is_some() {
+        timing::Phase::Combat
+    } else {
+        timing::Phase::Approach
+    };
+    state.frame_timing.set_phase(timing_phase);
     mode.0 = true;
     let world = inspection.world_snapshot(Some(clock));
     if world.loaded_chunks == state.chunks && state.chunks > 0 {
@@ -186,6 +269,9 @@ pub(crate) fn drive_battle_capture(
             || people.iter().count() != total
             || roster.soldiers.len() != scenario.total() + battle.independent_attackers
             || (!scenario.archer_battalions.is_empty() && visuals.bows.is_empty())
+            || !visuals
+                .cavalry
+                .ready(scenario.cavalry_battalions.len() * scenario.soldiers_per_battalion)
             || state.stable < 30
         {
             return;
@@ -217,6 +303,22 @@ pub(crate) fn drive_battle_capture(
             scenario.total(),
             total - scenario.total()
         );
+    }
+    visuals.cavalry.observe(&mut state.cavalry, now);
+    if !scenario.cavalry_battalions.is_empty() && state.stage == 1 {
+        let mut expected_pose = Transform::default();
+        crate::camera_rts::apply_commander_transform(&mut expected_pose, &camera, Some(&terrain));
+        if (!state.cavalry_close_done && !cavalry_close)
+            || visuals.camera_poses.single().map_or(true, |actual| {
+                actual
+                    .translation
+                    .distance_squared(expected_pose.translation)
+                    > 0.01
+                    || actual.rotation.angle_between(expected_pose.rotation) > 0.001
+            })
+        {
+            return;
+        }
     }
     for (id, _, _, _, _, _, _, swing, _, role, quiver, _) in &people {
         if role == Some(&SoldierRole::Archer) {
@@ -331,6 +433,9 @@ pub(crate) fn drive_battle_capture(
             .is_some_and(|at| now - at >= f64::from(battle.observe_seconds))
     {
         let passed = state.selection_verified
+            && state
+                .cavalry
+                .passed(scenario.cavalry_battalions.len() * scenario.soldiers_per_battalion)
             && state.accepted_attack
             && state.independent_engaged.len() >= battle.independent_attackers
             && state.engaged.len() >= battle.minimum_engaged_battalions
@@ -345,7 +450,7 @@ pub(crate) fn drive_battle_capture(
                 || !state.archers_in_melee.is_empty())
             && state.shots >= 10
             && (battle.retarget_after_seconds.is_none() || state.retargeted);
-        std::fs::write(out.join("summary.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":passed,"metrics_only":state.metrics_only,"retargeted":state.retargeted,"selection_verified":state.selection_verified,"accepted_attack":state.accepted_attack,"independent_attackers_engaged":state.independent_engaged,"attacking_battalions_engaged":state.engaged,"peak_contacts":state.max_contacts,"arrows_released":released_arrows,"peak_projectiles":state.peak_projectiles,"peak_archers_drawing":state.peak_archers_drawing,"archers_in_melee":state.archers_in_melee,"casualties":state.max_casualties,"samples":state.shots,"shots":if state.metrics_only {1} else {state.shots},"observed_world_seconds":now-state.contact_at.unwrap()})).unwrap()).unwrap();
+        std::fs::write(out.join("summary.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":passed,"cavalry":state.cavalry.summary(),"frame_timing":state.frame_timing.summary(),"cavalry_close_captured":state.cavalry_close_done,"metrics_only":state.metrics_only,"benchmark":state.benchmark,"retargeted":state.retargeted,"selection_verified":state.selection_verified,"accepted_attack":state.accepted_attack,"independent_attackers_engaged":state.independent_engaged,"attacking_battalions_engaged":state.engaged,"peak_contacts":state.max_contacts,"arrows_released":released_arrows,"peak_projectiles":state.peak_projectiles,"peak_archers_drawing":state.peak_archers_drawing,"archers_in_melee":state.archers_in_melee,"casualties":state.max_casualties,"samples":state.shots,"shots":state.png_shots,"observed_world_seconds":now-state.contact_at.unwrap()})).unwrap()).unwrap();
         info!(
             "Battle lab {}: engaged={:?}, casualties={}, shots={}",
             if passed { "PASS" } else { "FAIL" },
@@ -370,7 +475,7 @@ pub(crate) fn drive_battle_capture(
     let data:Vec<_>=people.iter().map(|(id,p,r,h,o,b,e,s,hit,role,quiver,bow)|serde_json::json!({"person":id.0,"position":p.0.to_array(),"yaw":r.0,"health":h.current,"owner":o.0,"battalion":b.map(|b|b.0.0),"target":e.map(|e|e.0.0),"impact_at":s.map(|s|s.impact_at),"reaction":hit.map(|h|(h.at,h.fatal)),"role":role,"arrows":quiver.map(|q|q.arrows),"bow_release_at":bow.map(|b|b.release_at)})).collect();
     std::fs::create_dir_all(&out).expect("battle output");
     let name = format!("{:04}", state.shots);
-    std::fs::write(out.join(format!("{name}.battle.json")),serde_json::to_vec_pretty(&serde_json::json!({"world_seconds":now,"since_order":now-state.order_at,"contacts":contacts,"alive":alive,"people":data,"archery_visuals":visuals.archery.snapshot(),"arrows":visuals.arrows.iter().map(|a|serde_json::json!({"position":a.position(now).to_array(),"launched_at":a.launched_at,"stopped_at":a.stopped_at})).collect::<Vec<_>>()})).unwrap()).unwrap();
+    std::fs::write(out.join(format!("{name}.battle.json")),serde_json::to_vec_pretty(&serde_json::json!({"world_seconds":now,"since_order":now-state.order_at,"contacts":contacts,"alive":alive,"people":data,"archery_visuals":visuals.archery.snapshot(),"cavalry_visuals":visuals.cavalry.snapshot(now),"arrows":visuals.arrows.iter().map(|a|serde_json::json!({"position":a.position(now).to_array(),"launched_at":a.launched_at,"stopped_at":a.stopped_at})).collect::<Vec<_>>()})).unwrap()).unwrap();
     if state.metrics_only && state.stage >= 2 {
         // Keep the initial readiness/selection screenshot, then measure the
         // ordinary renderer without repeated GPU readback and PNG encoding.
@@ -395,6 +500,7 @@ pub(crate) fn drive_battle_capture(
         &mut completions,
     ));
     state.shots += 1;
+    state.png_shots += 1;
     state.next_shot = now
         + if state.contact_at.is_some() {
             0.25

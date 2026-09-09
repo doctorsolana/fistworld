@@ -1009,6 +1009,10 @@ pub(super) fn enter_world_offline(
                 name: "Wanderer".to_string(),
                 submitted: true,
             });
+            // UI-only fixture: roles exercise roster/transfer controls. Mounted
+            // movement and horse pairing require the separate connected lab.
+            let cavalry =
+                std::env::var("FISTFORCE_CAPTURE_ARMY_CAVALRY").is_ok_and(|value| value == "1");
             for (id, name) in [(1u64, "1st Battalion"), (2u64, "2nd Battalion")] {
                 commands.spawn((
                     shared::components::Battalion {
@@ -1017,6 +1021,11 @@ pub(super) fn enter_world_offline(
                         ordinal: id,
                     },
                     shared::components::CommandedBy("wanderer".to_string()),
+                    if cavalry && id == 1 {
+                        shared::components::SoldierRole::Cavalry
+                    } else {
+                        shared::components::SoldierRole::Infantry
+                    },
                     shared::components::PlayerPosition(Vec3::new(id as f32 * 30.0, 0.0, 0.0)),
                 ));
             }
@@ -1042,6 +1051,11 @@ pub(super) fn enter_world_offline(
                         shared::components::CHARACTER_MAX_HEALTH - index as f32 * 9.0,
                     ),
                     shared::components::CommandedBy("wanderer".to_string()),
+                    if cavalry && (battalion == Some(1) || index == 5) {
+                        shared::components::SoldierRole::Cavalry
+                    } else {
+                        shared::components::SoldierRole::Infantry
+                    },
                 ));
                 if let Some(battalion) = battalion {
                     soldier.insert(shared::components::MemberOfBattalion(

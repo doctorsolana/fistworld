@@ -140,6 +140,12 @@ pub fn draw_formation_preview(
                 .into_iter()
                 .map(|(key, soldiers)| FormationGroup {
                     key,
+                    role: soldiers
+                        .iter()
+                        .filter_map(|s| roster.soldiers.get(&s.entity))
+                        .map(|s| s.role)
+                        .find(|role| *role == shared::components::SoldierRole::Cavalry)
+                        .unwrap_or_default(),
                     shape: roster
                         .battalions
                         .iter()
@@ -212,9 +218,8 @@ pub fn draw_formation_preview(
         let right = Vec3::new(block.facing.y, 0.0, -block.facing.x);
         let forward = Vec3::new(block.facing.x, 0.0, block.facing.y);
         let half = (block.files - 1) as f32 * block.spacing * 0.5 + 0.65;
-        let depth = (block.slots.len().div_ceil(block.files) - 1) as f32
-            * shared::formation::RANK_SPACING
-            + 0.65;
+        let depth =
+            (block.slots.len().div_ceil(block.files) - 1) as f32 * block.rank_spacing + 0.65;
         let corners = [
             block.centre - right * half + forward * 0.65,
             block.centre + right * half + forward * 0.65,

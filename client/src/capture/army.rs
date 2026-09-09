@@ -261,6 +261,11 @@ pub(crate) fn drive_army_capture(
                 .into_iter()
                 .map(|(key, soldiers)| FormationGroup {
                     key,
+                    role: roster
+                        .battalions
+                        .iter()
+                        .find(|b| b.id.0 == key)
+                        .map_or(default(), |b| b.role),
                     shape: roster
                         .battalions
                         .iter()

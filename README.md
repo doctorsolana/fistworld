@@ -21,12 +21,16 @@ arrival and reusable ship-navigation contract are documented in
 
 - A chunk-streamed generated world with biomes, rivers, coastlines, water, foliage,
   atmospheric day/night lighting and a seamless commander camera.
+- [Wild horse herds](docs/WILDLIFE.md) on meadow grass, with server-owned identity,
+  grazing and wandering near observers, and bounded client animation rigs. Stables
+  and horse acquisition remain future work.
 - Server-authoritative multiplayer, region interest management, session accounts and
   stable `PersonId`, `SettlementId`, `BuildingId`, `CompanyId`, `TradeContractId` and
   `TradeRouteId` relationships. A disconnected player
   can rejoin the same running server and re-adopt their live hero, cargo, coin and retinue;
   restarting the server intentionally begins a fresh world.
-- Battalion selection and frontage orders, flexible melee, archers with finite quivers,
+- Battalion selection and frontage orders, flexible melee, mounted cavalry in the
+  battle lab, archers with finite quivers,
   and animated catapults with authoritative splash damage. Army management handles
   membership, standing stances, equipment and fire policy. Recruitment and catapult
   acquisition still require developer access; paid military supply/upkeep are not built.
@@ -358,6 +362,11 @@ Use `./run.sh archerworld` for two infantry battalions and one archer battalion
 against three enemy battalions (120 soldiers per side). Select the archers and
 right-click an enemy to fire; **V** toggles hold fire. Army management has equipment,
 fire-policy and quiver controls. See [archery controls and limits](docs/ARCHERY.md).
+
+Use `./run.sh cavalryworld` for two eight-rider cavalry battalions and eight
+infantry against 32 enemy infantry. Right-click to move or attack and right-drag
+to set formation width/facing. Click either horse or rider to select their
+battalion. See [cavalry controls and limits](docs/CAVALRY.md).
 
 ### Generated-world stress fixture
 

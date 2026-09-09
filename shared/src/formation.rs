@@ -1,7 +1,7 @@
 //! Deterministic formation layout shared by the command preview and the server.
 //! This computes destinations, never authority or movement.
 
-use crate::components::BattalionFormation;
+use crate::components::{BattalionFormation, SoldierRole};
 use crate::protocol::FormationFrontage;
 use bevy::prelude::*;
 
@@ -26,6 +26,7 @@ pub struct FormationSoldier {
 pub struct FormationGroup {
     pub key: u64,
     pub shape: BattalionFormation,
+    pub role: SoldierRole,
     pub soldiers: Vec<FormationSoldier>,
 }
 
@@ -36,6 +37,8 @@ pub struct FormationBlock {
     pub facing: Vec2,
     pub files: usize,
     pub spacing: f32,
+    pub rank_spacing: f32,
+    pub clearance: f32,
     pub slots: Vec<(Entity, Vec3)>,
     /// File for each slot, including incomplete ranks and casualty gaps.
     pub file_indices: Vec<usize>,
@@ -101,7 +104,7 @@ pub fn layout(
         (f.width - BATTALION_GAP * (groups.len() - 1) as f32).max(0.0) / groups.len() as f32
     });
     for group in &mut groups {
-        group.shape = deployment_shape(group.soldiers.len(), group.shape, width_each);
+        group.shape = deployment_shape(group.soldiers.len(), group.shape, width_each, group.role);
     }
     let width = |g: &FormationGroup| (usize::from(g.shape.files) - 1) as f32 * g.shape.spacing;
     let total = groups.iter().map(width).sum::<f32>() + BATTALION_GAP * (groups.len() - 1) as f32;
@@ -110,6 +113,8 @@ pub fn layout(
     for mut group in groups {
         let files = usize::from(group.shape.files);
         let spacing = group.shape.spacing;
+        let rank_spacing = rank_spacing(group.role);
+        let clearance = clearance(group.role);
         let block_width = width(&group);
         let at = target + Vec3::new(right.x, 0.0, right.y) * (offset + block_width * 0.5);
         offset += block_width + BATTALION_GAP;
@@ -144,7 +149,7 @@ pub fn layout(
                 // agree with combat replacement instead of sliding on arrival.
                 let first_file = (files - count) / 2;
                 let lateral = ((first_file + file) as f32 - (files - 1) as f32 * 0.5) * spacing;
-                let xz = at.xz() + right * lateral - facing * rank as f32 * RANK_SPACING;
+                let xz = at.xz() + right * lateral - facing * rank as f32 * rank_spacing;
                 slots.push((soldier.entity, Vec3::new(xz.x, target.y, xz.y)));
                 file_indices.push(first_file + file);
             }
@@ -155,6 +160,8 @@ pub fn layout(
             facing,
             files,
             spacing,
+            rank_spacing,
+            clearance,
             slots,
             file_indices,
         });
@@ -162,26 +169,47 @@ pub fn layout(
     blocks
 }
 
+/// Physical dimensions are shared by previews, authoritative slots and combat files.
+pub fn rank_spacing(role: SoldierRole) -> f32 {
+    if role == SoldierRole::Cavalry {
+        3.2
+    } else {
+        RANK_SPACING
+    }
+}
+pub fn clearance(role: SoldierRole) -> f32 {
+    if role == SoldierRole::Cavalry {
+        crate::components::HORSE_CLEARANCE
+    } else {
+        0.0
+    }
+}
+
 pub fn deployment_shape(
     count: usize,
     preferred: BattalionFormation,
     width: Option<f32>,
+    role: SoldierRole,
 ) -> BattalionFormation {
+    let mounted = role == SoldierRole::Cavalry;
+    let base = if mounted { 3.2 } else { FILE_SPACING };
+    let minimum = if mounted { 3.15 } else { MIN_FILE_SPACING };
+    let maximum = if mounted { 3.6 } else { MAX_FILE_SPACING };
     let limit = count.clamp(1, MAX_FILES);
     let files = width
         .map_or(usize::from(preferred.files), |w| {
-            1 + (w.max(0.0) / FILE_SPACING).round() as usize
+            1 + (w.max(0.0) / base).round() as usize
         })
         .clamp(1, limit);
     let spacing = width
         .filter(|_| files > 1)
-        .map_or(preferred.spacing, |w| w / (files - 1) as f32);
+        .map_or(if mounted && preferred.spacing < minimum { base } else { preferred.spacing }, |w| w / (files - 1) as f32);
     BattalionFormation {
         files: files as u8,
         spacing: if spacing.is_finite() {
-            spacing.clamp(MIN_FILE_SPACING, MAX_FILE_SPACING)
+            spacing.clamp(minimum, maximum)
         } else {
-            FILE_SPACING
+            base
         },
     }
 }
@@ -193,6 +221,7 @@ mod tests {
     pub fn five_blocks() -> Vec<FormationGroup> {
         (0..5)
             .map(|g| FormationGroup {
+                role: SoldierRole::Infantry,
                 key: g,
                 shape: default(),
                 soldiers: (0..50)
@@ -314,6 +343,7 @@ mod fluid_tests {
     use super::*;
     fn group() -> FormationGroup {
         FormationGroup {
+            role: SoldierRole::Infantry,
             key: 1,
             shape: default(),
             soldiers: (0..50)
@@ -355,8 +385,8 @@ mod fluid_tests {
     }
     #[test]
     fn small_drag_adjustments_change_spacing_without_jumping_a_whole_file() {
-        let a = deployment_shape(50, default(), Some(33.2));
-        let b = deployment_shape(50, default(), Some(33.3));
+        let a = deployment_shape(50, default(), Some(33.2), SoldierRole::Infantry);
+        let b = deployment_shape(50, default(), Some(33.3), SoldierRole::Infantry);
         assert_eq!(a.files, 25);
         assert_eq!(a.files, b.files);
         assert!((b.spacing - a.spacing - 0.1 / 24.0).abs() < 0.00001);
@@ -402,6 +432,30 @@ mod fluid_tests {
         .unwrap();
         for ((_, slot), file) in b.slots.iter().zip(&b.file_indices) {
             assert!((slot.x - (*file as f32 - 4.5) * b.spacing).abs() < 0.001);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cavalry_tests {
+    use super::*;
+    #[test]
+    fn narrow_drag_preserves_the_horse_body_and_rank_clearance() {
+        let group = FormationGroup {
+            key: 1,
+            role: SoldierRole::Cavalry,
+            shape: BattalionFormation::default(),
+            soldiers: (0..8).map(|i| FormationSoldier {
+                entity: Entity::from_raw_u32(i + 1).unwrap(), identity: u64::from(i), position: Vec3::ZERO, seat: None,
+            }).collect(),
+        };
+        let blocks = layout(vec![group], Vec3::Z * 20., Some(FormationFrontage { facing: Vec2::Y, width: 1. }));
+        let block = &blocks[0];
+        assert_eq!(block.files, 1);
+        assert_eq!(block.clearance, crate::components::HORSE_CLEARANCE);
+        assert!(block.rank_spacing >= crate::components::HORSE_CLEARANCE * 2.);
+        for pair in block.slots.windows(2) {
+            assert!(pair[0].1.distance(pair[1].1) >= 3.1);
         }
     }
 }

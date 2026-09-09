@@ -56,6 +56,11 @@ pub fn stage_connected_army(world: &mut World) {
         }
         groups.push(FormationGroup {
             key: group as u64,
+            role: if scenario.cavalry_battalions.contains(&group) {
+                SoldierRole::Cavalry
+            } else {
+                SoldierRole::Infantry
+            },
             shape: default(),
             soldiers,
         });
@@ -97,7 +102,13 @@ pub fn stage_connected_army(world: &mut World) {
         memberships.push(members);
     }
     state.apply(world);
-    for members in memberships {
+    for (index, members) in memberships.into_iter().enumerate() {
+        if scenario.cavalry_battalions.contains(&index) {
+            for &member in &members {
+                crate::player::riding::equip_cavalry(world, member)
+                    .expect("cavalry lab needs clear ground for each horse");
+            }
+        }
         assert_eq!(
             crate::player::army::apply_army_order(
                 world,
@@ -195,6 +206,7 @@ fn stage_defenders(
         }
         groups.push(FormationGroup {
             key: group as u64,
+            role: SoldierRole::Infantry,
             shape: default(),
             soldiers,
         });

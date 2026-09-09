@@ -640,11 +640,19 @@ pub fn step_units(
             let step = (speed * remaining_seconds).min(distance);
             let preferred_direction = to_goal / distance;
             if wide_mover {
-                let (yaw, aligned) = shared::components::turn_siege_towards(
-                    rot.0,
-                    preferred_direction,
-                    remaining_seconds,
-                );
+                let (yaw, aligned) = if mounted.is_some() {
+                    shared::components::turn_horse_towards(
+                        rot.0,
+                        preferred_direction,
+                        remaining_seconds,
+                    )
+                } else {
+                    shared::components::turn_siege_towards(
+                        rot.0,
+                        preferred_direction,
+                        remaining_seconds,
+                    )
+                };
                 rot.set_if_neq(PlayerRotation(yaw));
                 if !aligned {
                     break;

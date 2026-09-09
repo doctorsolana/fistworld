@@ -1,7 +1,7 @@
 use super::*;
 use crate::player::{
     combat::AttackOrder,
-    hero::{navigation_segment_clear, MoveTarget},
+    hero::MoveTarget,
     orders::{CommandStance, FormationRoutes, MarchOrder},
 };
 use crate::world::village_roads::{NavigationRouteFailed, NavigationRoutePending, TravelRoute};
@@ -229,7 +229,7 @@ pub fn advance_battle_fronts(
             .max()
             .unwrap_or(1)
             .saturating_sub(1) as f32
-            * RANK_SPACING;
+            * front.rank_spacing;
         let defended_ground = Footprint {
             centre: front.anchor - front.facing * depth * 0.5,
             facing: front.facing,
@@ -286,7 +286,7 @@ pub fn advance_battle_fronts(
                     || body.point.distance_squared(goal) <= 2.5 * 2.5
                     || space.approach_clear(entity, body.point, goal);
                 if let Some(leader) = leader.filter(|_| !approach.released) {
-                    slot = leader.point - front.facing * RANK_SPACING;
+                    slot = leader.point - front.facing * front.rank_spacing;
                     // A reserve follows meaningful progress, not every tiny
                     // sideways correction made by the person ahead.
                     if slot.distance_squared(body.point) < 0.55 * 0.55 {
@@ -328,22 +328,22 @@ pub fn advance_battle_fronts(
             }
             let distance = position.0.xz().distance(slot);
             if distance > 0.18 {
-                let clear = navigation_segment_clear(
+                let clear = crate::player::siege::ground_clear(
                     position.0.xz(),
                     slot,
+                    front.clearance,
+                    terrain.as_deref(),
                     buildings.as_deref(),
                     colliders.as_deref(),
                     derived.as_deref(),
-                ) && terrain.as_deref().is_none_or(|t| {
-                    crate::player::hero::terrain_segment_walkable(t, position.0.xz(), slot)
-                });
+                );
                 if !clear && !front.march_paused {
                     if let Some(routes) = routes.as_mut() {
                         // All obstructed files share one bounded reverse field.
                         // The march system owns certification and retries; keep
                         // the battle intent so local contact can interrupt it.
                         let group = *route_group.get_or_insert_with(|| {
-                            routes.register(
+                            routes.register_with_clearance(
                                 front
                                     .columns
                                     .iter()
@@ -352,6 +352,7 @@ pub fn advance_battle_fronts(
                                     .map(|b| b.point)
                                     .collect(),
                                 front.anchor,
+                                front.clearance,
                             )
                         });
                         let destination = Vec3::new(
@@ -385,19 +386,15 @@ pub fn advance_battle_fronts(
                         now,
                         keep_file,
                         |end| {
-                            navigation_segment_clear(
+                            crate::player::siege::ground_clear(
                                 position.0.xz(),
                                 end,
+                                front.clearance,
+                                terrain.as_deref(),
                                 buildings.as_deref(),
                                 colliders.as_deref(),
                                 derived.as_deref(),
-                            ) && terrain.as_deref().is_none_or(|t| {
-                                crate::player::hero::terrain_segment_walkable(
-                                    t,
-                                    position.0.xz(),
-                                    end,
-                                )
-                            })
+                            )
                         },
                     );
                     let Some(next) = next else {

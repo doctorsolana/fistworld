@@ -82,6 +82,7 @@ pub(crate) fn sync_army_panel(
                 .into(),
             BoundText::Equipment => model.unit.map_or(String::new(), |b| {
                 if b.role == SoldierRole::Archer { format!("{} / {} arrows. Attack closes to bow range; a new attack resumes fire. Stop 100 m from enemies to rearm.",b.arrows,b.count*usize::from(QUIVER_CAPACITY)) }
+                else if b.role == SoldierRole::Cavalry { "Mounted sword cavalry. Right-click to move or attack; drag for formation width and facing. Detached riders keep their horses. Cavalry equipment cannot be changed here.".into() }
                 else { "Change equipment while stopped at least 100 m from enemies. Detached troops keep their equipment.".into() }
             }),
             BoundText::Notice => {

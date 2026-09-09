@@ -99,7 +99,11 @@ pub fn update_static_collider_streaming(
     terrain: Res<WorldTerrain>,
     library: Option<Res<DerivedColliderLibrary>>,
     building_index: Res<BuildingSpatialIndex>,
-    players: Query<&PlayerPosition>,
+    players: Query<(
+        &PlayerPosition,
+        Option<&shared::components::Horse>,
+        Has<crate::world::wildlife::ActiveWildHorse>,
+    )>,
     roads: Query<&shared::components::VillageRoad>,
     mut colliders: ResMut<StaticColliders>,
     mut state: ResMut<ColliderStreamingState>,
@@ -119,7 +123,14 @@ pub fn update_static_collider_streaming(
         state.cached_building_version = building_index.version;
     }
 
-    state.update_centers(players.iter().map(|pos| ChunkCoord::from_world_pos(pos.0)));
+    // Distant wildlife is a cheap record, not a request to load terrain/prop
+    // colliders across the whole map. Ridden horses remain physical actors.
+    state.update_centers(
+        players
+            .iter()
+            .filter(|(_, horse, active)| horse.is_none_or(|h| h.rider.is_some() || *active))
+            .map(|(pos, _, _)| ChunkCoord::from_world_pos(pos.0)),
+    );
 
     // Unload chunks that are no longer desired.
     let to_unload: Vec<ChunkCoord> = colliders

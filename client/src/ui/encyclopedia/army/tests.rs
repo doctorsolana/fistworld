@@ -230,3 +230,35 @@ fn archery_controls_send_owned_battalion_commands_and_show_ammunition() {
             .2
     );
 }
+
+#[test]
+fn cavalry_keeps_its_mounts_when_managed_without_a_stable() {
+    let (mut roster, state) = fixture();
+    roster.battalions[0].role = SoldierRole::Cavalry;
+    let model = PanelModel::new(&roster, &state);
+    assert!(
+        model.available.is_empty(),
+        "foot troops need mounts before joining cavalry"
+    );
+    assert!(model.reserves.is_empty());
+    assert_eq!(model.command(ArmyAction::Fill, &state, &roster), None);
+    assert!(
+        !model
+            .button(
+                ArmyAction::Role(SoldierRole::Infantry),
+                &state,
+                &roster,
+                false
+            )
+            .1
+    );
+    assert_eq!(
+        model.command(ArmyAction::Role(SoldierRole::Infantry), &state, &roster),
+        None
+    );
+    assert!(
+        model
+            .button(ArmyAction::SelectMap, &state, &roster, false)
+            .1
+    );
+}

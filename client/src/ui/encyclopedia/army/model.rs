@@ -75,12 +75,19 @@ impl<'a> PanelModel<'a> {
         let mut available = Vec::new();
         let mut reserves = Vec::new();
         for s in roster.soldiers.values() {
-            if s.battalion.is_none() && s.available {
+            let compatible = unit.is_none_or(|b| {
+                b.role == s.role
+                    || (b.role != SoldierRole::Cavalry && s.role != SoldierRole::Cavalry)
+            });
+            if s.battalion.is_none() && s.available && compatible {
                 reserves.push(s.entity);
             }
             if unit.is_some_and(|b| s.battalion == Some(b.id)) {
                 members.push(s.entity);
-            } else if unit.is_some() && s.battalion.is_some() == state.other_battalions {
+            } else if unit.is_some()
+                && compatible
+                && s.battalion.is_some() == state.other_battalions
+            {
                 available.push(s.entity);
             }
         }
@@ -136,10 +143,12 @@ impl<'a> PanelModel<'a> {
         match action {
             ArmyAction::New => (roster.battalions.len() < MAX_BATTALIONS_PER_ACCOUNT)
                 .then_some(ArmyOrder::Muster { members: vec![] }),
-            ArmyAction::Role(role) => Some(ArmyOrder::SetRole {
-                battalion: self.unit?.entity,
-                role,
-            }),
+            ArmyAction::Role(role) if self.unit?.role != SoldierRole::Cavalry => {
+                Some(ArmyOrder::SetRole {
+                    battalion: self.unit?.entity,
+                    role,
+                })
+            }
             ArmyAction::Fire(policy) => Some(ArmyOrder::SetFirePolicy {
                 battalion: self.unit?.entity,
                 policy,
@@ -220,7 +229,7 @@ impl<'a> PanelModel<'a> {
             ArmyAction::CancelDisband => ("CANCEL".into(), state.confirm_disband, false),
             ArmyAction::Role(role) => (
                 role.label().to_uppercase(),
-                exists,
+                self.unit.is_some_and(|b| b.role != SoldierRole::Cavalry),
                 self.unit.is_some_and(|b| b.role == role),
             ),
             ArmyAction::Fire(policy) => (

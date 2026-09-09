@@ -334,6 +334,72 @@ fn a_friendly_crossing_after_release_intercepts_the_arrow() {
     assert_eq!(app.world().get::<Health>(friend).unwrap().current, 68.);
     assert_eq!(app.world().get::<Health>(b).unwrap().current, 100.);
 }
+
+#[test]
+fn mounted_friendly_torso_blocks_a_lane_that_clears_an_infantry_head() {
+    let mut app = lab();
+    let archer = archer(&mut app);
+    person(&mut app, "bob", Vec3::Z * 30.);
+    let friend = person(&mut app, "alice", Vec3::Z * 15.);
+    app.world_mut().entity_mut(friend).insert(Mounted {
+        horse: 1,
+        gait: HorseGait::Gallop,
+        phase: RidingPhase::Riding,
+        since: 0.,
+    });
+    for _ in 0..15 {
+        step(&mut app, 0.1);
+    }
+    assert!(app.world().get::<BowShot>(archer).is_none());
+    assert_eq!(
+        app.world().get::<Quiver>(archer).unwrap().arrows,
+        QUIVER_CAPACITY
+    );
+    assert_eq!(app.world().get::<Health>(friend).unwrap().current, 100.);
+}
+
+#[test]
+fn arrow_sweep_finds_a_horse_head_across_the_next_spatial_cell() {
+    let mut app = App::new();
+    app.init_resource::<ArrowObstacles>();
+    app.add_systems(Update, advance_arrows);
+    let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+    let launched_at = seconds(app.world().get::<WorldTime>(clock).unwrap());
+    // Rider root is in z-cell1, while the swept arrow and old 0.5m padding
+    // remain in z-cell0. The head extends into that cell and must intercept.
+    let victim = person(&mut app, "bob", Vec3::new(0., 0., 4.1));
+    app.world_mut().entity_mut(victim).insert((
+        PlayerRotation(0.),
+        Mounted {
+            horse: 1,
+            gait: HorseGait::Gallop,
+            phase: RidingPhase::Riding,
+            since: launched_at,
+        },
+    ));
+    let arrow = app
+        .world_mut()
+        .spawn((
+            ArrowProjectile {
+                origin: Vec3::new(-5., 2.2, 2.75),
+                velocity: Vec3::X * ARROW_SPEED,
+                launched_at,
+                stopped_at: None,
+            },
+            ArrowFlight {
+                shooter: Entity::PLACEHOLDER,
+                checked_at: launched_at,
+            },
+            shared::region::RegionCoord::default(),
+        ))
+        .id();
+    step(&mut app, 0.2);
+    assert_eq!(app.world().get::<Health>(victim).unwrap().current, 68.);
+    assert!(
+        app.world().get_entity(arrow).is_err(),
+        "one health pool consumes the arrow once"
+    );
+}
 #[test]
 fn incomplete_ranks_settle_without_sideways_drift_or_cancelled_draws() {
     use crate::player::{

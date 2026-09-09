@@ -65,7 +65,8 @@ fn wire_common_systems(app: &mut App) {
             crate::capture::drive_army_capture,
             crate::capture::drive_management_capture
                 .after(crate::ui::encyclopedia::army::sync_army_panel),
-            crate::capture::drive_battle_capture,
+            crate::capture::drive_battle_capture
+                .after(crate::animation_clock::AnimationClockUpdate),
             crate::capture::drive_siege_capture,
         )
             .after(crate::selection::SelectionGestureSet)
@@ -137,7 +138,11 @@ fn wire_common_systems(app: &mut App) {
 
     app.add_systems(
         Update,
-        crate::capture::drive_live_lab_capture.run_if(in_state(GameState::Playing)),
+        (
+            crate::capture::drive_live_lab_capture,
+            crate::capture::drive_wildlife_capture,
+        )
+            .run_if(in_state(GameState::Playing)),
     );
     app.add_systems(
         Update,

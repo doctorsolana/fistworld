@@ -1,6 +1,8 @@
 //! Local approach choices for formed soldiers. Goals feed the existing mover;
 //! this module never changes position or performs per-soldier pathfinding.
-use super::{geometry::CONTACT_DISTANCE, CombatSpace};
+#[cfg(test)]
+use super::geometry::CONTACT_DISTANCE;
+use super::CombatSpace;
 use bevy::prelude::*;
 
 #[derive(Default)]
@@ -122,13 +124,15 @@ impl Steering {
                 .try_normalize()
                 .unwrap_or(Vec2::X);
             for angle in [0.0_f32, 0.55, -0.55, 1.05, -1.05] {
-                let goal = enemy.point + Mat2::from_angle(angle) * outward * CONTACT_DISTANCE;
+                let goal =
+                    enemy.point + Mat2::from_angle(angle) * outward * body.contact_distance(enemy);
                 let crowd = space
                     .nearby(goal)
                     .filter(|b| {
                         b.entity != entity
                             && b.entity != enemy.entity
-                            && b.point.distance_squared(goal) < 0.95 * 0.95
+                            && b.point.distance_squared(goal)
+                                < (b.radius + body.radius + 0.25).powi(2)
                     })
                     .count();
                 let change = previous.map_or(0.0, |old| {

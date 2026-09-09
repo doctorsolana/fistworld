@@ -1,0 +1,25 @@
+// Manual: ./run.sh cavalryworld. The launcher supplies this only to the server.
+// Connected verification: supply it to both binaries, with a fresh capture dir.
+(
+    version: 1,
+    account: "battlelab",
+    map: "battle_lab",
+    battalions: 3,
+    soldiers_per_battalion: 8,
+    cavalry_battalions: [0, 2],
+    origin: (-20.0, 0.0, -60.0),
+    deployments: [
+        (target: (-20.0, 0.0, -10.0), facing: (0.0, 1.0), width: 60.0),
+    ],
+    camera_focus: (-20.0, 0.0, -34.0),
+    camera_zoom: 85.0,
+    timeout_seconds: 180.0,
+    battle: Some((
+        defender_battalions: 2,
+        defenders_per_battalion: 16,
+        defender_origin: (-20.0, 0.0, -10.0),
+        defender_facing: (0.0, -1.0),
+        observe_seconds: 30.0,
+        minimum_engaged_battalions: 3,
+    )),
+)
