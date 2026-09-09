@@ -1,8 +1,8 @@
 # Game architecture
 
-Decisions first recorded 2026-07-27, with live-code status and ownership reconciled on
-2026-09-05. Retrofitting these boundaries is expensive, so read this before extending
-simulation code.
+Decisions first recorded 2026-07-27, with implementation status reviewed on
+2026-09-09. Historical performance measurements retain their original dates.
+Read these boundaries before extending simulation code.
 
 The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
 architecture: settlements, goods, caravans, clans, and the player's climb from one guy
@@ -13,13 +13,13 @@ ownership, municipal finance and settlement policy. The build order lives in
 capture artifact architecture live in [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md).
 [GAME-CODE-MAP.md](GAME-CODE-MAP.md) maps common changes to their current source owners.
 
-> **Status, reconciled 2026-09-05.** This remains a design record, with implementation state
+> **Status, reconciled 2026-09-09.** This remains a design record, with implementation state
 > marked **[not built]**, **[partial]** or **[done]**. The living-village foundation now
 > has stable world identities, one authoritative simulation clock, shared live/lab
 > scheduling, region-scoped settlement detail, a global settlement directory and an
 > aggregate off-screen economy. Stable companies now add 1,000-share cap tables, one
 > treasury, site cost centres and settlement-local physical branches. Player heroes, boats,
-> tactical battalions, formation orders and melee have live authoritative implementations.
+> tactical battalions, formation orders, melee, archers and catapults are live.
 > Strategic armies, political control and world-state persistence remain future work.
 > Do not read an unmarked future rule as working code.
 
@@ -48,8 +48,9 @@ nobody else is watching. It also cannot have a server own persistence.
 
 So: the server is authoritative, clients render and send intent, and each client receives
 only what is relevant to it (see §3). This is what the surviving lightyear plumbing
-already does, so no rewrite is needed — but it means **the server is the bottleneck to
-design around**, not client frame time.
+already does. Budget authoritative simulation and replication separately from client
+frame time: lower-end hardware still needs bounded animation, streaming and GPU work.
+Neither a server tick measurement nor a draw-call count proves the other budget is healthy.
 
 ### Never dirty a replicated component you did not change
 
@@ -157,21 +158,17 @@ A useful consequence: regions do not need to become ECS entities. They stay a re
 map, and the per-region thing the strategic tick actually wants is an *index of the
 settlements inside it* — a field, not an architecture.
 
-**Known divergence — there are three spatial partitions today, not one.** The claim in this
-section's title is already false in practice, and the note below about the 8m grid
-understates it. Three live grids run and do not know about each other:
+**Spatial indexes serve different costs.** `RegionCoord` is a 512 m interest/simulation
+partition; 64 m chunks stream terrain and static geometry, while finer spatial hashes
+serve collision, melee and ranged broad phases. They are not interchangeable political
+units and need not have the same cell size.
 
-| Grid | Size | Used for | Radius policy |
-|---|---|---|---|
-| `RegionCoord` | 512m | replication interest | scales with camera zoom |
-| `ChunkCoord` | 64m | terrain + static collider streaming | fixed +/-192m |
-| `SPATIAL_CELL_SIZE` | 8m | close-range obstacle queries | n/a |
-
-At max zoom the server replicates entities from a radius of kilometres while holding
-colliders for 192m — precisely the divergence this section says regions exist to prevent.
-This is *accepted* for now, not solved: collider streaming is an FPS-era structure that the
-tactical-unit work is expected to replace outright. Recorded here so the next reader does
-not assume it was reconciled.
+Static-prop collider streaming currently takes the union of three-chunk neighborhoods
+around distinct `PlayerPosition` chunks. That query includes actors and buildings as
+well as commanders; coverage is not just 192 m around the camera. Terrain-collider
+streaming has its own policy. The remaining scaling question is how interest, tactical
+activation and collision coverage respond to distant armies and large zoom changes.
+Measure those transitions rather than assuming the region layer has solved them.
 
 ## 4. What seamless zoom demands
 
@@ -184,8 +181,9 @@ This is the most technically demanding choice on the board. It requires:
   you are not tactically simulating (as icons/abstract), and you must simulate a region
   no one is rendering (strategic tick). Do not couple them.
 - **Transitions must not pop.** Cross-fade or match silhouettes across LOD bands.
-  **[partial]** — the terrain seam is genuinely invisible; water hard-pops, non-tree props
-  snap out at the wrong distance, and entities have no LOD to cross-fade at all.
+  **[partial]** — terrain/water streaming and prop LOD have dedicated implementations;
+  characters already have a full-rig/proxy split. Smoothness across moving zoom bands
+  still needs renderer evidence; this document does not establish a current popping defect.
 - **Near and far water are one visual contract.** Detailed ocean and sloping rivers use the
   terrain-crossing water mesh. The far mesh supplies an opaque ocean underlay and a widened
   cartographic river only outside the streamed detail hole. Its river marker must be removed
@@ -203,12 +201,11 @@ This is the most technically demanding choice on the board. It requires:
   reverse-Z, 5cm of separation at 12km is still tens of ULP. No logarithmic depth buffer
   and no per-band camera settings are needed. This is an entire risk the roadmap can skip.
 
-**The real gap is entity representation, not camera range.** Above ~1.5km nothing changes
-for the remaining 8x of zoom: the world is one static coloured mesh with nothing on it.
-Terrain is the ONLY thing with a far-zoom representation — heroes, buildings, and every
-future settlement, caravan and army have exactly one representation (a full 3D mesh) and
-either render as sub-pixel geometry or vanish. Read step 5 of the build order as *entity
-representation across bands* (not started), not as camera work (done).
+**The remaining gap is strategic representation.** Camera range, a world-map Hero
+marker/camera footprint and the dense-character rig/proxy split already exist. Readable
+settlement, army and caravan symbols, trade lines and political overlays remain open.
+These should use appropriate summaries rather than keeping every distant unit fully
+replicated and tactically active just to draw a map icon.
 
 Rough bands to design against:
 
@@ -349,8 +346,8 @@ The engine steps this section listed map onto it as follows, with their real sta
 | Old step | Reality | Lands in |
 |---|---|---|
 | 1. Region layer | Interest management done; ownership and persistence never started, and both move off regions entirely (§3) | Phase 1 |
-| 2. Strategic tick | **Partial.** Villager production, workplace stock, porter commerce and household purchasing run in aggregate. The first tactical company-owned caravan route now performs buyer-funded Stone contracts between two observed settlements; off-screen caravan aggregation, armies and strategic construction remain future work. | Phase 3 |
-| 3. Tactical units + flow fields | Not started. Deliberately moved LATE: it is the biggest block of work and carries the least architectural uncertainty. | Phase 6 |
+| 2. Strategic tick | **Partial.** Villager production, workplace stock, porter commerce and household purchasing run in aggregate. Embodied civic cargo, player merchant routes and bounded NPC merchant trials are live; aggregate caravan/army travel and strategic construction remain future work. | Phases 2–5 |
+| 3. Tactical units + flow fields | **Partial.** Local shared reverse-Dijkstra fields, battalions and flexible combat are live. Regional connectivity and narrow-passage coordination remain. | Phase 6 |
 | 4. Promotion/demotion | **Partial for ordinary villagers.** Tactical routine state is shed/rebuilt across `SimLevel`; army and travelling-party aggregate contracts remain. | Phase 2 |
 | 5. Zoom bands + render LOD | Camera range and dense-villager full-rig/proxy split done; buildings, armies and effects still need representation across bands. | as needed |
 | 6. Art pass | ongoing | — |
@@ -358,13 +355,13 @@ The engine steps this section listed map onto it as follows, with their real sta
 **The parting advice of this section still stands, and is why the order changed.** "Step 4
 is where the design actually gets tested, so do not leave it until last" was being violated
 by default: the old world-design order stacked four phases of economy on top of a seam it
-never validated. The seam is now Phase 2, tested on the cheapest entity that has one — a
-single traveller, measured by *arrival time*, which needs no combat code at all.
+never validated. Phase 2 calls for a regional traveller measured by *arrival time*;
+that remaining acceptance contract needs no combat code.
 
-One amendment: the advice was also impossible to act on as written, because the seam has
-neither endpoint — there is no strategic entity to promote and no tactical unit type to
-promote into. So the actionable form is: **write the promotion contract as tests the first
-time any strategic entity exists**, before the machinery it constrains.
+The resident `StrategicTravel` cursor and tactical movers now supply useful foundations.
+The next contract should exercise a regional travelling party across observation changes,
+with identical roster, cargo, money and elapsed travel. Do not mistake the existing
+resident round trip for a proven off-screen army or caravan simulation.
 
 ## 8. Living-world implementation rules
 

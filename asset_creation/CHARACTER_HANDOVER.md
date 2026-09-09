@@ -6,8 +6,9 @@ The bare body remains **1.70 m** tall in game, with the current 21-joint rig.
 The elbows articulate; legs retain the stylized rigid-limb shape without knee joints.
 The new clips respect that silhouette; they are not anatomical motion capture.
 
-Bow assets, elbow articulation and the future soldier presentation API are covered
-in [ARCHERY_HANDOVER.md](ARCHERY_HANDOVER.md). Archery combat is not implemented.
+Bow assets, elbow articulation and soldier presentation are covered in
+[ARCHERY_HANDOVER.md](ARCHERY_HANDOVER.md). Authoritative archery combat is integrated;
+see [ARCHERY.md](../docs/ARCHERY.md) for gameplay and connected verification.
 
 ## What owns what
 

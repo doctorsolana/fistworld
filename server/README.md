@@ -96,9 +96,10 @@ the marginally profitable roster supported by recent sales, unmet demand and exi
 Their cached output budget is shared by tactical and strategic production. Solvent unwanted
 sites mothball and reopen before the permit planner considers duplicate capacity. All
 expansion/dividend reserves must use enabled positions, not architectural maximums.
-NPC Storage Halls normally require an established branch with two other local sites. A real
-export contract lowers that threshold to one productive site so a quarry concern can vertically
-integrate into transport; player permits stay available independently of the autopilot rule.
+NPC Storage Halls normally require an established branch with two other local sites. Funded
+civic export or merchant opportunity signals can also justify a standalone logistics firm;
+player permits stay available independently of the autopilot rule. Bounded autonomous
+merchant trials use delayed reports and the same physical routes as player timetables.
 
 ## Scheduling rules
 
@@ -141,8 +142,9 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   loaded chunks even when all desired chunks are already present.
 - A `StrategicPerson` retains durable social/economic state but owns no tactical path,
   door timer, seat or animation progress. World-wide work belongs in aggregate passes.
-- Embodied routes must remain bounded, cached and shared where possible. Future army/group
-  command requires flow fields rather than multiplying local A*.
+- Embodied routes must remain bounded, cached and shared where possible. Army commands
+  already use bounded shared local fields; future regional routing must extend that
+  boundary rather than multiplying per-soldier A*.
 - Watercraft use the separate `player::boat` stack. `Vessel` is the generic navigation
   opt-in; road/character routes must never move a vessel. Direct water lines are the fast
   path, obstructed searches are water-certified A*, and `VesselNavigationQueue` admits at

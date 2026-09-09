@@ -108,7 +108,7 @@ shared branch stock. The first live route serves cash-backed civic Stone tenders
 any supplier exists. Stone-rich investors can see the unmet order; a complete listing binds the
 actual seller and origin. An NPC
 normally founds a depot only for a company that already controls at least two other local sites,
-but a real export contract lowers that threshold to one productive site. It will not
+but funded export or merchant opportunity signals can support a standalone logistics firm. It will not
 autonomously duplicate a depot in the same branch. Players remain free to buy the tier-unlocked
 permit as a speculative infrastructure investment.
 
@@ -133,8 +133,8 @@ trips mothball the route, and a seven-day pause is required before another trial
 mistakes, missed opportunities and player arbitrage without making NPC decisions random.
 
 Regional investment signals are incentives, not orders. A cash-backed civic tender or a merchant
-opportunity can encourage a producer-town company to build its first Storage Hall after one
-productive site, then hire a Company Porter. The permit board sees remaining external units only
+opportunity can justify a first Storage Hall without the usual two-site prerequisite,
+including for a young logistics company, then hiring a Company Porter. The permit board sees remaining external units only
 after active inbound cargo is deducted. Hunger alone is not guaranteed revenue: autonomous
 merchants require funded unmet demand or demonstrated sales, so an impoverished starving town
 does not attract endless wagons it cannot pay for.
@@ -830,7 +830,7 @@ settlements and must remain green as policy decisions grow more sophisticated.
 
 | Concern | Authoritative location |
 |---|---|
-| Replicated policy, strategy and staffing types | `shared/src/components/actors.rs` |
+| Replicated civic policy, strategy and staffing types | `shared/src/components/civic.rs` |
 | Money units, accounts, market, permit and planning formulas | `shared/src/economy.rs` |
 | Company identity, 1,000-share cap table and share offers | `shared/src/components/identity.rs` |
 | Company migration, pooled finance, dividends and executive review | `server/src/world/village/companies.rs` |

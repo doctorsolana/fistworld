@@ -6,18 +6,24 @@ sword and ends up running a realm. Companion to [ARCHITECTURE.md](ARCHITECTURE.m
 which says how the engine carries this; this document says what the world *is*.
 The build order for both lives in [ROADMAP.md](ROADMAP.md).
 
-> **Status, updated 2026-08-17.** The autonomous village slice in §1b is live:
+> **Status reconciled 2026-09-09.** The autonomous village slice in §1b is live:
 > stable identities, named residents, seeded layouts, permits, physical construction,
 > builder-made roads, occupations, bounded inventories, farming/fishing/lumber work,
 > households, local prices, payroll, daily consumption and civic jobs. The positive tier
-> ladder reaches City with placeholder civic art. Ordinary off-screen residents now use
+> ladder reaches City, with authored Moot/Village/Town Halls, Market and Church;
+> a distinct City Hall remains absent and Tavern art is not yet bound to its runtime kind.
+> Ordinary off-screen residents now use
 > aggregate production and commerce. Player Hall trading, physical permit construction,
 > company treasuries, 1,000-share ownership, vertical integration, Storage Halls, local
 > private porters, the first buyer-funded inter-settlement Stone routes, compact resident day
 > plans and private Tavern meal service are also live.
-> World-state persistence, independent merchant caravans, travelling-party
-> promotion, physical walls, clans and combat remain future work. Read §1b as the report of
-> current code and the rest as design unless it explicitly says otherwise.
+> Player merchant timetables and bounded autonomous company merchant trials are live.
+> Non-dev Hero/Dinghy arrival, battalions, flexible melee, archers and catapults are live too;
+> recruitment is still a developer action and military supply/upkeep remain open.
+> World-state persistence, strategic travelling-party promotion, physical walls and clans
+> remain future work. Read §1b as implementation detail and the remaining sections as
+> design unless explicitly marked current. The [plan review](PLAN-REVIEW-2026-09.md)
+> records the next-step recommendations without changing the agreed game direction.
 
 The genre anchor: Mount & Blade's economic loop (trade → enterprises → retinue
 → fiefs) and The Guild's business ownership, but observed from an RTS camera in
@@ -81,16 +87,18 @@ one persistent, always-simulating multiplayer world.
    never "population 34"; it is thirty-four people, one of whom is Gudrun the
    Forester, and if she dies the sawmill she worked stops producing.
 
-   This is affordable because identity is tiny and simulation is not. Measured:
-   a person costs ~24 bytes when their name is stored as the `u64` seed that
-   generates it (30,000 people = 0.69 MB), and 10,000 people advancing along
-   cached routes costs 13 microseconds per tick. What does NOT scale, and is
+   Earlier compact-record microbenchmarks reported ~24 bytes per identity with a
+   seed-derived name (30,000 such records = 0.69 MB) and 13 microseconds for 10,000
+   cached route cursors. Those are not current full-person memory or live simulation
+   benchmarks: inventories, relationships, economic state and ECS storage add cost.
+   What does NOT scale, and is
    therefore forbidden, is per-person pathfinding over the heightfield,
    continuously evaluated need trees and frame-rate schedules, and global detailed replication.
    Compact once-daily plans and statistical off-screen outcomes are intentionally bounded.
 4. **Society persists, terrain regenerates.** The map is a seed recipe;
-   settlements, clans, stocks, and claims are server state. Wiping
-   `server_data` gives a fresh society on the same land.
+   settlements, clans, stocks, and claims are mutable server state. This is the intended
+   durability boundary; today a server process restart resets society without loading
+   `server_data`. A future explicit world reset must reset accounts and ownership together.
 5. **Simple atoms, emergent stakes.** A handful of goods and a scalar
    prosperity number per settlement — depth comes from geography (who has
    iron, who has grain, what road runs between them), not from deep stat
@@ -118,6 +126,7 @@ to abandoned, but nothing short of destruction turns it to Ruins. See "The
 bottom tier is a floor" below.
 
 ```
+// Conceptual political view, not the runtime component or a proposed save schema.
 Settlement {
     id, name, position, region: RegionCoord,
     tier: Ruins | Hamlet | Village | Town | City,
@@ -128,11 +137,8 @@ Settlement {
     owner: Option<ClanId>,    // None = independent; normal and permanent
     resource_profile: ResourceProfile,  // cached at founding, see below
     business_slots: Vec<BusinessSlot>,
-    // layout — see "The settlement plan" below
+    // layout intent — actual buildings/roads are separate mutable records
     plan_seed: u64,
-    layout_version: u16,
-    build_cursor: u16,
-    damage_bits: BitVec,
 }
 ```
 
@@ -159,16 +165,11 @@ start with deterministic founding households. This matters because it is the
 difference between founding meaning something and being a button that prints
 villages.
 
-That is deliberate, and it is worth being explicit about why, because the
-obvious alternative is tempting: let players build houses wherever they like and
-have a village *emerge* once enough cluster together. The data model above
-cannot express it. A settlement is a PLACE with a plan; buildings are how that
-plan gets EXPRESSED (`build_cursor`), not what constitutes it. There is no
-standalone building entity with an owner and a position anywhere in this design,
-and adding one would mean re-deriving settlements from geometry on every tick —
-which is exactly what the strategic layer may not do. The city hall gives the
-player the same feeling ("I put a building down and a village appeared") while
-keeping the settlement as the atom.
+The Hall establishes the settlement identity; nearby buildings do not implicitly
+create or merge settlements. Buildings are nevertheless individual mutable records
+with stable `BuildingId`, placement, kind and settlement membership. Houses have
+personal ownership; productive sites are operated by companies. Explicit joins by
+`SettlementId` keep this inexpensive without inferring ownership from geometry.
 
 Who may found:
 
@@ -178,10 +179,9 @@ Who may found:
 - **Inside a settlement you already hold**, which is how a Ruins site gets
   refounded and how a clan plants a second seat in its own territory.
 
-  Note this is deliberately NOT "land where you own the buildings". There is
-  no independently-owned building record in this design — buildings belong to
-  a settlement's plan, not to people — so ownership of *ground* is expressed
-  through the settlement that claims it, never through a count of structures.
+  Owning a house or company site is not political control of the surrounding land.
+  Future territorial ownership belongs to the settlement/clan relationship, never
+  to a count of privately owned structures.
 
 **A settlement does not need a founder.** Most will not have one. The world
 spawns settlements from the seed, god mode spawns them on command, and neither
@@ -322,25 +322,21 @@ Population grows from births against a food-supported cap and migrates toward
 prosperous settlements (a trickle, at the strategic tick) — as PEOPLE moving
 between rosters, not as a float moving between counters.
 
-**The settlement plan: layout is a seed recipe too.** At founding, a
-deterministic generator produces the settlement's entire growth plan from
-`(plan_seed, terrain, water access, resource_profile, nearby roads,
-layout_version)`: main and side roads, squares and civic spaces, an *ordered*
-list of plots in expansion rings, reserved defensive/industrial ground, and
-the allowed building archetypes per plot. The plan is never stored — it is
-recomputed from the seed; what persists is `build_cursor` (how far along the
-sequence this settlement has built) plus `damage_bits` for individually
-destroyed buildings. Growth advances the cursor; decline walks it backward,
-so newer outer buildings empty out before the historic core. Organic-looking
-incremental growth for one integer of state, targeting the existing
-`MapPlot`/`MapRoad`/`PlotArchetype` model, obeying pillar 4.
+**The settlement plan: seeded preferences, mutable development.** The live planner
+uses seeded layout grammars to rank candidate sites, then checks current demand,
+terrain, existing buildings, roads and reservations before granting a permit.
+Player placement uses the same authoritative access and collision rules. Completed
+buildings retain their accepted positions; later demand does not move them.
 
-One knob of economic adaptation, no live planner: plot geometry is fixed, but
-*which* archetype occupies a plot is chosen from its allowed list by current
-settlement need — a riverside industrial plot resolves to mill | warehouse |
-workshop, an outer flat plot to farm | pasture | cottage, a central plot to
-market | inn | merchant house. Needs shape the town's appearance without any
-runtime terrain search.
+The earlier seed-only `build_cursor`/`damage_bits` proposal is superseded. A durable
+save must retain actual accepted sites, ownership, worksites, upgrades, road geometry
+and progress, adjunct fields/piers and their stable relationships. Recompute derived
+search caches and indexes after loading, not the historical choices that produced a
+town. Deterministic terrain does not make a changing society reconstructible from seed.
+
+The regional traditions and defensive layouts below remain design goals. Extend the
+current planner and explicit reservations when implementing them; do not replace
+existing town state with a precomputed immutable list of plots.
 
 **The seed chooses a history, not a universal template.** The plan recipe first
 selects a regional tradition (northern, central or southern), then a settlement
@@ -1314,8 +1310,9 @@ and debugging surfaces live in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md). That docume
 source of truth when implementation detail and this higher-level design summary differ.
 
 **Consumption.** Population eats food; construction (tier upgrades, businesses)
-consumes wood/stone; unit recruitment and gear consume iron. These sinks keep
-prices from flattening.
+consumes Wood/Stone. Paid recruitment, equipment production and military resupply
+are intended future demand sinks; current role changes and quiver rearming do not
+consume Iron, money or supply stock.
 
 **Carry, cart, storage.** A player owns only what they can physically keep
 somewhere. On foot that is a personal inventory — a few slots, weight-capped;
@@ -1342,9 +1339,9 @@ pass.
 wages, relief and construction materials without replacing the treasury's cash;
 `HouseholdEconomy` holds the shared necessities purse while the cabin inventory
 is its pantry. `WorkStatus` is deliberately only `Employed`, `LookingForWork` or
-`Chilling`. At 30 personal coins, an owner with two secure payroll days and an
-available replacement leaves hands-on work, chills, and is preferred as investor
-when the settlement later requests another business. Every firm retains a bounded,
+`Chilling`. Owner leisure uses a daily reservation wage based on personal cash runway,
+local meal cost, individual variation and company workload, with replacement and
+payroll checks. There is no universal 30-coin retirement threshold. Every firm retains a bounded,
 pull-based 365-day history of site P&L, company treasury context, liabilities,
 prices, wages, physical flow, stock, owner decisions and solvency changes; it is
 sent only when its history view or settlement archive is requested rather than
@@ -1388,8 +1385,8 @@ but it cannot remain forever hidden in a dead bakery while residents starve.
 **Character aptitudes.** Every embodied hero and villager has Physique,
 Intelligence and Charm in the hard range 0–100. Generated villagers begin with
 stable seed-based variation; a hero's live entity retains those values across reconnects
-within the running server session. Legacy v6/v7 profile tooling still migrates safely to v8,
-but the default server does not load it after restart. A successful farm-work cycle currently adds
+within the running server session. The old disk-profile loader and migrations have been
+removed; reconnect snapshots are in memory only. A successful farm-work cycle currently adds
 one Physique, once per cycle rather than once per rendered frame, so time warp
 cannot multiply training. `WorkforceRequirements` is the future specialist-job
 gate and the labour market already honours it, but Farmsteads, Fisherman's Huts
@@ -1465,7 +1462,7 @@ Deliberately lighter than Mount & Blade — closer to The Guild:
 ```
 Clan {
     id, name, banner_color,
-    treasury: f32,
+    treasury: u64,                  // fixed-point pennies, as in the live economy
     members: Vec<PlayerId | NpcCaptainId>,
     relations: HashMap<ClanId, f32>,   // -100..100
     ai_disposition: Expansionist | Mercantile | Raider,  // NPC clans only
@@ -1499,10 +1496,10 @@ Who owns the land is **derived, not stored**.
 **Sources, not paint.** Settlements (and later, forts) are the only sources
 of political influence. Region control is a computed cache: never saved,
 never edited directly, always recomputable from the sources. Conquest is
-entirely about settlements; the map colors follow. This keeps
-ARCHITECTURE.md's "regions are the political unit" true for interest
-management and persistence while making the gameplay verb — *take that town*
-— match what players see. One-way data flow, nothing to reconcile.
+entirely about settlements; the map colors follow. Settlements own political and
+future persistent state; regions carry interest, simulation level and derived influence.
+This keeps the gameplay verb — *take that town* — aligned with the authoritative
+ownership model. One-way data flow, nothing to reconcile.
 
 ```
 influence(source → region) = strength(source) − travel_cost(source → region)
@@ -1546,36 +1543,24 @@ is a territorial attack without a single battle.
 The M&B arc, RTS-flavoured. Each rung uses systems the rung below already
 exercised:
 
-1. **One guy.** Spawn as a commander with a sword and pocket change near a
-   village.
-
-   > **[correction]** This used to read "a commander (exists) with a sword
-   > (exists)". Both parentheticals were false, and this is the correction most
-   > likely to wreck a schedule. The commander exists only as a BODILESS camera
-   > anchor; the body is the Hero, and the only path to one is a god command the
-   > server drops unless `FISTWORLD_DEV=1`. **The sword does not exist at all** —
-   > weapons and combat were stripped wholesale in commit `041deaa` (~9,600 lines)
-   > and never replaced. A shared 100-point `Health` component is now attached to
-   > every Hero and Villager, replicated, inspectable and connected to starvation
-   > mortality and estate cleanup. Weapons, combat input and combat damage still do
-   > not exist, so rung 1 is not done.
-2. **First coin.** Trade runs with a hand cart (buy grain, walk it to the
-   quarry town), escort a caravan for a fee, bounty on a bandit camp. All of
-   these are "move a unit next to a thing" — no new UI concepts.
-3. **Retinue.** Hire villagers/mercenaries into a small persistent squad.
-   Bigger escorts, bigger bounties, first raids.
-
-   > **[correction]** This used to say "melee combat exists". It does not — see
-   > rung 1. Combat is greenfield work and is the single largest hidden cost in
-   > this document; it is scheduled explicitly in ROADMAP Phase 7. The old design
-   > is recoverable prior art in git history, but it was built for a first-person
-   > shooter with one player-controlled body, so its input and targeting halves do
-   > not transfer to units under selection and orders.
-4. **Businesses.** Buy a slot in a settlement (sawmill in a forest village,
-   quarry in the highlands, smithy where iron flows through). Passive share
-   of that settlement's production stream — income while offline, a stake in
-   that settlement's safety, and a reason to care about a specific corner of
-   the map.
+1. **One person.** Non-dev character creation, a coastal Dinghy arrival, shore
+   disembarkation and an embodied Hero are live. The Hero can move, trade and fight;
+   see [PLAYER-START-AND-VESSELS.md](PLAYER-START-AND-VESSELS.md). A fresh ordinary
+   world still needs populated starting settlements without operator/lab setup.
+2. **First coin.** Nearby Hall buy/consign actions and company businesses are live.
+   A personally purchasable cart, paid escort contracts and bandit bounties remain
+   future work. Existing company merchant routes provide the physical cargo foundation.
+3. **Retinue.** Battalion selection, movement, flexible melee, archers and catapults
+   are implemented on the living map. Developer conscription grants command ownership;
+   Army management organizes people already commanded by the account. Paid hiring,
+   military wages, food/equipment supply, morale and defeat/recovery rules remain open.
+   See [COMBAT-DESIGN.md](COMBAT-DESIGN.md), [ARCHERY.md](ARCHERY.md) and
+   [CATAPULT.md](CATAPULT.md). Combat is no longer greenfield work.
+4. **Businesses.** Incorporation, permits, physical player construction, site/company
+   management, shares and inter-town merchant timetables are live. These are real
+   staffed operations with physical stock, costs and profits. Durable restart saves,
+   company-funded acquisition of existing listed firms and explicit offline-income
+   rules remain open; reconnecting to a running world is already supported.
 5. **Clan.** Charter one, pool coin with other players, claim a village —
    now garrison upkeep, taxes, and defending YOUR caravans matter.
 6. **Realm.** Claims on towns and cities, sieges (late; needs the army layer),
@@ -1586,10 +1571,11 @@ garrisons → sieges) so coin keeps mattering.
 
 ## 7. How it runs on the engine
 
-- **Ticks.** Strategic movement stays at 1Hz (caravans, warbands). The
-  economy ticks slower — every 30–60s per settlement, staggered across
-  settlements so cost is flat. At ~100 settlements this is arithmetic on a
-  few dozen floats each: negligible, exactly what the strategic layer is for.
+- **Ticks.** The live server uses the shared 60 Hz schedule, bounded 1 Hz strategic
+  passes and explicit daily/staggered decision cadences. Ordinary resident travel and
+  aggregate economy already use these boundaries. Regional caravan/warband aggregation
+  and broader settlement work staggering remain future work; their cost must be measured
+  with real inventories and transactions rather than estimated as a few floats per town.
 - **Replication.** Settlement summaries (position, tier, name, owner, top
   prices) replicate globally like WorldTime — they're the map screen. Full
   detail (stocks, slots) replicates on interest. Caravans/warbands are
@@ -1605,31 +1591,19 @@ garrisons → sieges) so coin keeps mattering.
   > map screen, the map screen no longer justifies whole-world interest, so the view
   > radius can be clamped hard. That is simultaneously the render-LOD/sim-LOD decoupling
   > ARCHITECTURE §4 demands and the structural fix for zoom-driven replication cost.
-- **Persistence.** One future world-state file (settlements, accounts, heroes, clans,
-  caravans and ownership), small enough to snapshot whole. The
-  deterministic site list and settlement plans are NOT stored — recomputed
-  from seed; only mutable state persists (a settlement's layout is one
-  cursor + damage bits). The derived region-control map is not saved at all.
+- **Persistence.** One future versioned world-state snapshot must retain accounts,
+  people, settlements, companies/shares, physical buildings and roads, inventories,
+  offers, debts, worksites, caravans and their in-flight claims. Stable IDs join these
+  records. Store the terrain recipe and its generator version; rebuild terrain and
+  derived indexes on load. Dynamic plots and road progress cannot be regenerated
+  from a layout cursor. Region influence is derived and need not be saved.
 
-  > **[correction]** Legacy profile tooling is not the model for the world format.
-  > Those profiles are bincode, which is **positional**: it carries no field
-  > names, so the `#[serde(default)]` attributes on `PlayerProfile` are inert and the
-  > loader is forced to reject-and-backup on any layout change. `PROFILE_VERSION` is
-  > already at 8. A wipe is an inconvenience for a name and an outfit; for a future
-  > world file holding months of population, prosperity and build cursors
-  > it deletes the game. Use a versioned self-describing format (RON is already a
-  > workspace dependency) with a real migration chain, and write the v1 to v2 migration
-  > while the payload is still trivial.
-  >
-  > Durability is a separate axis from format and is equally unbuilt. The live server now
-  > deliberately treats process lifetime as world lifetime: player profiles, heroes and
-  > settlements all start fresh together rather than restoring accounts into an empty world.
-  > A future durable world file
-  > needs backup rotation and load-newest-valid-on-corrupt, and it must be written
-  > through a bounded background IO worker rather than the main thread. Note also
-  > that **`fly.toml` declares no volume**, so today `server_data/` is ephemeral and
-  > every deploy destroys it — persistence code of any format is worthless until that
-  > is fixed (ROADMAP Phase 0).
+  The live `PlayerProfile` is an in-memory session snapshot. The legacy disk loader,
+  `PROFILE_VERSION` and v6/v7 migration tooling have been removed. A new world format
+  needs its own version envelope, tested migrations, atomic background writes, backup
+  rotation and recovery from a corrupt newest snapshot. Accounts and society must
+  share one save/reset boundary. `fly.toml` still has no storage volume; deploying
+  durable hosted worlds needs that storage plus a real restart/restore test.
 - **Promotion contract.** Every strategic entity defines its tactical
   spawn (caravan → wagons+guards, settlement → buildings+villagers,
   warband → soldiers) and the demotion back to numbers must lose nothing the
@@ -1651,27 +1625,26 @@ from auditing the code rather than the doc:
 
 - **The promotion/demotion seam moved EARLY** (ROADMAP Phase 2). This section stacked four
   phases of economy on top of a seam it never validated, which violates ARCHITECTURE §7's
-  own closing advice. It is now tested on one traveller, measured by arrival time — which
-  needs no combat code.
+  own closing advice. Its next proof is one regional traveller, measured by arrival time,
+  extending the resident route-cursor tests without needing combat code.
 - **Flow-field pathfinding moved LATE** (ROADMAP Phase 6). This section's closing note said
   flow fields were "needed by Phase 3's cart". They are not: a hand cart is one unit
   following one order, which the hero loop already does end to end. Flow fields are gated on
   many units sharing a goal — the retinue, not the cart.
-- **A Phase 0 appeared.** Every "playable" claim below was really a DEV-MODE claim on a
-  local binary: the only path to a body is a god command, and the hosted server could not
-  boot or retain a profile. That had to be fixed before any phase could be validated by an
-  actual player.
+- **A Phase 0 appeared.** Originally, Hero creation required God mode. Normal Hero/Dinghy
+  creation and live-session reconnect now work; ordinary-world population and a complete
+  opening loop still need to be separated from prepared lab scenarios.
 
 Two smaller corrections to this section's assumptions, both verified against the code:
 
-- **"Map/minimap markers" (old Phase 1).** There is no minimap anywhere in the client, and
-  the world map's only marker is bound to a component nothing ever inserts, so it sits
-  frozen at panel centre. The marker layer is greenfield.
+- **Map markers (Phase 1).** The world map now has a live Hero arrow and projected camera
+  footprint. Settlement, caravan, army and political overlays remain open.
 - **Carry capacity and inventory (old Phase 3).** This gap is now partly closed by
   `shared::economy::GoodsInventory`: people and buildings have bounded bulk capacity and
   transfers are lossless. Workplace, house, Hall and hero stores are inspectable through
   their relevant panels; nearby Hall buy/consign actions are authoritative. Durable restart
-  persistence and larger player-owned storage remain absent.
+  persistence and a personally purchasable hand cart remain absent. Company Storage Halls
+  and their employed porter carts are already implemented.
 
 ## 9. Deliberately NOT building (yet)
 
@@ -1689,18 +1662,21 @@ Two smaller corrections to this section's assumptions, both verified against the
   observed work loops are also live. A compact once-daily wake/work/meal/leisure/sleep calendar
   and physical private Tavern visit now form the bounded scheduling seam; continuously evaluated
   happiness, comfort and other Sims-style needs remain deliberately deferred.
-- A goods graph beyond the current seven physical goods + coin — tools/luxury/cloth wait until cities exist
-  and need demand sinks.
+- Additional production chains beyond the current nine physical goods and coin.
+  Livestock already produces Meat and Wool; crafted equipment, clothing and luxuries
+  still need production and useful demand before expanding the catalogue.
 - Diplomacy UI — relations are consequences of actions until proven boring.
-- Sieges — a rung 6/7 problem; the economy has to be worth fighting over first.
+- Settlement sieges and destructible defenses. The catapult unit and troop splash damage
+  are live; wall interception, building destruction and settlement capture are not.
 
   **Player founding is no longer deferred** (§1b): raising a hall in god mode
   founds a settlement today, with spacing, water and naming all enforced
   server-side. What is still missing is the COST of founding — right now it is
   free, which is fine while only god mode can do it and wrong the moment
   ordinary players can.
-- A live reactive settlement planner — the deterministic plan plus per-plot
-  archetype choice covers growth; revisit only if settlements feel static.
+- Whole-town replanning that moves accepted plots. The live permit planner already
+  reacts to demand and geography; future districts and walls must respect existing
+  buildings, roads and reservations.
 - Any economy client-side — clients render and request; the server owns every
   number (anti-cheat is architecture, not a feature).
 

@@ -1,6 +1,7 @@
 # Company Economy
 
-Status: implemented foundation and permanent design reference, audited 2026-08-16. This document
+Status: implemented foundation and permanent design reference; merchant, storage and
+market-target status reconciled 2026-09-09. This document
 defines the boundary between people, companies and operating sites; the civic
 market rules remain in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 
@@ -19,7 +20,7 @@ market rules remain in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 - Active company input requests have first claim on compatible owned output. The branch reserve comes next; only the uncommitted remainder may be collected for the public market.
 - A Moot Steward can carry an internal shipment for a company at the civic rate of one penny per carried bulk unit. The Hall is the employer/dispatcher, not a waypoint or buyer.
 - A private Storage Hall holds 2,400 bulk and opens up to four ordinary one-job Company Porter positions. Its porters move only their company's goods inside that settlement and charge no municipal delivery fee; their wages are the logistics cost.
-- NPCs normally treat a Storage Hall as established branch infrastructure: an autonomous applicant needs at least two other local company sites and cannot add a second depot to that branch. A real export contract lowers the threshold to one productive site, allowing a quarry concern to build its own warehouse and transport arm. The tier-unlocked player permit remains freely purchasable.
+- NPCs normally treat a Storage Hall as established branch infrastructure: an autonomous applicant needs at least two other local company sites and cannot add a second depot to that branch. Funded civic export or merchant opportunity signals can also support a young standalone logistics company without that two-site prerequisite. Ordinary opportunity/funding checks still apply; the tier-unlocked player permit remains freely purchasable.
 - Workshops near 80% capacity can send bounded excess loads to an owned local Storage Hall. Processors can draw requested inputs back from it, and branch surplus stored there can still reach the public market.
 - Cross-settlement transfers are explicit company assets. Buyer-funded civic contracts use locked pickup/delivery stops; player-authored merchant routes use two to eight ordered town stops with `Buy`, `Load owned stock`, `Sell` or `Unload to storage` instructions. Every route names one home Storage Hall, one good, a finite cart target and an employed Company Porter. No company is tagged as a special trade-company type.
 - Input sourcing modes are `PreferOwned`, `CheapestAvailable` and `OwnedOnly`.
@@ -97,9 +98,9 @@ position and no other resident can take it, the Master seeks work again and
 receives first refusal through the ordinary vacancy matcher. If the wage later
 becomes attractive relative to their security, they may also return by choice.
 Observed resting Masters use the bounded ambient-life system and prefer cached
-spots around a local Market when one exists. Later taverns, clothing, house
-improvements and other trades should attach real purchases to this leisure;
-the present foundation only supplies time, movement and labour choice.
+spots around a local Market when one exists. Private Tavern meal service and compact
+daily plans already attach real purchases to civilian routines. Clothing, house
+improvements and other future trades can extend that boundary.
 
 ## Formation, acting company and funding a new site
 
@@ -135,11 +136,11 @@ treasury, not one duplicate buffer per cost centre. This distinction is
 load-bearing for circulation: a vertically integrated firm may retain prudent
 working capital without swallowing nearly every coin in a small settlement.
 
-The shared Moot inventory is a sales floor rather than free warehousing. A branch
-may consign each good only until that good's public target is full, counting stock
-already in a porter's cart. Excess stays at its producing site or Storage Hall and
-becomes eligible as households clear earlier listings. This keeps a Wheat glut from
-using every hall slot while food buyers wait for Bread, Fish or Flour.
+The shared Moot inventory is a sales floor with separate capacity for each good.
+Public target stock guides planning and pricing; it does not cap consignments.
+Owned-input reservations and branch retain/sell policy still protect private stock,
+and the physical per-good market compartment bounds delivery. A Wheat glut cannot
+consume the slots reserved for Bread, Fish or Flour. See [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 
 The company pays only the actual permit fee. Suggested opening capital for a
 processor—one input batch plus prudent opening payroll—is a decision/UI
@@ -294,7 +295,7 @@ than destroying money or guessing a recipient.
 ## Implementation checklist
 
 - [x] Stable company/share components and registries
-- [x] Existing-world/company migration
+- [x] Live component reconciliation into the company model (not a disk-save migration)
 - [x] One authoritative company treasury and consolidated daily ledger
 - [x] Company-funded payroll, inputs, taxes and dividends
 - [x] Company-funded new-site permits and personal capital contributions
@@ -317,7 +318,10 @@ than destroying money or guessing a recipient.
 - [x] NPC operational, dividend and capital controller
 - [x] Demand-led staffing, productive-site mothball and automatic reopening lifecycle
 - [ ] Voluntary branch sale/reallocation across settlements
-- [ ] NPC independent merchant speculation, wagon/cart art and multi-wagon route scaling
+- [x] Bounded autonomous merchant trials using delayed/imprecise reports, real company
+      cash, confidence/risk checks and mothball/retry rules
+- [x] Employed porter hand-cart art, load state and wheel animation
+- [ ] Strategic caravan promotion, larger wagons and multi-wagon route scaling
 - [x] Unit and coin/share conservation tests
 - [ ] Multi-seed economic tuning
 - [x] Explicit marginal staffing, demand budget and mothball/reopen acceptance tests

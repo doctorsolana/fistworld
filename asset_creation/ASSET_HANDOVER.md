@@ -1,16 +1,19 @@
 # Implemented village asset reference
 
-Everything below is **shipped, verified and integrated**: exported, contract-checked,
-colliders baked and consumed by current character/village presentation. The remaining gaps
-are explicit: better walk-speed normalisation, `carry_idle`, a fishing clip/tool and
-authored art for later civic buildings. Treat these measurements and anchors as the live
-runtime contract, not as a pending handoff checklist.
+This is the historical first village-asset integration record. Its original counts,
+character timing and building geometry have been superseded by subsequent rebuilds.
+Use [CHARACTER_HANDOVER.md](CHARACTER_HANDOVER.md) and
+[ARCHERY_HANDOVER.md](ARCHERY_HANDOVER.md) for the current character, and
+[HOUSE_HANDOVER.md](HOUSE_HANDOVER.md), [LUMBERJACK_HUT.md](LUMBERJACK_HUT.md),
+[CIVIC_LEVELS_INTEGRATION.md](CIVIC_LEVELS_INTEGRATION.md) and
+[RURAL_BUILDINGS.md](RURAL_BUILDINGS.md) for current building contracts.
+The lessons below remain useful; do not restore their old dimensions or clip lists.
 
 Verifiers, if you want to confirm any claim yourself:
 
 ```
 python3 asset_creation/character/inspect_glb.py client/assets/characters/Humanoid.glb
-python3 asset_creation/inspect_prop_glb.py client/assets/game_assets/buildings/village/MootHall.glb
+python3 asset_creation/houses/inspect_prop_glb.py client/assets/game_assets/buildings/village/MootHall.glb
 ```
 
 > **Naming authority.** The current source is `asset_creation/character/humanoid.blend` and it ships

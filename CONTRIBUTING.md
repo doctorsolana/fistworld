@@ -96,13 +96,16 @@ and preserve dates on benchmark/reference results unless that exact measurement 
 **Scale target.** This game is meant to retain thousands of people while embodying only the
 observed subset. Anything per-person per-frame is a design decision, not a detail:
 
-- Ordinary off-screen people must carry durable identity/economic state without routes,
-  physics, door choreography, seats or animations. Extend aggregate strategic passes for
-  world-wide rules.
+- Ordinary off-screen people keep durable identity/economic state without tactical
+  pathfinding, door choreography, seats or animation progress. A previously planned trip
+  may retain the existing cheap `StrategicTravel` cursor. Extend aggregate passes for world-wide rules.
 - Local village routes use bounded surveys, an obstacle-versioned cache and the shared road
-  graph. Per-agent A\* does not scale to a commanded group or shared destination; future
-  formations require a flow field.
-- One `AnimationPlayer` per unit will not survive. Plan on instancing or vertex-animation textures.
+  graph. Per-agent A\* does not scale to a commanded group or shared destination;
+  commanded formations already share bounded local fields; regional travel should extend
+  that ownership rather than multiplying per-soldier searches.
+- Keep full animation rigs within the existing close-character budget and reuse distant
+  proxies. Instanced animation or vertex-animation textures are future options if measurements
+  justify them, not a prerequisite for replacing the current bounded rig/proxy implementation.
 - Replicate global settlement summaries separately from region-scoped physical and economic
   detail. Do not make new settlement detail globally visible.
 

@@ -3,8 +3,9 @@
 A persistent-world multiplayer RTS built with **Rust** and **Bevy 0.19**. One
 seed-generated world contains autonomous settlements whose named residents migrate, form
 households, take jobs, produce and trade physical goods, build roads and grow their town.
-The long-term game expands that foundation into player businesses, caravans, clans,
-territory and war.
+Player businesses, physical company caravans and tactical battles already extend that
+foundation. The long-term game connects them through paid retinues, durable worlds,
+clans, territory and war.
 
 The old first-person game is preserved at git tag `citysim-final`; the live workspace is
 the RTS/living-world codebase. Start with [WORLD-DESIGN.md](docs/WORLD-DESIGN.md) for the
@@ -25,6 +26,10 @@ arrival and reusable ship-navigation contract are documented in
   `TradeRouteId` relationships. A disconnected player
   can rejoin the same running server and re-adopt their live hero, cargo, coin and retinue;
   restarting the server intentionally begins a fresh world.
+- Battalion selection and frontage orders, flexible melee, archers with finite quivers,
+  and animated catapults with authoritative splash damage. Army management handles
+  membership, standing stances, equipment and fire policy. Recruitment and catapult
+  acquisition still require developer access; paid military supply/upkeep are not built.
 - God-mode settlement founding and villager spawning. Unaffiliated people choose a
   settlement, migrate to its hall and become residents.
 - Autonomous housing, employment, permits and geography-aware construction. Seeded
@@ -91,8 +96,9 @@ arrival and reusable ship-navigation contract are documented in
   scrollable Permits & Property board with live permit prices/demand and inherited or insolvent
   business listings, alongside pull-based settlement, civic, market, individual-business
   and consolidated company history ledgers.
-- Left click inspects any visible person, building or worksite; left-drag selects the local
-  hero and future player-commanded units inside the marquee. Picking follows current rendered
+- Left click inspects visible people, buildings and worksites; touching an owned battalion
+  member selects that battalion. Left-drag selects the local hero and commanded units,
+  expanding touched battalions. Picking follows current rendered
   character positions, respects exact rotated building footprints and remains aligned when the
   3D render scale is below the window resolution.
 - Player heroes have bounded physical inventories and wallets. Walking within 12 metres of
@@ -133,11 +139,14 @@ constructs it. Those values remain prototype balance, not final design.
 
 ## Major work still ahead
 
+- A populated ordinary-world opening without lab/God-mode setup. Non-dev Hero creation
+  works, but deterministic starting settlements and their initial residents are not seeded.
 - Versioned world-state persistence, migrations, backups and hosted durable storage.
-- Births, aging, non-starvation mortality, decline and persistent tree depletion/regrowth.
-- NPC merchant speculation, wagon art, multi-wagon route scaling and general regional price
-  discovery remain ahead. Buyer-funded Stone contracts and player-authored physical multi-town
-  merchant routes are live. Players can now
+- Births, aging, non-combat/non-starvation mortality, decline and persistent tree depletion/regrowth.
+- Strategic caravan travel, larger transport, multi-wagon route scaling, escorts and
+  interception remain ahead. Buyer-funded Stone contracts, player-authored physical multi-town
+  routes and bounded NPC merchant trials using imperfect price reports are live. Porter
+  hand-cart art is already integrated. Players can now
   commission and physically build an ordinary business, then manage strategy, wages, prices,
   collection, input procurement, company shares, private supply and profit retention through
   the same policies as NPC owners. Company-funded purchases of existing listed firms and
@@ -149,6 +158,8 @@ constructs it. Those values remain prototype balance, not final design.
   see [combat controls and limits](docs/COMBAT-DESIGN.md).
 
 The checked state and dependencies for each item live in [ROADMAP.md](docs/ROADMAP.md).
+The [September plan review](docs/PLAN-REVIEW-2026-09.md) proposes the next playable
+milestones and records the documentation corrections behind that recommendation.
 
 ## Workspace
 

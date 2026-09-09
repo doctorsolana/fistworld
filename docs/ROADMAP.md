@@ -4,8 +4,10 @@ The single build order. [ARCHITECTURE.md](ARCHITECTURE.md) says how the engine c
 game; [WORLD-DESIGN.md](WORLD-DESIGN.md) says what the world *is*. Both used to carry their
 own phase list, and the two disagreed — this file replaces both.
 
-Written 2026-07-30 and re-audited against the code on 2026-08-18. Where a doc claim and
-the code disagree, the executable state wins and the doc is corrected.
+Written 2026-07-30; implementation status reconciled against the code on 2026-09-09.
+Where a doc claim and the code disagree, the executable state wins. The dated
+[plan review](PLAN-REVIEW-2026-09.md) records the evidence and proposed next milestones;
+those recommendations do not replace the agreed phases below.
 
 **Ordering principle: risk first.** Phases are ordered by which unknown, discovered late,
 would invalidate the most already-built work — not by narrative order. The big reordering
@@ -21,13 +23,13 @@ infrastructure is a phase that cannot be tested.
 
 | Phase | Name | Size | State |
 |---|---|---|---|
-| 0 | Let me in | M | in progress |
+| 0 | Let me in | M | non-dev arrival and session reconnect are live; a populated ordinary-world opening remains |
 | 1 | The world remembers | L | in progress — stable identity, settlement directory, founding, picking and panels are live; world-state persistence is not |
 | 2 | The seam | L | in progress — ordinary villagers now demote to aggregate strategic work; the traveller/army promotion contract is not built |
 | 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village → Town → City are live; births and decline are not |
-| 4 | Prices and the hand cart | M | in progress — local Moot trading, on-foot player exchange and the company economy are live; hand carts and inter-town trade are not |
-| 5 | Caravans | L | not started |
-| 6 | Command | XL | not started |
+| 4 | Prices and the hand cart | M | in progress — player trading, companies, Storage Halls, porter carts and inter-town cargo are live; a personally purchasable hand cart and restart durability remain |
+| 5 | Caravans | L | in progress — civic contracts, player timetables and bounded NPC merchant trials are live; strategic parties, escorts and interception remain |
+| 6 | Command | XL | in progress — selection, battalions, flexible melee and bounded shared formation fields are live; regional routing and narrow-passage coordination remain |
 | 7 | Retinue and businesses | L | in progress — ownership, company controls and shares are live; tactical battalions/basic melee are live; military upkeep and durable offline persistence remain |
 | 8 | Clans and territory | L | not started |
 | 9 | War for the realm | XL | not started |
@@ -36,13 +38,15 @@ infrastructure is a phase that cannot be tested.
 
 ## Phase 0 — Let me in
 
-**Playable:** a stranger joins the hosted server with `FISTWORLD_DEV` unset, gets a body,
-and walks it around a world that is still there tomorrow.
+**Playable:** a stranger joins with `FISTWORLD_DEV` unset, creates a body, sails ashore,
+finds an inhabited settlement and can reconnect to the same running session.
 
 The normal non-dev body path is now live: a new account creates one Hero, arrives by
 server-positioned Dinghy and can sail ashore, while a returning account re-adopts its live
-body. Durable cross-process world storage and hosted redeployment verification remain the
-Phase 0 exit blockers.
+body. Deterministic normal-world settlement seeding is still absent: lab staging and
+God-mode founding currently supply the settlements. Natural immigration waits for a Moot
+to exist. A useful populated opening is still needed; cross-process durability belongs to
+Phase 1 and must be verified separately from same-process reconnects.
 
 - [x] Clamp client-supplied `view_radius` (was a one-message remote OOM)
 - [x] Keep Docker workspace stubs aligned with non-server workspace members
@@ -78,8 +82,8 @@ Phase 0 exit blockers.
       starter Dinghy, sail through the ordinary right-click order path, disconnect,
       reconnect, and re-adopt the same live Hero body.
 
-**Exit:** a non-dev client spawns a hero, walks and trades, disconnects, and finds the exact
-live body again while that server session continues.
+**Exit:** without operator setup, a non-dev client finds a populated world, creates a hero,
+walks and trades, disconnects, and finds the exact live body again while that session continues.
 
 ---
 
@@ -96,10 +100,12 @@ join keys or on-disk contracts that are ruinous to change later.
       the settlement directory join on ids; names remain display/legacy-migration data.
       The allocator observes loaded ids before issuing another, ready for the versioned
       world-state file below.
-- [ ] **World-state file, versioned and self-describing.** NOT bincode: it is positional,
-      which is exactly why `PROFILE_VERSION` is at 8 and the profile loader has explicit
-      v6/v7 migrations plus reject-and-backup for unknown layouts. A wipe is an inconvenience for an outfit and fatal for months of
-      settlement state. RON is already a workspace dependency.
+- [ ] **World-state file, versioned and self-describing.** The current `PlayerProfile`
+      is only an in-memory reconnect snapshot; the old disk loader and v6/v7 migrations
+      have been removed. Save the mutable society, including individual buildings, roads,
+      people, companies, claims and in-flight cargo. A layout cursor cannot reconstruct
+      player placement or demand-led growth. RON is already a workspace dependency;
+      validate a version envelope before decoding and migrating the payload.
 - [ ] **Write the v1 to v2 migration before there is anything to lose.** A migration path
       that is never exercised is the one that fails when it matters.
 - [ ] Route future world saves through a bounded background IO worker, not the main thread
@@ -115,8 +121,9 @@ join keys or on-disk contracts that are ruinous to change later.
 - [x] **`Person` and the settlement roster, before anything writes a population
       float.** WORLD-DESIGN 1a makes population a roster of named people rather
       than a number, and retrofitting that later means tearing out every
-      consumer of `population: f32`. It is ~24 bytes a head and the name model
-      already exists, so there is no reason to defer it.
+      consumer of `population: f32`. Compact identity records are cheap; the old
+      ~24-byte estimate is not the memory cost of a complete live person with
+      inventories, economic state, routes and rendering.
 - [ ] The three LOCATION STATES from WORLD-DESIGN 1a -- AtPlace, Travelling
       (position derived, not stepped) and Embodied -- decided here even if only
       AtPlace is populated at first. Everyone must always have a knowable
@@ -135,14 +142,15 @@ join keys or on-disk contracts that are ruinous to change later.
       for player ones.
 - [ ] Deterministic settlement site selection from the seed (for the world's
       OWN settlements; player founding does not need it)
-- [ ] Map markers (there is no marker layer today; the map's only marker is bound to a
-      component nothing inserts)
+- [ ] Settlement, caravan and army map markers. The world map already follows the local
+      Hero's actual position/facing and projects the camera footprint; those are not missing.
 - [x] Screen-space picking so a settlement can be clicked. Halls opt into
       `Selectable` with a building-sized hit shape; a place is never commandable,
       so selecting one never produces an order.
 - [x] Inspect panel. `client/src/ui/settlement_panel.rs` — name, tier, residents
       by name, treasury, what stands (with owners), what is going up, permit
-      prices. Contains no controls, because the village decides for itself.
+      prices. Inspection coexists with exchange, property and company actions; civic
+      governance controls and player political authority remain separate future work.
 - [x] PLACES tab in the encyclopedia: every known settlement, with bearing and
       distance from the player.
 - [x] COMPANIES tab in the encyclopedia: scalable global firm directory,
@@ -153,25 +161,31 @@ join keys or on-disk contracts that are ruinous to change later.
 **The autonomous village slice** (WORLD-DESIGN §1b — a whole experiment, run to
 answer "can a village run itself?" before any of the economy above exists):
 
+This is also an implementation history. Exact current recipes, policy values and
+investment rules belong to CIVIC-ECONOMY and COMPANY-ECONOMY-IMPLEMENTATION; dated lab
+results establish their original fixtures, not every later balance revision.
+
 - [x] Villagers start unhoused, unemployed and resident nowhere. God mode spawns
       people; it never places them.
 - [x] Uncommitted villagers find the nearest non-Ruins settlement and walk to its
       hall on the real terrain. Arriving makes them residents.
-- [x] Resident count RE-DERIVED from the roster every tick, never incremented on
+- [x] Resident count derived from the authoritative roster with change-aware
+      reconciliation, never incremented on
       arrival — a nudged counter drifts, and a population that disagrees with the
       people standing there is the lie the encyclopedia must never tell.
 - [x] `Residence` replicated per person, so a panel can name who lives where.
-- [x] Concurrent bootstrap permits; needs begin in strict order (food source →
-      Lumberjack Hut → enough Houses) counting BUILT and PLANNED alike. The food source
+- [x] Concurrent demand-led permits count built and planned capacity. Early food and
+      housing needs can bootstrap construction; a Lumberjack Hut is not a compulsory
+      second shell when builders can supply the temporary timber demand. The food source
       becomes a Fisherman's Hut where its pier can reach valid open water,
       otherwise a Farmstead. Successive
       decision ticks may reserve different collision-safe plots while earlier
       worksites are still being supplied or built. Housing repeats until every
       resident has a bed; measured food shortage can repeat Farmsteads, and a
       viable shoreline settlement can ultimately support both farm and fish.
-- [x] A resident applies and becomes the building's owner, by durable `PersonId` — whoever
-      holds the fewest already, so each person has a stake rather than one
-      villager owning the whole place. No residents, no permits: a foundation
+- [x] Eligible residents and companies apply through the authoritative permit and
+      funding rules, retaining durable ownership. Property concentration and residents
+      without property are valid outcomes. No residents, no autonomous permits: a foundation
       does not build itself. Needed housing permits are free; every business
       permit debits the applicant's wallet into the settlement treasury, with a
       need discount and progressively higher prices for repeat holdings.
@@ -206,7 +220,8 @@ answer "can a village run itself?" before any of the economy above exists):
 - [x] End-to-end test over the real scheduled systems:
       `village::tests::three_villagers_settle_and_build_a_village_unaided`.
 - [x] Bounded bulk inventories on villagers, completed buildings and the hall.
-      Seven physical goods share capacity; coin is a separate fixed-point ledger.
+      Nine physical goods share bounded inventory rules; coin is a separate fixed-point ledger.
+      Public markets use per-good compartments rather than one competing shared capacity.
 - [x] Occupations and bounded workplace slots. Farmsteads employ Farmers,
       Fisherman's Huts employ Fishers, Lumberjack Huts employ a Woodcutter, and
       Windmills and Bakeries employ Millers and Bakers. Houses employ nobody.
@@ -336,8 +351,8 @@ answer "can a village run itself?" before any of the economy above exists):
       becomes a City after five sustained days. Village → Town additionally buys and stages
       8 Stone and physically constructs the Town Hall. The current Town → City gate remains
       direct until City Hall art and its material recipe are authored; the generic Hall
-      project seam is ready for that recipe. Civic buildings use placeholder art but real
-      plots, material supply, staffing, storage and road connections.
+      project seam is ready for that recipe. Moot/Village/Town Halls, Market and Church
+      have authored art. The Tavern runtime still uses its placeholder mapping.
 - [x] Physical civic-hall ladder. The authoritative settlement entity retains its
       identity and state while its replicated Hall level changes Moot Hall → Village
       Hall → Town Hall. All three assets pin the door to one threshold. Foundations,
@@ -346,8 +361,8 @@ answer "can a village run itself?" before any of the economy above exists):
 - [x] Stone Quarry founding trade. A geography-aware permit seeks rocky ground, two
       Quarriers perform visible outdoor extraction, each carries a bounded two-Stone load
       back to finite business storage, and Moot Stewards consign output through the ordinary
-      private market. The current gray blockout deliberately preserves the semantic building
-      contract until authored quarry art arrives.
+      private market. The authored quarry workshop and yard now preserve the semantic
+      building contract; see [RURAL_BUILDINGS.md](../asset_creation/RURAL_BUILDINGS.md).
 - [x] First contracted inter-settlement cargo. An eligible Town Works becomes the first real
       Stone buyer and escrows treasury cash before any supplier exists. Stone-rich investors
       see the public tender; a complete listing binds its exact remote seller and waits for a source
@@ -356,7 +371,8 @@ answer "can a village run itself?" before any of the economy above exists):
       market fee, civic material/freight expense and carrier service revenue settle at their
       actual milestones. A small minimum call-out covers the fixed carrier cost of partial loads.
       Hall/company UI and bounded trip history expose the result. Player-authored physical
-      merchant timetables are also live; NPC speculation and strategic graph travel remain Phase 5.
+      merchant timetables and bounded NPC merchant trials are also live; regional strategic
+      graph travel, escorts and interception remain Phase 5.
 
 **Deliberately deferred:** a billboard/impostor/symbol renderer. Settlements read as
 screen-projected UI labels, using the world-to-panel projection the map already has. That
@@ -398,7 +414,9 @@ regional traveller/army round-trip or formula-vs-observed arrival-time contract 
 - [ ] Round-trip test: promote, demote, promote again — state must be identical
 - [ ] **Arrival-time agreement test:** N runs formula-only vs N runs observed; the
       distributions must overlap
-- [ ] Traversability gate (water, slope) — movement currently ignores both
+- [ ] Regional traveller traversability and arrival-time agreement. Existing tactical
+      land movement already validates water, slope and obstacles; individual Hero swimming
+      and vessel navigation have separate explicit rules.
 - [ ] A scripted second client that can CHOOSE whether to observe, so the look-away exploit
       is testable at all
 
@@ -444,17 +462,18 @@ ordinary residents shed paths, door choreography and work-animation phases.
       Bakeries transform Flour to Bread only while a real employee is working.
       Both use bounded inventories, private input procurement, wages, prices,
       solvency, Moot Steward transport and strategic/tactical parity.
-- [x] Starvation mortality as a real roster event: every embodied person has
-      100 Health, each missed daily meal removes 10, and zero Health atomically
-      releases jobs/homes, settles the estate and lists owned firms for takeover.
+- [x] Starvation mortality as a real roster event: people have 100 Health; missed meals
+      progressively lower the safe ceiling, with direct lethal starvation beginning
+      after ten consecutive misses. Eating restores the ceiling and permits gradual
+      recovery. Zero Health releases jobs/homes and settles estates and business succession.
       The bounded mortality ledger keeps dead people inspectable without retaining
       thousands of dead ECS bodies.
-- [ ] Births against a food-supported cap, aging and non-starvation mortality
+- [ ] Births against a food-supported cap, aging and other natural mortality
 - [ ] Further food processing, recipes, nutrition quality and differentiated diets
 - [x] Later tier ladder requirements: Marketplace and Tavern plus sustained trade
       advance a Village to Town; Church plus sustained regional prosperity advances a
-      Town to City. Placeholder civic meshes preserve the semantic/build pipeline until
-      authored art replaces them. Military remains deliberately outside the growth gate.
+      Town to City. Authored Hall/Market/Church assets are live; a distinct City Hall and
+      its material recipe remain open. Military stays outside the growth gate.
 - [ ] Hysteresis on every transition
 - [ ] The decline ladder: struggling -> abandoned (recoverable) -> Ruins, where
       only the last needs destruction, deliberate razing, or long physical decay.
@@ -481,8 +500,8 @@ ordinary residents shed paths, door choreography and work-animation phases.
 **Playable:** buy grain cheap in a meadows village, cart it to the highland quarry town,
 sell it dear. The M&B opening hour.
 
-- [x] Seven bounded physical goods: Wheat, Fish (the stable internal `Food` id),
-      Flour, Bread, Wood, Stone and Iron
+- [x] Nine bounded physical goods: Wheat, Fish (the stable internal `Food` id),
+      Flour, Bread, Meat, Wool, Wood, Stone and Iron
 - [x] NPC coin and workplace ownership ledgers
 - [x] Bounded physical stores on villagers, workplaces, houses and halls
 - [ ] Persisted settlement stock semantics and ownership
@@ -511,6 +530,8 @@ sell it dear. The M&B opening hour.
       focused coverage proves a future processing business can reorder Wheat without a
       one-off purchasing system.
 - [x] Generic carry capacity and lossless bounded transfers
+- [x] Authored porter hand carts and load/wheel presentation for employed logistics workers
+- [ ] A purchasable personal hand cart and its ordinary-player controls
 - [x] First player buy/sell UI: an embodied hero within 12m buys one real listed unit or
       posts one carried unit under their stable identity; custom quantities and asks remain
       part of merchant/business management.
@@ -571,7 +592,9 @@ wagons when you get close.
 
 Cargo rides the seam proven in Phase 2, so this phase adds economics, not architecture.
 
-- [ ] Settlement dispatch toward the best price in range
+- [x] Bounded autonomous company merchant trials using delayed market observations,
+      trait/strategy-dependent confidence, real cash risk and mothball/retry rules.
+      This is company decision-making, not a settlement-owned global price oracle.
 - [x] Generic company route identity, buyer contract, finite cargo and milestone accounting
       (proved first with civic Stone; Phase 5 adds merchant risk and the regional graph)
 - [x] Player-authored two-to-eight-stop merchant timetable with physical Buy/Load/Sell/Unload,
@@ -599,18 +622,20 @@ Cargo rides the seam proven in Phase 2, so this phase adds economics, not archit
 **Playable:** select units with a click and a drag box, order a group somewhere, watch them
 arrive without shoving each other through walls.
 
-Pushed late deliberately: this is the largest block of work in the roadmap and carries the
-LEAST architectural uncertainty. It is a solved genre problem with a known cost model, so
-building it early would burn months without falsifying anything.
+The local command foundation has already been built and iterated in connected battles.
+Remaining work should extend it for difficult terrain and regional travel; do not restart
+formation or melee implementation because an older phase summary called it unbuilt.
 
 - [x] Character-scoped `MoveTarget`, with authoritative account ownership.
-- [x] Click/box selection, Shift addition/toggling, individual bearer selection and control groups.
+- [x] Click/box selection, whole-battalion expansion, Shift addition/toggling and control groups.
+      Remove a member from its battalion before controlling it individually.
 - [x] Ordered tactical commands, limits and authoritative feedback.
 - [x] Separate battalion blocks, dragged frontage/facing, hold, attack-move and retreat.
 - [x] Bounded shared formation fields for local obstacle routing and certified open-ground legs.
-- [ ] Regional traversability graph, narrow-passage/column coordination and rigid formation wheeling.
-- [ ] Replace the unused generic `find_path` routine when regional navigation lands;
-      keep civilian road-routing budgets and obstacle contracts separate from formation ownership.
+- [ ] Regional traversability graph and narrow-passage/column coordination that preserve
+      the current flexible combat behavior.
+- [x] Remove the unused generic `find_path` routine. Civilian road-routing budgets and
+      obstacle contracts remain separate from formation ownership.
 
 **Exit:** twenty units cross a map together and it looks deliberate.
 
@@ -667,8 +692,8 @@ border without a battle.
 
 **Playable:** take a realm.
 
-- [ ] Warbands and garrisons (note: a garrison is already a Town REQUIREMENT
-      from Phase 3, so soldiers exist as people well before this phase)
+- [ ] Strategic warbands and garrisons. Military strength is not a settlement tier
+      requirement; the tactical soldiers already built in Phases 6–7 are the foundation.
 - [ ] Refugee migration when a settlement is destroyed: form parties holding
       real PersonIds, one route per party, and on arrival they compete for
       vacant homes and jobs. A party groups for ROUTING and map presentation,
@@ -685,15 +710,14 @@ border without a battle.
 
 Things every phase touches, easy to discover too late:
 
-- [ ] **Client/server version compatibility.** lightyear 0.28 wires bevy_replicon, which
-      hashes replication-rule and event registration order and disconnects mismatched
-      clients. Every phase registers new components and messages, so every deploy locks out
-      every previously distributed client. Needs a version gate and a distribution story.
+- [ ] **Client/server release compatibility.** A manually maintained `PROTOCOL_ID` already
+      gates the netcode handshake; coordinated rebuild/restart remains mandatory after wire
+      changes. A friendly incompatible-version message and matching client distribution,
+      automated release checks and rollout policy still need work.
 - [ ] **Replication backpressure.** No cap on entities per client, no priority scheme, no
       bandwidth ceiling. Every phase adds entity classes.
-- [ ] **The 13MB `map.ron`**, most of it ~74k baked prop spawns that are already derivable
-      from the seed recipe. Contradicts the repo's own seed-recipe principle and is copied
-      into every container image.
+- [x] **Seed-recipe map storage.** `client/assets/maps/big_world/map.ron` is 500 bytes
+      at the 2026-09-09 audit, with no baked object list. The old 13 MB cleanup item is obsolete.
 - [ ] **Engine upgrade reserve.** This repo's history shows engine bumps are multi-week
       events. Budget for one.
 - [ ] **Multiplayer validation.** Clans, territory and politics are only meaningful with
