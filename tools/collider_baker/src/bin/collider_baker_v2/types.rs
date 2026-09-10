@@ -18,6 +18,9 @@ pub(crate) struct ColliderManifestEntry {
     pub(crate) mode: ColliderMode,
     pub(crate) vertex_filter: VertexFilter,
     pub(crate) collidable: bool,
+    /// Optional authored subtrees to omit; keeps walkable courtyards out of a building hull.
+    #[serde(default)]
+    pub(crate) exclude_nodes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

@@ -1855,7 +1855,7 @@ fn clear_and_level(
     publish_terrain_chunks(terrain, deltas, commands, affected);
 }
 
-fn publish_terrain_chunks(
+pub(crate) fn publish_terrain_chunks(
     terrain: &WorldTerrain,
     deltas: &mut PublishedTerrainDeltas,
     commands: &mut Commands,
@@ -1902,7 +1902,7 @@ fn level_building_ground(
     )
 }
 
-fn level_construction_ground(
+pub(crate) fn level_construction_ground(
     terrain: &mut WorldTerrain,
     under: &UnderConstruction,
 ) -> Vec<shared::terrain::ChunkCoord> {

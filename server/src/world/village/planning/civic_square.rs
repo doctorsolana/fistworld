@@ -13,6 +13,39 @@ use crate::world::village::*;
 
 type SurveySignature = (usize, usize, usize, u32);
 
+/// Reuse ordinary public-ground and Market access checks before an inhabited
+/// opening fills a site with houses. No stock, paving or buildings are created.
+pub(crate) fn founding_civic_square(
+    terrain: &WorldTerrain,
+    hall: Vec3,
+    colliders: &StaticColliders,
+    derived: &DerivedColliderLibrary,
+) -> Option<SettlementCivicSquare> {
+    let mut chunks = HashMap::new();
+    square_candidates(terrain, hall, 0.0, &[])
+        .into_iter()
+        .find(|square| {
+            square_ground_is_suitable(terrain, square)
+                && square_clears_generated_props(terrain, square, derived, &mut chunks)
+                && super::manual::validate_manual_plot(
+                    terrain,
+                    hall,
+                    SettlementBuildingKind::Market,
+                    square.market_position,
+                    square.market_rotation,
+                    &[(hall, SettlementBuildingKind::Hall.clearance())],
+                    &[],
+                    &[],
+                    &[],
+                    Some(colliders),
+                    Some(derived),
+                    None,
+                    &[],
+                )
+                .is_ok()
+        })
+}
+
 /// Existing reservations are never moved, including after Hall upgrades. A
 /// failed legacy-town survey retries only when actual land reservations or
 /// terrain change; an empty world returns before collecting global snapshots.

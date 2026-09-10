@@ -6,7 +6,7 @@ skeleton. The contracts differ enough that conflating them causes real bugs, so 
 
 Older workshops demonstrate the original log construction pipeline.
 The rebuilt [houses](HOUSE_HANDOVER.md), [lumberjack workshop](LUMBERJACK_HUT.md)
-[windmill](WINDMILL.md) and [storage hall](STORAGE_HALL.md)
+[windmill](WINDMILL.md), [storage hall](STORAGE_HALL.md) and [bakery](BAKERY.md)
 use self-contained builders that author directly in Blender +Y and export their own GLBs.
 Use each building's documented entry point: the older `export_prop_glb.py` applies a
 −90° facing correction and must not process these newer sources. Shared scale, timber,

@@ -18,6 +18,8 @@ pub(crate) use siege::{
     drive_siege_capture, drive_siege_input, drive_siege_ray, frame_siege_flight, SiegeCapture,
 };
 mod army;
+mod tavern;
+pub(crate) use tavern::drive_tavern_review;
 mod battle;
 pub(crate) use army::{drive_army_capture, drive_army_input, ArmyCapture};
 pub(crate) use battle::{
@@ -43,13 +45,14 @@ pub(crate) use presentation::{setup_capture_presentation, sync_capture_presentat
 mod fortification_fixtures;
 mod scene_fixtures;
 mod town_fixtures;
+mod tree_fixtures;
 mod ui_fixtures;
 mod ui_tour;
 mod world_fixture;
 
 pub(crate) use live::{
     drive_live_lab_capture, drive_live_voyage_capture, drive_live_voyage_click_input,
-    LiveVoyageCaptureState,
+    live_capture_request, LiveVoyageCaptureState,
 };
 
 use crate::camera_rts::CommanderCamera;
@@ -60,7 +63,7 @@ use crate::capture_artifact::{
 };
 use bevy::prelude::*;
 use bevy::render::view::screenshot::Screenshot;
-use inspection::CaptureInspection;
+pub(crate) use inspection::CaptureInspection;
 use scene_fixtures::{
     drive_capture_dinghy, spawn_capture_dinghy, spawn_capture_heroes, spawn_capture_isolated_prop,
     stage_capture_permit_placement,
@@ -241,7 +244,9 @@ pub fn run(mut config: CaptureConfig) {
                 .as_ref()
                 .is_some_and(|recording| recording.enabled))
     {
-        eprintln!("capture: --benchmark requires a nonempty continuous flight without comparison or recording");
+        eprintln!(
+            "capture: --benchmark requires a nonempty continuous flight without comparison or recording"
+        );
         std::process::exit(2);
     }
     // Captures must not inherit the user's saved settings file.
@@ -383,6 +388,7 @@ pub fn run(mut config: CaptureConfig) {
         Update,
         (
             spawn_capture_isolated_prop,
+            tree_fixtures::spawn_tree_review,
             spawn_capture_dinghy,
             drive_capture_dinghy,
             spawn_capture_heroes,
@@ -835,6 +841,26 @@ fn evaluate_assertions(
                 }
                 CaptureAssertion::HorseRigsAtMost { count } => {
                     (snapshot.horse_rigs, snapshot.horse_rigs <= count)
+                }
+                CaptureAssertion::PropRootsAtLeast { count } => {
+                    (snapshot.prop_roots, snapshot.prop_roots >= count)
+                }
+                CaptureAssertion::PropRootsAtMost { count } => {
+                    (snapshot.prop_roots, snapshot.prop_roots <= count)
+                }
+                CaptureAssertion::VisibleTreeRootsAtLeast { count } => (
+                    snapshot.visible_tree_roots,
+                    snapshot.visible_tree_roots >= count,
+                ),
+                CaptureAssertion::VisibleTreeRootsAtMost { count } => (
+                    snapshot.visible_tree_roots,
+                    snapshot.visible_tree_roots <= count,
+                ),
+                CaptureAssertion::GrassBatchesAtLeast { count } => {
+                    (snapshot.grass_batches, snapshot.grass_batches >= count)
+                }
+                CaptureAssertion::GrassBatchesAtMost { count } => {
+                    (snapshot.grass_batches, snapshot.grass_batches <= count)
                 }
                 CaptureAssertion::VillagersAtLeast { count } => {
                     (snapshot.villagers, snapshot.villagers >= count)

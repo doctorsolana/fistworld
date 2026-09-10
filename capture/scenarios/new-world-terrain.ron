@@ -1,0 +1,48 @@
+// Terrain-only reference for the shared session recipe. Inhabited settlement
+// and arrival behavior require the connected capture hooks (docs/NEW-WORLD.md).
+(
+    version: 1,
+    name: "new-world-terrain",
+    map: "world",
+    output_dir: "logs/captures/new-world-terrain",
+    resolution: (1600, 900),
+    target: scene,
+    show_window: false,
+    warmup_frames: 240,
+    readiness: (
+        minimum_frames: 60,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 64,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTWORLD_WORLD_SEED": "1",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (
+            name: "arrival-coast",
+            focus: (3160.0, 0.0, -1280.0),
+            yaw: -0.55,
+            zoom: 140.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+        (
+            name: "fertile-valley",
+            focus: (3073.3, 0.0, -1265.9),
+            yaw: -0.9,
+            zoom: 300.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+        (
+            name: "woodland-site",
+            focus: (1779.2, 0.0, -2137.5),
+            yaw: 0.5,
+            zoom: 180.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+    ],
+)

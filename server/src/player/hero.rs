@@ -341,11 +341,9 @@ pub fn ensure_player_permit_ledgers(
 /// Spawn a villager: a named person who lives in the world and belongs to
 /// nobody.
 ///
-/// A test tool until settlements produce their own population (ROADMAP Phase 3),
-/// and deliberately NOT persisted -- world-state persistence does not exist yet,
-/// so a villager lasts until the server restarts. That is honest for a spawn
-/// button; the alternative is a villager who silently evaporates and looks like
-/// a bug.
+/// Shared by ordinary world founding, natural immigration and developer tools.
+/// Callers add the appropriate identity and social relationships. Residents last
+/// for this server session; world-state persistence remains a separate feature.
 pub fn spawn_villager(
     commands: &mut Commands,
     terrain: &shared::terrain::WorldTerrain,

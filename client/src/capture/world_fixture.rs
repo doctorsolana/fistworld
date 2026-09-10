@@ -1,8 +1,8 @@
 //! Offline replicated world, settlement and encyclopedia fixture setup.
 
+use super::CaptureConfig;
 use super::history_fixtures::{synthetic_settlement_history, synthetic_world_history};
 use super::ui_fixtures::stage_capture_companies;
-use super::CaptureConfig;
 use crate::states::GameState;
 use bevy::prelude::*;
 use shared::components::WorldTime;
@@ -182,7 +182,7 @@ pub(super) fn enter_world_offline(
             "1" | "village"
                 | "coast"
                 | "industries"
-                | "bakery"
+                | "bakery" | "tavern"
                 | "market"
                 | "market_paved"
                 | "storage_hall"
@@ -236,7 +236,7 @@ pub(super) fn enter_world_offline(
                 // Centre the authored production cluster rather than its Hall.
                 // This keeps close asset-validation shots reusable as the Hall
                 // ladder grows substantially taller than founding industries.
-                "industries" | "bakery" | "market" | "market_paved" | "storage_hall" | "lumberjack" | "windmill" => {
+                "industries" | "bakery" | "tavern" | "market" | "market_paved" | "storage_hall" | "lumberjack" | "windmill" => {
                     focus + Vec3::new(0.0, 0.0, 140.0)
                 }
                 _ if std::env::var("FISTFORCE_CAPTURE_PERMIT_PLACEMENT").is_ok() => {
@@ -400,7 +400,7 @@ pub(super) fn enter_world_offline(
                 .is_ok_and(|v| {
                     matches!(
                         v.as_str(),
-                        "village" | "industries" | "bakery" | "market" | "market_paved" | "storage_hall" | "lumberjack" | "windmill"
+                        "village" | "industries" | "bakery" | "tavern" | "market" | "market_paved" | "storage_hall" | "lumberjack" | "windmill"
                     )
                 })
             {
@@ -432,6 +432,8 @@ pub(super) fn enter_world_offline(
                     &[K::Windmill]
                 } else if mode == "lumberjack" {
                     &[K::LumberjackHut]
+                } else if mode == "tavern" {
+                    &[K::Tavern]
                 } else if mode == "bakery" {
                     &[K::Bakery]
                 } else if matches!(mode.as_str(), "market" | "market_paved") {
@@ -440,7 +442,7 @@ pub(super) fn enter_world_offline(
                     &[K::Farmstead, K::LumberjackHut, K::Windmill, K::Bakery]
                 };
                 for (index, kind) in kinds.iter().copied().enumerate() {
-                    let at = if matches!(mode.as_str(), "bakery" | "market" | "market_paved" | "storage_hall" | "lumberjack" | "windmill") {
+                    let at = if matches!(mode.as_str(), "bakery" | "tavern" | "market" | "market_paved" | "storage_hall" | "lumberjack" | "windmill") {
                         focus
                     } else if mode == "industries" {
                         // One authored comparison line: equal frontage,
@@ -457,6 +459,17 @@ pub(super) fn enter_world_offline(
                         .get_resource::<shared::terrain::WorldTerrain>()
                         .map(|t| t.get_height(at.x, at.z))
                         .unwrap_or(at.y);
+                    if matches!(kind, K::Bakery | K::Tavern) {
+                        // Art inspection uses the same level plot as real placement.
+                        let def = kind.art().definition();
+                        let centre = def.world_footprint_center(Vec3::new(at.x, ground, at.z), 0.0);
+                        if let Some(mut terrain) = world.get_resource_mut::<shared::terrain::WorldTerrain>() {
+                            terrain.apply_flatten_rect(
+                                Vec3::new(centre.x, ground, centre.y),
+                                def.terrain_flat_half_extents(), 0.0, def.terrain_blend_width(),
+                            );
+                        }
+                    }
                     let mut store =
                         shared::economy::GoodsInventory::new(kind.storage_bulk_capacity());
                     match kind {
@@ -470,6 +483,7 @@ pub(super) fn enter_world_offline(
                             store.add(shared::economy::Good::Wheat, 8);
                             store.add(shared::economy::Good::Flour, 3);
                         }
+                        K::Tavern => { store.add(shared::economy::Good::Bread, 24); }
                         K::Bakery => {
                             store.add(shared::economy::Good::Flour, 6);
                             store.add(shared::economy::Good::Bread, 160);
@@ -511,7 +525,7 @@ pub(super) fn enter_world_offline(
                             K::Farmstead => shared::economy::Good::Wheat,
                             K::LumberjackHut => shared::economy::Good::Wood,
                             K::Windmill => shared::economy::Good::Flour,
-                            K::Bakery => shared::economy::Good::Bread,
+                            K::Bakery | K::Tavern => shared::economy::Good::Bread,
                             K::Market | K::StorageHall => shared::economy::Good::Wood,
                             _ => unreachable!(),
                         }),

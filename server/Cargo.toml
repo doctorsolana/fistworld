@@ -9,3 +9,4 @@ lightyear = { workspace = true }
 shared = { path = "../shared" }
 
 parry3d = "0.25.3"
+rand = "0.8"

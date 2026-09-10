@@ -42,6 +42,8 @@ struct WindParams {
 // x: per-instance height jitter fraction, y: height stretch,
 // z: map half extent (m), w: climate seed phase.
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> wind_extra: vec4<f32>;
+// Brightness/warmth amplitudes and explicit canopy-mask flag. No instance materials.
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var<uniform> canopy_variation: vec4<f32>;
 
 @vertex
 fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
@@ -50,6 +52,8 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 
     let mesh_world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
     var world_from_local = mesh_world_from_local;
+    let origin_xz = mesh_world_from_local[3].xz;
+    let hjit = fract(sin(dot(origin_xz, vec2<f32>(127.1, 311.7))) * 43758.5453);
 
 #ifdef VERTEX_NORMALS
     out.world_normal = mesh_functions::mesh_normal_local_to_world(
@@ -72,8 +76,6 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     // BotW-style) times a per-instance jitter hashed from the instance
     // origin so identical tufts grow to different heights. Identity for
     // trees/bushes (x = 0, y = 1).
-    let origin_xz = mesh_world_from_local[3].xz;
-    let hjit = fract(sin(dot(origin_xz, vec2<f32>(127.1, 311.7))) * 43758.5453);
     vertex.position.y *= max(wind_extra.y, 0.001) * (1.0 + (hjit - 0.5) * 2.0 * wind_extra.x);
 
     var world_pos = mesh_functions::mesh_position_local_to_world(
@@ -160,10 +162,27 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 #endif
 
 #ifdef VERTEX_COLORS
+    // Tree identity is the unswayed INSTANCE ORIGIN, shared by both LODs. Neither
+    // vertex position nor frame time may seed this: those produce mottled bark,
+    // swimming colour or a colour jump when a tree changes detail level.
+    // Reuse the existing height-jitter hash: colour adds no extra trig calls.
+    let identity = hjit;
+    let warmth = fract(hjit * 13.371 + 0.173) * 2.0 - 1.0;
+    // Existing green trees encode foliage in COLOR_0. New coloured crowns carry
+    // an explicit UV mask so copper leaves/blossom tint without colouring bark.
+    var canopy = smoothstep(0.005, 0.045, vertex.color.g - max(vertex.color.r, vertex.color.b));
+#ifdef VERTEX_UVS_B
+    canopy = mix(canopy, clamp(1.0 - vertex.uv_b.y, 0.0, 1.0), canopy_variation.z);
+#endif
+    let brightness = (identity * 2.0 - 1.0) * canopy_variation.x;
+    let warm_shift = warmth * canopy_variation.y;
+    let tint = vec3<f32>(1.0 + brightness + warm_shift,
+                        1.0 + brightness,
+                        1.0 + brightness - warm_shift);
     // Gust sheen: the passing wave brightens tips, making the front visible
     // as a silver ripple rolling across the field.
     out.color = vec4<f32>(
-        vertex.color.rgb * (1.0 + gust_sheen * 0.30 * tip),
+        vertex.color.rgb * mix(vec3<f32>(1.0), tint, canopy) * (1.0 + gust_sheen * 0.30 * tip),
         vertex.color.a
     );
 #endif

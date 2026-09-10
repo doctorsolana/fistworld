@@ -643,14 +643,24 @@ def paint_object(obj, rgb, is_leaf):
             z = me.vertices[me.loops[li].vertex_index].co.z
             if is_leaf:
                 shade = 0.86 + 0.14 * min(1.0, max(0.0, z / max(top, 1e-6)))
-                colour = tuple(min(1.0, c * shade) for c in rgb)
+                tone = rgb
+                if palette := PROFILE.get("leaf_palette"):
+                    # A continuous crown-space field survives changes in LOD topology.
+                    co = me.vertices[me.loops[li].vertex_index].co
+                    blend = 0.5 + 0.5 * math.sin(co.x * 0.86 + co.y * 0.63 + co.z * 0.71 + SEED)
+                    blend = blend ** PROFILE.get("leaf_palette_bias", 1.0)
+                    tone = tuple(a + (b - a) * blend for a, b in zip(*palette))
+                colour = tuple(min(1.0, c * shade) for c in tone)
             elif marked:
                 colour = mark_rgb
             else:
                 colour = rgb
             colours.data[li].color = (colour[0], colour[1], colour[2], 1.0)   # alpha ALWAYS 1.0
             weight = 0.0 if z < 0.4 else min(1.0, ((z - 0.4) / max(top, 1e-6)) ** 1.3)
-            wind.data[li].uv = (max(weight, 0.8) if is_leaf else weight, 0.0)
+            # New assets explicitly distinguish leaves from bark for instance tint.
+            # glTF flips V: this becomes 1-TEXCOORD_1.y in the shader.
+            canopy = float(is_leaf) if PROFILE.get("canopy_mask") else 0.0
+            wind.data[li].uv = (max(weight, 0.8) if is_leaf else weight, canopy)
 
 
 def bed_to_ground(objs, sink):
@@ -724,4 +734,5 @@ def main():
     log(f"wrote {path} ({os.path.getsize(path) / 1024:.0f} KB)")
 
 
-main()
+if __name__ == "__main__":
+    main()

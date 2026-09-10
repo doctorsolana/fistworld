@@ -228,8 +228,10 @@ pub(crate) fn spawn_terrain_chunks(
         }
 
         let resolution = WEIGHTMAP_RESOLUTION;
+        // A joining server can replace the process's initial map. Snapshot
+        // the active recipe, not TerrainGenerator::new()'s startup cache.
+        let generator = terrain.generator.clone();
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let generator = TerrainGenerator::new();
             let mesh_data = generator.generate_chunk_with_deltas(&delta_map, coord);
             let tangents = compute_chunk_tangents(&mesh_data).unwrap_or_default();
             // Shoreline subdivision, attribute copies and tangent fallback are

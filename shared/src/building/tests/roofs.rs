@@ -119,6 +119,10 @@ fn all_authored_roofs_have_outward_facing_undersides() {
     // nearby framing, so two-sided materials cannot conceal an open mesh.
     let cases: &[(&str, &[(f32, f32, f32, f32)])] = &[
         (
+            "Bakery",
+            &[(3.10, 0.3, 3.02, 3.20), (1.5, -3.0, 2.65, 2.80)],
+        ),
+        (
             "MootHall",
             &[(3.3, 0.7, 4.55, 4.80), (1.0, -4.4, 5.85, 6.05)],
         ),

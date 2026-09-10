@@ -7,6 +7,7 @@ use shared::components::{ActiveMapState, CharacterKind, CharacterNavigationStatu
 use super::presentation::CapturePresentationTarget;
 use crate::camera_rts::CommanderCamera;
 use crate::capture_artifact::{CaptureWorldSnapshot, CaptureWriteRequest};
+use crate::props::{is_tree_kind, ChunkedGroundCover, EnvironmentProp, PropKindTag};
 use crate::render::systems::scaled_target::SceneRenderTarget;
 use crate::terrain::LoadedChunks;
 
@@ -21,6 +22,17 @@ pub(crate) struct CaptureInspection<'w, 's> {
     settlements: Query<'w, 's, (), With<shared::components::Settlement>>,
     horses: Query<'w, 's, (), With<shared::components::Horse>>,
     horse_rigs: Query<'w, 's, (), With<crate::animals::HorseRig>>,
+    prop_roots: Query<
+        'w,
+        's,
+        (
+            Option<&'static PropKindTag>,
+            Option<&'static Visibility>,
+            Option<&'static InheritedVisibility>,
+        ),
+        With<EnvironmentProp>,
+    >,
+    grass_batches: Query<'w, 's, (), With<ChunkedGroundCover>>,
     buildings: Query<'w, 's, (), With<shared::components::SettlementBuilding>>,
     fortifications: Query<'w, 's, &'static shared::components::FortificationSegment>,
     navigation: Query<'w, 's, &'static CharacterNavigationStatus>,
@@ -32,7 +44,27 @@ pub(crate) struct CaptureInspection<'w, 's> {
 }
 
 impl CaptureInspection<'_, '_> {
+    pub(crate) fn loaded_chunk_count(&self) -> usize {
+        self.loaded_chunks
+            .as_ref()
+            .map_or(0, |chunks| chunks.chunks.len())
+    }
+
     pub(super) fn world_snapshot(&self, clock: Option<&WorldTime>) -> CaptureWorldSnapshot {
+        let mut prop_roots = 0;
+        let mut tree_roots = 0;
+        let mut visible_tree_roots = 0;
+        for (kind, visibility, inherited) in &self.prop_roots {
+            prop_roots += 1;
+            if kind.is_some_and(|kind| is_tree_kind(kind.0)) {
+                tree_roots += 1;
+                if visibility.is_some_and(|visibility| *visibility != Visibility::Hidden)
+                    && inherited.is_some_and(|visibility| visibility.get())
+                {
+                    visible_tree_roots += 1;
+                }
+            }
+        }
         CaptureWorldSnapshot {
             frame: self.frame_count.0,
             entity_count: self.all_entities.iter().count(),
@@ -47,6 +79,10 @@ impl CaptureInspection<'_, '_> {
                 .count(),
             horses: self.horses.iter().count(),
             horse_rigs: self.horse_rigs.iter().count(),
+            prop_roots,
+            tree_roots,
+            visible_tree_roots,
+            grass_batches: self.grass_batches.iter().count(),
             settlements: self.settlements.iter().count(),
             settlement_buildings: self.buildings.iter().count(),
             fortification_sections: self
@@ -71,7 +107,7 @@ impl CaptureInspection<'_, '_> {
 
     /// Populate evidence at the moment the screenshot is requested. Live runs
     /// have no deterministic timestep; their metadata keeps that value at zero.
-    pub(super) fn complete_live_request(
+    pub(crate) fn complete_live_request(
         &self,
         request: &mut CaptureWriteRequest,
         camera: Option<&CommanderCamera>,
@@ -122,6 +158,63 @@ mod tests {
     use super::*;
     use crate::capture_artifact::CaptureTarget;
     use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn vegetation_snapshot_distinguishes_roots_visibility_and_grass_batches() {
+        use shared::props::PropKind;
+        use shared::terrain::ChunkCoord;
+
+        let mut world = World::new();
+        world.insert_resource(bevy::diagnostic::FrameCount(1));
+        // Include hidden trees, a hidden ancestor, a non-tree and an untyped
+        // authored prop. Entity count alone cannot detect lost vegetation.
+        for (kind, visibility, inherited) in [
+            (
+                PropKind::OakA,
+                Visibility::Visible,
+                InheritedVisibility::VISIBLE,
+            ),
+            (
+                PropKind::PineA,
+                Visibility::Hidden,
+                InheritedVisibility::HIDDEN,
+            ),
+            (
+                PropKind::BirchA,
+                Visibility::Inherited,
+                InheritedVisibility::HIDDEN,
+            ),
+            (
+                PropKind::SmallRockA,
+                Visibility::Visible,
+                InheritedVisibility::VISIBLE,
+            ),
+        ] {
+            world.spawn((
+                EnvironmentProp {
+                    chunk: ChunkCoord::new(0, 0),
+                },
+                PropKindTag(kind),
+                visibility,
+                inherited,
+            ));
+        }
+        world.spawn(EnvironmentProp {
+            chunk: ChunkCoord::new(0, 0),
+        });
+        let grass = world.spawn(ChunkedGroundCover).id();
+        let mut state = SystemState::<CaptureInspection>::new(&mut world);
+        let snapshot = state.get(&world).unwrap().world_snapshot(None);
+        assert_eq!(snapshot.prop_roots, 5);
+        assert_eq!(snapshot.tree_roots, 3);
+        assert_eq!(snapshot.visible_tree_roots, 1);
+        assert_eq!(snapshot.grass_batches, 1);
+
+        world.despawn(grass);
+        let snapshot = state.get(&world).unwrap().world_snapshot(None);
+        assert_eq!(snapshot.grass_batches, 0);
+        assert_eq!(snapshot.visible_tree_roots, 1);
+    }
 
     #[test]
     fn connected_artifact_records_replicated_world_and_actual_camera_pose() {

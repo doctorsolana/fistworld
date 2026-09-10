@@ -5,6 +5,8 @@ use std::path::Path;
 
 use super::*;
 
+mod bakery;
+mod tavern;
 mod civic;
 mod roofs;
 mod rural;

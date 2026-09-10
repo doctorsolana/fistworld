@@ -30,6 +30,8 @@ impl Plugin for NameEntryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayerNameInput>();
         app.init_resource::<NameSubmissionFeedback>();
+        app.init_resource::<network::PendingWorldJoin>();
+        app.add_systems(OnExit(GameState::Connected), network::cancel_world_join);
 
         app.add_systems(OnEnter(GameState::Connected), spawn_name_entry_ui);
         app.add_systems(OnExit(GameState::Connected), despawn_name_entry_ui);

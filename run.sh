@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|cavalryworld|realworld|multi] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|cavalryworld|mixedbattle|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -31,6 +31,7 @@
 # NOT -- the stale reference lives in the rlib, not the incremental cache.
 
 set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
 PROFILE="playtest"
 ARGS=()
@@ -247,12 +248,14 @@ else
     TARGET_DIR="$PROFILE"
 fi
 
-# Which map the server and client load; big_world is the generated round world.
-export CITYSIM_MAP_ID="${CITYSIM_MAP_ID:-big_world}"
-
-# Local servers run with god commands enabled; production config (fly.toml) never
-# sets this, and an explicitly exported value wins.
-export FISTWORLD_DEV="${FISTWORLD_DEV:-1}"
+# With no authored map selected, the server creates the ordinary populated
+# world and sends its recipe at login. Clients do not choose a separate seed.
+# Development fixtures remain opt-in and keep their convenient God controls.
+if [[ -z "${CITYSIM_MAP_ID:-}" || "${CITYSIM_MAP_ID:-}" == "world" ]]; then
+    export FISTWORLD_DEV="${FISTWORLD_DEV:-0}"
+else
+    export FISTWORLD_DEV="${FISTWORLD_DEV:-1}"
+fi
 
 SERVER_PID=""
 CLIENT1_PID=""
@@ -377,16 +380,22 @@ echo -e "${YELLOW}Build profile: ${PROFILE}${NC}"
 
 case $MODE in
     server)
-        cleanup_server
+        if command -v lsof >/dev/null 2>&1 && lsof -nP -iUDP:5000 -t 2>/dev/null | grep -q .; then
+            echo "UDP 5000 is already in use; stop that server before starting a new world." >&2
+            exit 1
+        fi
         echo -e "${GREEN}Starting server...${NC}"
-        STARTED_SERVER=1
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server
         ;;
     client)
         echo -e "${BLUE}Starting client...${NC}"
-        cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
+        if [[ "${CITYSIM_MAP_ID:-}" == "world" ]]; then
+            env -u CITYSIM_MAP_ID cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
+        else
+            cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
+        fi
         ;;
-    battle5v5|archerworld|cavalryworld)
+    battle5v5|archerworld|cavalryworld|mixedbattle)
         cd "$(dirname "${BASH_SOURCE[0]}")"
         # This fixture needs a fresh server. Do not terminate an unrelated
         # running game or connect its client to the wrong world.
@@ -401,9 +410,15 @@ case $MODE in
         export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
         export FISTFORCE_AUTOCONNECT=battlelab FISTWORLD_AUTOSPAWN_HERO=1
         export FISTWORLD_AUTOSPAWN_AT=-32,-72 FISTFORCE_COMBAT_MODE=1
-        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--20,-36}"
+        BATTLE_DEFAULT_FOCUS=-20,-36
         BATTLE_DEFAULT_ZOOM=125
         if [[ "$MODE" == "cavalryworld" ]]; then BATTLE_DEFAULT_ZOOM=85; fi
+        if [[ "$MODE" == "mixedbattle" ]]; then
+            BATTLE_DEFAULT_FOCUS=-20,-48
+            BATTLE_DEFAULT_ZOOM=130
+            export FISTWORLD_AUTOSPAWN_AT=-20,-108
+        fi
+        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:-$BATTLE_DEFAULT_FOCUS}"
         export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-$BATTLE_DEFAULT_ZOOM}"
         export FISTFORCE_START_YAW="${FISTFORCE_START_YAW:-0}"
         export BEVY_ASSET_ROOT="$PWD/client/assets"
@@ -411,7 +426,11 @@ case $MODE in
         BATTLE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$PWD/logs/$MODE-$(date +%Y%m%d-%H%M%S)}"
         mkdir -p "$BATTLE_LOG_DIR"
         BATTLE_SCENARIO="battle-5v5"
-        if [[ "$MODE" == "cavalryworld" ]]; then
+        if [[ "$MODE" == "mixedbattle" ]]; then
+            BATTLE_SCENARIO="battle-mixed-4v4"
+            echo -e "${YELLOW}Four battalions per side, 32 soldiers each: I archers, II/III infantry, IV cavalry versus four enemy infantry battalions.${NC}"
+            echo -e "${YELLOW}Right-click an enemy to attack; drag RMB to set formation width/facing. Enemies counterattack after your archers open fire.${NC}"
+        elif [[ "$MODE" == "cavalryworld" ]]; then
             BATTLE_SCENARIO="battle-cavalry"
             echo -e "${YELLOW}Two 8-rider cavalry wings and 8 infantry versus 32 enemy infantry.${NC}"
             echo -e "${YELLOW}Select I or III for cavalry. Right-click to move or attack; drag RMB to set line width and facing.${NC}"
@@ -452,7 +471,44 @@ case $MODE in
         fi
         echo -e "${GREEN}Client closed. Stopping battle server...${NC}"
         ;;
-    both|testworld|testlab|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|realworld|reallab)
+    both)
+        if { command -v lsof >/dev/null 2>&1 && lsof -nP -iUDP:5000 -t 2>/dev/null | grep -q .; } ||
+           { command -v ss >/dev/null 2>&1 && ss -H -uln 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:5000([[:space:]]|$)'; }; then
+            echo "UDP 5000 is already in use. Stop the existing server, or use ./run.sh client to join it." >&2
+            exit 1
+        fi
+        export BEVY_ASSET_ROOT="$PWD/client/assets"
+        export RUST_LOG="${RUST_LOG:-info}"
+        GAME_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$PWD/logs/game-$(date +%Y%m%d-%H%M%S)}"
+        mkdir -p "$GAME_LOG_DIR"
+        echo -e "${GREEN}Preparing the game. Logs: $GAME_LOG_DIR${NC}"
+        cargo build "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server -p client
+        "./target/$TARGET_DIR/server" >"$GAME_LOG_DIR/server.log" 2>&1 &
+        SERVER_PID=$!
+        if ! wait_for_local_server; then
+            tail -n 40 "$GAME_LOG_DIR/server.log" >&2
+            exit 1
+        fi
+        # Print the reproducible seed and opening summary without streaming
+        # every villager's ordinary business log into the terminal.
+        grep -E 'Creating new world:|World opening ready:' "$GAME_LOG_DIR/server.log" || true
+        if [[ "${CITYSIM_MAP_ID:-}" == "world" ]]; then
+            env -u CITYSIM_MAP_ID "./target/$TARGET_DIR/client" >"$GAME_LOG_DIR/client.log" 2>&1 &
+        else
+            "./target/$TARGET_DIR/client" >"$GAME_LOG_DIR/client.log" 2>&1 &
+        fi
+        CLIENT1_PID=$!
+        if wait "$CLIENT1_PID"; then
+            CLIENT1_PID=""
+        else
+            client_status=$?
+            CLIENT1_PID=""
+            tail -n 40 "$GAME_LOG_DIR/client.log" >&2
+            exit "$client_status"
+        fi
+        echo -e "${GREEN}Client closed. Stopping this session's server.${NC}"
+        ;;
+    testworld|testlab|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|realworld|reallab)
         cleanup_server
         if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "uxstressworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" || "$MODE" == "battleworld" ]]; then
             echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, map ${CITYSIM_MAP_ID}, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 25x / 100x)${NC}"
@@ -540,10 +596,10 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|cavalryworld|realworld|multi|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|cavalryworld|mixedbattle|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
-        echo "  both    - Start server then client (default)"
+        echo "  both    - Play a new seeded world with roughly ten inhabited settlements (default)"
         echo "  testworld - Watch one deterministic logged Village Lab settlement (starts at 1x)"
         echo "  uxworld - Open a mature logged 500-resident City for permit/company UX testing (1x)"
         echo "  uxstressworld - Grow that City from 500 toward 1,000 with a day-2 shock and stuck-actor evidence (10x)"
@@ -558,6 +614,7 @@ case $MODE in
         echo "  archerworld - Mixed infantry and archers with an enemy countercharge"
         echo "  battle5v5 - Build and open a manual battle with five 50-person battalions per side"
         echo "  cavalryworld - Mounted cavalry wings and infantry support against enemy infantry"
+        echo "  mixedbattle - One archer, two infantry and one cavalry battalion versus four infantry battalions"
         echo "  realworld - Watch a logged 32-villager stress village on big_world"
         echo "  multi   - Start server + 2 clients for multiplayer testing"
         echo "  windows - Build & run Windows client with GPU (for WSL2)"
@@ -565,6 +622,7 @@ case $MODE in
         echo "Profiles: default=playtest (fast rebuilds, release-grade speed)"
         echo "          --dev     fastest rebuilds, slightly slower runtime"
         echo "          --release true shipping build; slow to rebuild"
+        echo "Repeat a world: FISTWORLD_WORLD_SEED=12345 ./run.sh"
         exit 1
         ;;
 esac

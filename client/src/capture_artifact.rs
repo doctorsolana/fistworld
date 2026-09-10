@@ -66,6 +66,12 @@ pub enum CaptureAssertion {
     HorsesAtLeast { count: usize },
     HorseRigsAtLeast { count: usize },
     HorseRigsAtMost { count: usize },
+    PropRootsAtLeast { count: usize },
+    PropRootsAtMost { count: usize },
+    VisibleTreeRootsAtLeast { count: usize },
+    VisibleTreeRootsAtMost { count: usize },
+    GrassBatchesAtLeast { count: usize },
+    GrassBatchesAtMost { count: usize },
     SettlementsAtLeast { count: usize },
     SettlementBuildingsAtLeast { count: usize },
     FortificationSectionsAtLeast { count: usize },
@@ -338,6 +344,13 @@ pub struct CaptureWorldSnapshot {
     pub villagers: usize,
     pub horses: usize,
     pub horse_rigs: usize,
+    pub prop_roots: usize,
+    pub tree_roots: usize,
+    /// Tree roots enabled by local and inherited visibility. This does not
+    /// assert that a mesh passed camera frustum/occlusion culling; inspect PNGs.
+    pub visible_tree_roots: usize,
+    /// Instanced ground-cover render entities, not individual grass tufts.
+    pub grass_batches: usize,
     pub settlements: usize,
     pub settlement_buildings: usize,
     pub fortification_sections: usize,

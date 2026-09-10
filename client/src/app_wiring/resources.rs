@@ -23,7 +23,9 @@ pub fn setup_resources(app: &mut App) {
     app.init_resource::<audio::RemoteAudioEmitterIndex>();
 
     // Graphics settings (toggleable from pause menu)
-    app.insert_resource(game_systems::GraphicsSettings::load_or_default());
+    let settings_store = game_systems::GraphicsSettingsStore::default();
+    app.insert_resource(settings_store.load());
+    app.insert_resource(settings_store);
 
     // Input settings (controls, sensitivity - adjustable from pause menu)
     app.init_resource::<game_systems::InputSettings>();

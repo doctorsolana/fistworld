@@ -635,6 +635,10 @@ pub enum NameSubmissionResult {
         /// New accounts receive `None` because their opening voyage owns the
         /// initial camera presentation.
         commander_view: Option<CommanderView>,
+        /// Reliable join-time world authority. The client prepares and checks
+        /// this terrain before entering gameplay or submitting CreateHero.
+        map: crate::components::ActiveMapState,
+        world_recipe: Option<crate::worldgen::GeneratedWorld>,
     },
     /// Name rejected, must try again
     Rejected {
@@ -777,6 +781,13 @@ mod tests {
                 yaw: -1.125,
                 zoom: 742.0,
             }),
+            map: crate::components::ActiveMapState {
+                map_id: crate::map::SESSION_MAP_ID.into(),
+                bounds_min: bevy::prelude::Vec2::splat(-4096.0),
+                bounds_max: bevy::prelude::Vec2::splat(4096.0),
+                content_hash: 18273,
+            },
+            world_recipe: Some(crate::map::new_world_recipe(u64::MAX)),
         };
 
         let bytes = bincode::serialize(&result).unwrap();

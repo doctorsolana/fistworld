@@ -21,6 +21,10 @@ arrival and reusable ship-navigation contract are documented in
 
 - A chunk-streamed generated world with biomes, rivers, coastlines, water, foliage,
   atmospheric day/night lighting and a seamless commander camera.
+- The ordinary launch creates a random seeded world with roughly ten inhabited settlements.
+  Terrain, local resources and certified access govern their sites, sizes and businesses;
+  named residents, homes, companies and finite opening stock become ordinary simulation
+  state. See [NEW-WORLD.md](docs/NEW-WORLD.md).
 - [Wild horse herds](docs/WILDLIFE.md) on meadow grass, with server-owned identity,
   grazing and wandering near observers, and bounded client animation rigs. Stables
   and horse acquisition remain future work.
@@ -146,8 +150,8 @@ constructs it. Those values remain prototype balance, not final design.
 
 ## Major work still ahead
 
-- A populated ordinary-world opening without lab/God-mode setup. Non-dev Hero creation
-  works, but deterministic starting settlements and their initial residents are not seeded.
+- Ordinary player/AI settlement founding, paid introductory work and military recruitment.
+  The initial settlement network is generated; later new Halls still require developer access.
 - Versioned world-state persistence, migrations, backups and hosted durable storage.
 - Births, aging, non-combat/non-starvation mortality, decline and persistent tree depletion/regrowth.
 - Strategic caravan travel, larger transport, multi-wagon route scaling, escorts and
@@ -189,7 +193,7 @@ live-panel rules are in [UI-ARCHITECTURE.md](docs/UI-ARCHITECTURE.md).
 ## Run the game
 
 ```bash
-./run.sh                 # server in the background, then the client
+./run.sh                 # new random inhabited world, then the client
 ./run.sh --dev           # faster compile, slower runtime
 ./run.sh --release       # shipping/performance measurement profile
 ```
@@ -197,9 +201,14 @@ live-panel rules are in [UI-ARCHITECTURE.md](docs/UI-ARCHITECTURE.md).
 The default `playtest` profile keeps release-grade optimisation without thin LTO and with
 incremental compilation. Use it for normal play and iteration.
 
+Normal play disables God commands. Each server restart creates a fresh world; the seed
+is printed in the terminal and in `logs/game-*/server.log`. Reproduce its initial geography
+and settlements with `FISTWORLD_WORLD_SEED=12345 ./run.sh`. Joining another running server
+uses that server's recipe automatically. Explicit lab commands keep their fixed scenarios.
+
 ### Display settings
 
-Open **Pause → Graphics** to choose a conventional display mode and output resolution:
+Open **Pause → Graphics**. The three display modes are explicit buttons at the top:
 
 - **Windowed** uses the selected physical client-area resolution.
 - **Borderless Fullscreen** uses the desktop's current/native resolution. It is the default and
@@ -211,16 +220,11 @@ Open **Pause → Graphics** to choose a conventional display mode and output res
 
 Mode and resolution changes apply immediately and show a 15-second **Keep / Revert** prompt.
 They are not saved until confirmed, and automatically return to the last working setting if
-the countdown expires. **3D Render Scale** is independent: it lowers only the world render
-target while keeping the window and UI sharp. macOS defaults to 60% because a Retina borderless
-window contains substantially more physical pixels; 55% and 60% are both available as explicit
-steps alongside the higher-quality settings.
-
-The same panel also exposes **3D Grass Renderer**. **Chunked** is the production default: it
-preserves the same deterministic 1x grass placement, authored blades, climate colour, wind,
-terrain height, and road/building exclusions, but sends compact GPU instance buffers in coarse
-camera-cullable sectors. **Legacy** remains available as a compatibility/debug fallback.
-Switches apply live and the unused renderer is torn down rather than left doubled in memory.
+the countdown expires. **Output Resolution** is disabled in Borderless because the desktop
+owns its video mode. **3D Resolution** remains adjustable in every mode and shows the actual
+scene pixels alongside the percentage, for example `1512 x 982 (50%)` on a 3024 x 1964 display.
+It lowers only the world render target while keeping the window and UI sharp. Steps range
+from 25% to 100%; macOS defaults to 60%. Settings labels also update after a resize or revert.
 
 ### Deterministic Village Lab
 
@@ -367,6 +371,13 @@ Use `./run.sh cavalryworld` for two eight-rider cavalry battalions and eight
 infantry against 32 enemy infantry. Right-click to move or attack and right-drag
 to set formation width/facing. Click either horse or rider to select their
 battalion. See [cavalry controls and limits](docs/CAVALRY.md).
+
+Use `./run.sh mixedbattle` for four 32-person battalions per side: your **I** archers,
+**II/III** infantry and **IV** cavalry against four enemy infantry battalions
+(128 soldiers per side, with 32 horses for your cavalry). Archers begin behind the
+infantry and cavalry on the right flank. Right-click an enemy to attack; the enemy
+counterattacks ten simulation seconds after your archers first shoot. You retain
+manual control throughout. The scenario is `capture/scenarios/battle-mixed-4v4.ron`.
 
 ### Generated-world stress fixture
 

@@ -18,7 +18,8 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
     use shared::props::PropKind::*;
     match kind {
         BroadleafNarrowA | OakA | BroadleafLargeA | BroadleafSpreadingA | BirchA | BirchB
-        | ChestnutA | BroadleafHighCrownA | BroadleafTallA => Some(TreeMeshLabels {
+        | ChestnutA | BroadleafHighCrownA | BroadleafTallA | FieldMapleA | CopperBeechA
+        | WildCherryA => Some(TreeMeshLabels {
             lod0_label: "Mesh0/Primitive0",
             lod1_label: Some("Mesh1/Primitive0"),
             material_label: "Material0",

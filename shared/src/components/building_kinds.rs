@@ -130,7 +130,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::FishermansHut => Art::FishermansHut,
             SettlementBuildingKind::House => Art::LogCabin,
             SettlementBuildingKind::Market => Art::Market,
-            SettlementBuildingKind::Tavern => Art::PlaceholderTavern,
+            SettlementBuildingKind::Tavern => Art::Tavern,
             SettlementBuildingKind::Church => Art::Church,
             SettlementBuildingKind::Windmill => Art::Windmill,
             SettlementBuildingKind::Bakery => Art::Bakery,
@@ -156,6 +156,12 @@ impl SettlementBuildingKind {
     /// Conservative siting envelope. Houses reserve the union of both L2
     /// lines because the deterministic line pick happens at the approved plot.
     pub fn placement_definition(self) -> crate::building::BuildingDef {
+        if self == SettlementBuildingKind::Tavern {
+            let mut definition = self.art().definition();
+            definition.footprint = Vec2::new(9.4, 13.4);
+            definition.footprint_center = Vec2::new(0.0, -2.3);
+            return definition;
+        }
         if self != SettlementBuildingKind::House {
             return self.art().definition();
         }
@@ -381,7 +387,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::FishermansHut => Vec2::new(0.0, -4.45),
             SettlementBuildingKind::House => Vec2::new(0.0, -4.30),
             SettlementBuildingKind::Market => Vec2::new(0.0, -6.5),
-            SettlementBuildingKind::Tavern => Vec2::new(0.0, -4.0),
+            SettlementBuildingKind::Tavern => Vec2::new(0.0, -4.85),
             SettlementBuildingKind::Church => Vec2::new(0.0, -6.5),
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => {
                 Vec2::new(0.0, -4.0)
@@ -400,7 +406,12 @@ impl SettlementBuildingKind {
     /// unadjusted goal inside the navigation blocker. Houses use the reserved
     /// envelope so their entrance remains reachable after an appearance upgrade.
     pub fn entrance_position(self, plot: Vec3, rotation_y: f32) -> Vec3 {
-        let definition = self.placement_definition();
+        let definition = if self == Self::Tavern {
+            // The patio is reserved land, not a solid wall in front of the door.
+            self.art().definition()
+        } else {
+            self.placement_definition()
+        };
         let mut anchor = self.door_offset();
         // Current building doors face local -Z. Keep a small gap beyond the
         // exact boundary so rotation and interpolation cannot turn it into a

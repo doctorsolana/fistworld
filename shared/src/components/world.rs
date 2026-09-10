@@ -70,6 +70,18 @@ pub struct ActiveMapState {
     pub content_hash: u64,
 }
 
+impl ActiveMapState {
+    pub fn from_terrain(terrain: &crate::terrain::WorldTerrain) -> Self {
+        let bounds = terrain.generator.active_map_bounds();
+        Self {
+            map_id: terrain.generator.active_map_id().into(),
+            bounds_min: bounds.min_vec2(),
+            bounds_max: bounds.max_vec2(),
+            content_hash: terrain.generator.active_map_content_hash(),
+        }
+    }
+}
+
 impl WorldTime {
     /// The display clock is deliberately literal: at 1x, one simulation second
     /// advances it by one world minute and a complete day takes 24 real minutes.

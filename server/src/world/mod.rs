@@ -16,6 +16,7 @@ pub mod identity;
 pub mod immigration;
 pub mod map_state;
 pub mod navgrid;
+pub(crate) mod new_world;
 pub mod pathfinding;
 pub mod regions;
 pub mod settlement_development;

@@ -48,6 +48,8 @@ pub(crate) struct LiveVoyageCaptureState {
     awaiting: Option<(u64, u32)>,
     sail_origin: Option<Vec3>,
     click_phase: u8,
+    land_goal: Option<Vec3>,
+    include_landing: bool,
 }
 
 /// Drive a real press/release through the ordinary right-click order system.
@@ -57,7 +59,7 @@ pub(crate) fn drive_live_voyage_click_input(
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut state: ResMut<LiveVoyageCaptureState>,
 ) {
-    if !state.enabled || state.stage != 3 {
+    if !state.enabled || !matches!(state.stage, 3 | 4) {
         return;
     }
     match state.click_phase {
@@ -112,12 +114,11 @@ pub(crate) fn drive_live_voyage_capture(
         (
             &shared::components::Hero,
             &shared::components::PlayerPosition,
+            Option<&shared::components::AboardBoat>,
         ),
-        (
-            With<shared::components::Hero>,
-            With<shared::components::AboardBoat>,
-        ),
+        With<shared::components::Hero>,
     >,
+    settlements: Query<&shared::components::PlayerPosition, With<shared::components::Settlement>>,
     mut state: ResMut<LiveVoyageCaptureState>,
     mut completions: ResMut<CaptureCompletions>,
     mut app_exit: MessageWriter<AppExit>,
@@ -136,6 +137,8 @@ pub(crate) fn drive_live_voyage_capture(
             return;
         }
         state.enabled = true;
+        state.include_landing =
+            std::env::var("FISTWORLD_VOYAGE_CAPTURE_LANDING").as_deref() == Ok("1");
         state.out_dir = out_dir;
         info!("live voyage capture: armed for {}", state.out_dir.display());
     }
@@ -169,7 +172,7 @@ pub(crate) fn drive_live_voyage_capture(
         );
         state.awaiting = None;
         state.stage += 1;
-        if state.stage >= 4 {
+        if state.stage >= if state.include_landing { 5 } else { 4 } {
             state.enabled = false;
             commands.remove_resource::<crate::camera_rts::CursorTerrainOverride>();
             if std::env::var("FISTWORLD_VOYAGE_CAPTURE_EXIT")
@@ -192,7 +195,7 @@ pub(crate) fn drive_live_voyage_capture(
                 .then_some((entity, position.0, rotation.0))
         });
     let boat_position = local_boat.map(|(_, position, _)| position);
-    let hero_position = heroes.iter().find_map(|(hero, position)| {
+    let hero_position = heroes.iter().find_map(|(hero, position, _)| {
         (local_id == Some(shared::player::peer_id_to_u64(hero.owner))).then_some(position.0)
     });
     let running = opening.running_elapsed_secs();
@@ -247,6 +250,33 @@ pub(crate) fn drive_live_voyage_capture(
                 .sail_origin
                 .is_some_and(|origin| origin.distance(position) >= 7.0)
         }
+        4 => {
+            if state.land_goal.is_none() {
+                let Some((_, boat, _)) = local_boat else {
+                    return;
+                };
+                let Some(hall) = settlements.iter().min_by(|a, b| {
+                    a.0.xz()
+                        .distance_squared(boat.xz())
+                        .total_cmp(&b.0.xz().distance_squared(boat.xz()))
+                }) else {
+                    return;
+                };
+                let mut goal =
+                    shared::components::SettlementBuildingKind::Hall.entrance_position(hall.0, 0.0);
+                goal.y = terrain.get_height(goal.x, goal.z);
+                state.land_goal = Some(goal);
+                state.click_phase = 1;
+                commands.insert_resource(crate::camera_rts::CursorTerrainOverride(goal.xz()));
+                info!("live voyage capture: armed ordinary inland right-click to Hall at {goal:?}");
+                return;
+            }
+            heroes.iter().any(|(hero, position, aboard)| {
+                local_id == Some(shared::player::peer_id_to_u64(hero.owner))
+                    && aboard.is_none()
+                    && position.0.xz().distance(state.land_goal.unwrap().xz()) < 12.0
+            })
+        }
         _ => false,
     };
     if !ready {
@@ -261,6 +291,7 @@ pub(crate) fn drive_live_voyage_capture(
         1 => "02_transition.png",
         2 => "03_rts.png",
         3 => "04_sailing.png",
+        4 => "05_arrival.png",
         _ => return,
     };
     let path = state.out_dir.join(filename);
@@ -307,6 +338,8 @@ pub(crate) fn drive_live_voyage_capture(
 /// - `FISTWORLD_LAB_CAPTURE_EXIT=1` closes the client after the file is written.
 /// - `FISTWORLD_LAB_CAPTURE_FORTIFICATIONS=N` waits for N completed defense sections.
 /// - `FISTWORLD_LAB_CAPTURE_ACTIVITY=gate` frames a completed gateway near a person.
+/// - `FISTWORLD_LAB_CAPTURE_ACTIVITY=settlement` frames the nearest real settlement
+///   after the opening voyage cinematic; it also works in an ordinary seeded world.
 pub(crate) fn drive_live_lab_capture(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
@@ -328,6 +361,11 @@ pub(crate) fn drive_live_lab_capture(
         &shared::components::FortificationSegment,
         Option<&crate::settlement::fortifications::FortificationVisual>,
     )>,
+    settlements: Query<(
+        &shared::components::SettlementId,
+        &shared::components::PlayerPosition,
+    )>,
+    opening: Res<crate::boat::OpeningCinematic>,
 ) {
     if matches!(*state, LiveLabCaptureState::Uninitialized) {
         let Some(day) = std::env::var("FISTWORLD_LAB_CAPTURE_DAY")
@@ -350,6 +388,11 @@ pub(crate) fn drive_live_lab_capture(
 
     let follow_rest = std::env::var("FISTWORLD_LAB_CAPTURE_ACTIVITY").as_deref() == Ok("rest");
     let follow_gate = std::env::var("FISTWORLD_LAB_CAPTURE_ACTIVITY").as_deref() == Ok("gate");
+    let follow_settlement =
+        std::env::var("FISTWORLD_LAB_CAPTURE_ACTIVITY").as_deref() == Ok("settlement");
+    if follow_settlement && opening.is_active() {
+        return;
+    }
     let gate = follow_gate
         .then(|| {
             defenses
@@ -414,6 +457,19 @@ pub(crate) fn drive_live_lab_capture(
             let Ok(mut camera) = cameras.single_mut() else {
                 return;
             };
+            let focus = if follow_settlement {
+                let Some((_, position)) = settlements.iter().min_by(|(a_id, a), (b_id, b)| {
+                    a.0.xz()
+                        .distance_squared(camera.focus.xz())
+                        .total_cmp(&b.0.xz().distance_squared(camera.focus.xz()))
+                        .then(a_id.0.cmp(&b_id.0))
+                }) else {
+                    return;
+                };
+                Some(position.0)
+            } else {
+                gate
+            };
             if follow_rest {
                 let Some((person, point)) = resting else {
                     return;
@@ -424,7 +480,7 @@ pub(crate) fn drive_live_lab_capture(
                     info!("live character rest capture: PersonId({person}) at {point:?}");
                 }
             }
-            if let Some(point) = gate {
+            if let Some(point) = focus {
                 camera.focus = point;
                 camera.focus_target = point;
             }
@@ -444,7 +500,7 @@ pub(crate) fn drive_live_lab_capture(
                 path: path.clone(),
                 zoom: *zoom,
                 frames_left,
-                gate_focus: gate,
+                gate_focus: focus,
             };
             *readiness = ReadinessProgress::default();
         }
@@ -483,6 +539,17 @@ pub(crate) fn drive_live_lab_capture(
                 .loaded_chunks
                 .as_ref()
                 .map_or(0, |loaded| loaded.chunks.len());
+            // A replicated Hall alone is not evidence of a living town.
+            // Wait for its streamed, dressed residents before photographing it.
+            if follow_settlement && resting_people.is_empty() {
+                readiness.frames += 1;
+                if readiness.frames > 1200 {
+                    error!("live settlement capture: no dressed residents arrived");
+                    *state = LiveLabCaptureState::Done;
+                    app_exit.write(AppExit::error());
+                }
+                return;
+            }
             match advance_readiness(
                 &mut readiness,
                 &CaptureReadiness {
@@ -593,7 +660,7 @@ pub(crate) fn drive_live_lab_capture(
     }
 }
 
-pub(super) fn live_capture_request(
+pub(crate) fn live_capture_request(
     path: PathBuf,
     scenario: &str,
     shot: &str,

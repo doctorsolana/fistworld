@@ -7,6 +7,12 @@
 
 use super::*;
 
+mod outdoor;
+#[cfg(test)]
+mod outdoor_tests;
+mod review;
+pub(crate) use review::stage_tavern_review;
+
 const TAVERN_OPEN_MINUTE: u16 = 12 * 60;
 const TAVERN_CLOSE_MINUTE: u16 = 21 * 60 + 30;
 const TAVERN_DINING_SECONDS: f32 = 45.0;
@@ -41,6 +47,7 @@ pub struct TavernVisitRoutine {
     dining_seconds: f32,
     failed_routes: u8,
     served: bool,
+    outdoor_seat: Option<u8>,
     /// Where the walking leg last made measurable progress, and when
     /// (absolute world seconds). Waiting in the line refreshes it too - only
     /// a walker who is genuinely pinned in place accumulates stall time.
@@ -54,7 +61,13 @@ impl TavernVisitRoutine {
         match self.phase {
             TavernVisitPhase::Going => CharacterObjective::GoingToTavern,
             TavernVisitPhase::Entering => CharacterObjective::WaitingForTavernService,
-            TavernVisitPhase::Dining => CharacterObjective::EatingAtTavern,
+            TavernVisitPhase::Dining | TavernVisitPhase::OutdoorDining => {
+                CharacterObjective::EatingAtTavern
+            }
+            TavernVisitPhase::GoingOutside | TavernVisitPhase::ToSeat => {
+                CharacterObjective::GoingToTavern
+            }
+            TavernVisitPhase::LeavingSeat => CharacterObjective::LeavingTavern,
             TavernVisitPhase::Leaving => CharacterObjective::LeavingTavern,
         }
     }
@@ -65,6 +78,10 @@ enum TavernVisitPhase {
     Going,
     Entering,
     Dining,
+    GoingOutside,
+    ToSeat,
+    OutdoorDining,
+    LeavingSeat,
     Leaving,
 }
 
@@ -331,7 +348,15 @@ pub fn refresh_character_day_plans(
             } else {
                 PlannedLeisure::LocalFreeTime
             },
-            leisure_status: PlannedLeisureStatus::Planned,
+            // A new job changes today's schedule, not a meal already finished.
+            // Keep the completion so recruitment cannot schedule a second visit.
+            leisure_status: if existing.is_some_and(|plan| {
+                plan.day == clock.day && plan.leisure_status == PlannedLeisureStatus::Completed
+            }) {
+                PlannedLeisureStatus::Completed
+            } else {
+                PlannedLeisureStatus::Planned
+            },
             planned_work_status: *work_status,
         });
     }
@@ -466,6 +491,7 @@ pub fn assign_tavern_routines(
                 dining_seconds: 0.0,
                 failed_routes: 0,
                 served: false,
+                outdoor_seat: None,
                 progress_position: position.0,
                 progress_world_seconds: f64::from(clock.day) * f64::from(clock.cycle_duration())
                     + f64::from(clock.seconds_in_cycle),
@@ -544,6 +570,7 @@ pub fn run_tavern_routines(
         Without<TavernWorkerRoutine>,
     >,
     employment: Query<&shared::components::EmployedAt, With<CharacterKind>>,
+    strategic_people: Query<Entity, With<strategic::StrategicPerson>>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
@@ -560,6 +587,12 @@ pub fn run_tavern_routines(
     // Visitors physically AT the line always rank ahead of distant walkers
     // (FIFO within each group): the door must never sit idle - with a queue
     // beside it - waiting for an earlier admittee still crossing town.
+    let mut occupied = HashMap::<Entity, u8>::new();
+    for (_, _, _, _, _, _, _, routine, ..) in visitors.iter_mut() {
+        if let Some(index) = routine.outdoor_seat {
+            *occupied.entry(routine.tavern).or_default() |= 1 << index;
+        }
+    }
     let mut exterior_by_tavern = HashMap::<Entity, Vec<(Entity, u128, Vec3)>>::new();
     for (visitor, position, _, _, _, _, _, routine, ..) in visitors.iter_mut() {
         if routine.phase == TavernVisitPhase::Going {
@@ -590,6 +623,10 @@ pub fn run_tavern_routines(
     for (worker, position, mut activity, mut routine, move_target, transit, failed) in
         workers.iter_mut()
     {
+        if strategic_people.contains(worker) {
+            commands.entity(worker).remove::<TavernWorkerRoutine>();
+            continue;
+        }
         let Ok((building, at, rotation, ..)) = taverns.get_mut(routine.tavern) else {
             commands.entity(worker).remove::<TavernWorkerRoutine>();
             continue;
@@ -619,7 +656,9 @@ pub fn run_tavern_routines(
                 routine.phase = TavernWorkerPhase::Serving;
             }
             TavernWorkerPhase::Entering => {}
-            TavernWorkerPhase::Serving => *activity = CharacterActivity::Indoors,
+            TavernWorkerPhase::Serving => {
+                activity.set_if_neq(CharacterActivity::Indoors);
+            }
             TavernWorkerPhase::Leaving if transit.is_none() => {
                 activity.set_if_neq(CharacterActivity::Idle);
                 commands
@@ -645,6 +684,20 @@ pub fn run_tavern_routines(
         failed,
     ) in visitors.iter_mut()
     {
+        if strategic_people.contains(visitor) {
+            outdoor::restore_ground(&mut commands, visitor, position.0, &routine);
+            activity.set_if_neq(CharacterActivity::Idle);
+            commands
+                .entity(visitor)
+                .remove::<strategic::StrategicTravel>();
+            let status = if routine.served {
+                PlannedLeisureStatus::Completed
+            } else {
+                PlannedLeisureStatus::TavernUnavailable
+            };
+            finish_visit(&mut commands, visitor, &mut plan, status);
+            continue;
+        }
         let Ok((
             building,
             at,
@@ -658,6 +711,8 @@ pub fn run_tavern_routines(
             mut service,
         )) = taverns.get_mut(routine.tavern)
         else {
+            outdoor::restore_ground(&mut commands, visitor, position.0, &routine);
+            activity.set_if_neq(CharacterActivity::Idle);
             finish_visit(
                 &mut commands,
                 visitor,
@@ -669,6 +724,17 @@ pub fn run_tavern_routines(
         service.roll_to_day(clock.day);
         let entrance = building.kind.entrance_position(at.0, rotation.0);
         let inside = building.kind.interior_door_position(at.0, rotation.0);
+        if failed.is_some() && routine.outdoor_seat.is_some() {
+            outdoor::restore_ground(&mut commands, visitor, position.0, &routine);
+            activity.set_if_neq(CharacterActivity::Idle);
+            finish_visit(
+                &mut commands,
+                visitor,
+                &mut plan,
+                PlannedLeisureStatus::Completed,
+            );
+            continue;
+        }
         if failed.is_some() {
             routine.failed_routes = routine.failed_routes.saturating_add(1);
             commands.entity(visitor).remove::<NavigationRouteFailed>();
@@ -760,7 +826,7 @@ pub fn run_tavern_routines(
                 } else if ingredient.is_none()
                     || service.innkeepers_on_duty == 0
                     || service.current_day.served_meals >= capacity
-                    || service.current_guests >= service.guest_capacity
+                    || service.current_guests > service.guest_capacity
                 {
                     service.current_day.unavailable_visits =
                         service.current_day.unavailable_visits.saturating_add(1);
@@ -793,8 +859,52 @@ pub fn run_tavern_routines(
                 }
                 routine.phase = TavernVisitPhase::Dining;
                 activity.set_if_neq(CharacterActivity::Indoors);
+                if routine.served {
+                    if let Some(index) =
+                        outdoor::reserve(occupied.entry(routine.tavern).or_default())
+                    {
+                        routine.outdoor_seat = Some(index);
+                        let seat = shared::building::tavern::outdoor_seat(index, at.0, rotation.0)
+                            .unwrap();
+                        begin_workplace_exit(
+                            &mut commands,
+                            visitor,
+                            at.0,
+                            entrance,
+                            inside,
+                            seat.approach,
+                        );
+                        routine.phase = TavernVisitPhase::GoingOutside;
+                    }
+                }
             }
             TavernVisitPhase::Entering => {}
+            TavernVisitPhase::GoingOutside
+            | TavernVisitPhase::ToSeat
+            | TavernVisitPhase::OutdoorDining
+            | TavernVisitPhase::LeavingSeat => {
+                if outdoor::advance(
+                    &mut commands,
+                    visitor,
+                    position.0,
+                    &mut activity,
+                    &mut routine,
+                    move_target,
+                    transit,
+                    at.0,
+                    rotation.0,
+                    dt,
+                    now,
+                ) {
+                    activity.set_if_neq(CharacterActivity::Idle);
+                    finish_visit(
+                        &mut commands,
+                        visitor,
+                        &mut plan,
+                        PlannedLeisureStatus::Completed,
+                    );
+                }
+            }
             TavernVisitPhase::Dining => {
                 activity.set_if_neq(CharacterActivity::Indoors);
                 routine.dining_seconds -= dt;
@@ -842,7 +952,12 @@ pub fn run_tavern_routines(
     for (_, _, _, _, _, _, _, routine, ..) in visitors.iter_mut() {
         if matches!(
             routine.phase,
-            TavernVisitPhase::Entering | TavernVisitPhase::Dining
+            TavernVisitPhase::Entering
+                | TavernVisitPhase::Dining
+                | TavernVisitPhase::GoingOutside
+                | TavernVisitPhase::ToSeat
+                | TavernVisitPhase::OutdoorDining
+                | TavernVisitPhase::LeavingSeat
         ) {
             if let Ok((.., mut service)) = taverns.get_mut(routine.tavern) {
                 service.current_guests = service
@@ -1271,6 +1386,7 @@ mod tests {
                         dining_seconds: 0.0,
                         failed_routes: 0,
                         served: false,
+                        outdoor_seat: None,
                         progress_position: position,
                         progress_world_seconds: 0.0,
                     },

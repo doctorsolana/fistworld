@@ -1,5 +1,10 @@
 # Bakery, Windmill and Market — asset handover
 
+> **Bakery rebuilt 2026-09-10.** Use [BAKERY.md](BAKERY.md) for the current model,
+> dimensions, self-exporting builder, material names and inspection workflow.
+> Bakery geometry and rebuild instructions below describe the August model.
+> Its reserved plot, road/door anchor, bread stock names and door timing remain stable.
+
 > **Windmill rebuilt 2026-09-06.** Use [WINDMILL.md](WINDMILL.md) for the current
 > geometry, direct +Y export, animation, lighting and inspection workflow. The
 > windmill-specific geometry, dimensions and rebuild instructions below describe

@@ -18,6 +18,7 @@ pub(crate) fn run() {
     app.add_plugins(bevy::log::LogPlugin::default());
     app.add_plugins(bevy::state::app::StatesPlugin);
 
+    crate::world::bootstrap::prepare_session_terrain(&mut app);
     resources::setup_resources(&mut app);
 
     app.add_plugins(ServerPlugins {

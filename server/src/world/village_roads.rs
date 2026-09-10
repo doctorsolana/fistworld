@@ -1092,6 +1092,11 @@ pub(crate) fn overland_trade_corridor_exists(
         fine_endpoint_radius: 0.0,
     };
     let mut scratch = SurveyScratch::default();
+    // Founding and trade surveys often cross open, dry meadow. Certify the
+    // direct segment first instead of exploring thousands of equivalent cells.
+    if survey.line_clear(start, goal, &mut scratch) {
+        return true;
+    }
     !survey_a_star(&survey, &mut scratch).is_empty()
 }
 
@@ -2268,7 +2273,7 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
             SettlementBuildingKind::Hall
         }
         BuildingType::Market | BuildingType::MarketPaved => SettlementBuildingKind::Market,
-        BuildingType::PlaceholderTavern => SettlementBuildingKind::Tavern,
+        BuildingType::Tavern => SettlementBuildingKind::Tavern,
         BuildingType::Church => SettlementBuildingKind::Church,
         BuildingType::Windmill => SettlementBuildingKind::Windmill,
         BuildingType::Bakery => SettlementBuildingKind::Bakery,

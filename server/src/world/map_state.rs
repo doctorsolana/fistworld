@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
 
 use shared::components::{ActiveMapState, CloudSeed};
-use shared::terrain::{WorldTerrain, WORLD_SEED};
+use shared::terrain::WorldTerrain;
 
 /// One-shot resource to ensure we only spawn `CloudSeed` once.
 #[derive(Resource)]
@@ -15,13 +15,24 @@ pub struct CloudSeedSpawned;
 pub struct ActiveMapStateSpawned;
 
 /// Spawn the server-authoritative cloud seed replicated to all clients.
-pub fn spawn_cloud_seed_once(mut commands: Commands, spawned: Option<Res<CloudSeedSpawned>>) {
+pub fn spawn_cloud_seed_once(
+    mut commands: Commands,
+    terrain: Res<WorldTerrain>,
+    spawned: Option<Res<CloudSeedSpawned>>,
+) {
     if spawned.is_some() {
         return;
     }
     commands.insert_resource(CloudSeedSpawned);
 
-    let seed = (WORLD_SEED as u64) ^ 0xC10D_5EED_F00D_BA5Eu64;
+    let seed = terrain
+        .generator
+        .loaded_map()
+        .definition
+        .generated
+        .as_ref()
+        .map_or(shared::terrain::WORLD_SEED as u64, |recipe| recipe.seed)
+        ^ 0xC10D_5EED_F00D_BA5Eu64;
     commands.spawn((
         CloudSeed { seed },
         Replicate::to_clients(NetworkTarget::All),
@@ -42,12 +53,7 @@ pub fn spawn_active_map_state_once(
     commands.insert_resource(ActiveMapStateSpawned);
 
     let map_bounds = terrain.generator.active_map_bounds();
-    let map_state = ActiveMapState {
-        map_id: terrain.generator.active_map_id().to_string(),
-        bounds_min: map_bounds.min_vec2(),
-        bounds_max: map_bounds.max_vec2(),
-        content_hash: terrain.generator.active_map_content_hash(),
-    };
+    let map_state = ActiveMapState::from_terrain(&terrain);
 
     commands.spawn((map_state, Replicate::to_clients(NetworkTarget::All)));
 

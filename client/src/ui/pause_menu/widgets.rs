@@ -18,7 +18,7 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 margin: UiRect::all(Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
+                border: UiRect::all(Val::Px(2.0)),
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
@@ -75,7 +75,7 @@ pub(super) fn spawn_graphics_panel(
 
             // Help text
             panel.spawn((
-                Text::new("Toggle/adjust to fix flickering or brightness"),
+                Text::new("Choose a display mode and balance detail with performance."),
                 crate::ui::typography::text(12.0),
                 TextColor(INK_INVERSE_MUTED),
                 Node {
@@ -84,72 +84,11 @@ pub(super) fn spawn_graphics_panel(
                 },
             ));
 
-            // Toggle buttons
-            spawn_toggle(
-                panel,
-                "Bloom",
-                GraphicsToggle::Bloom,
-                settings.bloom_enabled,
-            );
-            spawn_toggle(
-                panel,
-                "Shadows",
-                GraphicsToggle::Shadows,
-                settings.shadows_enabled,
-            );
-            spawn_toggle(
-                panel,
-                "Atmosphere",
-                GraphicsToggle::Atmosphere,
-                settings.atmosphere_enabled,
-            );
-            spawn_toggle(
-                panel,
-                "Clouds",
-                GraphicsToggle::Clouds,
-                settings.clouds_enabled,
-            );
-            spawn_toggle(
-                panel,
-                "VSync",
-                GraphicsToggle::Vsync,
-                settings.vsync_enabled,
-            );
-            // Separator
-            panel.spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(1.0),
-                    margin: UiRect::vertical(Val::Px(16.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
-            ));
-
-            // Slider controls
+            // Display controls stay at the top, including confirmation.
+            display::spawn_display_modes(panel, settings.display_mode());
             spawn_slider(
                 panel,
-                "Display Mode",
-                SliderControl::DisplayMode,
-                settings.display_mode().label(),
-            );
-            panel.spawn((
-                Text::new(if cfg!(target_os = "macos") {
-                    "Borderless keeps Command-Tab and Spaces available. Exclusive changes the monitor resolution."
-                } else {
-                    "Borderless keeps the desktop video mode. Exclusive changes the monitor resolution."
-                }),
-                crate::ui::typography::text(11.0),
-                TextColor(INK_INVERSE_MUTED),
-                Node {
-                    max_width: Val::Px(430.0),
-                    margin: UiRect::bottom(Val::Px(12.0)),
-                    ..default()
-                },
-            ));
-            spawn_slider(
-                panel,
-                "Resolution",
+                "Output Resolution",
                 SliderControl::Resolution,
                 &settings.displayed_resolution_label(monitor),
             );
@@ -164,7 +103,7 @@ pub(super) fn spawn_graphics_panel(
                         row_gap: Val::Px(8.0),
                         padding: UiRect::all(Val::Px(10.0)),
                         margin: UiRect::bottom(Val::Px(12.0)),
-                        border: UiRect::all(Val::Px(1.0)),
+                        border: UiRect::all(Val::Px(2.0)),
                         border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
                         ..default()
                     },
@@ -225,10 +164,63 @@ pub(super) fn spawn_graphics_panel(
                 });
             spawn_slider(
                 panel,
-                "3D Render Scale",
+                "3D Resolution",
                 SliderControl::RenderScale,
                 &format!("{:.0}%", settings.render_scale * 100.0),
             );
+            panel.spawn((
+                display::DisplayModeHint,
+                Text::new(""),
+                crate::ui::typography::text(13.0),
+                TextColor(INK_INVERSE_MUTED),
+                Node {
+                    max_width: Val::Px(470.0),
+                    margin: UiRect::bottom(Val::Px(12.0)),
+                    ..default()
+                },
+            ));
+            // Toggle buttons
+            spawn_toggle(
+                panel,
+                "Bloom",
+                GraphicsToggle::Bloom,
+                settings.bloom_enabled,
+            );
+            spawn_toggle(
+                panel,
+                "Shadows",
+                GraphicsToggle::Shadows,
+                settings.shadows_enabled,
+            );
+            spawn_toggle(
+                panel,
+                "Atmosphere",
+                GraphicsToggle::Atmosphere,
+                settings.atmosphere_enabled,
+            );
+            spawn_toggle(
+                panel,
+                "Clouds",
+                GraphicsToggle::Clouds,
+                settings.clouds_enabled,
+            );
+            spawn_toggle(
+                panel,
+                "VSync",
+                GraphicsToggle::Vsync,
+                settings.vsync_enabled,
+            );
+            // Separator
+            panel.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(1.0),
+                    margin: UiRect::vertical(Val::Px(16.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
+            ));
+
             spawn_slider(
                 panel,
                 "Shadow Quality",
@@ -243,13 +235,13 @@ pub(super) fn spawn_graphics_panel(
             );
             spawn_slider(
                 panel,
-                "View Distance",
+                "Terrain Detail Range",
                 SliderControl::ViewDistance,
-                &format!("{} chunks", settings.view_distance),
+                &sliders::graphics_label(settings, SliderControl::ViewDistance),
             );
             spawn_slider(
                 panel,
-                "Prop Distance",
+                "Scenery Distance",
                 SliderControl::PropDistance,
                 &format!("{:.0}%", settings.prop_render_multiplier * 100.0),
             );
@@ -488,7 +480,7 @@ fn spawn_step_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker
                 height: Val::Px(28.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
+                border: UiRect::all(Val::Px(2.0)),
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },

@@ -1,0 +1,18 @@
+(
+    version: 1,
+    name: "meadow-trees",
+    map: "big_world",
+    output_dir: "logs/captures/meadow-trees",
+    resolution: (1800, 1100),
+    target: scene,
+    show_window: false,
+    warmup_frames: 300,
+    readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: { "FISTFORCE_CAPTURE_CLOUDS": "clear" },
+    shots: [
+        (name: "meadow-close", focus: (-2920.0, 0.0, -660.0), yaw: -0.45, zoom: 60.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64)]),
+        (name: "meadow-overview", focus: (-2920.0, 0.0, -660.0), yaw: -0.45, zoom: 180.0, time_of_day: 0.5),
+        (name: "meadow-morning", focus: (-2920.0, 0.0, -660.0), yaw: 0.75, zoom: 240.0, time_of_day: 0.39),
+        (name: "forest-reference", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 150.0, time_of_day: 0.5),
+    ],
+)

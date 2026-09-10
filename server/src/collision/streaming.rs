@@ -155,7 +155,7 @@ pub fn update_static_collider_streaming(
                 &mut colliders,
                 chunk,
                 state.zones_by_chunk.get(&chunk).map(Vec::as_slice),
-                &roads,
+                roads.iter(),
             );
         }
     }
@@ -192,7 +192,7 @@ pub fn update_static_collider_streaming(
                 &mut colliders,
                 chunk,
                 state.zones_by_chunk.get(&chunk).map(Vec::as_slice),
-                &roads,
+                roads.iter(),
             );
             loaded_this_tick += 1;
         }
@@ -226,13 +226,13 @@ fn unload_chunk(colliders: &mut StaticColliders, chunk: ChunkCoord) {
     bump_chunk_version(colliders, chunk);
 }
 
-fn load_chunk(
+fn load_chunk<'a>(
     terrain: &WorldTerrain,
     library: &DerivedColliderLibrary,
     colliders: &mut StaticColliders,
     chunk: ChunkCoord,
     chunk_zones: Option<&[BuildZoneEntry]>,
-    roads: &Query<&shared::components::VillageRoad>,
+    roads: impl Iterator<Item = &'a shared::components::VillageRoad> + Clone,
 ) {
     let spawns = shared::props::generate_chunk_prop_spawns(&terrain.generator, chunk);
 
@@ -250,7 +250,7 @@ fn load_chunk(
         if kind.is_road_clearable() {
             let point = Vec2::new(spawn.position.x, spawn.position.z);
             if colliders.road_tree_was_cleared(point)
-                || roads.iter().any(|road| {
+                || roads.clone().any(|road| {
                     road.contains_built_point(point, shared::components::ROAD_CLEARED_TREE_PADDING)
                 })
             {
@@ -283,6 +283,30 @@ fn load_chunk(
     colliders.chunk_instances.insert(chunk, ids);
     colliders.version = colliders.version.wrapping_add(1);
     bump_chunk_version(colliders, chunk);
+}
+
+/// One-time founding survey, using the same prop instances and collision
+/// radii as runtime streaming. It is independent of whether a player happens
+/// to observe the candidate site during world creation.
+pub(crate) fn survey_settlement_props(
+    terrain: &WorldTerrain,
+    library: &DerivedColliderLibrary,
+    center: Vec3,
+) -> StaticColliders {
+    let mut colliders = StaticColliders::default();
+    for chunk in ChunkCoord::from_world_pos(center).chunks_in_radius(6) {
+        if chunk.in_world_bounds() {
+            load_chunk(
+                terrain,
+                library,
+                &mut colliders,
+                chunk,
+                None,
+                std::iter::empty(),
+            );
+        }
+    }
+    colliders
 }
 
 #[cfg(test)]

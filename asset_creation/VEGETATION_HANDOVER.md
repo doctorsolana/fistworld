@@ -1,5 +1,9 @@
 # Vegetation replacement — implemented handover
 
+> September 2026 meadow addition: three further trees, restrained per-instance canopy colour,
+> and deterministic meadow species mixing are documented in [MEADOW_TREES.md](MEADOW_TREES.md).
+> Counts and replacement comparisons below describe the earlier vegetation set.
+
 > The replacement is live and its canonical names are now defined in
 > `ASSET_NAMING.md`. Names such as `Tree_09` below refer only to legacy map ids
 > or the removed donor assets; they are accepted at the map-loading boundary

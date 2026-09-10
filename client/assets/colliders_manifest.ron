@@ -1,6 +1,14 @@
 (
   version: 1,
   entries: [
+    (
+      kind: "building_tavern",
+      gltf_path: "game_assets/buildings/village/Tavern.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: All,
+      exclude_nodes: ["TavernCourtyard"],
+      collidable: true,
+    ),
     // =========================================================================
     // environment/rocks
     // =========================================================================
@@ -102,6 +110,28 @@
     (
       kind: "broadleaf_tall_a",
       gltf_path: "game_assets/environment/trees/broadleaf/BroadleafTallA.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+
+    (
+      kind: "field_maple_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/FieldMapleA.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "copper_beech_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/CopperBeechA.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "wild_cherry_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/WildCherryA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
@@ -293,7 +323,7 @@
       kind: "building_bakery",
       gltf_path: "game_assets/buildings/village/Bakery.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.443 ),
+      vertex_filter: LowerYPercent ( percent: 0.400 ),
       collidable: true,
     ),
     // Open-air public squares. Villagers must walk through the plot to reach

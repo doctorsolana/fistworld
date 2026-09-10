@@ -102,7 +102,7 @@ Every vegetation GLB ships:
 ### Why opaque, definitively
 
 The wheat field already settled this (PROP_PIPELINE §11) and it cost a rebuild to learn: opaque
-geometry has no transparency sorting and no overdraw, and the result was *smaller on disk* than the
+geometry avoids transparency sorting and alpha-card overdraw, and the result was *smaller on disk* than the
 textured version despite ten times the geometry. Alpha cards on 22 000 trees is the single most
 expensive mistake available in this project.
 
@@ -170,12 +170,15 @@ to disappear. The asset would look perfect in Blender and shed its trunk in game
 So:
 
 - `COLOR_0.a = 1.0` on every vertex, always.
-- **Wind weight goes in `TEXCOORD_1` (UV1), `.x`.** Nothing multiplies UV1 into colour, and glTF
-  carries it natively. The live wind material reads this channel; keeping it in the
-  contract avoids family-specific authoring and shader branches.
+- **Reserve wind weight in `TEXCOORD_1` (UV1), `.x`.** Nothing multiplies UV1 into colour, and glTF
+  carries it natively. Current wind derives bend from mesh-local height bounds; these authored
+  weights remain available for a future weighted bend without re-exporting the assets.
+- Meadow accent trees use Blender `Wind.y = 1` on foliage and `0` on bark. glTF flips V, so the
+  shader reads **`1 - TEXCOORD_1.y`** as the canopy mask. Enable it only for assets authored with
+  this contract. Legacy green trees use a colour-based mask instead. Never tint bark to identify leaves.
 - `COLOR_1` is not an option: `bevy_gltf` rejects it outright.
 
-Weights, when wind arrives: `0.0` trunk base, `0.25–0.5` branches, `0.75–1.0` outer foliage.
+Reserved weights: `0.0` trunk base, `0.25–0.5` branches, `0.75–1.0` outer foliage.
 
 ---
 
@@ -185,8 +188,10 @@ Every normal vegetation mesh uses one runtime material handle. In Blender the pr
 `vegetation_opaque` with the runtime's own values (metallic 0, roughness 0.9, reflectance 0.25) so
 studio and game agree.
 
-Colour variety comes from **vertex colours and from genuinely different variants**, not from
-per-instance material clones. A shared material remains worth having even under Bevy 0.19's
+Colour variety comes from **vertex colours, different variants and a restrained per-tree shader tint**,
+without per-instance material clones. The tint is seeded from the unswayed instance origin and shared
+across LODs; pines receive a smaller range than broadleaf trees. See `MEADOW_TREES.md` for values and
+the canopy-mask contract. A shared material remains worth having even under Bevy 0.19's
 bindless `StandardMaterial`, because bindless is device-dependent and shared handles cost nothing.
 
 ---

@@ -1,5 +1,8 @@
 //! settings systems.
 
+mod persistence;
+pub use persistence::{save_graphics_settings, GraphicsSettingsStore};
+
 use super::atmosphere::default_bloom_settings;
 use super::cloud_layer::CloudLayerPlane;
 use super::*;
@@ -23,22 +26,6 @@ impl DisplayMode {
             Self::Windowed => "Windowed",
             Self::Borderless => "Borderless Fullscreen",
             Self::ExclusiveFullscreen => "Exclusive Fullscreen",
-        }
-    }
-
-    pub const fn next(self) -> Self {
-        match self {
-            Self::Windowed => Self::Borderless,
-            Self::Borderless => Self::ExclusiveFullscreen,
-            Self::ExclusiveFullscreen => Self::ExclusiveFullscreen,
-        }
-    }
-
-    pub const fn prev(self) -> Self {
-        match self {
-            Self::Windowed => Self::Windowed,
-            Self::Borderless => Self::Windowed,
-            Self::ExclusiveFullscreen => Self::Borderless,
         }
     }
 }
@@ -261,12 +248,12 @@ impl ShadowQuality {
 /// Persisted to [`SETTINGS_FILE`]; unknown/missing fields fall back to the
 /// (env-aware) defaults so old files survive new fields.
 #[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default = "GraphicsSettings::shipped_defaults")]
 pub struct GraphicsSettings {
     /// 3D resolution scale. The scene renders into an offscreen target of
     /// `window_physical_size * render_scale` and is upscaled to the window, so
     /// GPU fragment cost scales with the square of this value. UI stays native.
-    /// Range: 0.5-1.0. Default: 0.60 on macOS, 0.75 elsewhere.
+    /// Range: 0.25-1.0. Default: 0.60 on macOS, 0.75 elsewhere.
     pub render_scale: f32,
     /// Screen-space ambient occlusion (fullscreen pass + depth/normal prepass).
     /// Expensive on integrated GPUs. Default: off.
@@ -453,12 +440,28 @@ impl GraphicsSettings {
     }
 
     pub fn displayed_resolution_label(&self, monitor: Option<&Monitor>) -> String {
-        if self.display_mode() == DisplayMode::Borderless {
+        let prefix = match self.display_mode() {
+            DisplayMode::Borderless => Some("Native"),
+            DisplayMode::ExclusiveFullscreen
+                if monitor
+                    .and_then(|monitor| {
+                        best_fullscreen_video_mode(monitor, self.display_resolution)
+                    })
+                    .is_none() =>
+            {
+                // apply_window_mode uses VideoModeSelection::Current when an
+                // old preference is unavailable on this monitor. Describe the
+                // fallback instead of claiming the stale request was applied.
+                Some("Current")
+            }
+            _ => None,
+        };
+        if let Some(prefix) = prefix {
             monitor.map_or_else(
-                || "Native".to_string(),
+                || prefix.to_string(),
                 |monitor| {
                     format!(
-                        "Native {} x {}",
+                        "{prefix} {} x {}",
                         monitor.physical_width, monitor.physical_height
                     )
                 },
@@ -485,7 +488,7 @@ impl GraphicsSettings {
         {
             // Floor matches scaled_target_extent's clamp so the resource
             // never claims a scale the target refuses to render at.
-            self.render_scale = scale.clamp(0.5, 1.0);
+            self.render_scale = super::scaled_target::clamped_render_scale(scale);
         }
         self.shadows_enabled = env_bool("FISTFORCE_SHADOWS", self.shadows_enabled);
         self.atmosphere_enabled = env_bool("FISTFORCE_ATMOSPHERE", self.atmosphere_enabled);
@@ -577,77 +580,6 @@ impl GraphicsSettings {
         if forced("FISTFORCE_RESOLUTION") {
             self.display_resolution = baseline.display_resolution;
         }
-    }
-
-    /// Settings for this run: the saved file (if any) under the env overrides.
-    /// FISTFORCE_NO_SETTINGS_FILE skips the file for reproducible captures.
-    pub fn load_or_default() -> Self {
-        let mut settings = if std::env::var("FISTFORCE_NO_SETTINGS_FILE").is_ok() {
-            Self::default()
-        } else {
-            std::fs::read_to_string(SETTINGS_FILE)
-                .ok()
-                .and_then(|text| match ron::from_str::<GraphicsSettings>(&text) {
-                    Ok(parsed) => Some(parsed),
-                    Err(err) => {
-                        warn!("Ignoring malformed {SETTINGS_FILE}: {err}");
-                        None
-                    }
-                })
-                .unwrap_or_default()
-        };
-        // Reproducible captures and profiling runs skip only the user's file;
-        // their explicit environment overrides must still take effect.
-        settings.apply_env_overrides();
-        settings
-    }
-}
-
-/// Persist settings ~a second after the last change, so slider drags don't
-/// write a file per step.
-pub fn save_graphics_settings(
-    settings: Res<GraphicsSettings>,
-    time: Res<Time>,
-    pending_display: Option<Res<PendingDisplayChange>>,
-    mut deadline: Local<Option<f32>>,
-) {
-    if settings.is_changed() && !settings.is_added() {
-        *deadline = Some(time.elapsed_secs() + 1.0);
-    }
-    let Some(due) = *deadline else {
-        return;
-    };
-    // A candidate display mode may be perfectly valid to the OS but unusable
-    // on a particular screen. Never persist it until the player confirms.
-    if pending_display.is_some() {
-        return;
-    }
-    if time.elapsed_secs() < due {
-        return;
-    }
-    *deadline = None;
-    // Env-forced values are session-only and must never reach the file: the
-    // baseline for forced fields is whatever the file already says (or the
-    // shipped defaults when there is no file yet).
-    let baseline = std::fs::read_to_string(SETTINGS_FILE)
-        .ok()
-        .and_then(|text| ron::from_str::<GraphicsSettings>(&text).ok())
-        .unwrap_or_else(GraphicsSettings::shipped_defaults);
-    let mut to_save = settings.clone();
-    to_save.revert_env_forced(&baseline);
-    let serialized = match ron::ser::to_string_pretty(&to_save, ron::ser::PrettyConfig::default()) {
-        Ok(text) => text,
-        Err(err) => {
-            warn!("Could not serialize graphics settings: {err}");
-            return;
-        }
-    };
-    if let Some(parent) = std::path::Path::new(SETTINGS_FILE).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    match std::fs::write(SETTINGS_FILE, serialized) {
-        Ok(()) => info!("Saved graphics settings to {SETTINGS_FILE}"),
-        Err(err) => warn!("Could not write {SETTINGS_FILE}: {err}"),
     }
 }
 

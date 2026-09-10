@@ -27,11 +27,29 @@ pub struct PresentCamera;
 #[derive(Component)]
 pub struct PresentSurface;
 
+/// Shared by the render target and settings labels, including malformed saved values.
+pub fn clamped_render_scale(render_scale: f32) -> f32 {
+    if render_scale.is_finite() {
+        render_scale.clamp(0.25, 1.0)
+    } else {
+        1.0
+    }
+}
+
+/// Actual scene pixels. UI and the desktop video mode stay at the window size.
+pub fn scene_render_resolution(window: &Window, render_scale: f32) -> DisplayResolution {
+    let scale = clamped_render_scale(render_scale);
+    DisplayResolution::new(
+        ((window.physical_width() as f32 * scale).round() as u32).max(1),
+        ((window.physical_height() as f32 * scale).round() as u32).max(1),
+    )
+}
+
 pub(super) fn scaled_target_extent(window: &Window, render_scale: f32) -> Extent3d {
-    let scale = render_scale.clamp(0.5, 1.0);
+    let resolution = scene_render_resolution(window, render_scale);
     Extent3d {
-        width: ((window.physical_width() as f32 * scale).round() as u32).max(1),
-        height: ((window.physical_height() as f32 * scale).round() as u32).max(1),
+        width: resolution.width,
+        height: resolution.height,
         depth_or_array_layers: 1,
     }
 }
@@ -139,4 +157,45 @@ pub(super) fn scene_camera_target(image: Handle<Image>) -> RenderTarget {
         handle: image,
         scale_factor: 1.0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retina_scene_resolution_changes_without_resizing_the_window() {
+        let window = Window {
+            resolution: bevy::window::WindowResolution::new(3024, 1964),
+            ..default()
+        };
+        assert_eq!(
+            scene_render_resolution(&window, 0.5),
+            DisplayResolution::new(1512, 982)
+        );
+        assert_eq!(
+            scene_render_resolution(&window, 0.33),
+            DisplayResolution::new(998, 648)
+        );
+        assert_eq!(window.physical_width(), 3024);
+        assert_eq!(window.physical_height(), 1964);
+    }
+
+    #[test]
+    fn malformed_scales_cannot_create_empty_or_oversized_targets() {
+        let window = Window {
+            resolution: bevy::window::WindowResolution::new(1600, 900),
+            ..default()
+        };
+        for scale in [f32::NAN, f32::INFINITY, 3.0] {
+            assert_eq!(
+                scene_render_resolution(&window, scale),
+                DisplayResolution::new(1600, 900)
+            );
+        }
+        assert_eq!(
+            scene_render_resolution(&window, -1.0),
+            DisplayResolution::new(400, 225)
+        );
+    }
 }

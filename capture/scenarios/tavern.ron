@@ -1,0 +1,24 @@
+(
+    version: 1,
+    name: "tavern",
+    map: "village_lab",
+    output_dir: "logs/captures/tavern",
+    resolution: (1600, 1100),
+    target: scene,
+    show_window: false,
+    warmup_frames: 300,
+    readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_SETTLEMENT": "tavern",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "front", focus: (0.0, 0.0, 0.0), yaw: 3.45, zoom: 31.0, time_of_day: 0.5),
+        (name: "rear", focus: (0.0, 0.0, 0.0), yaw: 0.65, zoom: 31.0, time_of_day: 0.5),
+        (name: "courtyard", focus: (0.0, 0.0, -5.0), yaw: 3.25, zoom: 20.0, time_of_day: 0.5),
+        (name: "under-eaves", focus: (-5.5, 0.0, -10.0), yaw: 3.72, zoom: 20.0, pitch: Some(-0.20), eye: 10.0, time_of_day: 0.50),
+        (name: "dormer", focus: (0.0, 0.0, 0.0), yaw: 4.45, zoom: 26.0, time_of_day: 0.5),
+        (name: "night", focus: (0.0, 0.0, 0.0), yaw: 3.65, zoom: 29.0, time_of_day: 0.95),
+        (name: "gameplay", focus: (0.0, 0.0, 0.0), yaw: 3.65, zoom: 55.0, time_of_day: 0.5),
+    ],
+)

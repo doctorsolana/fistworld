@@ -63,6 +63,7 @@ fn wire_common_systems(app: &mut App) {
         Update,
         (
             crate::capture::drive_army_capture,
+            crate::capture::drive_tavern_review,
             crate::capture::drive_management_capture
                 .after(crate::ui::encyclopedia::army::sync_army_panel),
             crate::capture::drive_battle_capture

@@ -10,19 +10,27 @@ static ACTIVE_MAP_BOUNDS: RwLock<Option<MapBounds>> = RwLock::new(None);
 static ACTIVE_LOADED_MAP: OnceLock<Arc<LoadedMap>> = OnceLock::new();
 
 pub(super) fn load_active_map() -> Arc<LoadedMap> {
-    let loaded =
-        ACTIVE_LOADED_MAP
-            .get_or_init(|| {
-                let map_id = std::env::var("CITYSIM_MAP_ID")
-                    .ok()
-                    .filter(|id| !id.trim().is_empty())
-                    .unwrap_or_else(|| DEFAULT_MAP_ID.to_string());
+    let loaded = ACTIVE_LOADED_MAP
+        .get_or_init(|| {
+            let map_id = std::env::var("CITYSIM_MAP_ID")
+                .ok()
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_MAP_ID.to_string());
 
-                Arc::new(load_map(&map_id).unwrap_or_else(|err| {
-                    panic!("Failed to load authored map '{}': {err}", map_id)
-                }))
-            })
-            .clone();
+            let map = if map_id == crate::map::SESSION_MAP_ID {
+                let seed = std::env::var("FISTWORLD_WORLD_SEED")
+                    .expect("Offline world capture requires FISTWORLD_WORLD_SEED")
+                    .parse()
+                    .expect("FISTWORLD_WORLD_SEED must be an unsigned integer");
+                crate::map::load_session_map(&crate::map::new_world_recipe(seed))
+            } else {
+                load_map(&map_id)
+            };
+            Arc::new(
+                map.unwrap_or_else(|err| panic!("Failed to load authored map '{}': {err}", map_id)),
+            )
+        })
+        .clone();
 
     set_active_map_bounds(loaded.definition.bounds);
     loaded

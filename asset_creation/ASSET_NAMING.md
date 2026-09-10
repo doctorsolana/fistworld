@@ -34,7 +34,7 @@ exists.
 |---|---|
 | Small rocks | `SmallRockA`, `SmallRockB`, `SmallRockC` |
 | Boulders | `BoulderA`, `BoulderB` |
-| Broadleaf trees | `BroadleafNarrowA`, `BroadleafLargeA`, `BroadleafSpreadingA`, `BroadleafHighCrownA`, `BroadleafTallA`, `OakA`, `BirchA`, `BirchB`, `ChestnutA` |
+| Broadleaf trees | `BroadleafNarrowA`, `BroadleafLargeA`, `BroadleafSpreadingA`, `BroadleafHighCrownA`, `BroadleafTallA`, `OakA`, `BirchA`, `BirchB`, `ChestnutA`, `FieldMapleA`, `CopperBeechA`, `WildCherryA` |
 | Dead trees | `DeadTreeA`, `DeadTreeB`, `DeadTreeC`, `DeadGnarledA` |
 | Conifers | `PineA`, `PineB`, `PineTallA`, `PineTallB`, `PineYoungA`, `PineYoungB` |
 | Bushes | `BushA`, `BushB`, `BushC` |

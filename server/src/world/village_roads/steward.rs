@@ -66,6 +66,7 @@ pub fn staff_moot_stewards(
         Option<&shared::components::EmployedAt>,
         Option<&shared::components::CivicEmployment>,
     )>,
+    tavern_visitors: Query<(), With<crate::world::village::TavernVisitRoutine>>,
 ) {
     for (hall, settlement, mut administration, mut runtime, settlement_id, policies) in
         halls.iter_mut()
@@ -100,8 +101,9 @@ pub fn staff_moot_stewards(
             }
             let candidate = villagers
                 .iter()
-                .filter(|(_, _, _, intent, occupation, steward, employed_at, civic_job)| {
+                .filter(|(entity, _, _, intent, occupation, steward, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
+                        && !tavern_visitors.contains(*entity)
                         && occupation.0.is_none()
                         && steward.is_none()
                         && employed_at.is_none()
@@ -198,6 +200,7 @@ pub fn staff_public_positions(
         Option<&crate::world::village::MarketCollectionRoutine>,
         Option<&RoadBuilderRoutine>,
     )>,
+    tavern_visitors: Query<(), With<crate::world::village::TavernVisitRoutine>>,
 ) {
     // Aggregate once for all halls. Scanning every business separately for
     // every settlement would turn civic staffing into O(settlements × firms)
@@ -386,8 +389,9 @@ pub fn staff_public_positions(
             }
             let candidate = villagers
                 .iter()
-                .filter(|(_, _, _, intent, occupation, _, steward, employed_at, civic_job, _, _)| {
+                .filter(|(entity, _, _, intent, occupation, _, steward, employed_at, civic_job, _, _)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
+                        && !tavern_visitors.contains(*entity)
                         && occupation.0.is_none()
                         && steward.is_none()
                         && employed_at.is_none()
@@ -436,8 +440,9 @@ pub fn staff_public_positions(
             }
             let candidate = villagers
                 .iter()
-                .filter(|(_, _, _, intent, occupation, _, _, employed_at, civic_job, _, _)| {
+                .filter(|(entity, _, _, intent, occupation, _, _, employed_at, civic_job, _, _)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
+                        && !tavern_visitors.contains(*entity)
                         && occupation.0.is_none()
                         && employed_at.is_none()
                         && civic_job.is_none()

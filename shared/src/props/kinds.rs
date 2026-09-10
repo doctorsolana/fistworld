@@ -24,6 +24,9 @@ pub enum PropKind {
     ChestnutA,
     BroadleafHighCrownA,
     BroadleafTallA,
+    FieldMapleA,
+    CopperBeechA,
+    WildCherryA,
 
     // environment/trees/dead
     DeadTreeA,
@@ -78,6 +81,9 @@ impl PropKind {
                 | Self::ChestnutA
                 | Self::BroadleafHighCrownA
                 | Self::BroadleafTallA
+                | Self::FieldMapleA
+                | Self::CopperBeechA
+                | Self::WildCherryA
                 | Self::PineA
                 | Self::PineB
                 | Self::PineTallA
@@ -140,6 +146,9 @@ impl PropKind {
             "chestnut_a" | "tree_18" => Some(Self::ChestnutA),
             "broadleaf_high_crown_a" | "tree_29" => Some(Self::BroadleafHighCrownA),
             "broadleaf_tall_a" => Some(Self::BroadleafTallA),
+            "field_maple_a" => Some(Self::FieldMapleA),
+            "copper_beech_a" => Some(Self::CopperBeechA),
+            "wild_cherry_a" => Some(Self::WildCherryA),
 
             "dead_tree_a" | "dead_tree_1" => Some(Self::DeadTreeA),
             "dead_tree_b" | "dead_tree_2" => Some(Self::DeadTreeB),
@@ -190,6 +199,9 @@ impl PropKind {
             Self::ChestnutA => "chestnut_a",
             Self::BroadleafHighCrownA => "broadleaf_high_crown_a",
             Self::BroadleafTallA => "broadleaf_tall_a",
+            Self::FieldMapleA => "field_maple_a",
+            Self::CopperBeechA => "copper_beech_a",
+            Self::WildCherryA => "wild_cherry_a",
             Self::DeadTreeA => "dead_tree_a",
             Self::DeadTreeB => "dead_tree_b",
             Self::DeadTreeC => "dead_tree_c",
@@ -234,6 +246,9 @@ impl PropKind {
             Self::ChestnutA => "Chestnut A",
             Self::BroadleafHighCrownA => "High-Crown Broadleaf A",
             Self::BroadleafTallA => "Tall Broadleaf A",
+            Self::FieldMapleA => "Field Maple A",
+            Self::CopperBeechA => "Copper Beech A",
+            Self::WildCherryA => "Wild Cherry A",
             Self::DeadTreeA => "Dead Tree A",
             Self::DeadTreeB => "Dead Tree B",
             Self::DeadTreeC => "Dead Tree C",
@@ -287,6 +302,9 @@ impl PropKind {
             Self::BroadleafTallA => {
                 "game_assets/environment/trees/broadleaf/BroadleafTallA.glb#Scene0"
             }
+            Self::FieldMapleA => "game_assets/environment/trees/broadleaf/FieldMapleA.glb#Scene0",
+            Self::CopperBeechA => "game_assets/environment/trees/broadleaf/CopperBeechA.glb#Scene0",
+            Self::WildCherryA => "game_assets/environment/trees/broadleaf/WildCherryA.glb#Scene0",
             Self::DeadTreeA => "game_assets/environment/trees/dead/DeadTreeA.glb#Scene0",
             Self::DeadTreeB => "game_assets/environment/trees/dead/DeadTreeB.glb#Scene0",
             Self::DeadTreeC => "game_assets/environment/trees/dead/DeadTreeC.glb#Scene0",
@@ -330,6 +348,9 @@ pub const ALL_PROP_KINDS: &[PropKind] = &[
     PropKind::ChestnutA,
     PropKind::BroadleafHighCrownA,
     PropKind::BroadleafTallA,
+    PropKind::FieldMapleA,
+    PropKind::CopperBeechA,
+    PropKind::WildCherryA,
     PropKind::DeadTreeA,
     PropKind::DeadTreeB,
     PropKind::DeadTreeC,

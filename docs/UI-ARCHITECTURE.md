@@ -19,6 +19,7 @@ screen-specific hover logic, accidental world input, or full-tree churn at simul
 | `client/src/ui/scroll.rs` | Wheel bubbling and nested scroll behavior |
 | Screen modules | Data model, layout and actions specific to that screen |
 | `client/src/app_wiring/window.rs` | Resolution-aware UI scale; 3D render scale never makes UI blurry |
+| `client/src/ui/pause_menu/display.rs` | Explicit display-mode choices, supported output sizes, actual scene-pixel labels and retained confirmation/resize state |
 
 Do not put a new palette alias, hover state machine, modal scrim or scroll algorithm in a
 screen module. Screen-specific data colours (for example chart series or a health grade) are
@@ -226,7 +227,12 @@ with `FISTFORCE_CAPTURE_HERO=default FISTFORCE_CAPTURE_HERO_OFFSET=0,0 FISTFORCE
   scrollbar width. Nested scroll views rely on `UiScrollPlugin` bubbling; do not consume wheel
   events in a screen-specific system.
 - Output resolution, display mode and 3D render scale are separate. The world may render below
-  native resolution, but UI renders at the window resolution.
+  native resolution, but UI renders at the window resolution. The graphics panel exposes
+  Windowed, Borderless and Exclusive as direct choices. Borderless disables output-size
+  stepping with visible guidance; the separate 3D Resolution control always works and
+  reports scene pixels plus scale (25–100%). Its labels and disabled/selected states bind
+  from current settings and window size, including after a timed revert. Pixel dimensions
+  use the same calculation as the production scene target.
 
 ## Regression checks
 

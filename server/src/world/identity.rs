@@ -222,7 +222,7 @@ impl WorldIdAllocator {
         self.next_trade_route = self.next_trade_route.max(id.0.saturating_add(1));
     }
 
-    fn person(&mut self) -> PersonId {
+    pub(crate) fn person(&mut self) -> PersonId {
         let id = PersonId(self.next_person);
         self.next_person = self.next_person.saturating_add(1);
         id
@@ -234,7 +234,7 @@ impl WorldIdAllocator {
         id
     }
 
-    fn building(&mut self) -> BuildingId {
+    pub(crate) fn building(&mut self) -> BuildingId {
         let id = BuildingId(self.next_building);
         self.next_building = self.next_building.saturating_add(1);
         id

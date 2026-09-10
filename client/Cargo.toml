@@ -18,6 +18,8 @@ capture-video = ["dep:bevy_dev_tools", "bevy_dev_tools/screenrecording"]
 
 [dependencies]
 bevy = { workspace = true }
+# Native display-mode evidence for the opt-in display smoke test.
+winit = { version = "0.30", default-features = false }
 lightyear = { workspace = true }
 shared = { path = "../shared" }
 rand = "0.8"

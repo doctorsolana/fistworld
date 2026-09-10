@@ -4,6 +4,14 @@ Decisions first recorded 2026-07-27, with implementation status reviewed on
 2026-09-09. Historical performance measurements retain their original dates.
 Read these boundaries before extending simulation code.
 
+Ordinary world bootstrap lives in `shared::map::session` (validated terrain recipe),
+`server::world::bootstrap` (seed selection) and `world::new_world` (site survey, complete
+layout validation and finite society initialization before the socket opens). Later growth
+remains owned by the ordinary village systems. Reliable name acceptance carries the map
+recipe/hash; `client::ui::name_entry::network` prepares it asynchronously, invalidates old
+rendering caches and enters Playing only after validation. Replicated earthworks remain
+separate from the immutable recipe. See [NEW-WORLD.md](NEW-WORLD.md).
+
 The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
 architecture: settlements, goods, caravans, clans, and the player's climb from one guy
 to a realm. [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md) is the executable reference for market

@@ -1,0 +1,16 @@
+(
+    version: 1,
+    name: "meadow-trees-trio",
+    map: "village_lab",
+    output_dir: "logs/captures/meadow-trees-trio",
+    resolution: (1500, 900),
+    target: scene,
+    show_window: false,
+    warmup_frames: 300,
+    readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: { "FISTFORCE_CAPTURE_TREES": "trio", "FISTFORCE_CAPTURE_CLOUDS": "clear" },
+    shots: [
+        (name: "three-new-trees", focus: (0.0, 0.0, 0.0), yaw: -0.1, zoom: 25.0, time_of_day: 0.5, assertions: [entities_at_least(count: 100)]),
+        (name: "rear", focus: (0.0, 0.0, 0.0), yaw: 2.80, zoom: 29.0, time_of_day: 0.5),
+    ],
+)

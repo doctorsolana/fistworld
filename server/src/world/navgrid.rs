@@ -71,6 +71,11 @@ pub fn sync_obstacle_grid(
             rotation: building.rotation,
             obstacle_type: building.building_type as u32,
         });
+        if building.building_type == shared::building::BuildingType::Tavern {
+            for obstacle in shared::building::tavern::table_obstacles(building.position, building.rotation) {
+                grid.insert(obstacle);
+            }
+        }
     }
 
     for wall in &walls {
@@ -231,7 +236,7 @@ mod tests {
                     SettlementBuildingKind::LivestockFarm,
                 ),
                 (
-                    BuildingType::PlaceholderTavern,
+                    BuildingType::Tavern,
                     SettlementBuildingKind::Tavern,
                 ),
                 (BuildingType::Church, SettlementBuildingKind::Church),

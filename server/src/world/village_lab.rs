@@ -2251,7 +2251,7 @@ fn money_breakdown(world: &mut World) -> MoneyBreakdown {
     }
 }
 
-fn total_money(world: &mut World) -> u64 {
+pub(crate) fn total_money(world: &mut World) -> u64 {
     money_breakdown(world).total()
 }
 
@@ -5278,7 +5278,7 @@ fn village_simulation_lab() {
                                 | shared::building::BuildingType::MarketPaved => {
                                     SettlementBuildingKind::Market
                                 }
-                                shared::building::BuildingType::PlaceholderTavern => {
+                                shared::building::BuildingType::Tavern => {
                                     SettlementBuildingKind::Tavern
                                 }
                                 shared::building::BuildingType::Church => {

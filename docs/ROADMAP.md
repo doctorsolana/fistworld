@@ -29,7 +29,7 @@ Stables, horse acquisition and charge momentum remain future work. See
 
 | Phase | Name | Size | State |
 |---|---|---|---|
-| 0 | Let me in | M | non-dev arrival and session reconnect are live; a populated ordinary-world opening remains |
+| 0 | Let me in | M | non-dev arrival, a seeded inhabited opening and session reconnect are live |
 | 1 | The world remembers | L | in progress — stable identity, settlement directory, founding, picking and panels are live; world-state persistence is not |
 | 2 | The seam | L | in progress — ordinary villagers now demote to aggregate strategic work; the traveller/army promotion contract is not built |
 | 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village → Town are live; City is deferred; births and decline are not |
@@ -49,10 +49,11 @@ finds an inhabited settlement and can reconnect to the same running session.
 
 The normal non-dev body path is now live: a new account creates one Hero, arrives by
 server-positioned Dinghy and can sail ashore, while a returning account re-adopts its live
-body. Deterministic normal-world settlement seeding is still absent: lab staging and
-God-mode founding currently supply the settlements. Natural immigration waits for a Moot
-to exist. A useful populated opening is still needed; cross-process durability belongs to
-Phase 1 and must be verified separately from same-process reconnects.
+body. The ordinary launch now seeds roughly ten inhabited settlements from the server's random
+world recipe, validates their local food chains, homes and access, and hands them to the
+ordinary economy with finite assets. Natural immigration can use these existing Halls.
+Cross-process durability belongs to Phase 1 and must be verified separately from
+same-process reconnects. See [NEW-WORLD.md](NEW-WORLD.md).
 
 - [x] Clamp client-supplied `view_radius` (was a one-message remote OOM)
 - [x] Keep Docker workspace stubs aligned with non-server workspace members
@@ -73,6 +74,9 @@ Phase 1 and must be verified separately from same-process reconnects.
       loading a hero into a freshly reset society would create orphan ownership.
 - [x] A non-dev spawn path: character creation sends `CreateHero`; the server owns coastal
       placement and creates exactly one Hero plus starter Dinghy without `DevCommand`.
+- [x] Ordinary inhabited opening: server-selected random seed, reliable join-time terrain
+      recipe, roughly ten geography-aware communities and a coast connected to an inhabited Hall.
+      Founding supplies are finite; no lab policies, refills or scripted growth run afterward.
 - [x] New-player presentation: mandatory character creator, dressed Hero/boat readiness
       gate, face-to-RTS opening camera, selected water-only boat and shore disembark. See
       [PLAYER-START-AND-VESSELS.md](PLAYER-START-AND-VESSELS.md).
@@ -146,8 +150,8 @@ join keys or on-disk contracts that are ruinous to change later.
       Today founding always sends an empty name and the server generates one,
       which is the correct behaviour for world and god foundings and a gap only
       for player ones.
-- [ ] Deterministic settlement site selection from the seed (for the world's
-      OWN settlements; player founding does not need it)
+- [x] Deterministic initial settlement site selection from the server's world seed;
+      player founding remains a separate future action. See [NEW-WORLD.md](NEW-WORLD.md).
 - [ ] Settlement, caravan and army map markers. The world map already follows the local
       Hero's actual position/facing and projects the camera footprint; those are not missing.
 - [x] Screen-space picking so a settlement can be clicked. Halls opt into

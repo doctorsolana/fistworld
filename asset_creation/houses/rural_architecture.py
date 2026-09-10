@@ -246,6 +246,7 @@ def export(
     budget=20000,
     folder="buildings/village",
     double_sided=False,
+    extras=(),
 ):
     body, leaf, glass = meshes
     scene = bpy.context.scene
@@ -257,6 +258,8 @@ def export(
     material = palette_material(name + "Palette")
     material.use_backface_culling = not double_sided
     body.object(name, material)
+    for node_name, mesh in extras:
+        mesh.object(node_name, material)
     if pivot is not None:
         animate_door(leaf.object(name + "Door", material, pivot))
     if glass.vertices:
@@ -298,7 +301,7 @@ def export(
         ),
         flush=True,
     )
-    points = [Vector(v) for m in meshes for v in m.vertices]
+    points = [Vector(v) for m in (*meshes, *(m for _, m in extras)) for v in m.vertices]
     low = Vector(tuple(min(v[i] for v in points) for i in range(3)))
     high = Vector(tuple(max(v[i] for v in points) for i in range(3)))
     aim = (low + high) / 2

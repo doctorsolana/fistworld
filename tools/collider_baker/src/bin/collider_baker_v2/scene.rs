@@ -3,13 +3,20 @@ use bevy::prelude::*;
 use bevy::world_serialization::WorldAsset;
 use bevy_mesh::VertexAttributeValues;
 
-pub(crate) fn collect_scene_vertices(scene: &mut WorldAsset, meshes: &Assets<Mesh>) -> Vec<Vec3> {
+pub(crate) fn collect_scene_vertices(
+    scene: &mut WorldAsset,
+    meshes: &Assets<Mesh>,
+    exclude_nodes: &[String],
+) -> Vec<Vec3> {
     let mut out = Vec::new();
 
     let world = &mut scene.world;
 
     let mut query = world.query::<(Entity, &Mesh3d)>();
     for (entity, mesh3d) in query.iter(world) {
+        if !included_node(entity, world, exclude_nodes) {
+            continue;
+        }
         let Some(mesh) = meshes.get(&mesh3d.0) else {
             continue;
         };
@@ -34,6 +41,7 @@ pub(crate) fn collect_scene_vertices(scene: &mut WorldAsset, meshes: &Assets<Mes
 pub(crate) fn collect_scene_mesh(
     scene: &mut WorldAsset,
     meshes: &Assets<Mesh>,
+    exclude_nodes: &[String],
 ) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -42,6 +50,9 @@ pub(crate) fn collect_scene_mesh(
 
     let mut query = world.query::<(Entity, &Mesh3d)>();
     for (entity, mesh3d) in query.iter(world) {
+        if !included_node(entity, world, exclude_nodes) {
+            continue;
+        }
         let Some(mesh) = meshes.get(&mesh3d.0) else {
             continue;
         };
@@ -98,4 +109,38 @@ fn world_matrix_for(entity: Entity, world: &World) -> Mat4 {
     }
 
     mat
+}
+
+fn included_node(mut entity: Entity, world: &World, names: &[String]) -> bool {
+    if names.is_empty() {
+        return true;
+    }
+    loop {
+        if world
+            .get::<Name>(entity)
+            .is_some_and(|name| names.iter().any(|n| n == name.as_str()))
+        {
+            return false;
+        }
+        match world.get::<ChildOf>(entity) {
+            Some(parent) => entity = parent.parent(),
+            None => return true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn collider_node_selection_includes_primitives_but_not_the_courtyard() {
+        let mut world = World::new();
+        let body = world.spawn(Name::new("Tavern")).id();
+        let primitive = world.spawn(ChildOf(body)).id();
+        let garden = world.spawn(Name::new("TavernCourtyard")).id();
+        let selected = vec!["TavernCourtyard".to_string()];
+        assert!(included_node(primitive, &world, &selected));
+        assert!(!included_node(garden, &world, &selected));
+        assert!(included_node(garden, &world, &[]));
+    }
 }

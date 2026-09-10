@@ -18,10 +18,8 @@ pub enum BuildingType {
     /// reads pre-art RON data that still calls it `PlaceholderMarket`.
     #[serde(alias = "PlaceholderMarket")]
     Market,
-    /// Generated blockouts used by the settlement simulation until authored
-    /// civic art arrives. They deliberately have no scene path: the client
-    /// draws their definitions as simple coloured boxes.
-    PlaceholderTavern,
+    /// Authored inn and courtyard; retains the original blockout discriminant.
+    Tavern,
     /// Authored church; retains the original blockout discriminant.
     Church,
     VillageHall,
@@ -75,6 +73,7 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::StorageHall,
     BuildingType::StoneQuarry,
     BuildingType::Church,
+    BuildingType::Tavern,
 ];
 
 impl BuildingType {
@@ -93,7 +92,7 @@ impl BuildingType {
             BuildingType::TownHall => "building_town_hall",
             BuildingType::FishermansHut => "building_fishermans_hut",
             BuildingType::Market => "building_market",
-            BuildingType::PlaceholderTavern => "placeholder_tavern",
+            BuildingType::Tavern => "building_tavern",
             BuildingType::Church => "building_church",
             BuildingType::Windmill => "building_windmill",
             BuildingType::Bakery => "building_bakery",
@@ -129,7 +128,7 @@ impl BuildingType {
             BuildingType::MarketPaved => {
                 Some("game_assets/buildings/village/MarketPaved.glb#Scene0")
             }
-            BuildingType::PlaceholderTavern => None,
+            BuildingType::Tavern => Some("game_assets/buildings/village/Tavern.glb#Scene0"),
             BuildingType::Church => Some("game_assets/buildings/village/Church.glb#Scene0"),
             BuildingType::StorageHall => {
                 Some("game_assets/buildings/village/StorageHall.glb#Scene0")
@@ -308,15 +307,16 @@ impl BuildingType {
                 color: Color::srgb(0.46, 0.30, 0.18),
                 model_path: Some("game_assets/buildings/village/LivestockFarm.glb#Scene0"),
             },
-            BuildingType::PlaceholderTavern => BuildingDef {
+            BuildingType::Tavern => BuildingDef {
                 building_type: *self,
-                display_name: "Tavern (blockout)",
-                footprint: Vec2::new(8.0, 7.0),
+                display_name: "Tavern",
+                // Solid inn only. Siting reserves the walkable courtyard separately.
+                footprint: Vec2::new(9.2, 8.8),
                 footprint_center: Vec2::ZERO,
-                height: 4.4,
-                flatten_radius: 1.7,
-                color: Color::srgb(0.52, 0.25, 0.16),
-                model_path: None,
+                height: 8.4,
+                flatten_radius: 6.5,
+                color: Color::srgb(0.52, 0.36, 0.22),
+                model_path: Some("game_assets/buildings/village/Tavern.glb#Scene0"),
             },
             BuildingType::Church => BuildingDef {
                 building_type: *self,
@@ -346,7 +346,7 @@ impl BuildingType {
                 display_name: "Bakery",
                 footprint: Vec2::new(7.0420, 8.2400),
                 footprint_center: Vec2::new(0.0990, 0.7200),
-                height: 5.33,
+                height: 6.08,
                 flatten_radius: 1.6,
                 color: Color::srgb(0.64, 0.37, 0.20),
                 model_path: Some("game_assets/buildings/village/Bakery.glb#Scene0"),
@@ -428,6 +428,8 @@ impl BuildingDef {
     pub const fn terrain_flat_margin(&self) -> f32 {
         match self.building_type {
             BuildingType::Market | BuildingType::MarketPaved => 3.0,
+            // Keep the courtyard benches and their approaches on the building plane.
+            BuildingType::Tavern => 5.0,
             _ => 0.0,
         }
     }

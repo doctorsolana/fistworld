@@ -570,6 +570,7 @@ pub fn handle_create_hero_requests(
         Option<&PlayerRotation>,
     )>,
     mut clients: Query<(&RemoteId, &mut MessageReceiver<CreateHero>), With<ClientOf>>,
+    opening: Option<Res<crate::world::new_world::WorldOpening>>,
 ) {
     for (remote, mut receiver) in clients.iter_mut() {
         for request in receiver.receive() {
@@ -604,8 +605,16 @@ pub fn handle_create_hero_requests(
                 })
                 .flatten();
             let opening_voyage = ux_start.is_none();
-            let Some((position, yaw)) = ux_start.or_else(|| starting_voyage(&terrain, &account))
-            else {
+            let Some((position, yaw)) = ux_start.or_else(|| {
+                if let Some(opening) = opening.as_ref() {
+                    let voyage = opening
+                        .arrivals
+                        .get(stable_account_seed(&account) as usize % opening.arrivals.len())?;
+                    Some((voyage.start, voyage.yaw))
+                } else {
+                    starting_voyage(&terrain, &account)
+                }
+            }) else {
                 warn!(
                     "Cannot create hero for '{account}': active map has no reachable edge voyage"
                 );

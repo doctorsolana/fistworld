@@ -67,10 +67,11 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
     app.add_systems(
         Startup,
         (
-            world::bootstrap::setup_world,
             collision::library::setup_baked_colliders,
+            world::new_world::populate,
             spawn_server,
-        ),
+        )
+            .chain(),
     );
 
     app.add_systems(Update, start_server);
@@ -83,6 +84,7 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
             world::map_state::spawn_cloud_seed_once,
             world::map_state::spawn_active_map_state_once,
             world::regions::build_region_registry,
+            world::village::stage_tavern_review,
             world::village_lab_scenario::stage_rendered_lab_once,
             world::village_lab_scenario::stage_rendered_lab_arrivals,
             world::village_lab_scenario::log_rendered_village_diagnostics,

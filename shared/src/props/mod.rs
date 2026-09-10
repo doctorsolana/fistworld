@@ -1,6 +1,7 @@
 //! Deterministic prop placement shared between client and server.
 
 mod kinds;
+mod meadow;
 mod spawn;
 mod tuning;
 

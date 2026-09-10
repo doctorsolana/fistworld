@@ -1,0 +1,28 @@
+// Manual: ./run.sh mixedbattle. Only the server receives this fixture.
+// I: archers behind II/III: infantry; IV: cavalry on the right flank.
+(
+    version: 1,
+    account: "battlelab",
+    map: "battle_lab",
+    battalions: 4,
+    soldiers_per_battalion: 32,
+    archer_battalions: [0],
+    cavalry_battalions: [3],
+    origin: (-20.0, 0.0, -70.0),
+    deployments: [
+        (target: (-20.0, 0.0, -10.0), facing: (0.0, 1.0), width: 72.0),
+    ],
+    camera_focus: (-20.0, 0.0, -48.0),
+    camera_zoom: 130.0,
+    timeout_seconds: 240.0,
+    counterattack_after_seconds: Some(10.0),
+    battle: Some((
+        defender_battalions: 4,
+        defenders_per_battalion: 32,
+        defender_origin: (-20.0, 0.0, -10.0),
+        defender_facing: (0.0, -1.0),
+        observe_seconds: 60.0,
+        minimum_engaged_battalions: 4,
+        attacker_offsets: [(26.4, -20.0), (0.0, 0.0), (0.0, 0.0), (12.0, -6.0)],
+    )),
+)

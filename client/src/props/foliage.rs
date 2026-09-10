@@ -4,7 +4,8 @@ use bevy::prelude::*;
 use crate::render::systems::GraphicsSettings;
 
 use super::wind::{
-    bake_foliage_color_ramp, wind_params_for_mesh, WindExtension, WindFoliageMaterial,
+    bake_foliage_color_ramp, canopy_variation, wind_params_for_mesh, WindExtension,
+    WindFoliageMaterial,
 };
 use super::{
     is_tree_kind, EnvironmentProp, FoliageMaterialCache, NeedsFoliageMaterials, PropKindTag,
@@ -235,6 +236,7 @@ pub(super) fn apply_foliage_materials(
                                             climate_half,
                                             climate_phase,
                                         ),
+                                        variation: canopy_variation(kind),
                                     },
                                 });
                                 cache
@@ -304,6 +306,9 @@ pub(super) fn needs_foliage_materials(kind: shared::props::PropKind) -> bool {
             | ChestnutA
             | BroadleafHighCrownA
             | BroadleafTallA
+            | FieldMapleA
+            | CopperBeechA
+            | WildCherryA
             // environment/trees/dead
             | DeadTreeA
             | DeadTreeB

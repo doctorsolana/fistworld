@@ -16,12 +16,12 @@ pub use cloud_layer::{spawn_cloud_plane, update_cloud_plane, CloudLayerMaterial,
 pub use cloud_shadows::sync_cloud_shadow_params;
 pub use clouds::{update_cloud_cover, CloudCover, CloudCoverMode, CloudCoverOverride};
 pub use day_night::update_day_night_cycle;
-pub use scaled_target::sync_scene_render_target;
+pub use scaled_target::{clamped_render_scale, scene_render_resolution, sync_scene_render_target};
 pub use settings::{
     apply_graphics_settings, available_display_resolutions, best_fullscreen_video_mode,
     save_graphics_settings, sync_shadow_cascades_to_zoom, tick_display_change_confirmation,
-    DisplayMode, DisplayResolution, GraphicsSettings, InputSettings, PendingDisplayChange,
-    LAUNCHER_RESOLUTION,
+    DisplayMode, DisplayResolution, GraphicsSettings, GraphicsSettingsStore, InputSettings,
+    PendingDisplayChange, LAUNCHER_RESOLUTION,
 };
 pub use setup::setup_rendering;
 

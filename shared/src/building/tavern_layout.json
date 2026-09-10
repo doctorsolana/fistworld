@@ -1,0 +1,7 @@
+{
+  "table_centers": [[-2.75, -6.8], [2.75, -6.8]],
+  "table_size": [2.2, 0.85, 0.96],
+  "bench_offset": 1.0,
+  "bench_height": 0.5,
+  "seat_offsets": [-0.5, 0.5]
+}

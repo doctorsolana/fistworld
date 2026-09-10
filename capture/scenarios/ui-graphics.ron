@@ -1,0 +1,13 @@
+(
+    version: 1,
+    name: "graphics-display-controls",
+    map: "big_world",
+    output_dir: "logs/captures/ui-graphics",
+    resolution: (1600, 1000),
+    target: window,
+    show_window: false,
+    warmup_frames: 240,
+    readiness: (minimum_frames: 60, maximum_frames: 1200, minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: { "FISTFORCE_CAPTURE_PAUSE": "graphics", "FISTFORCE_CAPTURE_CLOUDS": "clear" },
+    shots: [ (name: "display-controls", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64)]) ],
+)

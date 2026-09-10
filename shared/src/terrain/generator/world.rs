@@ -335,6 +335,30 @@ impl Default for WorldTerrain {
 }
 
 impl WorldTerrain {
+    pub fn from_loaded_map(map: LoadedMap) -> Self {
+        super::map_access::set_active_map_bounds(map.definition.bounds);
+        let river_water = RiverWaterIndex::from_loaded_map(&map);
+        let delta_chunks = map.terrain_deltas_by_chunk.clone();
+        Self {
+            generator: TerrainGenerator::from_loaded_map(map),
+            river_water,
+            delta_chunks,
+            version: 0,
+            chunk_versions: HashMap::new(),
+            full_rebuild_version: 0,
+        }
+    }
+
+    /// Install a different server's base world and invalidate all derived
+    /// terrain, even when its map id and dimensions match the previous world.
+    pub fn replace_loaded_map(&mut self, map: LoadedMap) {
+        let version = self.version.wrapping_add(1);
+        let rebuild = self.full_rebuild_version.wrapping_add(1);
+        *self = Self::from_loaded_map(map);
+        self.version = version;
+        self.full_rebuild_version = rebuild;
+    }
+
     #[inline]
     pub fn water_level(&self) -> Option<f32> {
         self.generator.loaded_map().heightmap.water_level

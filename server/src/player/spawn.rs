@@ -186,6 +186,10 @@ pub fn handle_player_name_submission(
                 profile_loaded,
                 needs_hero_creation: !has_hero,
                 commander_view,
+                map: shared::components::ActiveMapState::from_terrain(&terrain),
+                world_recipe: (terrain.generator.active_map_id() == shared::map::SESSION_MAP_ID)
+                    .then(|| terrain.generator.loaded_map().definition.generated.clone())
+                    .flatten(),
             });
             dev_sender.send::<ReliableChannel>(DevStatus {
                 god: dev.allows(peer_id, &god_sessions),

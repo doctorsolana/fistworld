@@ -145,7 +145,8 @@ pub(crate) fn poll_and_bake(
 
         match entry.mode {
             ColliderMode::ConvexHull => {
-                let mut vertices = collect_scene_vertices(&mut scene, &meshes);
+                let mut vertices =
+                    collect_scene_vertices(&mut scene, &meshes, &entry.exclude_nodes);
                 if vertices.is_empty() {
                     panic!(
                         "No vertices found for kind {} (path {})",
@@ -207,7 +208,8 @@ pub(crate) fn poll_and_bake(
                     );
                 }
 
-                let (verts, indices) = collect_scene_mesh(&mut scene, &meshes);
+                let (verts, indices) =
+                    collect_scene_mesh(&mut scene, &meshes, &entry.exclude_nodes);
                 if verts.is_empty() || indices.is_empty() {
                     panic!(
                         "No triangles found for kind {} (path {})",

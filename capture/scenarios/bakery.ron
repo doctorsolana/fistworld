@@ -1,0 +1,32 @@
+(
+    version: 1,
+    name: "bakery",
+    map: "village_lab",
+    output_dir: "logs/captures/bakery",
+    resolution: (1600, 1000),
+    fixed_delta_seconds: 0.016666667,
+    target: scene,
+    show_window: false,
+    warmup_frames: 300,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_SETTLEMENT": "bakery",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    // Free-look eye is above sea level; the fixture foundation is at Y=8.885553.
+ shots: [
+        (name: "front-day", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 19.0, time_of_day: 0.43, assertions: [settlements_at_least(count: 1), entities_at_least(count: 100)]),
+        (name: "front-door", focus: (-15.0, 0.0, -15.0), yaw: 3.20, zoom: 16.0, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+        (name: "rear", focus: (-15.0, 0.0, -15.0), yaw: 0.6, zoom: 20.0, time_of_day: 0.5, assertions: [settlements_at_least(count: 1)]),
+        (name: "under-eaves-front", focus: (-11.5, 0.0, -20.0), yaw: 2.50, zoom: 15.0, pitch: Some(-0.28), eye: 10.3, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+        (name: "under-eaves-side", focus: (-7.0, 0.0, -11.0), yaw: 1.107, zoom: 15.0, pitch: Some(-0.25), eye: 9.985553, time_of_day: 0.50, assertions: [settlements_at_least(count: 1)]),
+        (name: "oven-side", focus: (-7.0, 0.0, -15.0), yaw: 1.5708, zoom: 15.0, pitch: Some(0.06), eye: 10.10, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+        (name: "night", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 21.0, time_of_day: 0.00),
+        (name: "gameplay", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 58.0, time_of_day: 0.43),
+    ],
+)

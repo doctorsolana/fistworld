@@ -197,15 +197,18 @@ choose — naming a place is the first act of ownership the game offers and shou
 not be taken away by a generator. That is a courtesy extended to the person who
 did the founding, not a claim that founding requires one.
 
-**Seeded settlements.** The world does not start empty. Settlement *sites* are
-chosen deterministically from the world seed at first server start (flat land
-near water, scored by the diversity and richness of `BiomeField::resources`
-within a working radius ~300m). Sites are data, the founding roster is state:
-the world starts with N settlements seeded across the continents, biased so each
-continent gets a spread of farm/wood/stone/iron specialisations. Most start
-independent; a few clusters start clan-held (§4). Ruins can be refounded, which
-is the same act — raising a city hall on the old site, inheriting its name and
-its plan.
+**Seeded settlements — current opening.** The ordinary server chooses a random seed
+and creates roughly ten independent inhabited places on a substantial coastal land region.
+Flat, dry sites with a plausible local food base are ranked by resources, spacing and
+useful overland connections. Local carrying capacity and seeded age influence population;
+there is no fixed quota of towns or hamlets. Full food chains, homes, door access, fields
+and local dirt lanes must pass the existing plot/road validators before a site is committed.
+The initial people, businesses and finite assets are mutable server state afterward.
+See [NEW-WORLD.md](NEW-WORLD.md) for the implemented contract.
+
+**Future scope.** Import-dependent harsh-region settlements, multiple inhabited continents,
+clan-held starting clusters and refounding ruins need the associated trade, political and
+founding systems. The present generator does not claim to simulate centuries of history.
 
 > **[correction]** This used to cite "the same spiral-search logic the old landmark
 > placement used" as available machinery. That function was DELETED (commit `1fe84ed`)
@@ -1568,7 +1571,7 @@ exercised:
 1. **One person.** Non-dev character creation, a coastal Dinghy arrival, shore
    disembarkation and an embodied Hero are live. The Hero can move, trade and fight;
    see [PLAYER-START-AND-VESSELS.md](PLAYER-START-AND-VESSELS.md). A fresh ordinary
-   world still needs populated starting settlements without operator/lab setup.
+   world now includes inhabited starting settlements without operator/lab setup.
 2. **First coin.** Nearby Hall buy/consign actions and company businesses are live.
    A personally purchasable cart, paid escort contracts and bandit bounties remain
    future work. Existing company merchant routes provide the physical cargo foundation.
@@ -1654,7 +1657,7 @@ from auditing the code rather than the doc:
   following one order, which the hero loop already does end to end. Flow fields are gated on
   many units sharing a goal — the retinue, not the cart.
 - **A Phase 0 appeared.** Originally, Hero creation required God mode. Normal Hero/Dinghy
-  creation and live-session reconnect now work; ordinary-world population and a complete
+  creation, seeded ordinary-world population and live-session reconnect now work; a complete
   opening loop still need to be separated from prepared lab scenarios.
 
 Two smaller corrections to this section's assumptions, both verified against the code:

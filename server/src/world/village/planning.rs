@@ -6,6 +6,7 @@
 
 mod civic_square;
 pub use civic_square::ensure_civic_squares;
+pub(crate) use civic_square::founding_civic_square;
 mod demand;
 mod districts;
 mod fishing;

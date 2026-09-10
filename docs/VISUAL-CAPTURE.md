@@ -15,6 +15,11 @@ The implementation separates orchestration from fixture data:
 
 - `client/src/capture.rs` owns application setup, camera movement, readiness and sequencing.
 - `client/src/capture/live.rs` owns the connected voyage and Village Lab hooks.
+  These also inspect ordinary seeded worlds: `FISTWORLD_VOYAGE_CAPTURE_LANDING=1`
+  adds a fifth shot after an ordinary inland right-click, disembark and walk to an
+  inhabited Hall. `FISTWORLD_LAB_CAPTURE_ACTIVITY=settlement` frames the nearest actual
+  Hall after the opening cinematic and waits for dressed residents; no lab fixture or
+  God access is required.
 - `client/src/capture/inspection.rs` reads shared world counters and live camera evidence;
   `presentation.rs` owns the offline scene-and-UI render target.
 - `world_fixture.rs`, `scene_fixtures.rs`, `ui_fixtures.rs` and `history_fixtures.rs`
@@ -24,6 +29,11 @@ The implementation separates orchestration from fixture data:
   [TOWN-GROWTH-LAB.md](TOWN-GROWTH-LAB.md) and `capture/town_growth.py`.
 - `client/src/capture_artifact.rs` owns scenario RON, readiness, semantic assertions, Bevy
   screenshot observers, PNG/JSON artifacts and baseline comparison.
+
+Capture runs set `FISTFORCE_NO_SETTINGS_FILE=1`: this disables **both reading and
+writing** `client_data/settings.ron`. The same session policy applies to connected
+test runs that set the flag. Fixture-only changes (hidden scenery, window size and
+100% scene scale) must never overwrite the player's preferences.
 
 The screenshot entity is completed by Bevy's `ScreenshotCaptured` observer. The app never polls
 the filesystem to guess when rendering is finished and never exits while the last PNG is still
@@ -59,6 +69,14 @@ fixture environment variables remain supported.
 
 ## Scenario format
 
+The meadow tree scenarios use the production foliage shader and actual exported LOD meshes.
+`meadow-trees-trio.ron` shows the three new species from two sides; `meadow-trees-lineup.ron`
+compares both LODs against an existing oak and pine. Their `FISTFORCE_CAPTURE_TREES` fixture
+waits for the meshes and materials before staging specimens. `meadow-trees.ron` checks real
+generated meadow placement, morning light and a pine forest. `meadow-trees-flight.ron` moves
+continuously out and back through a meadow with changing zoom, recording every 15 frames.
+See `asset_creation/MEADOW_TREES.md` for the asset and colour-mask contracts.
+
 Scenarios belong under `capture/scenarios/` and are versioned. `storage-hall.ron` stages the
 authored warehouse from three angles; `storage-hall-door.ron` records one continuous open/close
 cycle. The latter uses `FISTFORCE_CAPTURE_DOORS=cycle` to alternate the ordinary building-side
@@ -75,6 +93,18 @@ the capture camera's `eye` is measured above the local water level, not terrain.
 
 `lumberjack-hut.ron` checks the timber workshop from front/rear, at midnight, and at
 gameplay/town zoom. `lumberjack-hut-door.ron` records its ordinary door-demand cycle.
+
+`bakery.ron` checks the bakehouse front/rear, oven, roof and canopy undersides,
+night lighting and gameplay scale. The bakery fixture levels its plot with the
+normal building footprint/terrain blend contract. `bakery-door.ron` records a
+continuous demand-driven door cycle with the counters and entrance visible.
+See [the bakery handover](../asset_creation/BAKERY.md) for stock and light contracts.
+
+`tavern.ron` covers the inn, courtyard, dormer, night lighting and roof undersides;
+`tavern-door.ron` continuously exercises its door. The opt-in connected eight-guest
+review follows authoritative purchases, seating and departure. See
+[the tavern handover](../asset_creation/TAVERN_PROCEDURAL_HANDOVER.md) for launch
+commands and shared furniture/navigation contracts.
 
 `house-cabin-l1.ron`, `house-cabin-l2.ron`, `house-long-l1.ron` and
 `house-long-l2.ron` inspect each occupied home at daylight, midnight, rear and gameplay
@@ -171,6 +201,32 @@ Supported semantic assertions are:
 
 Assertions are evaluated immediately before rendering and are preserved in JSON even on failure,
 so a pretty screenshot cannot pass while its intended population or world state is absent.
+
+### Vegetation zoom recovery
+
+`capture/vegetation_zoom.py` generates two continuous close → map → close round trips
+on the reported Stoneham terrain (`world` seed `11272639609695457076`) and the maintained
+`big_world` forest reference. Each scenario has 661 frames and 23 PNG/JSON probes,
+including recovery periods after each return. They use ordinary procedural vegetation;
+the offline Stoneham view contains no server-created settlement fixture.
+
+```sh
+python3 capture/vegetation_zoom.py logs/captures/vegetation-scenarios
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario logs/captures/vegetation-scenarios/stoneham-vegetation-roundtrip.ron
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario logs/captures/vegetation-scenarios/forest-vegetation-roundtrip.ron
+```
+
+Metadata records `world.prop_roots`, `tree_roots`, `visible_tree_roots` and
+`grass_batches`. Visible tree roots have both local and inherited visibility enabled;
+this count does not prove that a mesh passed camera frustum/occlusion culling. Grass
+batches count instanced render entities, not individual tufts. Inspect the PNGs too.
+`prop_roots_at_least/at_most`, `visible_tree_roots_at_least/at_most` and
+`grass_batches_at_least/at_most` accept `(count: N)`. The generated scenarios require
+vegetation before and after both round trips and no props/batches at full map zoom.
+Assertions run on steady probes, after deferred streaming and visibility propagation
+have had time to follow the camera; they do not assert on the transition frame.
 
 ## Window, offscreen scene and diagnostics
 
@@ -630,6 +686,40 @@ Verification completed with `cargo check --workspace --all-targets`,
 `cargo test --workspace` (873 passed, 11 existing ignored),
 `cargo build --workspace --profile playtest`, formatting and whitespace checks.
 
+
+## Graphics controls and native display modes
+
+`capture/scenarios/ui-graphics.ron` captures the real graphics panel at 1600x1000;
+override `--resolution 1280x720` to check the smaller layout. The companion
+`ui-graphics-confirmation.ron` checks the real Keep/Revert panel at 720p. Its offline
+fixture holds the confirmation timer at 15 seconds without changing the native
+window or graphics preferences. Both use `target: window` for the composed UI.
+
+For native fullscreen verification, keep the computer unlocked, start an ordinary
+local server, then run the connected client from the repo root with:
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" \
+FISTFORCE_NO_SETTINGS_FILE=1 FISTFORCE_AUTOCONNECT=DisplayReview \
+FISTWORLD_AUTOSPAWN_HERO=1 FISTFORCE_DISPLAY_MODE=windowed \
+FISTWORLD_DISPLAY_CAPTURE_DIR="$PWD/logs/captures/display-modes" \
+  ./target/playtest/client
+```
+
+This opt-in driver activates the production UI button handlers, checks Windowed,
+Borderless and Exclusive modes, adjusts scene and supported output resolution,
+confirms changes, reverts to the confirmed borderless mode and finally returns to
+Windowed. It exits with failure on timeout or invalid capture. Read `summary.json`,
+the PNG/`.capture.json` pairs and `.display.json` native-mode evidence together.
+The latter records winit's actual fullscreen state, monitor video mode, content size
+and scene render target after 12 stable frames. On macOS, borderless content can be
+shorter than the monitor's video mode because Cocoa excludes the notch safe area.
+An output step is explicitly skipped if the monitor has only one eligible mode.
+The driver waits before sending input when no active primary monitor is reported;
+macOS reports no active displays while the session is locked.
+These connected screenshots use `target: scene`; use the offline scenarios above
+for UI layout. This exercises real action handlers, not native pointer hit-testing,
+and `FISTFORCE_NO_SETTINGS_FILE=1` prevents any read or write of player preferences.
 
 ## Shared UI theme gallery and motion rehearsal
 

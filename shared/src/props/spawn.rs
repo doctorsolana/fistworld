@@ -307,6 +307,7 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
     let clump_mask = fbm(splitmix64(seed ^ 77) as u32, 3, 1.0 / 90.0);
     let glade_mask = fbm(splitmix64(seed ^ 0x61A_DE) as u32, 2, 1.0 / 150.0);
     let copse_mask = fbm(splitmix64(seed ^ 0xC0F_5E) as u32, 2, 1.0 / 230.0);
+    let species_mask = fbm(splitmix64(seed ^ 0xC010_7EED) as u32, 2, 1.0 / 85.0);
     // Flowers gather in ~25 m drifts instead of a uniform sprinkle: dense
     // inside a drift, rare outside - clustering is what makes them read as
     // a PLACE (a flower patch you could walk to) rather than confetti.
@@ -460,12 +461,19 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
                             // Broadleaf country — never a pine. Skeleton trees
                             // take over across the dry fringe so the meadow
                             // treeline dies out on the approach to the desert.
-                            let pool = if rand01(&mut rng) < climate.dry * 0.70 {
-                                TREES_DEAD
+                            let dead = rand01(&mut rng) < climate.dry * 0.70;
+                            let choice = rand01(&mut rng);
+                            let kind = if dead {
+                                pick(TREES_DEAD, choice)
                             } else {
-                                TREES_BROADLEAF
+                                let patch =
+                                    species_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5;
+                                super::meadow::accent_tree(choice, patch).unwrap_or_else(|| {
+                                    pick(TREES_BROADLEAF, ((choice - 0.30) / 0.70).max(0.0))
+                                })
                             };
-                            (pick(pool, rand01(&mut rng)), 0.9 + rand01(&mut rng) * 0.4)
+                            // Keep the RNG draw count and every accepted position unchanged.
+                            (kind, 0.9 + rand01(&mut rng) * 0.4)
                         } else if roll > 0.995 {
                             (
                                 pick(SCATTER_ROCKS, rand01(&mut rng)),
@@ -919,12 +927,18 @@ mod tests {
         }
 
         let mut counts: HashMap<(WorldBiome, &str), u32> = HashMap::new();
+        let accents = [
+            PropKind::FieldMapleA,
+            PropKind::CopperBeechA,
+            PropKind::WildCherryA,
+        ];
+        let mut accent_counts = [0usize; 3];
         for chunk in chunks {
             for spawn in generate_chunk_prop_spawns(&terrain.generator, chunk) {
                 let Some(kind) = spawn.kind else { continue };
                 let family = if TREES_PINE.contains(&kind) {
                     "pine"
-                } else if TREES_BROADLEAF.contains(&kind) || TREES_TAIGA_BIRCH.contains(&kind) {
+                } else if kind.is_tree() {
                     "broadleaf"
                 } else if TREES_DEAD.contains(&kind) {
                     "dead"
@@ -943,11 +957,23 @@ mod tests {
                 let dz = terrain.get_height(x, z + STEP) - h;
                 let slope = dx.abs().max(dz.abs()) / STEP;
                 let biome = field.biome(x, z, h, slope);
+                if let Some(i) = accents.iter().position(|accent| *accent == kind) {
+                    assert_eq!(
+                        biome,
+                        WorldBiome::Meadows,
+                        "meadow accent leaked into {biome:?}"
+                    );
+                    accent_counts[i] += 1;
+                }
                 *counts.entry((biome, family)).or_default() += 1;
             }
         }
         let count = |b: WorldBiome, f: &'static str| *counts.get(&(b, f)).unwrap_or(&0);
         let trees = |b: WorldBiome| count(b, "pine") + count(b, "broadleaf") + count(b, "dead");
+        assert!(
+            accent_counts.iter().all(|count| *count > 0),
+            "missing meadow species: {accent_counts:?}"
+        );
 
         // Every biome with a species rule still grows a healthy stand.
         assert!(
@@ -1128,7 +1154,13 @@ mod tests {
             let trees = get("broadleaf") + get("conifer") + get("dead");
             println!(
                 "{b:<11}{km2:>9.2}   trees {trees:>6.0}  (broadleaf {:>5.0} conifer {:>5.0} dead {:>4.0})  bush {:>4.0}  fern {:>4.0}  rock {:>4.0}  flower {:>4.0}",
-                get("broadleaf"), get("conifer"), get("dead"), get("bush"), get("fern"), get("rock"), get("flower")
+                get("broadleaf"),
+                get("conifer"),
+                get("dead"),
+                get("bush"),
+                get("fern"),
+                get("rock"),
+                get("flower")
             );
         }
     }

@@ -5,16 +5,22 @@
 
 pub mod actions;
 pub mod animation;
+mod capture_fixture;
+mod display;
+mod display_capture;
 pub mod layout;
+mod sliders;
 pub mod widgets;
 
 use actions::{
-    handle_display_confirmation, handle_escape_key, handle_graphics_toggles,
-    handle_input_slider_steps, handle_pause_actions, handle_slider_steps, pause_menu_closed,
-    pause_menu_open, reset_menu_state, sync_display_confirmation, sync_pause_menu_cursor,
+    handle_display_confirmation, handle_escape_key, handle_graphics_toggles, handle_pause_actions,
+    pause_menu_closed, pause_menu_open, reset_menu_state, sync_display_confirmation,
+    sync_pause_menu_cursor,
 };
 use animation::animate_menu_transition;
+use display::{handle_display_modes, handle_display_steps, sync_display_controls};
 use layout::{despawn_pause_menu, spawn_pause_menu};
+use sliders::{handle_input_slider_steps, handle_slider_steps, sync_slider_controls};
 use widgets::{spawn_button, spawn_controls_panel, spawn_graphics_panel};
 
 use bevy::app::AppExit;
@@ -29,8 +35,8 @@ use super::modal::{modal_root_chrome, sync_modal_cursor, ModalRoot};
 use super::styles::*;
 use crate::input::InputState;
 use crate::render::systems::{
-    available_display_resolutions, DisplayMode, DisplayResolution, GraphicsSettings, InputSettings,
-    PendingDisplayChange,
+    available_display_resolutions, clamped_render_scale, scene_render_resolution, DisplayMode,
+    DisplayResolution, GraphicsSettings, InputSettings, PendingDisplayChange,
 };
 use crate::states::GameState;
 use crate::GameClient;
@@ -38,7 +44,7 @@ use crate::GameClient;
 /// Deterministically opens a pause-menu state for the offline visual harness.
 pub(crate) fn open_for_capture(commands: &mut Commands, panel: &str) {
     let (graphics_open, controls_open) = match panel {
-        "graphics" => (true, false),
+        "graphics" | "graphics-confirmation" => (true, false),
         "controls" => (false, true),
         _ => (false, false),
     };
@@ -58,6 +64,8 @@ pub struct PauseMenuPlugin;
 
 impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
+        display_capture::install(app);
+        capture_fixture::install(app);
         app.init_resource::<PauseMenuState>();
         app.init_resource::<PauseMenuOpen>();
         app.add_systems(Update, sync_pause_menu_cursor.run_if(pause_menu_open));
@@ -72,11 +80,19 @@ impl Plugin for PauseMenuPlugin {
                 handle_pause_actions,
                 handle_graphics_toggles,
                 handle_slider_steps,
+                handle_display_modes,
+                handle_display_steps,
                 handle_display_confirmation,
                 sync_display_confirmation,
                 handle_input_slider_steps,
                 animate_menu_transition,
             )
+                .run_if(pause_menu_open),
+        );
+        app.add_systems(
+            PostUpdate,
+            (sync_display_controls, sync_slider_controls)
+                .before(super::button_motion::animate_buttons)
                 .run_if(pause_menu_open),
         );
         app.add_systems(
@@ -142,7 +158,6 @@ enum GraphicsToggle {
 /// Slider controls (for view distance and prop distance)
 #[derive(Component, Clone, Copy, Debug)]
 enum SliderControl {
-    DisplayMode,
     Resolution,
     RenderScale,
     ShadowQuality,

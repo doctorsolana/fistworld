@@ -6,12 +6,15 @@ the client only presents the vessel and sends destinations.
 
 ## New-player flow
 
-1. A player submits an account name. A returning account on the same running server
-   re-adopts its existing hero and skips creation.
+1. A player submits an account name. The server supplies its exact terrain recipe and
+   map hash; the client prepares that world before entering play or requesting a Hero.
+   A returning account on the same running server re-adopts its existing hero and skips creation.
 2. A genuinely new account receives the mandatory **Create Your Hero** screen. Confirming
    sends only the outfit; the client does not choose a spawn position.
-3. The server samples an approach corridor from the active map edge using the stable account
-   seed. It accepts only continuous water leading to reachable dry shore, then starts the
+3. The ordinary seeded world has prevalidated coastal approaches within walking distance
+   of an inhabited Hall. The server chooses among them using the stable account seed.
+   Explicit authored maps retain the general coast sampler. Both accept only continuous
+   water leading to reachable dry shore, then start the
    Dinghy roughly 48–56 metres offshore: close enough for a short opening voyage, while
    leaving enough water for sailing to feel like an arrival rather than starting on the beach.
    A fresh server begins at 08:00 on the display clock, with the sun already above the

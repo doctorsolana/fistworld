@@ -38,6 +38,11 @@ const VIEWPORT_EDGE_THICKNESS: f32 = 1.5;
 
 pub struct WorldMapPlugin;
 
+pub(crate) fn reset_world_map(world: &mut World) {
+    world.insert_resource(MapTexture::default());
+    world.insert_resource(MapUiConfig::default());
+}
+
 impl Plugin for WorldMapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapOpen>();

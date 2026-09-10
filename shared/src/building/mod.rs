@@ -4,6 +4,7 @@
 
 mod defs;
 mod footprint;
+pub mod tavern;
 mod zones;
 
 pub use defs::*;

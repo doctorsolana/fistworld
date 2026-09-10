@@ -44,6 +44,18 @@ pub(crate) const WATER_DEEP_RGBA: [f32; 4] = [0.012, 0.09, 0.26, 0.92];
 
 pub struct WaterPlugin;
 
+pub(crate) fn reset_world_streaming(world: &mut World) {
+    let entities: Vec<_> = world
+        .query_filtered::<Entity, With<WaterChunk>>()
+        .iter(world)
+        .collect();
+    for entity in entities {
+        world.despawn(entity);
+    }
+    world.insert_resource(LoadedWaterChunks::default());
+    world.insert_resource(WaterDetailCoverage::default());
+}
+
 impl Plugin for WaterPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ToonWaterMaterial>::default());

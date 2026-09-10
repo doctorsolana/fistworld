@@ -31,7 +31,7 @@ enum ServerSet {
 fn configure_server_fixed_schedule(app: &mut App) {
     app.add_systems(
         Startup,
-        world::immigration::prepare_natural_immigration_coasts,
+        world::immigration::prepare_natural_immigration_coasts.after(world::new_world::populate),
     );
     world::village::schedule::configure_shared_village_simulation(app, FixedUpdate);
 

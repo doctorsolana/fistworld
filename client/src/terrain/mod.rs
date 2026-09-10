@@ -26,6 +26,23 @@ pub(crate) use streaming::TerrainStreamingState;
 /// Plugin for terrain rendering.
 pub struct TerrainPlugin;
 
+pub(crate) fn reset_world_streaming(world: &mut World) {
+    let entities: Vec<_> = world
+        .query_filtered::<Entity, Or<(With<TerrainChunk>, With<chunks::FarTerrain>)>>()
+        .iter(world)
+        .collect();
+    for entity in entities {
+        world.despawn(entity);
+    }
+    world.insert_resource(LoadedChunks::default());
+    world.insert_resource(streaming::TerrainStreamingState::default());
+    world.insert_resource(streaming::TerrainChunkTasks::default());
+    world.insert_resource(streaming::TerrainDeltaState::default());
+    world.insert_resource(paint::TerrainPaintState::default());
+    world.remove_resource::<shared::city::AuthoredCityLayout>();
+    world.init_resource::<shared::city::AuthoredCityLayout>();
+}
+
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<materials::TerrainSplatMaterial>::default());

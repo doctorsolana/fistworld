@@ -15,6 +15,9 @@ pub(crate) fn is_tree_kind(kind: PropKind) -> bool {
             | ChestnutA
             | BroadleafHighCrownA
             | BroadleafTallA
+            | FieldMapleA
+            | CopperBeechA
+            | WildCherryA
             | DeadTreeA
             | DeadTreeB
             | DeadTreeC

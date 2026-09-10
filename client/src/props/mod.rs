@@ -17,8 +17,25 @@ mod wind;
 pub use wind::WindFoliageMaterial;
 
 pub use debug::PropLodDebugMode;
+pub(crate) use ground_cover_chunked::ChunkedGroundCover;
 pub use plugin::PropsPlugin;
 pub use types::*;
+
+pub(crate) fn reset_world_streaming(world: &mut bevy::prelude::World) {
+    use bevy::{ecs::system::RunSystemOnce, prelude::*};
+    let entities: Vec<_> = world
+        .query_filtered::<Entity, With<EnvironmentProp>>()
+        .iter(world)
+        .collect();
+    for entity in entities {
+        world.despawn(entity);
+    }
+    world.insert_resource(LoadedPropChunks::default());
+    world.insert_resource(PendingPropSpawns::default());
+    world.insert_resource(PropChunkIndex::default());
+    world.insert_resource(BuildZoneChunkIndex::default());
+    let _ = world.run_system_once(ground_cover_chunked::clear_chunked_ground_cover);
+}
 
 pub(crate) use kinds::{is_tree_kind, uses_swap_mesh_lod};
 pub(crate) use simple_mesh::{try_spawn_simple_prop_mesh, SimplePropMeshCache};

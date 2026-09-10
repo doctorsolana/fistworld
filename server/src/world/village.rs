@@ -21,6 +21,8 @@ pub(crate) mod civic;
 mod commerce;
 mod companies;
 mod construction;
+pub(crate) use construction::{level_construction_ground, publish_terrain_chunks};
+pub(crate) use planning::founding_civic_square;
 mod development_market;
 mod economy;
 mod employment;
@@ -94,7 +96,9 @@ pub use objectives::sync_character_objectives;
 pub(crate) use planning::find_site;
 #[cfg(test)]
 pub(crate) use planning::SettlementUrbanPlan;
-pub use planning::{ensure_civic_squares, consider_permits, find_fishing_site, PermitPlanningDiagnostics, FREEBOARD};
+pub use planning::{
+    consider_permits, ensure_civic_squares, find_fishing_site, PermitPlanningDiagnostics, FREEBOARD,
+};
 #[cfg(test)]
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
 pub(crate) use planning::{
@@ -127,6 +131,7 @@ pub use settlement_economy::{
     ensure_settlement_economies, ensure_village_finances, sync_public_market_storage,
     update_moot_market_targets, update_settlement_economies, SettlementEconomyRuntime,
 };
+pub(crate) use tavern::stage_tavern_review;
 pub use tavern::{
     assign_tavern_routines, ensure_tavern_services, refresh_character_day_plans,
     review_tavern_businesses, run_strategic_tavern_visits, run_tavern_routines, TavernVisitRoutine,
@@ -1171,6 +1176,9 @@ pub struct HomeAssignment {
 }
 
 impl HomeAssignment {
+    pub(crate) const fn new(home: Entity) -> Self {
+        Self { home }
+    }
     pub(crate) const fn home(&self) -> Entity {
         self.home
     }

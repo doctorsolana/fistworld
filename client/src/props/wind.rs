@@ -20,6 +20,22 @@ pub struct WindExtension {
     /// seed phase — both for the frost tint (see wind_foliage.wgsl).
     #[uniform(101)]
     pub extra: Vec4,
+    /// x: brightness range, y: warmth range, z: explicit canopy UV mask.
+    /// Shared per species; the shader derives a stable tint from each tree's origin.
+    #[uniform(102)]
+    pub variation: Vec4,
+}
+
+pub(super) fn canopy_variation(kind: Option<shared::props::PropKind>) -> Vec4 {
+    use shared::props::PropKind::*;
+    match kind {
+        Some(PineA | PineB | PineTallA | PineTallB | PineYoungA | PineYoungB) => {
+            Vec4::new(0.045, 0.018, 0.0, 0.0)
+        }
+        Some(FieldMapleA | CopperBeechA | WildCherryA) => Vec4::new(0.10, 0.055, 1.0, 0.0),
+        Some(k) if k.is_tree() => Vec4::new(0.10, 0.065, 0.0, 0.0),
+        _ => Vec4::ZERO,
+    }
 }
 
 impl MaterialExtension for WindExtension {

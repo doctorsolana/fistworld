@@ -26,6 +26,10 @@ See [the game code map](../docs/GAME-CODE-MAP.md) for the cross-crate ownership 
 
 `world/mod.rs` is an orchestration surface. Its principal modules are:
 
+- `bootstrap.rs` selects the normal server's world seed before terrain-dependent resources
+  initialize. `new_world/` surveys sites and land regions, validates complete layouts and
+  initializes named society once before the socket opens. It has no recurring growth or
+  economy overrides; see [NEW-WORLD.md](../docs/NEW-WORLD.md).
 - `identity.rs`: allocates and indexes durable `PersonId`, `SettlementId`,
   `BuildingId` and `CompanyId` values and migrates remaining readable legacy relationships.
 - `simulation_time.rs` and `time.rs`: the one real/world/warp clock and world-day state.
