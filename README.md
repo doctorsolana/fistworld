@@ -46,8 +46,13 @@ arrival and reusable ship-navigation contract are documented in
   Bounded frontage infill encourages small groups of homes, with soft proximity
   preferences for related workplaces. The [town-growth lab](docs/TOWN-GROWTH-LAB.md)
   compares actual development under gentle, steady and burst immigration.
-- Physical Wood supply and construction; Farmsteads with two wheat fields, Fisherman's
-  Huts with piers, Lumberjack Huts with reachable-tree checks, authored Windmills and
+- House-adjacent [yards](docs/HOUSEHOLD-YARDS.md) fitted to available land, roads and
+  neighbouring building envelopes, with open entrances, planting, laundry and wood storage.
+  Shared boundary geometry supplies the visible fences and authoritative movement blockers;
+  incompatible future construction can revoke the yard. Garden plants are decorative.
+- Physical Wood supply and construction; Farmsteads with [fitted wheat parcels](docs/FARM-FIELDS.md)
+  divided into two durable worker subareas, Fisherman's Huts with piers,
+  Lumberjack Huts with reachable-tree checks, authored Windmills and
   Bakeries, and repeated housing/food construction driven by measured shortages.
 - Continuous visible work loops for farming, fishing, chopping, milling and baking;
   non-edible Wheat becomes household Flour, while Bakeries convert two Flour to four

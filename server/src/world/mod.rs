@@ -12,6 +12,7 @@
 pub mod bootstrap;
 pub mod dev;
 pub mod fortifications;
+pub mod household_yards;
 pub mod identity;
 pub mod immigration;
 pub mod map_state;
@@ -32,3 +33,5 @@ pub mod village_roads;
 pub mod army_lab;
 
 pub mod wildlife;
+
+pub(crate) mod farm_boundaries;

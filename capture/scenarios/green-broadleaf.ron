@@ -1,0 +1,23 @@
+(
+    version: 1,
+    name: "green-broadleaf",
+    map: "village_lab",
+    output_dir: "logs/captures/green-broadleaf",
+    resolution: (1600, 1000),
+    target: scene,
+    show_window: false,
+    warmup_frames: 300,
+    readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: { "FISTFORCE_CAPTURE_TREES": "green-broadleaf", "FISTFORCE_CAPTURE_CLOUDS": "clear" },
+    // x=-4.5: OakA; x=4.5: ChestnutA. Near row z=-6.5 is LOD0;
+    // rear row z=6.5 explicitly uses LOD1 through the production material.
+    shots: [
+        (name: "01-both-lods", focus: (0.0, 2.0, 0.0), yaw: -0.30, zoom: 43.0, time_of_day: 0.50, assertions: [entities_at_least(count: 100)]),
+        (name: "02-oak-near", focus: (-4.5, 1.0, -6.5), yaw: -0.45, zoom: 17.0, time_of_day: 0.50),
+        (name: "03-chestnut-near", focus: (4.5, 1.5, -6.5), yaw: 0.35, zoom: 21.0, time_of_day: 0.50),
+        (name: "04-far-meshes", focus: (0.0, 2.0, 6.5), yaw: 2.85, zoom: 28.0, time_of_day: 0.50),
+        (name: "05-reverse", focus: (0.0, 2.0, 0.0), yaw: 2.85, zoom: 43.0, time_of_day: 0.50),
+        (name: "06-town-scale", focus: (0.0, 2.0, 0.0), yaw: -0.30, zoom: 130.0, time_of_day: 0.50),
+        (name: "07-under-crowns", focus: (0.0, 0.0, -18.0), yaw: 3.14159265, zoom: 20.0, pitch: Some(-0.10), eye: 10.4, time_of_day: 0.50),
+    ],
+)

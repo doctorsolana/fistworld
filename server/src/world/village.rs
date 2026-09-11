@@ -102,8 +102,8 @@ pub use planning::{
 #[cfg(test)]
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
 pub(crate) use planning::{
-    nearby_defense_reservations, road_access_blockers_for_plot, validate_manual_plot,
-    ManualPlotApproval, RoadAccessBlocker,
+    nearby_defense_reservations, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
+    validate_manual_plot, ManualPlotApproval, RoadAccessBlocker,
 };
 pub use population::{
     advance_immigration_departures, arrive_at_settlement, recount_residents, seek_settlement,
@@ -217,6 +217,15 @@ type PermitBusyFilter = Or<(
 /// permit system's settlement queries within Bevy's system-parameter limit.
 #[derive(SystemParam)]
 pub struct PermitPlanningResources<'w, 's> {
+    fields: Query<
+        'w,
+        's,
+        (
+            &'static FarmField,
+            &'static PlayerPosition,
+            &'static PlayerRotation,
+        ),
+    >,
     ids: ResMut<'w, crate::world::identity::WorldIdAllocator>,
     terrain: Option<Res<'w, WorldTerrain>>,
     colliders: Option<Res<'w, StaticColliders>>,

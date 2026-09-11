@@ -193,8 +193,8 @@ pub(super) fn plot_fits_navigation_bounds(
     }
 
     if let (Some(fields), Some(field_half)) = (
-        kind.field_positions(candidate, rotation),
-        kind.field_half_extents(),
+        kind.intended_field_positions(candidate, rotation),
+        kind.intended_field_half_extents(),
     ) {
         let reserved_half = field_half + Vec2::splat(shared::components::FARM_FIELD_TERRACE_MARGIN);
         if fields

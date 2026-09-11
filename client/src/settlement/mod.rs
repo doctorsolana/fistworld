@@ -10,17 +10,20 @@
 //! livestock, animation, lighting and stock displays own their presentation state.
 
 mod roads;
-mod smoke;
+pub(crate) mod roadside;
+pub(crate) mod smoke;
 
 mod animation;
 mod buildings;
 mod construction;
 mod debug;
+mod farm_wind;
 pub(crate) mod fortifications;
 mod grounds;
 mod lighting;
 mod livestock;
 mod stock;
+pub(crate) mod yards;
 
 use crate::states::GameState;
 use crate::terrain::TerrainUpdateSet;
@@ -55,7 +58,10 @@ pub struct SettlementPlugin;
 impl Plugin for SettlementPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(crate::render::building_lod::BuildingLodPlugin);
-        app.add_plugins(smoke::BakerySmokePlugin);
+        app.add_plugins(smoke::ChimneySmokePlugin);
+        app.add_plugins(yards::HouseholdYardsPlugin);
+        app.add_plugins(bevy::pbr::MaterialPlugin::<farm_wind::CropWindMaterial>::default());
+        app.add_plugins(roadside::RoadsidePlugin);
         app.add_plugins(fortifications::FortificationPlugin);
         app.init_resource::<BuildingDoorAssets>();
         app.init_resource::<roads::VillageRoadPaintState>();

@@ -1,16 +1,18 @@
-//! Cheap, production-driven chimney smoke for settlement workplaces.
+//! Shared, bounded chimney smoke for working bakeries and occupied homes.
 //!
-//! The bakery GLB supplies only an `FX_ChimneySmoke` anchor. Simulation truth
-//! decides when it fires, while this client-only pool owns soft presentation:
-//! real-time pacing, wind drift, growth and fade. Time warp therefore makes the
-//! bakery produce faster without turning its chimney into a particle cannon.
+//! Authored `FX_ChimneySmoke` anchors locate the actual flues. Bakeries follow
+//! production; inhabited homes have staggered cosmetic hearth cycles. Puffs use
+//! real-time pacing, so simulation time warp cannot multiply the render cost.
 
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
+use bevy::render::render_resource::AsBindGroup;
+use bevy::shader::ShaderRef;
 
 use shared::components::{
-    BuildingId, CloudSeed, SettlementBuilding, SettlementBuildingKind, WorkplaceOperation,
-    WorldTime,
+    BuildingId, CloudSeed, Household, SettlementBuilding, SettlementBuildingKind,
+    WorkplaceOperation, WorldTime,
 };
 
 use crate::states::GameState;
@@ -23,18 +25,19 @@ const MATERIAL_STAGES: usize = 6;
 const MAX_SMOKE_PARTICLES: usize = 256;
 const SMOKE_TEXTURE: &str = "fx/smoke_puff.png";
 
-pub(super) struct BakerySmokePlugin;
+pub(super) struct ChimneySmokePlugin;
 
-impl Plugin for BakerySmokePlugin {
+impl Plugin for ChimneySmokePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SmokePool>()
+        app.add_plugins(MaterialPlugin::<ChimneySmokeMaterial>::default())
+            .init_resource::<SmokePool>()
             .add_systems(Startup, setup_smoke_assets)
             .add_systems(
                 Update,
                 (
-                    discover_bakery_smoke_emitters,
+                    discover_chimney_emitters,
                     update_smoke_particles,
-                    emit_bakery_smoke,
+                    emit_chimney_smoke,
                 )
                     .chain()
                     .run_if(in_state(GameState::Playing)),
@@ -48,7 +51,26 @@ impl Plugin for BakerySmokePlugin {
 #[derive(Resource)]
 struct SmokeAssets {
     mesh: Handle<Mesh>,
-    materials: [Handle<StandardMaterial>; MATERIAL_STAGES],
+    materials: [Handle<ChimneySmokeMaterial>; MATERIAL_STAGES],
+}
+
+type ChimneySmokeMaterial = ExtendedMaterial<StandardMaterial, SmokeDensity>;
+
+/// The existing puff image supplies density, not a black paint colour.
+/// Reusing its texture avoids another FX asset and keeps domestic smoke pale.
+#[derive(Asset, AsBindGroup, TypePath, Debug, Clone, Default)]
+struct SmokeDensity {}
+
+impl MaterialExtension for SmokeDensity {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/chimney_smoke.wgsl".into()
+    }
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
 }
 
 #[derive(Resource, Default)]
@@ -57,8 +79,9 @@ struct SmokePool {
 }
 
 #[derive(Component)]
-struct BakerySmokeEmitter {
+struct ChimneySmokeEmitter {
     anchor: Entity,
+    domestic: bool,
     intensity: f32,
     accumulator: f32,
     seed: u64,
@@ -66,7 +89,7 @@ struct BakerySmokeEmitter {
 }
 
 #[derive(Component)]
-struct SmokeParticle {
+pub(crate) struct SmokeParticle {
     age: f32,
     lifetime: f32,
     velocity: Vec3,
@@ -81,64 +104,70 @@ struct SmokeParticle {
 
 /// An exhausted puff remains allocated and hidden for the next chimney.
 #[derive(Component)]
-struct InactiveSmoke;
+pub(crate) struct InactiveSmoke;
 
 fn setup_smoke_assets(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<ChimneySmokeMaterial>>,
 ) {
     // A camera-facing card is two triangles instead of the old faceted sphere.
     // Its authored density texture supplies the apparent internal volume.
     let mesh = meshes.add(Rectangle::new(1.0, 1.0));
     let texture = asset_server.load(SMOKE_TEXTURE);
     let colors = [
-        Color::srgba(0.46, 0.42, 0.38, 0.42),
-        Color::srgba(0.50, 0.47, 0.43, 0.36),
-        Color::srgba(0.54, 0.52, 0.49, 0.29),
-        Color::srgba(0.58, 0.57, 0.54, 0.21),
-        Color::srgba(0.62, 0.62, 0.59, 0.13),
-        Color::srgba(0.67, 0.67, 0.64, 0.045),
+        Color::srgba(0.70, 0.68, 0.61, 0.38),
+        Color::srgba(0.73, 0.72, 0.66, 0.33),
+        Color::srgba(0.77, 0.76, 0.71, 0.26),
+        Color::srgba(0.80, 0.80, 0.76, 0.18),
+        Color::srgba(0.83, 0.83, 0.80, 0.10),
+        Color::srgba(0.85, 0.85, 0.82, 0.035),
     ];
     let materials = colors.map(|base_color| {
-        materials.add(StandardMaterial {
-            base_color,
-            base_color_texture: Some(texture.clone()),
-            alpha_mode: AlphaMode::Blend,
-            cull_mode: None,
-            perceptual_roughness: 1.0,
-            metallic: 0.0,
-            // Stable readability in both noon glare and moonlight. The low
-            // alpha and overlapping faceted silhouettes provide the volume.
-            unlit: true,
-            ..default()
+        materials.add(ExtendedMaterial {
+            base: StandardMaterial {
+                base_color,
+                base_color_texture: Some(texture.clone()),
+                alpha_mode: AlphaMode::Blend,
+                cull_mode: None,
+                perceptual_roughness: 1.0,
+                metallic: 0.0,
+                // The density shader takes illumination from the view's sky
+                // and directional lights; a billboard normal is not a volume.
+                unlit: true,
+                ..default()
+            },
+            extension: SmokeDensity {},
         })
     });
     commands.insert_resource(SmokeAssets { mesh, materials });
 }
 
-/// Scene instantiation is asynchronous, so this deliberately retries bakeries
+/// Scene instantiation is asynchronous, so this deliberately retries buildings
 /// until the authored anchor appears in their descendant hierarchy.
-fn discover_bakery_smoke_emitters(
+fn discover_chimney_emitters(
     mut commands: Commands,
-    bakeries: Query<
+    buildings: Query<
         (
             Entity,
             &SettlementBuilding,
             Option<&BuildingId>,
             Option<&WorkplaceOperation>,
         ),
-        (With<BuildingVisual>, Without<BakerySmokeEmitter>),
+        (With<BuildingVisual>, Without<ChimneySmokeEmitter>),
     >,
     children: Query<&Children>,
     names: Query<&Name>,
 ) {
-    for (bakery, building, building_id, operation) in bakeries.iter() {
-        if building.kind != SettlementBuildingKind::Bakery {
+    for (building_entity, building, building_id, operation) in buildings.iter() {
+        if !matches!(
+            building.kind,
+            SettlementBuildingKind::Bakery | SettlementBuildingKind::House
+        ) {
             continue;
         }
-        let mut stack = vec![bakery];
+        let mut stack = vec![building_entity];
         let mut anchor = None;
         while let Some(entity) = stack.pop() {
             if names
@@ -155,17 +184,20 @@ fn discover_bakery_smoke_emitters(
         let Some(anchor) = anchor else {
             continue;
         };
-        let seed = building_id.map_or_else(|| bakery.to_bits(), |id| id.0);
+        let seed = building_id.map_or_else(|| building_entity.to_bits(), |id| id.0);
         let active = operation.is_some_and(|operation| operation.is_active());
-        commands.entity(bakery).insert(BakerySmokeEmitter {
-            anchor,
-            intensity: if active { 1.0 } else { 0.0 },
-            // Stagger chimneys and give an already-working captured bakery a
-            // visible first puff promptly without an all-at-once startup burst.
-            accumulator: sample(seed, 0, 0) * 0.55,
-            seed,
-            sequence: 0,
-        });
+        commands
+            .entity(building_entity)
+            .insert(ChimneySmokeEmitter {
+                anchor,
+                domestic: building.kind == SettlementBuildingKind::House,
+                intensity: if active { 1.0 } else { 0.0 },
+                // Stagger chimneys and give an already-working captured bakery a
+                // visible first puff promptly without an all-at-once startup burst.
+                accumulator: sample(seed, 0, 0) * 0.55,
+                seed,
+                sequence: 0,
+            });
     }
 }
 
@@ -173,20 +205,20 @@ fn update_smoke_particles(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SmokeAssets>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, With<crate::camera_rts::CommanderCamera>>,
     mut particles: Query<
         (
             Entity,
             &mut SmokeParticle,
             &mut Transform,
             &mut Visibility,
-            &mut MeshMaterial3d<StandardMaterial>,
+            &mut MeshMaterial3d<ChimneySmokeMaterial>,
         ),
         Without<InactiveSmoke>,
     >,
 ) {
     let dt = time.delta_secs().min(0.2);
-    let camera_position = cameras.iter().next().map(GlobalTransform::translation);
+    let camera_position = cameras.single().ok().map(GlobalTransform::translation);
     for (entity, mut particle, mut transform, mut visibility, mut material) in particles.iter_mut()
     {
         particle.age += dt;
@@ -223,7 +255,7 @@ fn update_smoke_particles(
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn emit_bakery_smoke(
+fn emit_chimney_smoke(
     mut commands: Commands,
     time: Res<Time>,
     assets: Res<SmokeAssets>,
@@ -233,14 +265,19 @@ fn emit_bakery_smoke(
     world_time: Query<&WorldTime>,
     cloud_seed: Query<&CloudSeed>,
     anchors: Query<&GlobalTransform>,
-    mut emitters: Query<(Entity, Option<&WorkplaceOperation>, &mut BakerySmokeEmitter)>,
+    mut emitters: Query<(
+        Entity,
+        Option<&WorkplaceOperation>,
+        Option<&Household>,
+        &mut ChimneySmokeEmitter,
+    )>,
     mut inactive: Query<
         (
             Entity,
             &mut SmokeParticle,
             &mut Transform,
             &mut Visibility,
-            &mut MeshMaterial3d<StandardMaterial>,
+            &mut MeshMaterial3d<ChimneySmokeMaterial>,
         ),
         With<InactiveSmoke>,
     >,
@@ -265,14 +302,18 @@ fn emit_bakery_smoke(
     let dt = time.delta_secs().min(0.2);
     let mut available = inactive.iter_mut();
 
-    for (bakery, operation, mut emitter) in emitters.iter_mut() {
+    for (building_entity, operation, household, mut emitter) in emitters.iter_mut() {
         let Ok(anchor_transform) = anchors.get(emitter.anchor) else {
             // Handles a scene hot-reload: rediscover the replacement anchor.
-            commands.entity(bakery).remove::<BakerySmokeEmitter>();
+            commands
+                .entity(building_entity)
+                .remove::<ChimneySmokeEmitter>();
             continue;
         };
         let active_workers = operation.map_or(0, |operation| operation.active_workers);
-        let target = if active_workers > 0 {
+        let target = if emitter.domestic {
+            domestic_intensity(household, emitter.seed, clock)
+        } else if active_workers > 0 {
             1.0 + f32::from(active_workers.saturating_sub(1).min(2)) * 0.12
         } else {
             0.0
@@ -302,7 +343,14 @@ fn emit_bakery_smoke(
                 break;
             }
             emitter.accumulator -= interval;
-            let particle = make_particle(emitter.seed, emitter.sequence, direction, wind_speed);
+            let mut particle = make_particle(emitter.seed, emitter.sequence, direction, wind_speed);
+            if emitter.domestic {
+                // Thin domestic flues make a soft plume, not an industrial stack.
+                particle.start_scale *= 0.62;
+                particle.end_scale *= 0.65;
+                particle.velocity.x *= 0.75;
+                particle.velocity.z *= 0.75;
+            }
             let transform = particle_transform(origin, &particle);
             emitter.sequence = emitter.sequence.wrapping_add(1);
             emitted_this_frame += 1;
@@ -318,7 +366,7 @@ fn emit_bakery_smoke(
             } else if pool.allocated < MAX_SMOKE_PARTICLES {
                 pool.allocated += 1;
                 commands.spawn((
-                    Name::new("Pooled bakery chimney smoke"),
+                    Name::new("Pooled chimney smoke"),
                     particle,
                     Mesh3d(assets.mesh.clone()),
                     MeshMaterial3d(assets.materials[0].clone()),
@@ -334,6 +382,23 @@ fn emit_bakery_smoke(
                 break;
             }
         }
+    }
+}
+
+/// Cosmetic hearth use is tied to authoritative occupancy, with broad, staggered
+/// cooking/heating periods. No per-house timers or replicated particle state.
+fn domestic_intensity(household: Option<&Household>, seed: u64, clock: &WorldTime) -> f32 {
+    if household.is_none_or(|home| home.resident_ids.is_empty()) {
+        return 0.0;
+    }
+    let hour = clock.normalized_time() * 24.0;
+    let meal_time = (5.0..9.0).contains(&hour) || (16.0..21.0).contains(&hour);
+    let period = ((hour + sample(seed, 0, 21) * 3.0) / 3.0).floor() as u32;
+    let active_fraction = if meal_time { 0.80 } else { 0.45 };
+    if sample(seed ^ u64::from(clock.day), period, 22) < active_fraction {
+        0.40 + sample(seed, 0, 23) * 0.12
+    } else {
+        0.0
     }
 }
 
@@ -421,6 +486,37 @@ fn clear_smoke_pool(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn household_smoke_requires_real_occupants_and_stays_bounded() {
+        let mut clock = WorldTime::new_default();
+        let occupied = Household {
+            resident_ids: vec![shared::components::PersonId(7)],
+            residents: vec!["Resident".into()],
+        };
+        let display_name_only = Household {
+            residents: occupied.residents.clone(),
+            ..default()
+        };
+        let mut lit = 0;
+        for hour in 0..24 {
+            clock.seconds_in_cycle = hour as f32 / 24.0 * clock.cycle_duration();
+            assert_eq!(domestic_intensity(None, 42, &clock), 0.0);
+            assert_eq!(
+                domestic_intensity(Some(&display_name_only), 42, &clock),
+                0.0
+            );
+            for seed in 0..100 {
+                let amount = domestic_intensity(Some(&occupied), seed, &clock);
+                assert!((0.0..=0.52).contains(&amount));
+                lit += usize::from(amount > 0.0);
+            }
+        }
+        assert!(
+            (700..1900).contains(&lit),
+            "a town should have varied hearth cycles: {lit}"
+        );
+    }
 
     #[test]
     fn smoke_fade_stages_cover_the_whole_lifetime() {

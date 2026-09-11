@@ -72,8 +72,8 @@ impl SettlementCivicSquare {
             return true;
         }
         if let (Some(fields), Some(half)) = (
-            kind.field_positions(position, rotation),
-            kind.field_half_extents(),
+            kind.intended_field_positions(position, rotation),
+            kind.intended_field_half_extents(),
         ) {
             if fields.into_iter().any(|field| {
                 field.xz().distance(self.market_position.xz())
@@ -131,7 +131,9 @@ mod tests {
         let mut square = square();
         let position = Vec3::ZERO;
         let rotation = 0.7;
-        square.center = Kind::Farmstead.field_positions(position, rotation).unwrap()[0];
+        square.center = Kind::Farmstead
+            .intended_field_positions(position, rotation)
+            .unwrap()[0];
         square.half_extents = Vec2::splat(3.0);
         assert!(square.blocks_plot(Kind::Farmstead, position, rotation));
         let definition = Kind::Farmstead.placement_definition();

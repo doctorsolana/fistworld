@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use shared::building::point_in_any_build_zone_entries;
-use shared::components::VillageRoad;
+use shared::components::{distance_squared_to_segment, VillageRoad};
 use shared::props::{PropKind, PropSpawn};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
 
@@ -30,6 +30,9 @@ use super::{BuildZoneChunkIndex, PropAssets};
 
 const GROUND_COVER_CHUNK_RADIUS: i32 = 4;
 const GRASS_BATCH_CHUNKS: i32 = 3;
+/// Trampled/cut verges transition back into the taller wild meadow. This is
+/// presentation only; the server's road and navigation footprint is unchanged.
+const TENDED_ROAD_VERGE: f32 = 11.0;
 /// Grass blades are well below one pixel by this distance. Keeping their
 /// alpha-masked geometry alive beyond it turns whole meadow sectors into
 /// shimmering dots and wastes fill rate in middle/map view.
@@ -69,6 +72,7 @@ pub struct ChunkedGroundCover;
 
 #[derive(Default)]
 struct ChunkGrassInstances {
+    field_revision: u64,
     short: Vec<GrassInstance>,
     tall: Vec<GrassInstance>,
     fern_a: Vec<GrassInstance>,
@@ -109,6 +113,7 @@ pub struct ChunkedGroundCoverState {
     materials: HashMap<PropKind, Handle<InstancedGrassMaterial>>,
     material_cutout: Option<bool>,
     reported_chunk_count: usize,
+    yard_version: u64,
 }
 
 fn in_radius(coord: ChunkCoord, anchor: ChunkCoord, radius: i32) -> bool {
@@ -144,6 +149,54 @@ fn stable_height(position: Vec3) -> f32 {
     let value = (position.x * 127.1 + position.z * 311.7).sin() * 43_758.547;
     let random = value - value.floor();
     1.3 * (1.0 + (random - 0.5) * 0.5)
+}
+
+fn meadow_hash(x: u32, z: u32, seed: u64) -> f32 {
+    let value = shared::worldgen::splitmix64(((x as u64) << 32) ^ z as u64 ^ seed);
+    (value >> 40) as f32 / (1_u32 << 24) as f32
+}
+
+fn smooth_unit(value: f32) -> f32 {
+    let t = value.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn smooth_meadow_noise(point: Vec2, seed: u64) -> f32 {
+    let cell = point.floor().as_ivec2();
+    let fraction = point - point.floor();
+    let x = smooth_unit(fraction.x);
+    let z = smooth_unit(fraction.y);
+    let sample = |dx: i32, dz: i32| meadow_hash((cell.x + dx) as u32, (cell.y + dz) as u32, seed);
+    let corners = [sample(0, 0), sample(1, 0), sample(0, 1), sample(1, 1)];
+    let low = corners[0] + (corners[1] - corners[0]) * x;
+    let high = corners[2] + (corners[3] - corners[2]) * x;
+    low + (high - low) * z
+}
+
+/// Broad, smooth tending patches with no chunk-local seed or repeating tile.
+/// Differently rotated 16/29 m fields avoid an axis-aligned mown checkerboard.
+fn tended_meadow_patch(point: Vec2, seed: u64) -> f32 {
+    let fine = Vec2::new(
+        point.x * 0.924 + point.y * 0.383,
+        -point.x * 0.383 + point.y * 0.924,
+    ) / 16.0;
+    let broad = Vec2::new(point.x * 0.6 - point.y * 0.8, point.x * 0.8 + point.y * 0.6) / 29.0;
+    let value = smooth_meadow_noise(fine, seed ^ 0x51AF_2039) * 0.72
+        + smooth_meadow_noise(broad, seed ^ 0xC936_72A1) * 0.28;
+    smooth_unit((value - 0.40) / 0.25)
+}
+
+fn tended_grass_retention(point: Vec2, seed: u64, road_edge_distance: f32, tall: bool) -> f32 {
+    if road_edge_distance >= TENDED_ROAD_VERGE {
+        return 1.0;
+    }
+    // Keep some taller tufts in the quieter patches: a verge should read as
+    // irregular groups, not a uniformly shaved lawn. Size reduction already
+    // happens below, so this does not add another height multiplier.
+    let influence = 1.0 - smooth_unit((road_edge_distance - 3.5) / (TENDED_ROAD_VERGE - 3.5));
+    let floor: f32 = if tall { 0.50 } else { 0.22 };
+    let patch_retention = floor + (1.0 - floor) * tended_meadow_patch(point, seed);
+    1.0 - influence * (1.0 - patch_retention)
 }
 
 fn instance_for(
@@ -234,6 +287,7 @@ fn filtered_spawns(
     stress_density: f32,
     zones: &BuildZoneChunkIndex,
     roads: &Query<&VillageRoad>,
+    yards: Option<&crate::settlement::yards::YardGroundCover>,
 ) -> Vec<PropSpawn> {
     let mut spawns =
         shared::props::generate_chunk_grass_at_density(&terrain.generator, coord, stress_density);
@@ -242,21 +296,67 @@ fn filtered_spawns(
             !point_in_any_build_zone_entries(Vec2::new(spawn.position.x, spawn.position.z), entries)
         });
     }
+    spawns.retain(|spawn| !zones.fields.contains_point(spawn.position.xz()));
     // Select roads once per chunk. A dense town can have hundreds of roads;
     // restarting the full road query for every individual tuft made a dirty
     // chunk rebuild unnecessarily quadratic in unrelated roads.
     let relevant_roads = roads
         .iter()
         .filter(|road| {
-            road_chunk_bounds(road, 0.22).is_some_and(|(min, max)| {
+            road_chunk_bounds(road, TENDED_ROAD_VERGE).is_some_and(|(min, max)| {
                 (min.x..=max.x).contains(&coord.x) && (min.z..=max.z).contains(&coord.z)
             })
         })
         .collect::<Vec<_>>();
-    spawns.retain(|spawn| {
-        !relevant_roads.iter().any(|road| {
-            road.contains_built_point(Vec2::new(spawn.position.x, spawn.position.z), 0.22)
-        })
+    let seed = terrain
+        .generator
+        .loaded_map()
+        .definition
+        .generated
+        .as_ref()
+        .map_or(0, |generated| generated.seed);
+    spawns.retain_mut(|spawn| {
+        let point = spawn.position.xz();
+        let road_edge_distance = relevant_roads
+            .iter()
+            .map(|road| {
+                let distance_squared = road
+                    .built_points()
+                    .windows(2)
+                    .map(|pair| distance_squared_to_segment(point, pair[0], pair[1]))
+                    .fold(f32::INFINITY, f32::min);
+                distance_squared.sqrt() - road.width * 0.5
+            })
+            .fold(f32::INFINITY, f32::min);
+        if road_edge_distance <= 0.22
+            || yards.is_some_and(|yards| yards.contains_world_point(point))
+        {
+            return false;
+        }
+        if !matches!(
+            spawn.kind,
+            Some(PropKind::GrassShortA | PropKind::GrassTallA)
+        ) {
+            return true;
+        }
+        if road_edge_distance < TENDED_ROAD_VERGE {
+            let retention = tended_grass_retention(
+                point,
+                seed,
+                road_edge_distance,
+                spawn.kind == Some(PropKind::GrassTallA),
+            );
+            let roll = meadow_hash(point.x.to_bits(), point.y.to_bits(), seed ^ 0x7D32_84E9);
+            if roll >= retention {
+                return false;
+            }
+            spawn.scale *= if road_edge_distance <= 3.0 {
+                0.62
+            } else {
+                0.82
+            };
+        }
+        true
     });
     spawns
 }
@@ -274,8 +374,9 @@ fn build_chunk(
     state: &mut ChunkedGroundCoverState,
     zones: &BuildZoneChunkIndex,
     roads: &Query<&VillageRoad>,
+    yards: Option<&crate::settlement::yards::YardGroundCover>,
 ) {
-    let spawns = filtered_spawns(terrain, coord, stress_density, zones, roads);
+    let spawns = filtered_spawns(terrain, coord, stress_density, zones, roads, yards);
     let seed = terrain
         .generator
         .loaded_map()
@@ -285,7 +386,10 @@ fn build_chunk(
         .map(|generated| generated.seed)
         .unwrap_or(0);
     let dryness = shared::props::MeadowDryness::new(seed);
-    let mut data = ChunkGrassInstances::default();
+    let mut data = ChunkGrassInstances {
+        field_revision: zones.fields.chunk_revision(coord),
+        ..default()
+    };
     for spawn in &spawns {
         match spawn.kind {
             Some(PropKind::GrassShortA) => data.short.push(instance_for(spawn, terrain, &dryness)),
@@ -417,6 +521,7 @@ pub(super) fn stream_chunked_ground_cover(
     stress_density: Res<GroundCoverStressDensity>,
     zones: Res<BuildZoneChunkIndex>,
     roads: Query<&VillageRoad>,
+    yards: Option<Res<crate::settlement::yards::YardGroundCover>>,
 ) {
     let enabled = settings.props_enabled;
     if state.material_cutout != Some(settings.foliage_cutout_enabled) {
@@ -489,6 +594,27 @@ pub(super) fn stream_chunked_ground_cover(
         );
     }
 
+    if let Some(yards) = yards.as_deref() {
+        if state.yard_version != yards.version() {
+            // Only accepted land changes invalidate ground cover, never the
+            // state of individual plants or household members.
+            state.yard_version = yards.version();
+            let loaded = state.chunks.keys().copied().collect::<Vec<_>>();
+            state.dirty.extend(loaded);
+        }
+    }
+
+    // The bounded resident grass set keeps per-chunk revisions. A remote field
+    // edit does not rebuild nearby grass, and removals return its revision to 0.
+    let changed_fields = state
+        .chunks
+        .iter()
+        .filter_map(|(coord, data)| {
+            (data.field_revision != zones.fields.chunk_revision(*coord)).then_some(*coord)
+        })
+        .collect::<Vec<_>>();
+    state.dirty.extend(changed_fields);
+
     let next_dirty = state
         .dirty
         .iter()
@@ -503,6 +629,7 @@ pub(super) fn stream_chunked_ground_cover(
             &mut state,
             &zones,
             &roads,
+            yards.as_deref(),
         );
         if sync_render_sector(
             batch_coord(coord),
@@ -536,6 +663,7 @@ pub(super) fn stream_chunked_ground_cover(
             &mut state,
             &zones,
             &roads,
+            yards.as_deref(),
         );
         sync_render_sector(
             batch_coord(coord),
@@ -569,13 +697,27 @@ pub(super) fn stream_chunked_ground_cover(
 }
 
 pub(super) fn mark_chunked_grass_dirty_for_roads(
-    changed: Query<&VillageRoad, Changed<VillageRoad>>,
+    changed: Query<(Entity, &VillageRoad), Changed<VillageRoad>>,
+    mut removed: RemovedComponents<VillageRoad>,
+    mut previous: Local<HashMap<Entity, (ChunkCoord, ChunkCoord)>>,
     mut state: ResMut<ChunkedGroundCoverState>,
 ) {
-    for road in changed.iter() {
-        let Some((min, max)) = road_chunk_bounds(road, 0.32) else {
-            continue;
-        };
+    let mut dirty_bounds = Vec::new();
+    for entity in removed.read() {
+        if let Some(bounds) = previous.remove(&entity) {
+            dirty_bounds.push(bounds);
+        }
+    }
+    for (entity, road) in &changed {
+        if let Some(bounds) = previous.remove(&entity) {
+            dirty_bounds.push(bounds);
+        }
+        if let Some(bounds) = road_chunk_bounds(road, TENDED_ROAD_VERGE) {
+            previous.insert(entity, bounds);
+            dirty_bounds.push(bounds);
+        }
+    }
+    for (min, max) in dirty_bounds {
         for x in min.x..=max.x {
             for z in min.z..=max.z {
                 let coord = ChunkCoord::new(x, z);
@@ -596,6 +738,7 @@ pub(super) fn mark_chunked_grass_dirty_for_buildings(
         Added<shared::building::PlacedBuilding>,
     >,
     mut state: ResMut<ChunkedGroundCoverState>,
+    zones: Res<BuildZoneChunkIndex>,
     squares: Query<
         (Entity, &shared::components::SettlementCivicSquare),
         Changed<shared::components::SettlementCivicSquare>,
@@ -632,11 +775,11 @@ pub(super) fn mark_chunked_grass_dirty_for_buildings(
         }
     }
     for (building, position) in added.iter() {
-        for zone in shared::building::clearance_zones_for_building(
-            position.0,
-            building.building_type,
-            building.rotation,
-        ) {
+        for zone in
+            zones
+                .fields
+                .building_zones(position.0, building.building_type, building.rotation)
+        {
             let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
             for x in min_x..=max_x {
                 for z in min_z..=max_z {
@@ -694,6 +837,117 @@ pub(super) fn clear_chunked_ground_cover(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tended_meadow_is_continuous_across_chunks_without_a_chunk_repeat() {
+        let mut translated_difference = 0.0;
+        let mut seed_difference = 0.0;
+        for step in -64..=64 {
+            let point = Vec2::new(CHUNK_SIZE, step as f32 * 1.7);
+            let before = tended_meadow_patch(point - Vec2::X * 0.001, 917);
+            let after = tended_meadow_patch(point + Vec2::X * 0.001, 917);
+            assert!((before - after).abs() < 0.002);
+            let value = tended_meadow_patch(point, 917);
+            translated_difference +=
+                (value - tended_meadow_patch(point + Vec2::X * CHUNK_SIZE, 917)).abs();
+            seed_difference += (value - tended_meadow_patch(point, 918)).abs();
+        }
+        assert!(
+            translated_difference > 10.0,
+            "the same pattern must not restart each chunk"
+        );
+        assert!(
+            seed_difference > 10.0,
+            "different world seeds need different tending patches"
+        );
+    }
+
+    #[test]
+    fn meadow_tending_keeps_wilderness_and_fuller_tuft_groups() {
+        let mut minimum = 1.0_f32;
+        let mut maximum = 0.0_f32;
+        for x in -16..=16 {
+            for z in -16..=16 {
+                let point = Vec2::new(x as f32 * 8.0, z as f32 * 8.0);
+                let short = tended_grass_retention(point, 917, 1.0, false);
+                let tall = tended_grass_retention(point, 917, 1.0, true);
+                assert!((0.22..=1.0).contains(&short));
+                assert!(tall >= short && tall <= 1.0);
+                assert_eq!(
+                    tended_grass_retention(point, 917, TENDED_ROAD_VERGE, false),
+                    1.0
+                );
+                assert_eq!(tended_grass_retention(point, 917, f32::INFINITY, true), 1.0);
+                assert!(
+                    tended_grass_retention(point, 917, TENDED_ROAD_VERGE - 0.001, false) > 0.999
+                );
+                minimum = minimum.min(short);
+                maximum = maximum.max(short);
+            }
+        }
+        assert!(
+            minimum < 0.30 && maximum > 0.95,
+            "quiet gaps must coexist with full clumps"
+        );
+    }
+
+    #[test]
+    fn moved_and_removed_roads_restore_the_previous_grass_verge() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ChunkedGroundCoverState>()
+            .add_systems(Update, mark_chunked_grass_dirty_for_roads);
+        let old = ChunkCoord::new(0, 0);
+        let new = ChunkCoord::new(3, 0);
+        for coord in [old, new] {
+            app.world_mut()
+                .resource_mut::<ChunkedGroundCoverState>()
+                .chunks
+                .insert(coord, ChunkGrassInstances::default());
+        }
+        let entity = app
+            .world_mut()
+            .spawn(VillageRoad {
+                settlement: "Verge test".into(),
+                builder: "Builder".into(),
+                points: vec![Vec2::new(16., 20.), Vec2::new(32., 20.)],
+                built_through: 2,
+                width: 2.,
+                reserved_width: 4.,
+                surface: default(),
+                class: default(),
+                stone_committed: 0,
+            })
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old])
+        );
+        app.world_mut()
+            .resource_mut::<ChunkedGroundCoverState>()
+            .dirty
+            .clear();
+        app.world_mut()
+            .get_mut::<VillageRoad>(entity)
+            .unwrap()
+            .points = vec![Vec2::new(208., 20.), Vec2::new(216., 20.)];
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old, new])
+        );
+        app.world_mut()
+            .resource_mut::<ChunkedGroundCoverState>()
+            .dirty
+            .clear();
+        app.world_mut().despawn(entity);
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([new])
+        );
+    }
 
     #[test]
     fn instance_record_is_compact_and_stable() {

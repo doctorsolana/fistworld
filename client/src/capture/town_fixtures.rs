@@ -25,6 +25,28 @@ pub(super) struct TownSceneReadiness<'w, 's> {
     expected: Option<Res<'w, TownCaptureScenes>>,
     assets: Res<'w, AssetServer>,
     spawner: Res<'w, WorldInstanceSpawner>,
+    terrain: Res<'w, WorldTerrain>,
+    roadside: Option<Res<'w, crate::settlement::roadside::RoadsideReadiness>>,
+    fields: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::FarmField,
+            &'static PlayerPosition,
+            &'static PlayerRotation,
+            Option<&'static crate::settlement::FarmFieldVisual>,
+        ),
+    >,
+    yards: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::HouseholdYard,
+            &'static PlayerPosition,
+            &'static PlayerRotation,
+            Option<&'static crate::settlement::yards::YardVisual>,
+        ),
+    >,
     roots: Query<
         'w,
         's,
@@ -78,11 +100,33 @@ impl TownSceneReadiness<'_, '_> {
             .walls
             .iter()
             .all(|(wall, visual)| crate::settlement::fortifications::visual_matches(wall, visual));
-        if ready == expected.0.len() && walls_ready {
+        let fields_ready = self
+            .fields
+            .iter()
+            .all(|(field, position, rotation, visual)| {
+                visual.is_some_and(|visual| {
+                    visual.matches(field, position.0, rotation.0, &self.terrain)
+                })
+            });
+        let yards_ready = self.yards.iter().all(|(yard, position, rotation, visual)| {
+            crate::settlement::yards::visual_matches(
+                yard,
+                position.0,
+                rotation.0,
+                &self.terrain,
+                visual,
+            )
+        });
+        let roadside_ready = self.roadside.as_ref().is_none_or(|state| state.ready);
+        if ready == expected.0.len() && walls_ready && fields_ready && yards_ready && roadside_ready
+        {
             return Ok(true);
         }
         if frames >= maximum_frames {
-            return Err(format!("town scene readiness timed out: {ready}/{} imported scenes instantiated with loaded dependencies; defense meshes ready={walls_ready}", expected.0.len()));
+            return Err(format!(
+                "town scene readiness timed out: {ready}/{} imported scenes instantiated with loaded dependencies; defense meshes ready={walls_ready}, fields ready={fields_ready}, yards ready={yards_ready}, roadside ready={roadside_ready}",
+                expected.0.len()
+            ));
         }
         Ok(false)
     }
@@ -93,9 +137,9 @@ pub(super) fn stage_capture_town(mut commands: Commands) {
         return;
     };
     commands.queue(move |world: &mut World| {
-        let snapshot = TownSnapshot::read(&path)
+        let mut snapshot = TownSnapshot::read(&path)
             .unwrap_or_else(|error| panic!("capture town snapshot {path}: {error}"));
-        import_town(world, &snapshot)
+        import_town(world, &mut snapshot)
             .unwrap_or_else(|error| panic!("capture town snapshot {path}: {error}"));
         // Keep the exact input alongside the PNG/metadata, including terrain
         // earthworks, seed and simulation time. Later comparison must not
@@ -119,7 +163,7 @@ pub(super) fn stage_capture_town(mut commands: Commands) {
     });
 }
 
-fn import_town(world: &mut World, snapshot: &TownSnapshot) -> Result<(), String> {
+fn import_town(world: &mut World, snapshot: &mut TownSnapshot) -> Result<(), String> {
     snapshot.validate()?;
     let mut terrain = world.resource_mut::<WorldTerrain>();
     if terrain.generator.active_map_id() != snapshot.map_id
@@ -127,8 +171,10 @@ fn import_town(world: &mut World, snapshot: &TownSnapshot) -> Result<(), String>
     {
         return Err(format!(
             "snapshot map {} ({:016x}) differs from capture map {} ({:016x}); use the snapshot's map",
-            snapshot.map_id, snapshot.map_content_hash,
-            terrain.generator.active_map_id(), terrain.generator.active_map_content_hash(),
+            snapshot.map_id,
+            snapshot.map_content_hash,
+            terrain.generator.active_map_id(),
+            terrain.generator.active_map_content_hash(),
         ));
     }
     terrain.replace_delta_chunks(
@@ -149,6 +195,14 @@ fn import_town(world: &mut World, snapshot: &TownSnapshot) -> Result<(), String>
                 entry.name, entry.position.x, entry.position.z, snapshot.map_id,
             ));
         }
+    }
+
+    // An explicit authored art study may fit new dressing to an older layout.
+    // Record the accepted geometry in town-source.json for reproducible review.
+    // Ordinary snapshot imports preserve the server's exact accepted component.
+    if std::env::var("FISTFORCE_CAPTURE_FIT_TOWN_DRESSING").as_deref() == Ok("1") {
+        super::town_art_fields::fit_fields(snapshot, &terrain);
+        super::town_art_yards::fit_yards(snapshot, &terrain)?;
     }
 
     for mut clock in world.query::<&mut WorldTime>().iter_mut(world) {
@@ -216,6 +270,12 @@ fn import_town(world: &mut World, snapshot: &TownSnapshot) -> Result<(), String>
         if let Some(house) = entry.house {
             entity.insert(house);
         }
+        if let Some(household) = &entry.household {
+            entity.insert(household.clone());
+        }
+        if let Some(yard) = &entry.yard {
+            entity.insert(yard.clone());
+        }
         if let Some(level) = entry.market_level {
             entity.insert(level);
         }
@@ -247,14 +307,11 @@ fn import_town(world: &mut World, snapshot: &TownSnapshot) -> Result<(), String>
         world.spawn((section.clone(), PlayerPosition(section.midpoint())));
     }
     for entry in &snapshot.fields {
-        let entity = world
-            .spawn((
-                entry.component.clone(),
-                PlayerPosition(entry.position),
-                PlayerRotation(entry.rotation),
-            ))
-            .id();
-        scenes.0.push(entity);
+        world.spawn((
+            entry.component.clone(),
+            PlayerPosition(entry.position),
+            PlayerRotation(entry.rotation),
+        ));
     }
     for entry in &snapshot.pastures {
         world.spawn((
@@ -308,6 +365,8 @@ mod tests {
                 position,
                 rotation: 0.4,
                 house: (kind == Kind::House).then_some(appearance),
+                household: None,
+                yard: None,
                 market_level: None,
                 construction: None,
                 civic_upgrade: None,
@@ -380,7 +439,9 @@ mod tests {
                     settlement: "Snapshot".into(),
                     farmstead: farm.position,
                     plot_index: 1,
+                    layout_version: 0,
                     quality: 0.75,
+                    shape: None,
                 },
                 footprint: Vec2::new(8.0, 11.0),
                 footprint_center: origin.xz() + Vec2::new(70.0, 52.0),
@@ -422,12 +483,12 @@ mod tests {
     fn imported_snapshot_retains_real_art_worksites_roads_fields_and_earthworks() {
         let terrain = WorldTerrain::default();
         let original = snapshot(&terrain);
-        let state: TownSnapshot =
+        let mut state: TownSnapshot =
             serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
         let mut world = World::new();
         world.insert_resource(terrain);
         world.spawn(WorldTime::new_default());
-        import_town(&mut world, &state).unwrap();
+        import_town(&mut world, &mut state).unwrap();
 
         let houses: Vec<_> = world
             .query::<(
@@ -484,8 +545,11 @@ mod tests {
         assert!((ground.deltas[0] - 1.37).abs() < 1e-6);
         assert_eq!(ground.version, 9);
         assert_eq!(world.query::<&WorldTime>().single(&world).unwrap().day, 7);
-        assert_eq!(world.resource::<TownCaptureScenes>().0.len(), 4,
-            "Hall, two completed buildings and crop field require scenes; unraised worksite does not");
+        assert_eq!(
+            world.resource::<TownCaptureScenes>().0.len(),
+            3,
+            "Hall and two completed buildings require scenes; crops are procedural, and unraised worksites have no scene"
+        );
     }
 
     #[test]
@@ -499,7 +563,7 @@ mod tests {
         // Bevy 0.19 stores resource cells as entities; rejection must leave the
         // existing entity count unchanged rather than require an empty world.
         let entities_before = world.query::<Entity>().iter(&world).count();
-        assert!(import_town(&mut world, &state)
+        assert!(import_town(&mut world, &mut state)
             .unwrap_err()
             .contains("differs"));
         assert_eq!(
@@ -548,7 +612,7 @@ mod tests {
         // The terrain resource already contributes resource-backed entities.
         let entities_before = world.query::<Entity>().iter(&world).count();
 
-        let error = import_town(&mut world, &state).unwrap_err();
+        let error = import_town(&mut world, &mut state).unwrap_err();
         assert!(error.contains("not on dry land"), "{error}");
         assert_eq!(world.query::<&Settlement>().iter(&world).count(), 0);
         assert_eq!(

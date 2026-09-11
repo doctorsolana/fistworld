@@ -461,6 +461,25 @@ impl SettlementBuildingKind {
             .copied()
     }
 
+    /// Agricultural reservation requested by a NEW Farmstead. Durable field
+    /// entity origins and old-save fallback rectangles deliberately stay fixed.
+    /// A completed farm owns its accepted `FarmField` shapes, not this envelope.
+    pub fn intended_field_positions(self, plot: Vec3, rotation_y: f32) -> Option<[Vec3; 2]> {
+        (self == Self::Farmstead).then(|| {
+            [-10.0, 10.0].map(|side| {
+                let offset = crate::rotation::local_to_world_xz(Vec2::new(side, 19.0), rotation_y);
+                Vec3::new(plot.x + offset.x, plot.y, plot.z + offset.y)
+            })
+        })
+    }
+
+    pub const fn intended_field_half_extents(self) -> Option<Vec2> {
+        match self {
+            Self::Farmstead => Some(Vec2::new(10.0, 16.0)),
+            _ => None,
+        }
+    }
+
     /// Centre of the first crop plot.
     ///
     /// Kept as a compatibility convenience for callers that only need a

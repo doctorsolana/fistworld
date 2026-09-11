@@ -319,9 +319,11 @@ mod tests {
             .world_mut()
             .spawn((
                 FarmField {
+                    shape: None,
                     settlement: "Fallows".into(),
                     farmstead: Vec3::ZERO,
                     plot_index: 0,
+                    layout_version: 0,
                     quality: 0.8,
                 },
                 shared::components::AttachedTo(empty_id),

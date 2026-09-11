@@ -44,8 +44,8 @@ pub(crate) fn plot_intersects_defenses(
         return true;
     }
     if let (Some(fields), Some(half)) = (
-        kind.field_positions(position, rotation),
-        kind.field_half_extents(),
+        kind.intended_field_positions(position, rotation),
+        kind.intended_field_half_extents(),
     ) {
         if fields.into_iter().any(|field| {
             defenses.intersects_footprint(
@@ -122,7 +122,7 @@ mod tests {
             let rotation = 0.7;
             let position = Vec3::ZERO;
             let remote = kind
-                .field_positions(position, rotation)
+                .intended_field_positions(position, rotation)
                 .map(|fields| fields[0])
                 .or_else(|| kind.pasture_position(position, rotation))
                 .unwrap();

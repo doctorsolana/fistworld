@@ -186,9 +186,9 @@
   },
   {
     "source": "game_assets/buildings/village/CabinL2.glb",
-    "sha256": "e7174c24269077ad0b0e5661b340bca3fa8a31ecb363020a7a09cab62bc872d4",
+    "sha256": "0c2782d8711864befd1d282b0e3606d901a6c465fdafe04e8bc53930c0a67eb1",
     "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
-    "library_sha256": "b700585603e5be1ec27b68ab1034ac3ca3ecfeb08a9e044d8b9f59c995515bfb",
+    "library_sha256": "2036b8af7f896068029d9de08666e172ad562838bde2a8346b899a5635d1ac34",
     "library": "game_assets/buildings/lod/CabinL2.glb",
     "center": [
       0.0,
@@ -571,9 +571,9 @@
   },
   {
     "source": "game_assets/buildings/village/LogCabin.glb",
-    "sha256": "2d658dcd020453c5aea8937b224b7d3a2099107412da8bdb38c8c22a0a85be23",
+    "sha256": "e7169cf6ba290a92a2446f34e56cf3f674bf112d6078ffad360b6f471effbe20",
     "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
-    "library_sha256": "b355292c4ddefeb1d84c558ca1186fe0c571390292392aeeb3fc08a4f06c7faa",
+    "library_sha256": "f67361e05da3ca944ac7a7068910ec5a44acd7bed1bb997cfd9da17701430854",
     "library": "game_assets/buildings/lod/LogCabin.glb",
     "center": [
       0.0,
@@ -648,9 +648,9 @@
   },
   {
     "source": "game_assets/buildings/village/LongCabin.glb",
-    "sha256": "0f3f56cc7472b632cb0b307c6dcd08b984c15e633d166313f0629100f6aa596f",
+    "sha256": "386367600f918aed6e891b088916b03896fcb59c8053d3423732ef4840717859",
     "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
-    "library_sha256": "71b542ff3ce5aec9bbf5fa94611e52ae6d678164c78283fac2c7ea9a5f96fe7f",
+    "library_sha256": "e723d3b1902b57b142672aaf66b43e753dcb20eb32661d415f4ed2a5add1aa16",
     "library": "game_assets/buildings/lod/LongCabin.glb",
     "center": [
       0.0,
@@ -725,9 +725,9 @@
   },
   {
     "source": "game_assets/buildings/village/LongCabinL2.glb",
-    "sha256": "26e77f46ad28d8df5b5ca8732637354403fd04c03d126a7ef439c23364a0ba9c",
+    "sha256": "25b9770e8b6018c9c81a3042568587f0c198fc5e8bd0d65f361b241568785029",
     "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
-    "library_sha256": "0d090e07301c8abb6292e9345813c4b6cfb84c0b215e5ceab5a06f1d4c4cd386",
+    "library_sha256": "c46e89a2ede11f5fc702f32eb28eaa88f13ccee871be704d7d2c7791ea1830bc",
     "library": "game_assets/buildings/lod/LongCabinL2.glb",
     "center": [
       0.0,

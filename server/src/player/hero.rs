@@ -731,6 +731,14 @@ pub fn step_units(
                         current,
                         proposed,
                         shared::components::DEFENSE_OBSTACLE_TYPE,
+                    ) || grid.segment_blocked_by_type(
+                        current,
+                        proposed,
+                        shared::components::YARD_OBSTACLE_TYPE,
+                    ) || grid.segment_blocked_by_type(
+                        current,
+                        proposed,
+                        shared::components::FARM_FENCE_OBSTACLE_TYPE,
                     )
                 });
             if defense_blocked

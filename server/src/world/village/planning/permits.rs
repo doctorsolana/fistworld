@@ -14,7 +14,9 @@ use super::neighborhood::PlotNeighbor;
 use super::plots::{
     find_site_with_plan_diagnostics, SiteSearchRejections, MAX_SETTLEMENT_SEARCH_RADIUS,
 };
-use super::road_access::{planned_road_access_path, road_access_blockers_for_plot};
+use super::road_access::{
+    planned_road_access_path, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
+};
 use super::terrain::site_quality;
 use crate::world::village::development_market::{
     investor_score, investor_threshold, minimum_startup_capital, private_opportunities,
@@ -842,16 +844,22 @@ pub fn consider_permits(
                 .flat_map(|(under, _)| {
                     let radius = under
                         .kind
-                        .field_half_extents()
+                        .intended_field_half_extents()
                         .map(|half| half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN);
                     under
                         .kind
-                        .field_positions(under.position, under.rotation)
+                        .intended_field_positions(under.position, under.rotation)
                         .into_iter()
                         .flatten()
                         .filter_map(move |field| radius.map(|radius| (field, radius)))
                 }),
         );
+        occupied.extend(planning.fields.iter().flat_map(|(field, p, r)| {
+            field
+                .reservation_rects(p.0, r.0, 2.)
+                .into_iter()
+                .map(|(center, half, _)| (center, half.length()))
+        }));
         // The fenced pasture is a permanent land use even though it is not a
         // solid building. Reserve it from permits and roads from approval day.
         occupied.extend(
@@ -890,8 +898,13 @@ pub fn consider_permits(
             MAX_SETTLEMENT_SEARCH_RADIUS + 40.0,
         );
         let defenses = (!nearby_defenses.circuits.is_empty()).then_some(&nearby_defenses);
-        let civic_squares: Vec<_> = planning.civic_squares.iter()
-            .filter(|square| square.center.xz().distance(hall.0.xz()) < MAX_SETTLEMENT_SEARCH_RADIUS + 40.0).collect();
+        let civic_squares: Vec<_> = planning
+            .civic_squares
+            .iter()
+            .filter(|square| {
+                square.center.xz().distance(hall.0.xz()) < MAX_SETTLEMENT_SEARCH_RADIUS + 40.0
+            })
+            .collect();
         let mut urban_plan = current_urban_plan.cloned().unwrap_or_default();
         if missing == SettlementBuildingKind::House {
             if let Ok(charter) = developments.get(settlement_entity) {
@@ -931,14 +944,23 @@ pub fn consider_permits(
                 .iter()
                 .filter(|(under, _)| under.settlement == settlement_entity)
                 .flat_map(|(under, _)| {
-                    road_access_blockers_for_plot(under.kind, under.position, under.rotation)
+                    road_access_blockers_for_new_plot(under.kind, under.position, under.rotation)
                 }),
+        );
+        access_blockers.extend(
+            planning.fields.iter().flat_map(|(f, p, r)| {
+                super::road_access::RoadAccessBlocker::for_field(f, p.0, r.0)
+            }),
         );
         if let Some(defenses) = defenses {
             access_blockers.extend(super::reservations::defense_access_blockers(defenses));
         }
         if missing != SettlementBuildingKind::Market {
-            access_blockers.extend(super::civic_square::civic_market_access_blockers(&civic_squares, missing, None));
+            access_blockers.extend(super::civic_square::civic_market_access_blockers(
+                &civic_squares,
+                missing,
+                None,
+            ));
         }
         let search_signature = FailedSiteSearch {
             kind: missing,
@@ -1173,8 +1195,13 @@ pub fn consider_permits(
             }
             continue;
         }
-        if civic_squares.iter().any(|square| square.blocks_plot(kind, position, rotation)) {
-            if kind == SettlementBuildingKind::FishermansHut { advance_incremental_fishing_search(&mut clock, settlement_entity); }
+        if civic_squares
+            .iter()
+            .any(|square| square.blocks_plot(kind, position, rotation))
+        {
+            if kind == SettlementBuildingKind::FishermansHut {
+                advance_incremental_fishing_search(&mut clock, settlement_entity);
+            }
             continue;
         }
         if !processing_upstream_is_complete(kind, &completed) {

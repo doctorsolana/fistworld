@@ -42,6 +42,7 @@ mod tests {
     /// green while the water drifted away from the land.
     const SHADERS: &[(&str, usize)] = &[
         ("assets/shaders/wind_foliage.wgsl", 1),
+        ("assets/shaders/crop_wind.wgsl", 1),
         ("assets/shaders/cloud_layer.wgsl", 2),
         ("assets/shaders/terrain_splat.wgsl", 3),
         ("assets/toon_water.wgsl", 2),

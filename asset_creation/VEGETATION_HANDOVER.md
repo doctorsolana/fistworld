@@ -4,6 +4,11 @@
 > and deterministic meadow species mixing are documented in [MEADOW_TREES.md](MEADOW_TREES.md).
 > Counts and replacement comparisons below describe the earlier vegetation set.
 
+> The later [green broadleaf remake](GREEN_BROADLEAF.md) replaces `OakA.glb` and
+> `ChestnutA.glb` at their existing canonical runtime paths. Each now uses 877 / 249
+> near/far triangles; their earlier figures below are historical. This adds no runtime
+> asset identities and leaves the three meadow-accent species unchanged.
+
 > The replacement is live and its canonical names are now defined in
 > `ASSET_NAMING.md`. Names such as `Tree_09` below refer only to legacy map ids
 > or the removed donor assets; they are accepted at the map-loading boundary
@@ -19,7 +24,8 @@ The single maintained runtime catalogue lives under
 make 38 GLBs. Duplicate exports beside the generators were removed in September 2026.
 
 `asset_creation/vegetation/` retains generators, validators, shared path discovery and the
-three editable meadow `.blend` sources. Builders export directly into the runtime family
+three editable meadow `.blend` sources plus the canonical `oak_a.blend` and
+`chestnut_a.blend` sources. Builders export directly into the runtime family
 unless `--out` overrides it. Previews and generated `Grass_Blades_*.png` originals go under
 ignored `asset_creation/vegetation/renders/`; grass embeds those pixels in its GLB.
 Legacy grafts still require an external palette-textured donor via `--from-dir`; the old

@@ -393,6 +393,14 @@ Re-check after moving *either* the prop or the anchor.
 
 ## 11. Vegetation is a different problem from architecture
 
+**Runtime field update (September 2026):** normal `FarmField` entities now use
+accepted, terrain-following procedural parcels with two worker subareas. Their
+shared boundary drives soil, wheat, rustic perimeter fences and navigation;
+the entrance and internal worker division remain open. `WheatField.glb` remains
+an editable art/reference asset, not the runtime parcel footprint. Read
+[the farm parcel contract](../docs/FARM-FIELDS.md) before changing field art or
+reservations. Do not bake a solid collider over the planted ground.
+
 The wheat field (`build_wheat_field.py` -> `WheatField.glb`) breaks three of the rules above, each for
 a reason worth knowing.
 

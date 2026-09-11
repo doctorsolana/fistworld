@@ -1,7 +1,11 @@
 """Build a low-poly tree to the vegetation contract. Both LODs, from a seed.
 
     blender --background --factory-startup --python asset_creation/vegetation/build_vegetation.py -- \
-        --species oak [--seed 1] [--name OakA]
+        --species pine [--seed 1] [--name PineA]
+
+OakA and ChestnutA now use build_green_broadleaf.py for their current crown
+shapes. This module still supplies their original seeded trunk construction;
+its older complete crowns are available only with an explicit review --out.
 
 Verify what actually landed on disk -- several traps below are only visible post-export:
 
@@ -688,6 +692,11 @@ def bed_to_ground(objs, sink):
 
 
 def main():
+    if NAME in ("OakA", "ChestnutA") and os.path.realpath(OUT) == str(asset_paths.runtime_directory("trees/broadleaf")):
+        raise SystemExit(
+            f"{NAME} is maintained by build_green_broadleaf.py. "
+            "Use that builder for runtime export, or --out for an ignored legacy comparison."
+        )
     scene = work_scene()
     os.makedirs(OUT, exist_ok=True)
 

@@ -316,31 +316,26 @@ pub const LAUNCHER_RESOLUTION: (u32, u32) = (1600, 900);
 /// Style beyond this belongs in shading and terrain colour, not in the grade — a tone
 /// curve cannot make photographic terrain textures look low-poly.
 pub fn default_color_grading(exposure: f32) -> ColorGrading {
+    // Bevy 0.19's tonemapping_shared.wgsl::sectional_color_grading writes
+    // the highlight weight (`levels.z`) in its shadow/midtone blend, where
+    // `levels.x` is required. Different sections therefore jump at average
+    // linear RGB 0.1: smooth evening terrain and ordinary roof tile colors
+    // turn into abrupt pale islands. Identical neutral sections make that
+    // incorrect selection harmless without forking the renderer. Keep the
+    // global grade below; reconsider sections after upgrading Bevy and
+    // inspecting town-roof-diagnostic.ron's close and evening captures.
+    let section = ColorGradingSection::default();
     ColorGrading {
         global: ColorGradingGlobal {
             exposure,
             temperature: 0.030,
             tint: -0.010,
-            post_saturation: 1.06,
+            post_saturation: 1.12,
             ..Default::default()
         },
-        shadows: ColorGradingSection {
-            saturation: 1.04,
-            contrast: 0.99,
-            lift: 0.008,
-            ..Default::default()
-        },
-        midtones: ColorGradingSection {
-            saturation: 1.05,
-            contrast: 1.01,
-            ..Default::default()
-        },
-        highlights: ColorGradingSection {
-            // Soft highlight rolloff is the one part of the dreamy pass that helped.
-            saturation: 1.00,
-            contrast: 0.98,
-            ..Default::default()
-        },
+        shadows: section,
+        midtones: section,
+        highlights: section,
     }
 }
 
@@ -353,7 +348,10 @@ pub fn default_ssao_settings() -> ScreenSpaceAmbientOcclusion {
 }
 
 fn default_tonemapping() -> Tonemapping {
-    Tonemapping::AgX
+    // Retains the warm earth, green foliage and terracotta separation of the
+    // stylized assets. Fixed-view town/day/evening comparisons live in the
+    // town art study; neutral grading sections avoid Bevy 0.19's discontinuity.
+    Tonemapping::TonyMcMapface
 }
 
 /// User settings file (RON). Env test hooks override whatever it says.
@@ -846,6 +844,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_grade_avoids_bevy_019_section_boundary_discontinuity() {
+        // Bevy 0.19 switches from the shadow section to the highlight
+        // section at its lower blend boundary. Unequal sections recreate
+        // the pale terrain/roof islands even with smooth input lighting.
+        for exposure in [-1.0, 0.2, 2.0] {
+            let grade = default_color_grading(exposure);
+            assert_eq!(grade.shadows, grade.midtones);
+            assert_eq!(grade.midtones, grade.highlights);
+            assert_eq!(grade.global.exposure, exposure);
+        }
+    }
+
+    #[test]
     fn settings_roundtrip_through_ron() {
         let settings = GraphicsSettings {
             render_scale: 0.6,
@@ -864,7 +875,7 @@ mod tests {
         assert_eq!(parsed.display_resolution, DisplayResolution::new(1280, 720));
         assert_eq!(parsed.view_distance, 12);
         // Skipped field falls back to the pinned default.
-        assert_eq!(parsed.tonemapping, Tonemapping::AgX);
+        assert_eq!(parsed.tonemapping, default_tonemapping());
     }
 
     #[test]

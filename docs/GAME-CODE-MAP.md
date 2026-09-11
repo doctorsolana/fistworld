@@ -29,6 +29,9 @@ transfers out of client presentation systems.
 | Settlement identity, layouts and progression | `shared/src/components/settlements.rs` |
 | Building kinds, entrances and placement definitions | `shared/src/components/building_kinds.rs` |
 | Built structures, upgrades and worksites | `shared/src/components/buildings.rs` |
+| Accepted crop shapes, fence gates and work points | `shared/src/components/farm_fields.rs` and `farm_fields/` |
+| Household land fitting and shared fence geometry | `shared/src/components/household_yards.rs` and `household_yards/` |
+| Accepted-field vegetation clearing and local revisions | `shared/src/building/field_claims.rs` |
 | Civic roles and policy contracts | `shared/src/components/civic.rs` |
 | Permits and placement validation | `shared/src/components/permits.rs`, `placement.rs` |
 | Resident plans, nutrition and households | `shared/src/components/village_life.rs` |
@@ -68,6 +71,9 @@ arithmetic remain distinct.
 | Village resources and outward API | `server/src/world/village.rs` |
 | Permit review and geography | `server/src/world/village/planning.rs` and `planning/` |
 | Physical construction and material delivery | `server/src/world/village/construction.rs` |
+| Crop parcel surveys and area-limited output | `server/src/world/village/field_parcels.rs`, `farm_productivity.rs` |
+| Safe farm fence publication and navigation boundaries | `server/src/world/farm_boundaries.rs` |
+| Household plot ownership, refitting and boundaries | `server/src/world/household_yards.rs` |
 | Employment and embodied work | `server/src/world/village/employment.rs`, `trades.rs`, `processing.rs` |
 | Company, site and civic accounting | `server/src/world/village/companies.rs`, `businesses/`, `civic.rs` |
 | Offscreen simulation and interest management | `server/src/world/village/strategic.rs`, `server/src/world/regions.rs` |
@@ -107,6 +113,11 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Settlement plugin ordering | `client/src/settlement/mod.rs` |
 | Buildings, worksites, farm ground and flocks | `client/src/settlement/buildings.rs`, `construction.rs`, `grounds.rs`, `livestock.rs` |
 | Doors, windmills and local lighting | `client/src/settlement/animation.rs`, `lighting.rs` |
+| Road geometry, cached chunk segment index and seamless coverage masks | `client/src/settlement/roads.rs`, `roads/{geometry,index,raster}.rs` |
+| Planted fields and shared GPU wind | `client/src/settlement/farm_fields.rs`, `farm_wind.rs`, `client/assets/shaders/crop_wind.wgsl` |
+| Household dressing and terrain-fit fences | `client/src/settlement/yards/` |
+| Bounded roadside flowers, bushes and stones | `client/src/settlement/roadside.rs` and `roadside/` |
+| Occupancy-driven chimney smoke | `client/src/settlement/smoke.rs`, `client/assets/shaders/chimney_smoke.wgsl` |
 | Visible bakery stock | `client/src/settlement/stock.rs` |
 | Shared UI behavior and styling | `client/src/ui/foundation.rs`, `modal.rs`, `scroll.rs`, `styles.rs`, `typography.rs`, `motion.rs`, `button_motion.rs`, `frame.rs` |
 | Capture readiness, orchestration and fixture ownership | `client/src/capture.rs` and `capture/` |

@@ -1,0 +1,37 @@
+// Same close roofs and evening town as the art study. Compare separate runs
+// with FISTFORCE_BUILDING_LOD=0/1 and FISTFORCE_SHADOWS=0/1; keep all other
+// settings identical. The metadata records selected LODs and shadow cascades.
+// This also reproduces the Bevy 0.19 sectional-grade discontinuity: ordinary
+// shingle colors and smooth evening grass must never become pale islands.
+// FISTFORCE_CAPTURE_SECTIONAL_GRADE=off isolates those three grading sections
+// without changing the tone curve, global exposure, white balance or light.
+(
+    version: 1,
+    name: "town-roof-diagnostic",
+    map: "town_art_study",
+    output_dir: "logs/captures/town-roof-diagnostic",
+    resolution: (1920, 1200),
+    target: scene,
+    show_window: false,
+    fixed_delta_seconds: 0.016666667,
+    warmup_frames: 240,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1800,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_TOWN_SNAPSHOT": "capture/fixtures/town-art-direction.json",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+        "FISTFORCE_CAPTURE_FIT_TOWN_DRESSING": "1",
+    },
+    shots: [
+        (name: "01-roof-close", focus: (-140.0, 18.8, 52.0), yaw: -0.5,
+         zoom: 27.0, time_of_day: 0.45,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+        (name: "02-town-evening", focus: (-105.0, 16.0, 93.0), yaw: 2.75,
+         zoom: 140.0, time_of_day: 0.72,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+    ],
+)

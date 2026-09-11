@@ -53,7 +53,7 @@ pub const TERRAIN_LAYERS: [TerrainLayerDef; 4] = [
         albedo_source: "Grass_Texture_01.png",
         normal_source: "Ground_Normals_01.png",
         tile_metres: 8.0,
-        color: [0.26, 0.45, 0.20, 1.0],
+        color: [0.24, 0.40, 0.15, 1.0],
     },
     TerrainLayerDef {
         layer: TerrainLayer::Dirt,
@@ -73,7 +73,7 @@ pub const TERRAIN_LAYERS: [TerrainLayerDef; 4] = [
         tile_metres: 7.0,
         // Dark enough to read as compacted earth in full daylight while the
         // splat shoulder still has room to fade naturally into meadow grass.
-        color: [0.32, 0.23, 0.15, 1.0],
+        color: [0.60, 0.40, 0.22, 1.0],
     },
     TerrainLayerDef {
         layer: TerrainLayer::Sand,
@@ -93,8 +93,8 @@ pub const TERRAIN_LAYERS: [TerrainLayerDef; 4] = [
         display_name: "Cobblestone",
         albedo_source: "Cobblestone_Texture_01.png",
         normal_source: "Cobblestone_Normals_01.png",
-        tile_metres: 5.0,
-        color: [0.40, 0.39, 0.38, 1.0],
+        tile_metres: 3.2,
+        color: [0.52, 0.47, 0.37, 1.0],
     },
 ];
 
@@ -180,8 +180,11 @@ pub struct TerrainSplatParams {
     pub debug_mode: u32,
     /// 1.0 = full normal mapping, 0.0 = skip normal-map contribution.
     pub normal_strength: f32,
-    /// Explicit tail padding so Rust and WGSL agree on a 48-byte struct.
-    pub _pad: Vec2,
+    /// 1 = transient road map with inclusive chunk-edge samples; 0 = the
+    /// original cell-centred authored/generated map. Uses existing padding,
+    /// so the shared GPU uniform remains 48 bytes with no extra binding.
+    pub weightmap_endpoint_samples: f32,
+    pub _pad: f32,
 }
 
 #[derive(Clone, Copy, Debug, ShaderType)]

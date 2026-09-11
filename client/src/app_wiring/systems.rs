@@ -4,6 +4,7 @@ use super::*;
 
 pub fn setup_systems(app: &mut App) {
     crate::capture::install_session_capture(app);
+    crate::capture::install_live_farming_capture(app);
     wire_common_systems(app);
     wire_game_systems(app);
 }
@@ -19,6 +20,7 @@ fn wire_common_systems(app: &mut App) {
     app.add_systems(Startup, game_systems::setup_rendering);
     if std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_some()
         || std::env::var_os("FISTWORLD_SESSION_CAPTURE_DIR").is_some()
+        || std::env::var_os("FISTWORLD_FARM_CAPTURE_DIR").is_some()
     {
         app.add_systems(PostStartup, crate::capture::setup_capture_presentation);
         app.add_systems(

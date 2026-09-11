@@ -36,7 +36,9 @@ pub use plots::find_site;
 pub(super) use plots::find_site_with_plan;
 #[cfg(test)]
 pub(super) use road_access::planned_road_access_path;
-pub(crate) use road_access::{road_access_blockers_for_plot, RoadAccessBlocker};
+pub(crate) use road_access::{
+    road_access_blockers_for_new_plot, road_access_blockers_for_plot, RoadAccessBlocker,
+};
 pub(super) use terrain::farmstead_earthwork_effort;
 #[cfg(test)]
 pub(super) use terrain::slope_at;

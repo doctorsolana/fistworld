@@ -26,7 +26,7 @@ pub fn plan_settlement_defenses(
     buildings: Query<(&PlacedBuilding, &BuildingPosition)>,
     homes: Query<(&SettlementBuilding, &BuildingOf, &PlayerPosition)>,
     worksites: Query<&crate::world::village::UnderConstruction>,
-    fields: Query<(&PlayerPosition, &PlayerRotation), With<FarmField>>,
+    fields: Query<(&FarmField, &PlayerPosition, &PlayerRotation)>,
     pastures: Query<(&PlayerPosition, &PlayerRotation), With<LivestockPasture>>,
     squares: Query<&SettlementCivicSquare>,
     roads: Query<(&VillageRoad, &RoadOf)>,
@@ -88,10 +88,10 @@ pub fn plan_settlement_defenses(
             half_extents: def.footprint * 0.5,
             rotation: site.rotation,
         });
-        if let Some(half_extents) = site.kind.field_half_extents() {
+        if let Some(half_extents) = site.kind.intended_field_half_extents() {
             for center in site
                 .kind
-                .field_positions(site.position, site.rotation)
+                .intended_field_positions(site.position, site.rotation)
                 .into_iter()
                 .flatten()
             {
@@ -110,14 +110,14 @@ pub fn plan_settlement_defenses(
             });
         }
     }
-    occupied.extend(fields.iter().map(|(p, r)| {
-        Plot {
-            center: p.0.xz(),
-            half_extents: SettlementBuildingKind::Farmstead
-                .field_half_extents()
-                .unwrap(),
-            rotation: r.0,
-        }
+    occupied.extend(fields.iter().flat_map(|(f, p, r)| {
+        f.reservation_rects(p.0, r.0, 2.)
+            .into_iter()
+            .map(|(p, half_extents, rotation)| Plot {
+                center: p.xz(),
+                half_extents,
+                rotation,
+            })
     }));
     occupied.extend(pastures.iter().map(|(p, r)| {
         Plot {

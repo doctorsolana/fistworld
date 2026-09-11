@@ -1,8 +1,8 @@
 //! Offline replicated world, settlement and encyclopedia fixture setup.
 
-use super::CaptureConfig;
 use super::history_fixtures::{synthetic_settlement_history, synthetic_world_history};
 use super::ui_fixtures::stage_capture_companies;
+use super::CaptureConfig;
 use crate::states::GameState;
 use bevy::prelude::*;
 use shared::components::WorldTime;
@@ -183,7 +183,8 @@ pub(super) fn enter_world_offline(
             "1" | "village"
                 | "coast"
                 | "industries"
-                | "bakery" | "tavern"
+                | "bakery"
+                | "tavern"
                 | "market"
                 | "market_paved"
                 | "storage_hall"

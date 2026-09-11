@@ -1043,6 +1043,7 @@ pub struct NavigationLoad {
 
 #[derive(SystemParam)]
 pub(crate) struct RoutePlannerAux<'w, 's> {
+    fields: crate::world::farm_boundaries::FarmBoundarySource<'w, 's>,
     navigation_load: Option<ResMut<'w, NavigationLoad>>,
     placed_buildings: Query<'w, 's, (&'static PlacedBuilding, &'static BuildingPosition)>,
     changed_buildings: Query<'w, 's, (), Or<(Changed<PlacedBuilding>, Changed<BuildingPosition>)>>,
@@ -1050,6 +1051,29 @@ pub(crate) struct RoutePlannerAux<'w, 's> {
     defenses: Query<'w, 's, &'static shared::components::FortificationSegment>,
     changed_defenses: Query<'w, 's, (), Changed<shared::components::FortificationSegment>>,
     removed_defenses: RemovedComponents<'w, 's, shared::components::FortificationSegment>,
+    yards: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::HouseholdYard,
+            &'static PlayerPosition,
+            &'static PlayerRotation,
+        ),
+    >,
+    changed_yards: Query<
+        'w,
+        's,
+        (),
+        (
+            With<shared::components::HouseholdYard>,
+            Or<(
+                Changed<shared::components::HouseholdYard>,
+                Changed<PlayerPosition>,
+                Changed<PlayerRotation>,
+            )>,
+        ),
+    >,
+    removed_yards: RemovedComponents<'w, 's, shared::components::HouseholdYard>,
     active_ambient_routes: Query<
         'w,
         's,
@@ -1645,17 +1669,27 @@ pub fn plan_villager_travel_routes(
         }
     }
 
-    let removed_any = !aux.removed_buildings.is_empty() || !aux.removed_defenses.is_empty();
+    let fields_changed = aux.fields.refresh();
+    let removed_any = !aux.removed_buildings.is_empty()
+        || !aux.removed_defenses.is_empty()
+        || !aux.removed_yards.is_empty();
     aux.removed_buildings.clear();
     aux.removed_defenses.clear();
+    aux.removed_yards.clear();
     if !building_cache.initialized
         || !aux.changed_buildings.is_empty()
         || !aux.changed_defenses.is_empty()
+        || !aux.changed_yards.is_empty()
+        || fields_changed
         || removed_any
     {
         let rebuild_started = Instant::now();
-        let changed_blockers =
-            building_cache.rebuild(aux.placed_buildings.iter(), aux.defenses.iter());
+        let changed_blockers = building_cache.rebuild_with_fields(
+            aux.placed_buildings.iter(),
+            aux.defenses.iter(),
+            aux.yards.iter(),
+            aux.fields.obstacles(),
+        );
         // A cabin on the east side of town cannot invalidate a certified
         // migration corridor on the west. Remove only cached polylines that
         // actually touch an added, moved or removed building shell.

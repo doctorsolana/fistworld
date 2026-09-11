@@ -874,6 +874,11 @@ fn plot_overlap_reason(
         Option<&PlayerRotation>,
     )>,
     sites: &Query<(&ConstructionSite, &PlayerPosition)>,
+    fields: &Query<(
+        &shared::components::FarmField,
+        &PlayerPosition,
+        &PlayerRotation,
+    )>,
     roads: &[&VillageRoad],
 ) -> Option<String> {
     let clearance = kind.clearance();
@@ -903,8 +908,8 @@ fn plot_overlap_reason(
         }
         occupied.push((other.0, site.kind.clearance()));
         if let (Some(fields), Some(half)) = (
-            site.kind.field_positions(other.0, site.rotation),
-            site.kind.field_half_extents(),
+            site.kind.intended_field_positions(other.0, site.rotation),
+            site.kind.intended_field_half_extents(),
         ) {
             occupied.extend(fields.into_iter().map(|field| {
                 (
@@ -914,6 +919,12 @@ fn plot_overlap_reason(
             }));
         }
     }
+    occupied.extend(fields.iter().flat_map(|(field, p, r)| {
+        field
+            .reservation_rects(p.0, r.0, 2.)
+            .into_iter()
+            .map(|(p, half, _)| (p, half.length()))
+    }));
     if occupied.iter().any(|(other, other_clearance)| {
         Vec2::new(position.x - other.x, position.z - other.z).length() < clearance + other_clearance
     }) {
@@ -926,8 +937,8 @@ fn plot_overlap_reason(
         return Some("Building footprint overlaps a road reservation".into());
     }
     if let (Some(fields), Some(half)) = (
-        kind.field_positions(position, rotation),
-        kind.field_half_extents(),
+        kind.intended_field_positions(position, rotation),
+        kind.intended_field_half_extents(),
     ) {
         for field in fields {
             let field_clearance = half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN;
@@ -967,6 +978,11 @@ fn predict_permit_placement(
         Option<&PlayerRotation>,
     )>,
     sites: Query<(&ConstructionSite, &PlayerPosition)>,
+    fields: Query<(
+        &shared::components::FarmField,
+        &PlayerPosition,
+        &PlayerRotation,
+    )>,
     road_query: Query<(&VillageRoad, &RoadOf)>,
     mut preview: ResMut<PermitPlacementPreview>,
 ) {
@@ -1061,18 +1077,21 @@ fn predict_permit_placement(
         Some("Building or doorway reaches wet ground".to_string())
     } else if permit
         .kind
-        .field_positions(position, rotation)
+        .intended_field_positions(position, rotation)
         .is_some_and(|fields| {
-            permit.kind.field_half_extents().is_some_and(|half| {
-                fields.into_iter().any(|field| {
-                    shared::components::minimum_rotated_rect_water_clearance(
-                        terrain,
-                        field,
-                        half + Vec2::splat(shared::components::FARM_FIELD_TERRACE_MARGIN),
-                        rotation,
-                    ) < shared::components::SETTLEMENT_FREEBOARD
+            permit
+                .kind
+                .intended_field_half_extents()
+                .is_some_and(|half| {
+                    fields.into_iter().any(|field| {
+                        shared::components::minimum_rotated_rect_water_clearance(
+                            terrain,
+                            field,
+                            half + Vec2::splat(shared::components::FARM_FIELD_TERRACE_MARGIN),
+                            rotation,
+                        ) < shared::components::SETTLEMENT_FREEBOARD
+                    })
                 })
-            })
         })
     {
         Some("One of the two wheat fields reaches wet ground".to_string())
@@ -1095,6 +1114,7 @@ fn predict_permit_placement(
             hall_position.0,
             &buildings,
             &sites,
+            &fields,
             &roads,
         )
     };
@@ -1652,8 +1672,8 @@ fn draw_permit_placement_guides(
     if let (Some(fields), Some(half)) = (
         preview
             .kind
-            .field_positions(preview.position, preview.rotation),
-        preview.kind.field_half_extents(),
+            .intended_field_positions(preview.position, preview.rotation),
+        preview.kind.intended_field_half_extents(),
     ) {
         for field in fields {
             draw_rotated_rect(&mut gizmos, field, half, preview.rotation, color);

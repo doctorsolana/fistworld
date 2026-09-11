@@ -41,6 +41,7 @@ impl Plugin for PropsPlugin {
             (
                 debug::toggle_prop_lod_debug,
                 debug::log_prop_density_snapshot,
+                spawn::invalidate_props_for_farm_fields,
                 spawn::invalidate_props_for_new_buildings,
                 spawn::sync_build_zone_chunk_index,
                 spawn::clear_props_for_built_village_roads,

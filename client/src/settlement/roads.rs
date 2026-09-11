@@ -6,6 +6,14 @@
 //! and every repaint starts from the generated/authored base weights so road
 //! removal, streaming and dirt-to-stone upgrades remain reversible.
 
+mod geometry;
+mod index;
+mod raster;
+
+pub(super) use geometry::road_wear;
+use geometry::{width_variation, worn_road_points};
+use index::{RoadPaintIndex, RoadSegmentRef};
+
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -13,14 +21,13 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 
 use shared::components::{
-    BuildingOf, MarketLevel, PlayerPosition, PlayerRotation, RoadSurface, Settlement,
+    BuildingOf, MarketLevel, PlayerPosition, PlayerRotation, RoadClass, RoadSurface, Settlement,
     SettlementBuilding, SettlementBuildingKind, SettlementCivicSquare, SettlementId,
     SettlementTier, VillageRoad,
 };
 use shared::terrain::{
-    apply_terrain_paint_op_to_weights, terrain_paint_op_chunk_coords,
-    terrain_paint_op_intersects_chunk, ChunkCoord, TerrainLayer, TerrainPaintOp, TerrainPaintShape,
-    CHUNK_SIZE,
+    terrain_paint_op_chunk_coords, terrain_paint_op_intersects_chunk, ChunkCoord, TerrainLayer,
+    TerrainPaintOp, TerrainPaintShape, CHUNK_SIZE,
 };
 
 use crate::terrain::paint::{TerrainPaintState, WeightMapData};
@@ -29,26 +36,37 @@ use crate::terrain::PerfHitchStats;
 /// A few roads can replicate progress together at 100x. Capping uploads keeps
 /// that burst invisible to frame time; the dirty set coalesces repeat changes.
 const MAX_ROAD_PAINT_CHUNKS_PER_FRAME: usize = 4;
-const DIRT_STRENGTH: f32 = 0.88;
-const DIRT_FALLOFF_METERS: f32 = 1.35;
+/// Half-metre shoulders resolve the small bends in a lane. Only chunks with
+/// built roads/squares use this detail; the generated base stays at 64².
+const ROAD_WEIGHTMAP_RESOLUTION: u32 = 128;
+const DIRT_STRENGTH: f32 = 0.94;
+const DIRT_FALLOFF_METERS: f32 = 0.48;
 const STONE_STRENGTH: f32 = 0.97;
-const STONE_FALLOFF_METERS: f32 = 0.65;
-const STONE_DIRT_SHOULDER_EXTRA_WIDTH_METERS: f32 = 1.2;
+const STONE_FALLOFF_METERS: f32 = 0.32;
 const STONE_DIRT_SHOULDER_STRENGTH: f32 = 0.62;
 const STONE_DIRT_SHOULDER_FALLOFF_METERS: f32 = 1.0;
 
 #[derive(Clone, Debug, PartialEq)]
 struct RoadPaintSnapshot {
     points: Vec<Vec2>,
+    surveyed_points: Vec<Vec2>,
+    source_segments: Vec<usize>,
     width: f32,
+    reserved_width: f32,
+    class: RoadClass,
     surface: RoadSurface,
 }
 
 impl RoadPaintSnapshot {
     fn from_road(road: &VillageRoad) -> Self {
+        let (points, source_segments) = worn_road_points(road);
         Self {
-            points: road.built_points().to_vec(),
+            points,
+            source_segments,
+            surveyed_points: road.built_points().to_vec(),
             width: road.width,
+            reserved_width: road.reservation_width(),
+            class: road.class,
             surface: road.surface,
         }
     }
@@ -101,15 +119,15 @@ impl SquarePaintSnapshot {
         }
     }
 
-    /// The dirt under everything: the whole floor of an earthen square, or the compacted bed a
-    /// paved square's cobbles sit in, reaching past them by the roads' shoulder width.
+    /// The whole earthen floor, or the compacted bed beneath a paved square.
+    /// Both use the accepted bounds; the raster exposes the bed by wearing
+    /// cobbles inward rather than spreading a shoulder onto unclaimed land.
     fn bed_op(&self) -> TerrainPaintOp {
-        let (strength, falloff, extra) = match self.surface {
-            RoadSurface::Dirt => (DIRT_STRENGTH, DIRT_FALLOFF_METERS, 0.0),
+        let (strength, falloff) = match self.surface {
+            RoadSurface::Dirt => (DIRT_STRENGTH, DIRT_FALLOFF_METERS),
             RoadSurface::Stone => (
                 STONE_DIRT_SHOULDER_STRENGTH,
                 STONE_DIRT_SHOULDER_FALLOFF_METERS,
-                STONE_DIRT_SHOULDER_EXTRA_WIDTH_METERS * 0.5,
             ),
         };
         TerrainPaintOp {
@@ -119,7 +137,7 @@ impl SquarePaintSnapshot {
             falloff,
             shape: TerrainPaintShape::Rect {
                 center: self.center,
-                half_extents: self.half_extents + Vec2::splat(extra),
+                half_extents: self.half_extents,
                 rotation: self.rotation,
             },
         }
@@ -145,6 +163,7 @@ impl SquarePaintSnapshot {
 #[derive(Resource, Default)]
 pub(super) struct VillageRoadPaintState {
     roads: HashMap<Entity, RoadPaintSnapshot>,
+    index: RoadPaintIndex,
     squares: HashMap<Entity, SquarePaintSnapshot>,
     weightmaps: HashMap<ChunkCoord, AssetId<Image>>,
     dirty_chunks: HashSet<ChunkCoord>,
@@ -174,13 +193,13 @@ pub(super) fn paint_village_roads_into_terrain(
     mut terrain_paint: ResMut<TerrainPaintState>,
     mut images: ResMut<Assets<Image>>,
     mut perf: ResMut<PerfHitchStats>,
+    terrain_chunks: Query<&crate::terrain::TerrainChunk>,
+    mut terrain_materials: Option<ResMut<Assets<shared::terrain::TerrainSplatMaterial>>>,
 ) {
     let started = Instant::now();
 
     for entity in removed_roads.read() {
-        if let Some(previous) = state.roads.remove(&entity) {
-            mark_snapshot_chunks_dirty(&previous, &mut state.dirty_chunks);
-        }
+        state.remove_road(entity);
     }
 
     for (entity, road) in roads.iter() {
@@ -191,10 +210,7 @@ pub(super) fn paint_village_roads_into_terrain(
         if state.roads.get(&entity) == Some(&next) {
             continue;
         }
-        if let Some(previous) = state.roads.insert(entity, next.clone()) {
-            mark_snapshot_chunks_dirty(&previous, &mut state.dirty_chunks);
-        }
-        mark_snapshot_chunks_dirty(&next, &mut state.dirty_chunks);
+        state.replace_road(entity, next);
     }
 
     // Market squares. The table is a handful of entities, and a snapshot compares four numbers,
@@ -260,42 +276,32 @@ pub(super) fn paint_village_roads_into_terrain(
 
     // A terrain edit or stream reload replaces the image even when the chunk
     // coordinate stays the same. Handle identity makes that replacement dirty.
-    let loaded_weightmaps = terrain_paint
-        .weightmaps
-        .iter()
-        .map(|(coord, data)| (*coord, data.handle.id()))
-        .collect::<Vec<_>>();
-    let loaded_coords = loaded_weightmaps
-        .iter()
-        .map(|(coord, _)| *coord)
-        .collect::<HashSet<_>>();
     state
         .weightmaps
-        .retain(|coord, _| loaded_coords.contains(coord));
+        .retain(|coord, _| terrain_paint.weightmaps.contains_key(coord));
     state
         .dirty_chunks
-        .retain(|coord| loaded_coords.contains(coord));
-    for (coord, handle) in loaded_weightmaps {
-        if state.weightmaps.insert(coord, handle) != Some(handle) {
-            state.dirty_chunks.insert(coord);
+        .retain(|coord| terrain_paint.weightmaps.contains_key(coord));
+    for (coord, map) in &terrain_paint.weightmaps {
+        let handle = map.handle.id();
+        if state.weightmaps.insert(*coord, handle) != Some(handle) {
+            state.dirty_chunks.insert(*coord);
         }
     }
 
     let mut queued = state.dirty_chunks.iter().copied().collect::<Vec<_>>();
+    if queued.is_empty() {
+        if let Some(materials) = terrain_materials.as_deref_mut() {
+            sync_sampling_layout(&terrain_paint, &terrain_chunks, materials);
+        }
+        perf.terrain_paint_ms += started.elapsed().as_secs_f32() * 1000.0;
+        return;
+    }
     queued.sort_unstable_by_key(|coord| (coord.x, coord.z));
     queued.truncate(MAX_ROAD_PAINT_CHUNKS_PER_FRAME);
 
-    // Stable ordering ensures dirt is laid first and stone wins cleanly at an
-    // intersection. Entity bits only break ties between equal surfaces.
-    let mut snapshots = state
-        .roads
-        .iter()
-        .filter(|(_, road)| road.has_surface())
-        .map(|(entity, road)| (*entity, road))
-        .collect::<Vec<_>>();
-    snapshots
-        .sort_unstable_by_key(|(entity, road)| (surface_order(road.surface), entity.to_bits()));
-
+    // Dirt/stone coverage unions commute, so chunk-local segments need no
+    // entity sorting and no scan of the rest of the world's dense ribbons.
     let squares = state.squares.values().cloned().collect::<Vec<_>>();
 
     let mut completed = Vec::with_capacity(queued.len());
@@ -303,7 +309,8 @@ pub(super) fn paint_village_roads_into_terrain(
         let Some(weightmap) = terrain_paint.weightmaps.get_mut(&coord) else {
             continue;
         };
-        composite_roads_into_chunk(coord, weightmap, &snapshots, &squares);
+        let segments = state.index.segments(coord, &state.roads);
+        composite_segments_into_chunk(coord, weightmap, &segments, &squares);
         if upload_weightmap(weightmap, &mut images) {
             completed.push(coord);
             perf.paint_chunks_updated += 1;
@@ -313,23 +320,36 @@ pub(super) fn paint_village_roads_into_terrain(
         state.dirty_chunks.remove(&coord);
     }
 
+    if let Some(materials) = terrain_materials.as_deref_mut() {
+        sync_sampling_layout(&terrain_paint, &terrain_chunks, materials);
+    }
+
     perf.terrain_paint_ms += started.elapsed().as_secs_f32() * 1000.0;
 }
 
-fn surface_order(surface: RoadSurface) -> u8 {
-    match surface {
-        RoadSurface::Dirt => 0,
-        RoadSurface::Stone => 1,
-    }
-}
-
-fn mark_snapshot_chunks_dirty(snapshot: &RoadPaintSnapshot, dirty: &mut HashSet<ChunkCoord>) {
-    for (segment, pair) in snapshot.points.windows(2).enumerate() {
-        let op = road_segment_paint_op(snapshot, pair[0], pair[1], segment);
-        dirty.extend(terrain_paint_op_chunk_coords(&op));
-        if snapshot.surface == RoadSurface::Stone {
-            let shoulder = stone_dirt_shoulder_op(snapshot, pair[0], pair[1], segment);
-            dirty.extend(terrain_paint_op_chunk_coords(&shoulder));
+/// A newly spawned chunk can become queryable one frame after its image is
+/// painted. Check layout even on an otherwise idle compositor frame, but only
+/// mutate a material when the image's sampling contract actually changes.
+fn sync_sampling_layout(
+    terrain_paint: &TerrainPaintState,
+    chunks: &Query<&crate::terrain::TerrainChunk>,
+    materials: &mut Assets<shared::terrain::TerrainSplatMaterial>,
+) {
+    for chunk in chunks {
+        let Some(map) = terrain_paint.weightmaps.get(&chunk.coord) else {
+            continue;
+        };
+        if map.handle.id() != chunk.weightmap.id() {
+            continue;
+        }
+        let layout = if map.endpoint_samples { 1.0 } else { 0.0 };
+        if materials
+            .get(&chunk.material)
+            .is_some_and(|m| m.extension.params.weightmap_endpoint_samples != layout)
+        {
+            if let Some(mut material) = materials.get_mut(&chunk.material) {
+                material.extension.params.weightmap_endpoint_samples = layout;
+            }
         }
     }
 }
@@ -339,62 +359,36 @@ fn mark_square_chunks_dirty(snapshot: &SquarePaintSnapshot, dirty: &mut HashSet<
     dirty.extend(terrain_paint_op_chunk_coords(&snapshot.bed_op()));
 }
 
-fn composite_roads_into_chunk(
+fn composite_segments_into_chunk(
     coord: ChunkCoord,
     weightmap: &mut WeightMapData,
-    roads: &[(Entity, &RoadPaintSnapshot)],
+    segments: &[RoadSegmentRef],
     squares: &[SquarePaintSnapshot],
 ) {
-    weightmap.weights.clone_from(&weightmap.base_weights);
     let chunk_min = Vec2::new(coord.world_pos().x, coord.world_pos().z);
     let chunk_max = chunk_min + Vec2::splat(CHUNK_SIZE);
+    let has_surface = squares
+        .iter()
+        .any(|square| terrain_paint_op_intersects_chunk(&square.bed_op(), chunk_min, chunk_max))
+        || !segments.is_empty();
+    weightmap.resolution = if has_surface {
+        weightmap.base_resolution.max(ROAD_WEIGHTMAP_RESOLUTION)
+    } else {
+        weightmap.base_resolution
+    };
+    weightmap.endpoint_samples = has_surface;
+    reset_composite_base(weightmap);
 
     // Square floors and beds go down first, under every road, for the same reason the stone
     // roads' beds do: nothing laid later may cover cobble with a shoulder.
     for square in squares {
         let bed = square.bed_op();
         if terrain_paint_op_intersects_chunk(&bed, chunk_min, chunk_max) {
-            apply_terrain_paint_op_to_weights(
-                &bed,
-                chunk_min,
-                &mut weightmap.weights,
-                weightmap.resolution,
-            );
+            raster::paint_square(&bed, chunk_min, weightmap);
         }
     }
 
-    for (_, road) in roads {
-        // Paving is laid over a slightly wider compacted-earth bed. Paint the
-        // ENTIRE bed before any stone: interleaving bed/stone per segment lets
-        // the next segment's wider shoulder cover the previous segment's
-        // paving at bends.
-        if road.surface == RoadSurface::Stone {
-            for (segment, pair) in road.points.windows(2).enumerate() {
-                let shoulder = stone_dirt_shoulder_op(road, pair[0], pair[1], segment);
-                if terrain_paint_op_intersects_chunk(&shoulder, chunk_min, chunk_max) {
-                    apply_terrain_paint_op_to_weights(
-                        &shoulder,
-                        chunk_min,
-                        &mut weightmap.weights,
-                        weightmap.resolution,
-                    );
-                }
-            }
-        }
-        // All paved segments now land as one top coat over the complete dirt
-        // bed, so no shoulder can overpaint cobble at a joint.
-        for (segment, pair) in road.points.windows(2).enumerate() {
-            let op = road_segment_paint_op(road, pair[0], pair[1], segment);
-            if terrain_paint_op_intersects_chunk(&op, chunk_min, chunk_max) {
-                apply_terrain_paint_op_to_weights(
-                    &op,
-                    chunk_min,
-                    &mut weightmap.weights,
-                    weightmap.resolution,
-                );
-            }
-        }
-    }
+    raster::paint_road_segments(chunk_min, weightmap, segments);
 
     // Paving last: a stone road's dirt shoulder crosses the square's edge, and the cobbles must
     // win there so the road reads as running INTO the square.
@@ -403,17 +397,87 @@ fn composite_roads_into_chunk(
             continue;
         };
         if terrain_paint_op_intersects_chunk(&top, chunk_min, chunk_max) {
-            apply_terrain_paint_op_to_weights(
-                &top,
-                chunk_min,
-                &mut weightmap.weights,
-                weightmap.resolution,
-            );
+            raster::paint_square(&top, chunk_min, weightmap);
         }
     }
 }
 
-fn stone_dirt_shoulder_op(
+/// Brute-force reference selection used only by equivalence tests. Production
+/// uses the retained segment/chunk index and does not scan world roads here.
+#[cfg(test)]
+fn composite_roads_into_chunk(
+    coord: ChunkCoord,
+    map: &mut WeightMapData,
+    roads: &[(Entity, &RoadPaintSnapshot)],
+    squares: &[SquarePaintSnapshot],
+) {
+    let min = coord.world_pos().xz();
+    let max = min + Vec2::splat(CHUNK_SIZE);
+    let segments: Vec<_> = roads
+        .iter()
+        .flat_map(|(_, road)| {
+            road.points
+                .windows(2)
+                .enumerate()
+                .filter_map(move |(dense_index, pair)| {
+                    let op = road_segment_paint_op(road, pair[0], pair[1], dense_index);
+                    terrain_paint_op_intersects_chunk(&op, min, max)
+                        .then_some(RoadSegmentRef { road, dense_index })
+                })
+        })
+        .collect();
+    composite_segments_into_chunk(coord, map, &segments, squares);
+}
+
+/// Bilinear reconstruction of the same authored surface, followed by vector
+/// road painting at the finer resolution. Never resample a previous composite:
+/// edits/removal must not accumulate blur or leave an old road behind.
+fn reset_composite_base(weightmap: &mut WeightMapData) {
+    if !weightmap.endpoint_samples && weightmap.resolution == weightmap.base_resolution {
+        weightmap.weights.clone_from(&weightmap.base_weights);
+        return;
+    }
+    let source = weightmap.base_resolution;
+    let target = weightmap.resolution;
+    weightmap.weights.resize((target * target) as usize, [0; 4]);
+    let endpoint_samples = weightmap.endpoint_samples;
+    let source_coordinate = |index: u32| {
+        let uv = if endpoint_samples {
+            index as f32 / target.saturating_sub(1).max(1) as f32
+        } else {
+            (index as f32 + 0.5) / target as f32
+        };
+        (uv * source as f32 - 0.5).clamp(0.0, (source - 1) as f32)
+    };
+    for z in 0..target {
+        let source_z = source_coordinate(z);
+        let z0 = source_z.floor() as u32;
+        let z1 = (z0 + 1).min(source - 1);
+        for x in 0..target {
+            let source_x = source_coordinate(x);
+            let x0 = source_x.floor() as u32;
+            let x1 = (x0 + 1).min(source - 1);
+            let sample = |sx, sz, channel| {
+                weightmap.base_weights[(sz * source + sx) as usize][channel] as f32
+            };
+            let mut weight = [0; 4];
+            for (channel, value) in weight.iter_mut().enumerate() {
+                *value = sample(x0, z0, channel)
+                    .lerp(sample(x1, z0, channel), source_x - x0 as f32)
+                    .lerp(
+                        sample(x0, z1, channel).lerp(sample(x1, z1, channel), source_x - x0 as f32),
+                        source_z - z0 as f32,
+                    )
+                    .round() as u8;
+            }
+            weightmap.weights[(z * target + x) as usize] = weight;
+        }
+    }
+}
+
+/// Conservative upload/dirty bounds for the custom coverage rasterizer.
+/// This operation is only a bound; it does not paint the visible surface.
+fn road_segment_paint_op(
     road: &RoadPaintSnapshot,
     start: Vec2,
     end: Vec2,
@@ -422,54 +486,14 @@ fn stone_dirt_shoulder_op(
     TerrainPaintOp {
         id: segment as u64 + 1,
         layer: TerrainLayer::Dirt,
-        strength: STONE_DIRT_SHOULDER_STRENGTH,
-        falloff: STONE_DIRT_SHOULDER_FALLOFF_METERS,
+        strength: 1.0,
+        falloff: 0.0,
         shape: TerrainPaintShape::Line {
             start,
             end,
-            width: road.width * segment_width_variation(start, end, segment)
-                + STONE_DIRT_SHOULDER_EXTRA_WIDTH_METERS,
+            width: road.reserved_width + 4.0,
         },
     }
-}
-
-fn road_segment_paint_op(
-    road: &RoadPaintSnapshot,
-    start: Vec2,
-    end: Vec2,
-    segment: usize,
-) -> TerrainPaintOp {
-    let (layer, strength, falloff) = match road.surface {
-        RoadSurface::Dirt => (TerrainLayer::Dirt, DIRT_STRENGTH, DIRT_FALLOFF_METERS),
-        RoadSurface::Stone => (
-            TerrainLayer::Cobblestone,
-            STONE_STRENGTH,
-            STONE_FALLOFF_METERS,
-        ),
-    };
-    TerrainPaintOp {
-        // Local compositing does not persist this operation; a stable non-zero
-        // id still keeps it valid and useful in diagnostics/tests.
-        id: segment as u64 + 1,
-        layer,
-        strength,
-        falloff,
-        shape: TerrainPaintShape::Line {
-            start,
-            end,
-            // Small deterministic changes prevent a surveyed path from reading
-            // as a perfect extrusion while remaining stable across frames.
-            width: road.width * segment_width_variation(start, end, segment),
-        },
-    }
-}
-
-fn segment_width_variation(start: Vec2, end: Vec2, segment: usize) -> f32 {
-    let midpoint = (start + end) * 0.5;
-    let hash = midpoint.x.to_bits().rotate_left(7)
-        ^ midpoint.y.to_bits().rotate_left(19)
-        ^ (segment as u32).wrapping_mul(2_654_435_761);
-    0.94 + (hash & 255) as f32 / 255.0 * 0.12
 }
 
 fn upload_weightmap(weightmap: &WeightMapData, images: &mut Assets<Image>) -> bool {
@@ -480,6 +504,8 @@ fn upload_weightmap(weightmap: &WeightMapData, images: &mut Assets<Image>) -> bo
     for weights in &weightmap.weights {
         pixels.extend_from_slice(weights);
     }
+    image.texture_descriptor.size.width = weightmap.resolution;
+    image.texture_descriptor.size.height = weightmap.resolution;
     image.data = Some(pixels);
     true
 }
@@ -504,7 +530,66 @@ mod tests {
     }
 
     fn pixel(weights: &WeightMapData, x: u32, z: u32) -> [u8; 4] {
+        // Test points are metre-cell centres, independent of render detail.
+        let at = |i: u32| {
+            if weights.endpoint_samples {
+                ((i as f32 + 0.5) * (weights.resolution - 1) as f32 / CHUNK_SIZE).round() as u32
+            } else {
+                ((i as f32 + 0.5) * weights.resolution as f32 / CHUNK_SIZE) as u32
+            }
+        };
+        let x = at(x);
+        let z = at(z);
         weights.weights[(z * weights.resolution + x) as usize]
+    }
+
+    #[test]
+    fn road_detail_preserves_authored_base_and_restores_it_exactly_on_removal() {
+        let mut images = Assets::<Image>::default();
+        let base: Vec<_> = (0..64 * 64)
+            .map(|i| {
+                let grass = (i % 64) as u8 * 4;
+                [grass, 0, 255 - grass, 0]
+            })
+            .collect();
+        let mut map = build_weightmap_from_weights(base.clone(), 64, &mut images);
+        let handle = map.handle.id();
+        let lane = RoadPaintSnapshot::from_road(&road(
+            RoadSurface::Dirt,
+            Vec2::new(8.0, 32.0),
+            Vec2::new(56.0, 32.0),
+        ));
+        let lanes = [(Entity::from_bits(1), &lane)];
+        composite_roads_into_chunk(ChunkCoord::new(0, 0), &mut map, &lanes, &[]);
+        assert_eq!(map.resolution, ROAD_WEIGHTMAP_RESOLUTION);
+        assert!(map.endpoint_samples);
+        assert_eq!(map.base_resolution, 64);
+        assert_eq!(map.base_weights, base);
+        let first_composite = map.weights.clone();
+        assert!(pixel(&map, 32, 31)[1] > 200);
+        assert!(upload_weightmap(&map, &mut images));
+        assert_eq!(map.handle.id(), handle);
+        let image = images.get(&map.handle).unwrap();
+        assert_eq!(image.width(), ROAD_WEIGHTMAP_RESOLUTION);
+        assert_eq!(image.data.as_ref().unwrap().len(), 128 * 128 * 4);
+        composite_roads_into_chunk(ChunkCoord::new(0, 0), &mut map, &lanes, &[]);
+        assert_eq!(
+            map.weights, first_composite,
+            "repainting must not accumulate interpolation"
+        );
+
+        composite_roads_into_chunk(ChunkCoord::new(0, 0), &mut map, &[], &[]);
+        assert_eq!(map.resolution, 64);
+        assert!(!map.endpoint_samples);
+        assert_eq!(map.weights, base);
+        assert!(upload_weightmap(&map, &mut images));
+        assert_eq!(images.get(&map.handle).unwrap().width(), 64);
+        composite_roads_into_chunk(ChunkCoord::new(4, 4), &mut map, &lanes, &[]);
+        assert_eq!(
+            map.resolution, 64,
+            "distant roads must not expand wilderness maps"
+        );
+        assert_eq!(map.weights, base);
     }
 
     #[test]
@@ -591,14 +676,34 @@ mod tests {
         );
 
         let paving = pixel(&weightmap, 31, 31);
-        let verge = pixel(&weightmap, 31, 34);
-        let meadow = pixel(&weightmap, 31, 39);
         assert!(paving[3] > 240, "the paved core should stay cobblestone");
+        // The worn paving varies in width: one fixed metre-cell centre can be
+        // paving, especially after inclusive endpoint sampling. Require a real
+        // contiguous shoulder inside the surveyed corridor instead of assuming
+        // that the widest part has a dirt texel at an arbitrary coordinate.
+        let mut run = 0;
+        let mut longest = 0;
+        for x in 0..weightmap.resolution {
+            let world_x = weightmap.sample_position(Vec2::ZERO, x, 0).x;
+            if !(24.0..40.0).contains(&world_x) {
+                continue;
+            }
+            let has_verge = (0..weightmap.resolution).any(|z| {
+                let point = weightmap.sample_position(Vec2::ZERO, x, z);
+                let pixel = weightmap.weights[(z * weightmap.resolution + x) as usize];
+                (32.0..34.0).contains(&point.y)
+                    && pixel[0] > 20
+                    && pixel[1] > 40
+                    && pixel[1] > pixel[3]
+            });
+            run = if has_verge { run + 1 } else { 0 };
+            longest = longest.max(run);
+        }
         assert!(
-            verge[0] > 0 && verge[1] > verge[3],
-            "expected a grass/dirt-dominant verge, got {verge:?}"
+            longest >= 4,
+            "the road needs a visible, contiguous grass/dirt shoulder"
         );
-        assert_eq!(meadow, [255, 0, 0, 0]);
+        assert_eq!(pixel(&weightmap, 31, 39), [255, 0, 0, 0]);
     }
 
     #[test]
@@ -636,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn a_paved_square_is_cobble_with_a_dirt_verge_and_a_road_runs_into_it() {
+    fn a_paved_square_has_an_inner_dirt_verge_and_a_road_runs_into_it() {
         let resolution = 64;
         let mut images = Assets::<Image>::default();
         let mut weightmap = build_weightmap_from_weights(
@@ -656,7 +761,7 @@ mod tests {
             ChunkCoord::new(0, 0),
             &mut weightmap,
             &[(Entity::from_bits(1), &road)],
-            &[square],
+            &[square.clone()],
         );
 
         assert!(
@@ -667,11 +772,35 @@ mod tests {
             pixel(&weightmap, 32, 26)[3] > 240,
             "the road's end and the square's edge are one surface"
         );
-        let verge = pixel(&weightmap, 32, 38);
+        // Find the actual dusty edge on the quiet rear half, rather than an
+        // old point outside the accepted square. Adjacent samples must show
+        // an edge run, not an isolated chip or unrelated road shoulder.
+        let mut inner_verge = false;
+        for z in 0..weightmap.resolution {
+            for x in 0..weightmap.resolution - 1 {
+                let p = weightmap.sample_position(Vec2::ZERO, x, z);
+                let q = weightmap.sample_position(Vec2::ZERO, x + 1, z);
+                let near_rear = |p: Vec2| {
+                    let local = p - square.center;
+                    local.x.abs() < square.half_extents.x - 1.5
+                        && local.y > square.half_extents.y - 1.5
+                        && local.y < square.half_extents.y
+                };
+                let dusty = |w: [u8; 4]| w[1] > 30 && w[1] > w[3];
+                if near_rear(p)
+                    && near_rear(q)
+                    && dusty(weightmap.weights[(z * weightmap.resolution + x) as usize])
+                    && dusty(weightmap.weights[(z * weightmap.resolution + x + 1) as usize])
+                {
+                    inner_verge = true;
+                }
+            }
+        }
         assert!(
-            verge[1] > verge[3] && verge[1] > 0,
-            "past the kerb the bed shows as dirt, got {verge:?}"
+            inner_verge,
+            "the worn paving must expose a contiguous inner dirt transition"
         );
+        assert_eq!(pixel(&weightmap, 32, 38), [255, 0, 0, 0]);
         assert_eq!(
             pixel(&weightmap, 32, 44),
             [255, 0, 0, 0],
@@ -917,6 +1046,159 @@ mod tests {
         assert_eq!(
             app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)].weights,
             base
+        );
+    }
+
+    #[test]
+    fn unchanged_roads_repaint_replaced_and_reloaded_chunk_images() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        app.init_resource::<TerrainPaintState>();
+        app.init_resource::<VillageRoadPaintState>();
+        app.init_resource::<PerfHitchStats>();
+        app.add_systems(Update, paint_village_roads_into_terrain);
+        app.world_mut().spawn(road(
+            RoadSurface::Stone,
+            Vec2::new(8., 32.),
+            Vec2::new(56., 32.),
+        ));
+        let coord = ChunkCoord::new(0, 0);
+        let mut prior = None;
+        for pass in 0..3 {
+            if pass == 2 {
+                app.world_mut()
+                    .resource_mut::<TerrainPaintState>()
+                    .weightmaps
+                    .remove(&coord);
+                app.update();
+                assert!(!app
+                    .world()
+                    .resource::<VillageRoadPaintState>()
+                    .weightmaps
+                    .contains_key(&coord));
+            }
+            let map = build_weightmap_from_weights(
+                vec![[255, 0, 0, 0]; 64 * 64],
+                64,
+                &mut app.world_mut().resource_mut::<Assets<Image>>(),
+            );
+            let handle = map.handle.id();
+            assert_ne!(prior, Some(handle));
+            prior = Some(handle);
+            app.world_mut()
+                .resource_mut::<TerrainPaintState>()
+                .weightmaps
+                .insert(coord, map);
+            app.update();
+            let map = &app.world().resource::<TerrainPaintState>().weightmaps[&coord];
+            assert!(map.endpoint_samples);
+            assert!(
+                pixel(map, 31, 31)[3] > 240,
+                "pass {pass} lost an unchanged road"
+            );
+        }
+    }
+
+    #[test]
+    fn late_chunk_material_gets_endpoint_sampling_and_removal_restores_original_pixels() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        app.init_resource::<Assets<shared::terrain::TerrainSplatMaterial>>();
+        app.init_resource::<TerrainPaintState>();
+        app.init_resource::<VillageRoadPaintState>();
+        app.init_resource::<PerfHitchStats>();
+        app.add_systems(Update, paint_village_roads_into_terrain);
+        let base: Vec<_> = (0..64 * 64)
+            .map(|i| {
+                let grass = (i % 64) as u8 * 4;
+                [grass, 0, 255 - grass, 0]
+            })
+            .collect();
+        let map = build_weightmap_from_weights(
+            base.clone(),
+            64,
+            &mut app.world_mut().resource_mut::<Assets<Image>>(),
+        );
+        let handle = map.handle.clone();
+        app.world_mut()
+            .resource_mut::<TerrainPaintState>()
+            .weightmaps
+            .insert(ChunkCoord::new(0, 0), map);
+        let entity = app
+            .world_mut()
+            .spawn(road(
+                RoadSurface::Dirt,
+                Vec2::new(8., 32.),
+                Vec2::new(56., 32.),
+            ))
+            .id();
+        app.update();
+        // Deferred terrain spawns can make the material appear a frame after
+        // the image is painted. An empty dirty queue must still synchronize it.
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<shared::terrain::TerrainSplatMaterial>>()
+            .add(shared::terrain::TerrainSplatMaterial {
+                base: default(),
+                extension: shared::terrain::TerrainSplatExtension {
+                    weight_map: handle.clone(),
+                    albedo_array: default(),
+                    normal_array: default(),
+                    params: shared::terrain::TerrainSplatParams {
+                        layer_tiling: Vec4::ONE,
+                        water_params: Vec4::ZERO,
+                        debug_mode: 0,
+                        normal_strength: 0.,
+                        weightmap_endpoint_samples: 0.,
+                        _pad: 0.,
+                    },
+                    palette: shared::terrain::stylized_palette(),
+                },
+            });
+        app.world_mut().spawn(crate::terrain::TerrainChunk {
+            coord: ChunkCoord::new(0, 0),
+            weightmap: handle.clone(),
+            material: material.clone(),
+        });
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Assets<shared::terrain::TerrainSplatMaterial>>()
+                .get(&material)
+                .unwrap()
+                .extension
+                .params
+                .weightmap_endpoint_samples,
+            1.
+        );
+        app.world_mut().despawn(entity);
+        app.update();
+        let map = &app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)];
+        assert!(!map.endpoint_samples);
+        assert_eq!(map.resolution, 64);
+        assert_eq!(map.weights, base);
+        assert_eq!(map.base_weights, base);
+        let image = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(&handle)
+            .unwrap();
+        assert_eq!(
+            image.data.as_ref().unwrap(),
+            &base
+                .iter()
+                .flat_map(|p| p.iter().copied())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<Assets<shared::terrain::TerrainSplatMaterial>>()
+                .get(&material)
+                .unwrap()
+                .extension
+                .params
+                .weightmap_endpoint_samples,
+            0.
         );
     }
 }

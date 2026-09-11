@@ -90,6 +90,44 @@ impl RoadAccessBlocker {
     }
 }
 
+pub(crate) fn road_access_blockers_for_new_plot(
+    kind: SettlementBuildingKind,
+    position: Vec3,
+    rotation: f32,
+) -> Vec<RoadAccessBlocker> {
+    let mut result = road_access_blockers_for_plot(kind, position, rotation);
+    if let Some(centers) = kind.intended_field_positions(position, rotation) {
+        result.extend(centers.into_iter().map(|p| RoadAccessBlocker {
+            center: p.xz(),
+            half: kind.intended_field_half_extents().unwrap()
+                + Vec2::splat(RoadClass::Lane.initial_reserved_width() * 0.5 + 2.45),
+            rotation,
+        }));
+    }
+    result
+}
+impl RoadAccessBlocker {
+    pub(crate) fn for_field(
+        field: &shared::components::FarmField,
+        position: Vec3,
+        rotation: f32,
+    ) -> Vec<Self> {
+        field
+            .reservation_rects(
+                position,
+                rotation,
+                RoadClass::Lane.initial_reserved_width() * 0.5 + 2.45,
+            )
+            .into_iter()
+            .map(|(p, half, rotation)| Self {
+                center: p.xz(),
+                half,
+                rotation,
+            })
+            .collect()
+    }
+}
+
 pub(crate) fn road_access_blockers_for_plot(
     kind: SettlementBuildingKind,
     position: Vec3,
@@ -207,8 +245,8 @@ pub(in crate::world::village) fn planned_road_access_path(
         rotation,
     });
     if let (Some(fields), Some(field_half)) = (
-        kind.field_positions(position, rotation),
-        kind.field_half_extents(),
+        kind.intended_field_positions(position, rotation),
+        kind.intended_field_half_extents(),
     ) {
         let field_margin =
             reserved_width * 0.5 + 0.45 + shared::components::FARM_FIELD_TERRACE_MARGIN;

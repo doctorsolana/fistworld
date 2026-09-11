@@ -6,6 +6,12 @@ mod army;
 pub use archery::*;
 mod building_kinds;
 mod buildings;
+mod farm_fields;
+pub use farm_fields::{
+    farm_field_permanent_obstacles, fit_farm_field_shapes, fit_farm_field_shapes_on_terrain,
+    FarmFieldSection, FarmFieldShape, FARM_FENCE_HEIGHT, FARM_FENCE_OBSTACLE_TYPE,
+    FARM_FENCE_THICKNESS,
+};
 mod civic;
 mod fortifications;
 pub use fortifications::*;
@@ -14,6 +20,8 @@ pub use civic_square::*;
 mod health;
 mod horse;
 pub use horse::*;
+mod household_yards;
+pub use household_yards::*;
 mod identity;
 mod permits;
 mod placement;

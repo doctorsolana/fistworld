@@ -32,9 +32,12 @@ The client swaps the active mesh on one entity; both LODs are not drawn simultan
 | `WildCherryA.glb` | 6.03 m | 452 | 121 | 1,205 / 339 | 86,260 |
 
 Exported vertex counts include splits for flat normals and corner attributes, so they exceed
-editable mesh vertex counts. For context, existing `OakA` and `ChestnutA` each use 427 / 87
-triangles, while `PineA` uses 372 / 105. These additions are a visual improvement, not a measured
-FPS improvement. Density stays unchanged; species have different geometry costs.
+editable mesh vertex counts. The later [green broadleaf remake](GREEN_BROADLEAF.md)
+replaces the canonical `OakA` and `ChestnutA` crowns in place; each now uses 877 / 249
+triangles, compared with its earlier 427 / 87. `PineA` remains 372 / 105. That remake
+does not change the three meadow-accent species or the measurements in this table.
+These additions are a visual improvement, not a measured FPS improvement. Density
+stays unchanged; species have different geometry costs.
 
 Canonical editable sources are `vegetation/field_maple_a.blend`, `copper_beech_a.blend` and
 `wild_cherry_a.blend`. LOD1 is hidden in Blender to avoid overlapping the two meshes in review.

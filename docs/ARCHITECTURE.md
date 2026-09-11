@@ -21,6 +21,29 @@ ownership, municipal finance and settlement policy. The build order lives in
 capture artifact architecture live in [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md).
 [GAME-CODE-MAP.md](GAME-CODE-MAP.md) maps common changes to their current source owners.
 
+Accepted crop parcels and household yards are authoritative land geometry, not
+independent client decorations. The shared shape contracts supply fitting,
+containment, access and fence segments; the server owns publication, ownership,
+navigation and collision. The client batches ground-following crops, fences and
+domestic details from those contracts with bounded rebuilds and distance detail.
+Geometry revisions invalidate nearby terrain/vegetation caches; quality-only
+production changes do not rebuild the land. See [FARM-FIELDS.md](FARM-FIELDS.md),
+[HOUSEHOLD-YARDS.md](HOUSEHOLD-YARDS.md) and [TOWN-DRESSING.md](TOWN-DRESSING.md).
+
+Road presentation paints only the replicated built prefix. Full planned-route tangents
+give its Hermite curves stable construction progress and exact surveyed door/junction
+anchors. Smooth bounded bends and endpoint wear use spare width inside the accepted
+right-of-way; raster coverage clips to each original segment's surveyed capsule.
+Simulation paths and land permissions remain the shared surveyed polyline.
+Geometry changes update an index of dense ribbon segments by 64 m terrain chunk;
+a repaint reads only that chunk's segments and unions dirt/paving coverage
+independently of entity order.
+Loaded weightmap handle changes trigger repaint without rebuilding the road index.
+Road-bearing maps use inclusive endpoint samples with an explicit shader UV mapping;
+removing the last surface restores the exact original cell-centred base bytes and
+sampling mode. This guarantees matching road coverage at chunk boundaries, not
+identical historic authored terrain pixels on either side of every boundary.
+
 > **Status, reconciled 2026-09-09.** This remains a design record, with implementation state
 > marked **[not built]**, **[partial]** or **[done]**. The living-village foundation now
 > has stable world identities, one authoritative simulation clock, shared live/lab

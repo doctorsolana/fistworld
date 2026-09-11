@@ -240,9 +240,11 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                     .spawn((
                         AttachedTo(building_id),
                         FarmField {
+                            shape: None,
                             settlement: place.clone(),
                             farmstead: position,
                             plot_index,
+                            layout_version: 0,
                             quality: 0.8,
                         },
                         PlayerPosition(field_position),

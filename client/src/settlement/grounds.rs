@@ -1,32 +1,15 @@
-//! Replicated farm-field and fishing-pier scene attachment.
+//! Replicated agricultural ground and fishing-pier presentation.
 
 use bevy::prelude::*;
-use shared::components::{FarmField, FishingPier, PlayerPosition, PlayerRotation};
+use shared::components::{FishingPier, PlayerPosition, PlayerRotation};
 
-#[derive(Component)]
-pub struct FarmFieldVisual;
+#[path = "farm_fields.rs"]
+mod farm_fields;
+pub(super) use farm_fields::attach_farm_field_visuals;
+pub use farm_fields::FarmFieldVisual;
 
 #[derive(Component)]
 pub struct FishingPierVisual;
-
-/// Draw the collider-free wheat plot paired with a completed Farmstead.
-pub(super) fn attach_farm_field_visuals(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    fields: Query<(Entity, &FarmField, &PlayerPosition, &PlayerRotation), Without<FarmFieldVisual>>,
-) {
-    for (entity, field, position, rotation) in fields.iter() {
-        let scene = shared::props::PropKind::WheatField.scene_path();
-        commands.entity(entity).insert((
-            FarmFieldVisual,
-            Name::new(format!("Wheat field ({})", field.settlement)),
-            WorldAssetRoot(asset_server.load(scene)),
-            Transform::from_translation(position.0)
-                .with_rotation(Quat::from_rotation_y(rotation.0)),
-            Visibility::Inherited,
-        ));
-    }
-}
 
 /// Draw the authored, collider-free pier paired with a Fisherman's Hut.
 pub(super) fn attach_fishing_pier_visuals(

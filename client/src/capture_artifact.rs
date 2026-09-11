@@ -338,8 +338,44 @@ impl CaptureScenarioShot {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+/// Settings read from the running client, never reconstructed from scenario
+/// environment variables. The optional applied values expose camera overrides.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct CaptureGraphicsSnapshot {
+    /// Exact Bevy Tonemapping enum variant name (GraphicsSettings does not
+    /// serialize this dev-only field in ordinary user preferences).
+    pub tonemapping: String,
+    pub grade_exposure: f32,
+    pub render_scale: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_camera: Option<CaptureAppliedColorSnapshot>,
+}
+
+/// Actual 3D camera components when the request is inspected. All sectional
+/// arrays use [shadows, midtones, highlights], so neutral-grade ablations are
+/// observable without inferring them from the tone curve or scenario name.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct CaptureAppliedColorSnapshot {
+    pub tonemapping: String,
+    pub grade_exposure: f32,
+    pub temperature: f32,
+    pub tint: f32,
+    pub hue: f32,
+    pub post_saturation: f32,
+    pub midtones_range: [f32; 2],
+    pub saturation: [f32; 3],
+    pub contrast: [f32; 3],
+    pub gamma: [f32; 3],
+    pub gain: [f32; 3],
+    pub lift: [f32; 3],
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct CaptureWorldSnapshot {
+    /// Absent in old sidecars and headless fixtures without GraphicsSettings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphics: Option<CaptureGraphicsSnapshot>,
     /// Loaded roots [full, reduced, hidden]; these are not GPU visibility counts.
     pub building_lod_counts: [usize; 3],
     pub building_lod_pending: usize,
@@ -360,6 +396,17 @@ pub struct CaptureWorldSnapshot {
     pub grass_batches: usize,
     pub settlements: usize,
     pub settlement_buildings: usize,
+    pub household_yards: usize,
+    pub farm_fields: usize,
+    /// Loaded mesh triangles [soil, near crop, far crop], before visibility culling.
+    pub farm_field_triangles: [usize; 3],
+    /// View-space cascade far bounds for each sun; empty bounds mean shadows disabled.
+    pub sun_shadow_cascades: Vec<Vec<f32>>,
+    pub active_smoke_particles: usize,
+    pub allocated_smoke_particles: usize,
+    pub roadside_batches: usize,
+    pub roadside_clusters: usize,
+    pub roadside_triangles: usize,
     pub fortification_sections: usize,
     pub planning_routes: usize,
     pub blocked_routes: usize,

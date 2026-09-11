@@ -15,6 +15,201 @@ fn field_quality_controls_continuous_wheat_rate() {
 }
 
 #[test]
+fn farmers_share_accepted_parcel_capacity_instead_of_their_visual_work_slot() {
+    use shared::components::{
+        AttachedTo, BuildingId, BuildingOf, EmployedAt, FarmFieldShape, SettlementId,
+    };
+    let mut app = App::new();
+    app.init_resource::<SettlementEconomyRuntime>()
+        .init_resource::<BusinessEventQueue>();
+    let mut time = Time::<()>::default();
+    time.advance_by(std::time::Duration::from_secs(60));
+    app.insert_resource(time)
+        .add_systems(Update, run_farmer_routines);
+    app.world_mut().spawn(WorldTime::new_default());
+    let town_id = SettlementId(1);
+    let hall = app.world_mut().spawn(town_id).id();
+    let farm_id = BuildingId(7);
+    let farm_position = Vec3::new(20., 4., 0.);
+    let farm = app
+        .world_mut()
+        .spawn((
+            farm_id,
+            BuildingOf(town_id),
+            PlayerPosition(farm_position),
+            PlayerRotation(0.),
+            SettlementBuilding {
+                kind: SettlementBuildingKind::Farmstead,
+                settlement: "Test".into(),
+                owner: None,
+                quality: 1.,
+                workers: vec![],
+            },
+        ))
+        .id();
+    let mut field_entities = Vec::new();
+    let mut workers = Vec::new();
+    for (index, capacity) in [1., 0.5].into_iter().enumerate() {
+        let mut shape = FarmFieldShape::legacy_rectangle();
+        for section in &mut shape.sections {
+            section.left *= capacity;
+            section.right *= capacity;
+        }
+        let field = app
+            .world_mut()
+            .spawn((
+                FarmField {
+                    shape: Some(shape),
+                    plot_index: index as u8,
+                    settlement: "Test".into(),
+                    farmstead: farm_position,
+                    layout_version: 0,
+                    quality: 1.,
+                },
+                AttachedTo(farm_id),
+            ))
+            .id();
+        field_entities.push(field);
+        workers.push(
+            app.world_mut()
+                .spawn((
+                    CharacterKind::Villager,
+                    CharacterName(format!("Farmer {index}")),
+                    EmployedAt(farm_id),
+                    PlayerPosition(farm_position),
+                    VillagerIntent::Resident { settlement: hall },
+                    CharacterActivity::Farming,
+                    GoodsInventory::new(shared::economy::capacity::VILLAGER),
+                    FarmerRoutine {
+                        farmstead: farm,
+                        field,
+                        hall,
+                        work_stand: farm_position,
+                        harvest_seconds: 0.,
+                        failed_workplace_routes: 0,
+                        production_day: u32::MAX,
+                        produced_today: 0,
+                        phase: FarmerPhase::Farming,
+                    },
+                ))
+                .id(),
+        );
+    }
+    app.update();
+    for &worker in &workers {
+        assert_eq!(
+            app.world()
+                .get::<FarmerRoutine>(worker)
+                .unwrap()
+                .harvest_seconds,
+            45.
+        );
+    }
+    app.world_mut().despawn(field_entities[1]);
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<FarmerRoutine>(workers[0])
+            .unwrap()
+            .harvest_seconds,
+        75.,
+        "one remaining field yields half capacity just as in strategic production"
+    );
+}
+
+#[test]
+fn farmer_walks_inside_crop_ground_before_starting_to_harvest() {
+    use shared::components::{
+        AttachedTo, BuildingId, BuildingOf, EmployedAt, FarmFieldShape, SettlementId,
+    };
+    let mut app = App::new();
+    app.init_resource::<SettlementEconomyRuntime>()
+        .init_resource::<BusinessEventQueue>()
+        .init_resource::<Time>()
+        .add_systems(Update, run_farmer_routines);
+    app.world_mut().spawn(WorldTime::new_default());
+    let town = SettlementId(1);
+    let hall = app.world_mut().spawn(town).id();
+    let farm_id = BuildingId(7);
+    let position = Vec3::new(20., 4., 0.);
+    let farm = app
+        .world_mut()
+        .spawn((
+            farm_id,
+            BuildingOf(town),
+            PlayerPosition(position),
+            PlayerRotation(0.),
+            SettlementBuilding {
+                kind: SettlementBuildingKind::Farmstead,
+                settlement: "Test".into(),
+                owner: None,
+                quality: 1.,
+                workers: vec![],
+            },
+        ))
+        .id();
+    let field_position = position + Vec3::Z * 9.;
+    let shape = FarmFieldShape::legacy_rectangle();
+    let stand = field_position + Vec3::Z * (-5.5 + 0.6);
+    let outside = stand - Vec3::Z * 2.;
+    assert!(!shape.contains_world_point(outside.xz(), field_position, 0., 0.));
+    let field = app
+        .world_mut()
+        .spawn((
+            FarmField {
+                settlement: "Test".into(),
+                farmstead: position,
+                plot_index: 0,
+                layout_version: 0,
+                quality: 1.,
+                shape: Some(shape.clone()),
+            },
+            AttachedTo(farm_id),
+        ))
+        .id();
+    let worker = app
+        .world_mut()
+        .spawn((
+            CharacterKind::Villager,
+            CharacterName("Farmer".into()),
+            EmployedAt(farm_id),
+            PlayerPosition(outside),
+            VillagerIntent::Resident { settlement: hall },
+            CharacterActivity::Idle,
+            GoodsInventory::new(shared::economy::capacity::VILLAGER),
+            MoveTarget(stand),
+            FarmerRoutine {
+                farmstead: farm,
+                field,
+                hall,
+                work_stand: stand,
+                harvest_seconds: 0.,
+                failed_workplace_routes: 0,
+                production_day: u32::MAX,
+                produced_today: 0,
+                phase: FarmerPhase::WalkingToField { stand },
+            },
+        ))
+        .id();
+    app.update();
+    assert_ne!(
+        *app.world().get::<CharacterActivity>(worker).unwrap(),
+        CharacterActivity::Farming,
+        "the generic interaction radius must not start farming outside accepted ground"
+    );
+    assert!(app.world().get::<MoveTarget>(worker).is_some());
+    let inside = stand - Vec3::Z * 0.30;
+    assert!(shape.contains_world_point(inside.xz(), field_position, 0., -0.1));
+    app.world_mut().get_mut::<PlayerPosition>(worker).unwrap().0 = inside;
+    app.update();
+    assert_eq!(
+        *app.world().get::<CharacterActivity>(worker).unwrap(),
+        CharacterActivity::Farming
+    );
+    assert!(app.world().get::<MoveTarget>(worker).is_none());
+}
+
+#[test]
 fn a_farmer_carries_wheat_only_to_the_farmstead_store() {
     let mut app = village_test_app();
     app.init_resource::<Time>();
@@ -64,9 +259,11 @@ fn a_farmer_carries_wheat_only_to_the_farmstead_store() {
         .world_mut()
         .spawn((
             FarmField {
+                shape: None,
                 settlement: "Barleywick".to_string(),
                 farmstead: farm_position,
                 plot_index: 0,
+                layout_version: 0,
                 quality: 0.9,
             },
             PlayerPosition(field_position),

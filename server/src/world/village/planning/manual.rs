@@ -108,8 +108,8 @@ pub(crate) fn validate_manual_plot(
     }
 
     if let (Some(fields), Some(field_half)) = (
-        kind.field_positions(position, rotation),
-        kind.field_half_extents(),
+        kind.intended_field_positions(position, rotation),
+        kind.intended_field_half_extents(),
     ) {
         for field in fields {
             if shared::components::minimum_rotated_rect_water_clearance(

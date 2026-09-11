@@ -34,10 +34,12 @@ mod asset_fixtures;
 mod building_lods;
 mod character_fixtures;
 mod civic_fixtures;
+mod farming_live;
 mod history_fixtures;
 mod house_fixtures;
 mod inspection;
 mod live;
+pub(crate) use farming_live::install as install_live_farming_capture;
 mod session;
 pub(crate) use session::install as install_session_capture;
 mod performance;
@@ -50,6 +52,8 @@ mod fortification_fixtures;
 mod journey_tour;
 mod ledger_nested;
 mod scene_fixtures;
+mod town_art_fields;
+mod town_art_yards;
 mod town_fixtures;
 mod tree_fixtures;
 mod ui_fixtures;
@@ -323,6 +327,32 @@ pub fn run(mut config: CaptureConfig) {
         if config.target == CaptureTarget::Scene {
             settings.render_scale = 1.0;
         }
+        // Trusted art-review ablation, scoped to the capture process. Compare
+        // the same world and light before changing the shipped tone curve.
+        if let Ok(curve) = std::env::var("FISTFORCE_CAPTURE_TONEMAPPING") {
+            use bevy::core_pipeline::tonemapping::Tonemapping;
+            settings.tonemapping = match curve.as_str() {
+                "agx" => Tonemapping::AgX,
+                "tony" => Tonemapping::TonyMcMapface,
+                "neutral" => Tonemapping::SomewhatBoringDisplayTransform,
+                _ => panic!("unknown capture tonemapping {curve:?}"),
+            };
+        }
+        if let Ok(value) = std::env::var("FISTFORCE_CAPTURE_EXPOSURE") {
+            let exposure: f32 = value.parse().expect("capture exposure must be a number");
+            assert!(
+                exposure.is_finite() && (-2.0..=2.0).contains(&exposure),
+                "capture exposure must be within -2..=2 EV"
+            );
+            settings.grade_exposure = exposure;
+        }
+    }
+    // Isolate sectional grading from the tone curve, exposure, white balance
+    // and scene lighting. This diagnostic is installed only by this offline
+    // harness and cannot affect a normal game or the saved user settings.
+    if let Ok(mode) = std::env::var("FISTFORCE_CAPTURE_SECTIONAL_GRADE") {
+        assert_eq!(mode, "off", "unknown capture sectional grade {mode:?}");
+        app.add_systems(PostUpdate, disable_capture_sectional_grade);
     }
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         Duration::from_secs_f64(config.fixed_delta_seconds),
@@ -435,6 +465,22 @@ pub fn run(mut config: CaptureConfig) {
         // it into the capture process' exit status. CI and scripts need a
         // failed assertion/comparison to be an actual failed command.
         std::process::exit(i32::from(code.get()));
+    }
+}
+
+fn disable_capture_sectional_grade(
+    mut cameras: Query<
+        &mut bevy::render::view::ColorGrading,
+        (With<Camera3d>, Changed<bevy::render::view::ColorGrading>),
+    >,
+) {
+    let neutral = bevy::render::view::ColorGradingSection::default();
+    for mut grade in &mut cameras {
+        if grade.shadows != neutral || grade.midtones != neutral || grade.highlights != neutral {
+            grade.shadows = neutral;
+            grade.midtones = neutral;
+            grade.highlights = neutral;
+        }
     }
 }
 
@@ -852,7 +898,11 @@ fn evaluate_assertions(
                     )
                 }
                 CaptureAssertion::BuildingLodsAtLevel { level, count } => (
-                    snapshot.building_lod_counts.get(level).copied().unwrap_or(0),
+                    snapshot
+                        .building_lod_counts
+                        .get(level)
+                        .copied()
+                        .unwrap_or(0),
                     snapshot.building_lod_counts.get(level).copied() == Some(count),
                 ),
                 CaptureAssertion::EntitiesAtLeast { count } => {

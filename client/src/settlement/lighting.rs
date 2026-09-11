@@ -359,9 +359,7 @@ pub(super) fn setup_building_night_lighting(
             &[("Light_Lantern", 520_000.0, 8.5)]
         } else {
             match building_kind {
-                Some(SettlementBuildingKind::FishermansHut) => {
-                    &[("Light_Lantern", 440_000.0, 7.5)]
-                }
+                Some(SettlementBuildingKind::FishermansHut) => &[("Light_Lantern", 440_000.0, 7.5)],
                 // Authored rural sites and the windmill share the bounded window-light path.
                 Some(SettlementBuildingKind::Tavern) => &[("Light_Lantern", 620_000.0, 8.5)],
                 Some(SettlementBuildingKind::Bakery) => &[

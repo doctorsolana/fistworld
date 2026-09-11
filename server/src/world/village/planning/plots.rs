@@ -643,8 +643,8 @@ pub(super) fn find_site_with_plan_diagnostics(
                 continue;
             }
             if let (Some(field_positions), Some(field_half)) = (
-                kind.field_positions(candidate, rotation),
-                kind.field_half_extents(),
+                kind.intended_field_positions(candidate, rotation),
+                kind.intended_field_half_extents(),
             ) {
                 for field in field_positions {
                     if shared::components::minimum_rotated_rect_water_clearance(
@@ -732,8 +732,8 @@ pub(super) fn find_site_with_plan_diagnostics(
                 continue;
             }
             if let (Some(field_positions), Some(field_half)) = (
-                kind.field_positions(candidate, rotation),
-                kind.field_half_extents(),
+                kind.intended_field_positions(candidate, rotation),
+                kind.intended_field_half_extents(),
             ) {
                 for field in field_positions {
                     let field_center = Vec2::new(field.x, field.z);

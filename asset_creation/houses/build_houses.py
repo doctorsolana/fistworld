@@ -205,7 +205,7 @@ def roof_panel(mesh, top_a, top_b, bottom_a, bottom_b, rows, cols):
                     point(t0, u1, lift),
                 ],
                 "roof",
-                0.24,
+                0.12,
             )
             # Butt thickness is one quad. No hidden sides or six-face tile boxes.
             edge = [
@@ -344,6 +344,15 @@ def chimney(mesh, x, y, base, top):
         ],
         [(0, 1, 2, 3)],
         "dark",
+    )
+
+
+def chimney_top(spec):
+    """One authored point drives both the stack cap and the runtime FX anchor."""
+    return (
+        2.35 if spec.long else -1.28,
+        -0.55 if spec.long else -1.65,
+        (6.73 if spec.upper else 5.16) if spec.long else (6.76 if spec.upper else 4.14),
     )
 
 
@@ -632,13 +641,8 @@ def architecture(spec):
         body.beam((-rw, y, eave), (rw, y, eave), 0.12, 0.15, "oak")
     for x in [-rw, rw]:
         body.beam((x, -rd, eave), (x, rd, eave), 0.12, 0.15, "oak")
-    chimney(
-        body,
-        2.35 if spec.long else -1.28,
-        -0.55 if spec.long else -1.65,
-        eave + 0.35,
-        (6.73 if spec.upper else 5.16) if spec.long else (6.76 if spec.upper else 4.14),
-    )
+    chimney_x, chimney_y, chimney_z = chimney_top(spec)
+    chimney(body, chimney_x, chimney_y, eave + 0.35, chimney_z)
     pivot = entrance(body, leaf, glass, d, spec.long, spec.upper)
     if not spec.upper:
         # A real ceiling blocks views through the single-sided attic from an open door.
@@ -687,11 +691,13 @@ def build(spec):
     body.object(spec.name + "_Body", material)
     door = leaf.object("HouseDoor", material, pivot)
     glass.object("HouseGlass", palette_material("CabinGlass"))
+    chimney_x, chimney_y, chimney_z = chimney_top(spec)
     for name, location in {
         "Anchor_Door": (0, spec.door_approach, 0),
         "Light_Window.L": (-window_x, front + 0.30, 1.36),
         "Light_Window.R": (window_x, front + 0.30, 1.36),
         "Light_Interior": (0, 0, 1.68),
+        "FX_ChimneySmoke": (chimney_x, chimney_y, chimney_z + 0.08),
     }.items():
         obj = bpy.data.objects.new(name, None)
         scene.collection.objects.link(obj)

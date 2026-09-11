@@ -78,6 +78,10 @@ pub struct SnapshotBuilding {
     pub position: Vec3,
     pub rotation: f32,
     pub house: Option<HouseAppearance>,
+    #[serde(default)]
+    pub household: Option<crate::components::Household>,
+    #[serde(default)]
+    pub yard: Option<crate::components::HouseholdYard>,
     pub market_level: Option<MarketLevel>,
     /// None means complete. A permitted or raising site remains explicitly pending.
     pub construction: Option<ConstructionSite>,
@@ -103,6 +107,44 @@ pub struct SnapshotField {
     pub component: FarmField,
     pub footprint: Vec2,
     pub footprint_center: Vec2,
+}
+
+impl SnapshotField {
+    /// Diagnostic bounds follow accepted crop ground, not its old art box.
+    pub fn refresh_footprint(&mut self) {
+        let Some(shape) = &self.component.shape else {
+            self.footprint = SettlementBuildingKind::Farmstead
+                .field_half_extents()
+                .unwrap()
+                * 2.0;
+            self.footprint_center = self.position.xz();
+            return;
+        };
+        if !shape.is_valid() {
+            self.footprint = Vec2::ZERO;
+            self.footprint_center = self.position.xz();
+            return;
+        }
+        let min = Vec2::new(
+            shape
+                .sections
+                .iter()
+                .map(|s| s.left)
+                .fold(f32::INFINITY, f32::min),
+            shape.sections[0].z,
+        );
+        let max = Vec2::new(
+            shape
+                .sections
+                .iter()
+                .map(|s| s.right)
+                .fold(f32::NEG_INFINITY, f32::max),
+            shape.sections.last().unwrap().z,
+        );
+        self.footprint = max - min;
+        self.footprint_center = self.position.xz()
+            + crate::rotation::local_to_world_xz((min + max) * 0.5, self.rotation);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +228,22 @@ impl TownSnapshot {
         }
         if self.map_id.is_empty() || self.settlements.is_empty() {
             return Err("town snapshot needs a map and settlement".into());
+        }
+        if self.buildings.iter().any(|building| {
+            (building.household.is_some() || building.yard.is_some())
+                && (building.kind != SettlementBuildingKind::House
+                    || building.construction.is_some())
+        }) {
+            return Err("household/yard state belongs only to a completed house".into());
+        }
+        if self.fields.iter().any(|field| {
+            field
+                .component
+                .shape
+                .as_ref()
+                .is_some_and(|shape| !shape.sections.is_empty() && !shape.is_valid())
+        }) {
+            return Err("town snapshot contains an invalid crop parcel".into());
         }
         if !self.elapsed_world_seconds.is_finite()
             || !self.seconds_in_cycle.is_finite()
@@ -329,6 +387,61 @@ mod tests {
         state.version = TOWN_SNAPSHOT_VERSION;
         state.terrain_deltas[0].deltas_cm.pop();
         assert!(state.validate().unwrap_err().contains("terrain"));
+    }
+
+    #[test]
+    fn old_fields_remain_readable_and_shaped_bounds_roundtrip() {
+        let mut original = fixture();
+        original.fields.push(SnapshotField {
+            position: Vec3::new(15., 2., 18.),
+            rotation: std::f32::consts::FRAC_PI_2,
+            component: FarmField {
+                settlement: "Meadow".into(),
+                farmstead: Vec3::ZERO,
+                plot_index: 0,
+                layout_version: 0,
+                quality: 1.,
+                shape: None,
+            },
+            footprint: Vec2::new(8., 11.),
+            footprint_center: Vec2::new(15., 18.),
+        });
+        let mut old = serde_json::to_value(&original).unwrap();
+        old["fields"][0]["component"]
+            .as_object_mut()
+            .unwrap()
+            .remove("shape");
+        let mut recovered: TownSnapshot = serde_json::from_value(old).unwrap();
+        recovered.validate().unwrap();
+        assert!(recovered.fields[0].component.shape.is_none());
+        assert_eq!(recovered.fields[0].component.productive_fraction(), 1.);
+        let shape = crate::components::FarmFieldShape {
+            sections: vec![
+                crate::components::FarmFieldSection {
+                    z: -1.,
+                    left: -2.,
+                    right: 4.,
+                },
+                crate::components::FarmFieldSection {
+                    z: 5.,
+                    left: -1.,
+                    right: 3.,
+                },
+            ],
+        };
+        recovered.fields[0].component.shape = Some(shape.clone());
+        recovered.fields[0].refresh_footprint();
+        assert_eq!(recovered.fields[0].footprint, Vec2::splat(6.));
+        assert!(
+            recovered.fields[0]
+                .footprint_center
+                .distance(Vec2::new(17., 17.))
+                < 0.001
+        );
+        let again: TownSnapshot =
+            serde_json::from_str(&serde_json::to_string(&recovered).unwrap()).unwrap();
+        again.validate().unwrap();
+        assert_eq!(again.fields[0].component.shape, Some(shape));
     }
 
     #[test]

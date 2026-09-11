@@ -27,9 +27,9 @@ use shared::protocol::{
 use super::hero::OfflineHero;
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::village::{
-    minimum_startup_capital, road_access_blockers_for_plot, validate_manual_plot, BuildStage,
-    BusinessProjectAccounting, ConstructionMaterialRoutine, ManualPlotApproval,
-    PlayerConstructionAssignment, UnderConstruction,
+    minimum_startup_capital, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
+    validate_manual_plot, BuildStage, BusinessProjectAccounting, ConstructionMaterialRoutine,
+    ManualPlotApproval, PlayerConstructionAssignment, UnderConstruction,
 };
 use crate::world::village_roads::PlannedRoadAccess;
 
@@ -182,6 +182,15 @@ pub struct PlayerPermitWorld<'w, 's> {
     defenses: Query<'w, 's, &'static shared::components::SettlementDefenses>,
     civic_squares: Query<'w, 's, &'static shared::components::SettlementCivicSquare>,
     world_time: Query<'w, 's, &'static WorldTime>,
+    fields: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::FarmField,
+            &'static PlayerPosition,
+            &'static PlayerRotation,
+        ),
+    >,
 }
 
 #[derive(SystemParam)]
@@ -480,6 +489,12 @@ fn player_plot_snapshot(
             }));
         }
     }
+    occupied.extend(world.fields.iter().flat_map(|(field, p, r)| {
+        field
+            .reservation_rects(p.0, r.0, 2.)
+            .into_iter()
+            .map(|(center, half, _)| (center, half.length()))
+    }));
     for (_, pending, _) in world.pending.iter() {
         if pending.settlement_id != settlement_id {
             continue;
@@ -487,8 +502,8 @@ fn player_plot_snapshot(
         if let (Some(fields), Some(field_half)) = (
             pending
                 .kind
-                .field_positions(pending.position, pending.rotation),
-            pending.kind.field_half_extents(),
+                .intended_field_positions(pending.position, pending.rotation),
+            pending.kind.intended_field_half_extents(),
         ) {
             occupied.extend(fields.into_iter().map(|field| {
                 (
@@ -505,8 +520,8 @@ fn player_plot_snapshot(
             continue;
         }
         if let (Some(fields), Some(field_half)) = (
-            accepted_kind.field_positions(accepted_position, accepted_rotation),
-            accepted_kind.field_half_extents(),
+            accepted_kind.intended_field_positions(accepted_position, accepted_rotation),
+            accepted_kind.intended_field_half_extents(),
         ) {
             occupied.extend(fields.into_iter().map(|field| {
                 (
@@ -552,7 +567,7 @@ fn player_plot_snapshot(
             .iter()
             .filter(|(_, pending, _)| pending.settlement_id == settlement_id)
             .flat_map(|(_, pending, _)| {
-                road_access_blockers_for_plot(pending.kind, pending.position, pending.rotation)
+                road_access_blockers_for_new_plot(pending.kind, pending.position, pending.rotation)
             }),
     );
     blockers.extend(
@@ -560,7 +575,7 @@ fn player_plot_snapshot(
             .iter()
             .filter(|(accepted_settlement, ..)| *accepted_settlement == settlement_id)
             .flat_map(|(_, accepted_kind, accepted_position, accepted_rotation)| {
-                road_access_blockers_for_plot(
+                road_access_blockers_for_new_plot(
                     *accepted_kind,
                     *accepted_position,
                     *accepted_rotation,
@@ -568,13 +583,23 @@ fn player_plot_snapshot(
             }),
     );
 
+    blockers.extend(
+        world
+            .fields
+            .iter()
+            .flat_map(|(f, p, r)| crate::world::village::RoadAccessBlocker::for_field(f, p.0, r.0)),
+    );
     let nearby_defenses = crate::world::village::nearby_defense_reservations(
         world.defenses.iter(),
         position.xz(),
         360.0,
     );
     let defenses = (!nearby_defenses.circuits.is_empty()).then_some(&nearby_defenses);
-    let squares: Vec<_> = world.civic_squares.iter().filter(|square| square.center.xz().distance(position.xz()) < 120.0).collect();
+    let squares: Vec<_> = world
+        .civic_squares
+        .iter()
+        .filter(|square| square.center.xz().distance(position.xz()) < 120.0)
+        .collect();
     validate_manual_plot(
         terrain,
         hall,

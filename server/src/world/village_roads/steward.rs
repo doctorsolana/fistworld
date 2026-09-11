@@ -832,10 +832,7 @@ pub fn audit_village_roads(
         if stalled_roads > 0 {
             warn!(
                 "Village '{}': Road Steward {} reclaimed {} connector(s) with no daylight progress for {:.0} world seconds",
-                settlement.name,
-                steward_name.0,
-                stalled_roads,
-                ROAD_BUILDER_STALL_SECONDS,
+                settlement.name, steward_name.0, stalled_roads, ROAD_BUILDER_STALL_SECONDS,
             );
         }
 

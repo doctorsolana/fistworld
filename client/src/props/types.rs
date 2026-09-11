@@ -95,6 +95,7 @@ pub struct PropChunkIndex {
 #[derive(Resource)]
 pub struct BuildZoneChunkIndex {
     pub by_chunk: HashMap<ChunkCoord, Vec<BuildZoneEntry>>,
+    pub fields: shared::building::FarmFieldClaimIndex,
     pub dirty: bool,
 }
 
@@ -102,6 +103,7 @@ impl Default for BuildZoneChunkIndex {
     fn default() -> Self {
         Self {
             by_chunk: HashMap::new(),
+            fields: default(),
             dirty: true,
         }
     }

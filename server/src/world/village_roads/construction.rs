@@ -599,8 +599,9 @@ pub fn plan_requested_roads(
                         });
                     }
                     if let (Some(field_positions), Some(field_half)) = (
-                        site.kind.field_positions(site.position, site.rotation),
-                        site.kind.field_half_extents(),
+                        site.kind
+                            .intended_field_positions(site.position, site.rotation),
+                        site.kind.intended_field_half_extents(),
                     ) {
                         for field in field_positions {
                             let field_center = Vec2::new(field.x, field.z);
@@ -627,17 +628,21 @@ pub fn plan_requested_roads(
                         .filter(|(_, _, _, attached_to)| {
                             building_settlements.get(&attached_to.0) == Some(settlement_id)
                         })
-                        .map(|(_, field_position, field_rotation, _)| BuildingBlocker {
-                            center: Vec2::new(field_position.0.x, field_position.0.z),
-                            half: SettlementBuildingKind::Farmstead
-                                .field_half_extents()
-                                .expect("Farmstead has an authored wheat-field footprint")
-                                + Vec2::splat(
+                        .flat_map(|(field, p, r, _)| {
+                            field
+                                .reservation_rects(
+                                    p.0,
+                                    r.0,
                                     reserved_width * 0.5
                                         + shared::components::FARM_FIELD_TERRACE_MARGIN
                                         + ROAD_SURVEY_FIELD_EPSILON,
-                                ),
-                            rotation: field_rotation.0,
+                                )
+                                .into_iter()
+                                .map(|(center, half, rotation)| BuildingBlocker {
+                                    center: center.xz(),
+                                    half,
+                                    rotation,
+                                })
                         }),
                 );
                 if building_blockers
@@ -815,13 +820,11 @@ pub fn plan_requested_roads(
                     .filter(|(_, _, _, attached_to)| {
                         building_settlements.get(&attached_to.0) == Some(settlement_id)
                     })
-                    .any(|(_, field_position, field_rotation, _)| {
-                        certified.intersects_rotated_rect(
-                            Vec2::new(field_position.0.x, field_position.0.z),
-                            SettlementBuildingKind::Farmstead
-                                .field_half_extents()
-                                .expect("Farmstead has an authored wheat-field footprint"),
-                            field_rotation.0,
+                    .any(|(field, p, r, _)| {
+                        field.accepted_shape().intersects_road(
+                            p.0,
+                            r.0,
+                            &certified,
                             shared::components::FARM_FIELD_TERRACE_MARGIN,
                         )
                     });

@@ -1,0 +1,36 @@
+// The existing fixed town crosses chunk x=-128 at z=68.874, and chunk z=64
+// at x=-121.628/-120.671/-115.793. Inspect shoulders at those exact boundaries.
+// This reuses the canonical fixture; no duplicated town data or fake roads.
+(
+    version: 1,
+    name: "town-road-borders",
+    map: "town_art_study",
+    output_dir: "logs/captures/town-road-borders",
+    resolution: (1920, 1200),
+    target: scene,
+    show_window: false,
+    fixed_delta_seconds: 0.016666667,
+    warmup_frames: 240,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1800,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_TOWN_SNAPSHOT": "capture/fixtures/town-art-direction.json",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+        "FISTFORCE_CAPTURE_FIT_TOWN_DRESSING": "1",
+    },
+    shots: [
+        (name: "01-border-junction", focus: (-124.0, 17.6, 67.0), yaw: -0.5,
+         zoom: 31.0, time_of_day: 0.45,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+        (name: "02-border-reverse", focus: (-124.0, 17.6, 67.0), yaw: 2.75,
+         zoom: 31.0, time_of_day: 0.45,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+        (name: "03-border-context", focus: (-124.0, 17.6, 67.0), yaw: 2.75,
+         zoom: 70.0, time_of_day: 0.45,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+    ],
+)

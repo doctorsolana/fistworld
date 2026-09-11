@@ -53,7 +53,8 @@ struct TerrainSplatParams {
     water_params: vec4<f32>,
     debug_mode: u32,
     normal_strength: f32,
-    _pad: vec2<f32>,
+    weightmap_endpoint_samples: f32,
+    _pad: f32,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(120) var<uniform> terrain_params: TerrainSplatParams;
 
@@ -278,11 +279,20 @@ fn fragment(
 #endif
 
     var pbr_input = pbr_input_from_standard_material(in, is_front);
+    // Evaluate derivatives before material branches. Sub-pixel road grit fades
+    // away at map zoom instead of turning into a field of sparkling dots.
+    let ground_pixel = max(length(fwidth(pbr_input.world_position.xz)), 0.001);
 
     var weight_uv = vec2<f32>(0.0);
 #ifdef VERTEX_UVS
     weight_uv = in.uv;
 #endif
+    // Inclusive endpoint composites share the exact world-space border
+    // samples with neighbouring chunks. Map those endpoints to texel centres;
+    // unmodified authored/base maps keep their original cell-centred UVs.
+    let weight_size = vec2<f32>(textureDimensions(weight_map));
+    let endpoint_uv = (weight_uv * (weight_size - vec2<f32>(1.0)) + vec2<f32>(0.5)) / weight_size;
+    weight_uv = mix(weight_uv, endpoint_uv, terrain_params.weightmap_endpoint_samples);
     let sampled_weights = textureSample(weight_map, weight_map_sampler, weight_uv);
     let base_weights = normalize_weights(sampled_weights);
 
@@ -299,6 +309,21 @@ fn fragment(
         }
 
         let world_uv = pbr_input.world_position.xz;
+        // The weightmap carries the durable road ribbon. Erode only its mixed
+        // meadow/earth shoulder by a fraction of a metre in world space, so the
+        // lane has a worn edge without a repeating texture or extra geometry.
+        // Sand and paving transitions keep their own material boundaries.
+        if (weights.y > 0.03 && weights.x > 0.03 && weights.z + weights.w < 0.05) {
+            let shoulder = cloud_vnoise(world_uv * 1.25 + vec2<f32>(2.7, 19.3));
+            let earth_share = smoothstep(0.12, 0.86, weights.y + (shoulder - 0.5) * 0.22);
+            let other_share = max(1.0 - weights.y, 0.001);
+            weights = normalize_weights(vec4<f32>(
+                weights.x * (1.0 - earth_share) / other_share,
+                earth_share,
+                weights.z * (1.0 - earth_share) / other_share,
+                weights.w * (1.0 - earth_share) / other_share,
+            ));
+        }
         let uv_grass = tiled_uv(world_uv, terrain_params.layer_tiling.x);
         let uv_dirt = tiled_uv(world_uv, terrain_params.layer_tiling.y);
         let uv_sand = tiled_uv(world_uv, terrain_params.layer_tiling.z);
@@ -439,6 +464,62 @@ fn fragment(
             // Retain a trace of the sampled texture so the surface has grain.
             let grain = mix(vec3<f32>(1.0), albedo / max(luminance_safe(albedo), 0.001), palette.bands.z);
             flat_albedo *= grain;
+
+            // The existing low-contrast meadow facets were lost when grain
+            // kept chroma alone. Restore a little of their value, preserving
+            // the original texture and its restrained, non-patterned look.
+            let meadow_value = clamp(luminance_safe(albedo) / 0.113, 0.90, 1.10);
+            flat_albedo *= mix(1.0, meadow_value, weights.x * 0.70);
+
+            // Packed earth has small value changes and occasional embedded
+            // pale grit. World-space placement never repeats an image tile;
+            // meadow and sand keep their existing texture character.
+            if (weights.y > 0.01) {
+                // Lighter packed earth, confined to the existing dirt layer.
+                flat_albedo *= mix(vec3<f32>(1.0), vec3<f32>(1.36, 1.48, 1.62), weights.y);
+                let earth = cloud_vnoise(world_uv * 0.55 + vec2<f32>(13.7, 4.1));
+                let packed = smoothstep(0.25, 0.75, earth);
+                flat_albedo *= mix(1.0, mix(0.86, 1.16, packed), weights.y);
+                let fine_earth = cloud_vnoise(world_uv * 4.6 + vec2<f32>(5.8, 21.3));
+                flat_albedo *= mix(1.0, mix(0.93, 1.07, fine_earth),
+                    weights.y * (1.0 - smoothstep(0.15, 0.50, ground_pixel)));
+                let cell = floor(world_uv * 1.35);
+                let seed = cloud_hash(cell);
+                let center = vec2<f32>(
+                    cloud_hash(cell + vec2<f32>(19.1, 8.3)),
+                    cloud_hash(cell + vec2<f32>(7.7, 31.4)),
+                ) * 0.55 + 0.225;
+                // Embedded chips, with independent size/aspect/orientation.
+                // Using the occupancy hash for size made every surviving
+                // stone large and turned close lanes into pale polka dots.
+                let size = cloud_hash(cell + vec2<f32>(43.2, 17.9));
+                let aspect = cloud_hash(cell + vec2<f32>(2.6, 61.3));
+                let direction = (center - vec2<f32>(0.5))
+                    + vec2<f32>(0.001, 0.003);
+                let axis = normalize(direction);
+                let offset = fract(world_uv * 1.35) - center;
+                let delta = abs(vec2<f32>(dot(offset, axis),
+                    dot(offset, vec2<f32>(-axis.y, axis.x))))
+                    * vec2<f32>(mix(0.65, 1.0, aspect), mix(1.80, 0.95, aspect));
+                let shape = max(max(delta.x, delta.y), (delta.x + delta.y) * 0.72);
+                let radius = mix(0.045, 0.19, size * size)
+                    + smoothstep(0.90, 1.0, size) * 0.03;
+                let aa = ground_pixel * 0.675;
+                // Fade each chip by its own projected size: larger fragments
+                // survive town zoom while sub-pixel gravel becomes quiet.
+                let resolved = 1.0 - smoothstep(radius * 0.9, radius * 2.2, aa);
+                let speck = (1.0 - smoothstep(radius - aa, radius + aa, shape))
+                    * step(mix(0.84, 0.61, earth), seed)
+                    * resolved * (1.0 - smoothstep(0.20, 0.60, ground_pixel));
+                flat_albedo = mix(flat_albedo, palette.dirt.rgb * vec3<f32>(1.90, 2.20, 2.65),
+                    speck * weights.y * mix(0.50, 0.85, size));
+            }
+            // Preserve the authored mortar/stone value differences. Chroma-only
+            // normalization had erased most of the square's cobble pattern.
+            // The shipped sRGB cobbles decode to ~0.04..0.32 linear. Remap
+            // that range instead of clamping nearly every stone to one value.
+            let masonry_value = mix(0.50, 1.35, smoothstep(0.07, 0.30, luminance_safe(albedo)));
+            flat_albedo *= mix(1.0, masonry_value, weights.w * 0.85);
 
             albedo = mix(albedo, flat_albedo, stylize);
         }

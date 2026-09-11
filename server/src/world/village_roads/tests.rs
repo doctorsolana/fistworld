@@ -1,4 +1,63 @@
 use super::*;
+
+#[test]
+fn fenced_farm_work_stands_remain_reachable_through_the_shared_entrance() {
+    let farm = Vec3::new(1700., 80., 0.);
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(farm, Vec2::splat(50.), 0., 4.);
+    for turn in 0..8 {
+        let yaw = turn as f32 * std::f32::consts::TAU / 8.;
+        for shapes in [
+            shared::components::fit_farm_field_shapes(farm, yaw, 7, |_| true),
+            std::array::from_fn(|_| shared::components::FarmFieldShape::legacy_rectangle()),
+        ] {
+            let mut obstacles = SpatialObstacleGrid::default();
+            let fields: Vec<_> = shapes
+                .into_iter()
+                .enumerate()
+                .map(|(i, shape)| {
+                    let origin = SettlementBuildingKind::Farmstead
+                        .field_position_at(farm, yaw, i as u8)
+                        .unwrap();
+                    let field = shared::components::FarmField {
+                        settlement: "Farm".into(),
+                        farmstead: farm,
+                        plot_index: i as u8,
+                        quality: 1.,
+                        shape: Some(shape),
+                        layout_version: 2,
+                    };
+                    for obstacle in field.ground_obstacles(origin, yaw) {
+                        obstacles.insert(obstacle);
+                    }
+                    (field, origin)
+                })
+                .collect();
+            for (field, origin) in &fields {
+                for salt in 0..4 {
+                    let stand = reachable_farm_work_stand_in_shape(
+                        &terrain,
+                        farm,
+                        yaw,
+                        *origin,
+                        salt,
+                        Some(&obstacles),
+                        None,
+                        None,
+                        field.shape.as_ref(),
+                    )
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "field {} has no certified gate access at yaw {yaw}, salt {salt}",
+                            field.plot_index
+                        )
+                    });
+                    assert!(field.contains_world_point(stand.xz(), *origin, yaw, -0.35));
+                }
+            }
+        }
+    }
+}
 use crate::collision::library::{DerivedCollider, StaticColliderInstance};
 use shared::components::{SettlementTier, TimeWarp, WorkStatus};
 use shared::props::PropKind;
@@ -916,6 +975,37 @@ fn farm_work_stand_is_certified_from_the_authored_front_door() {
         stand.is_some(),
         "the normal authored Farmstead must retain a certified side corridor"
     );
+
+    let shape = shared::components::FarmFieldShape {
+        sections: vec![
+            shared::components::FarmFieldSection {
+                z: -3.,
+                left: -3.8,
+                right: 0.5,
+            },
+            shared::components::FarmFieldSection {
+                z: 4.,
+                left: -2.8,
+                right: 1.5,
+            },
+        ],
+    };
+    for salt in 0..4 {
+        let stand = reachable_farm_work_stand_in_shape(
+            &terrain,
+            farm,
+            rotation,
+            field,
+            salt,
+            Some(&obstacles),
+            None,
+            None,
+            Some(&shape),
+        )
+        .expect("clipped crop ground must retain a route around the actual farm shell");
+        assert!(shape.contains_world_point(stand.xz(), field, rotation, -0.3));
+        assert!(!obstacles.point_blocked(stand.xz()));
+    }
 }
 
 #[test]
@@ -1098,9 +1188,11 @@ fn a_farmstead_retains_its_road_request_until_both_fields_exist() {
         .expect("Farmstead has its first field");
     app.world_mut().spawn((
         FarmField {
+            shape: None,
             settlement: "Fieldford".into(),
             farmstead: position,
             plot_index: 0,
+            layout_version: 0,
             quality: 0.8,
         },
         PlayerPosition(first_field),
@@ -1684,9 +1776,11 @@ fn the_building_builder_owns_and_finishes_its_road_at_100x() {
     let field_position = Vec3::new(1720.0, 0.0, -4.5);
     app.world_mut().spawn((
         FarmField {
+            shape: None,
             settlement: "Oakmead".into(),
             farmstead: Vec3::new(1720.0, 0.0, 4.5),
             plot_index: 0,
+            layout_version: 0,
             quality: 0.7,
         },
         shared::components::AttachedTo(shared::components::BuildingId(77)),
@@ -3603,6 +3697,7 @@ fn open_market_squares_are_not_published_as_solid_navigation_blocks() {
             .iter()
             .map(|(building, position)| (building, position)),
         std::iter::empty(),
+        std::iter::empty(),
     );
 
     assert!(cache.blockers.is_empty());
@@ -3621,6 +3716,7 @@ fn open_market_squares_are_not_published_as_solid_navigation_blocks() {
         cabin
             .iter()
             .map(|(building, position)| (building, position)),
+        std::iter::empty(),
         std::iter::empty(),
     );
     assert_eq!(cache.blockers.len(), 1);
@@ -3644,12 +3740,20 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
     };
     let mut cache = NavigationBuildingCache::default();
     assert!(cache
-        .rebuild(std::iter::empty(), std::iter::once(&wall))
+        .rebuild(
+            std::iter::empty(),
+            std::iter::once(&wall),
+            std::iter::empty()
+        )
         .is_empty());
     wall.complete = true;
     assert_eq!(
         cache
-            .rebuild(std::iter::empty(), std::iter::once(&wall))
+            .rebuild(
+                std::iter::empty(),
+                std::iter::once(&wall),
+                std::iter::empty()
+            )
             .len(),
         1
     );
@@ -3661,12 +3765,20 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
         "a wall must not invent a house doorway for obstacle escape"
     );
     assert!(cache
-        .rebuild(std::iter::empty(), std::iter::once(&wall))
+        .rebuild(
+            std::iter::empty(),
+            std::iter::once(&wall),
+            std::iter::empty()
+        )
         .is_empty());
     wall.kind = FortificationKind::Gate;
     assert_eq!(
         cache
-            .rebuild(std::iter::empty(), std::iter::once(&wall))
+            .rebuild(
+                std::iter::empty(),
+                std::iter::once(&wall),
+                std::iter::empty()
+            )
             .len(),
         3
     );
@@ -3678,10 +3790,364 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
     }
     assert!(cache.buildings.is_empty());
     assert_eq!(
-        cache.rebuild(std::iter::empty(), std::iter::empty()).len(),
+        cache
+            .rebuild(std::iter::empty(), std::iter::empty(), std::iter::empty())
+            .len(),
         2
     );
     assert!(!cache
         .spatial
         .point_blocked(wall.gate_post_centers()[0].xz()));
+}
+
+#[test]
+fn household_yard_changes_invalidate_routes_without_inventing_a_doorway() {
+    use shared::components::{HouseholdYard, PlayerPosition, PlayerRotation, YardSide, YardUse};
+    let yard = HouseholdYard {
+        boundary: Vec::new(),
+        minimum: Vec2::new(5., -2.),
+        maximum: Vec2::new(7., 3.),
+        side: YardSide::Right,
+        use_kind: YardUse::Laundry,
+        seed: 1,
+    };
+    let origin = PlayerPosition(Vec3::ZERO);
+    let yaw = PlayerRotation(0.0);
+    let mut cache = NavigationBuildingCache::default();
+    assert!(!cache
+        .rebuild(
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::once((&yard, &origin, &yaw))
+        )
+        .is_empty());
+    assert!(cache.spatial.point_blocked(Vec2::new(7., 0.)));
+    assert!(!cache
+        .spatial
+        .segment_blocked(Vec2::new(4., 0.), Vec2::new(6., 0.)));
+    assert!(
+        cache.buildings.is_empty(),
+        "a fence is never a doorway escape exemption"
+    );
+    assert!(cache
+        .rebuild(
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::once((&yard, &origin, &yaw))
+        )
+        .is_empty());
+
+    let moved = PlayerPosition(Vec3::new(30., 0., 0.));
+    assert!(!cache
+        .rebuild(
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::once((&yard, &moved, &yaw))
+        )
+        .is_empty());
+    assert!(!cache.spatial.point_blocked(Vec2::new(7., 0.)));
+    assert!(cache.spatial.point_blocked(Vec2::new(37., 0.)));
+    assert!(!cache
+        .rebuild(std::iter::empty(), std::iter::empty(), std::iter::empty())
+        .is_empty());
+    assert!(!cache.spatial.point_blocked(Vec2::new(37., 0.)));
+}
+
+#[test]
+fn residents_can_route_out_of_yards_beside_rotated_upgraded_houses() {
+    use shared::components::{fit_household_yard, HouseAppearance, YardSide, YardUse};
+    let base = Vec3::new(1700.0, 80.0, 0.0);
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(base, Vec2::splat(55.0), 0.0, 4.0);
+    let reserved = SettlementBuildingKind::House.placement_definition();
+    let lo = reserved.footprint_center - reserved.footprint * 0.5;
+    let hi = reserved.footprint_center + reserved.footprint * 0.5;
+    let props = PropBlockers::default();
+    let mut scratch = SurveyScratch::default();
+    for art in [BuildingType::CabinL2, BuildingType::LongCabinL2] {
+        for side in [YardSide::Left, YardSide::Right, YardSide::Rear] {
+            for depth in [2.8, 2.2, 1.6] {
+                for step in 0..16 {
+                    let yaw = step as f32 * std::f32::consts::TAU / 16.0;
+                    for offset in [Vec2::ZERO, Vec2::new(0.37, 0.61), Vec2::new(0.96, 1.21)] {
+                        let at = base + Vec3::new(offset.x, 0.0, offset.y);
+                        for seed in [0, 4 << 8] {
+                            let yard = fit_household_yard(
+                                HouseAppearance::default(),
+                                at,
+                                yaw,
+                                seed,
+                                |point, radius| {
+                                    let p =
+                                        shared::rotation::world_to_local_xz(point - at.xz(), yaw);
+                                    let distance = match side {
+                                        YardSide::Left => lo.x - p.x,
+                                        YardSide::Right => p.x - hi.x,
+                                        YardSide::Rear => p.y - hi.y,
+                                    };
+                                    // A narrow valid strip forces the real fitter to
+                                    // choose its smallest recipe in constrained cases.
+                                    distance > 0.0 && distance + radius < 0.55 + depth + 0.41
+                                },
+                                |_| Some(at.y),
+                            )
+                            .unwrap();
+                            assert_eq!(yard.side, side);
+                            let fitted_depth = match side {
+                                YardSide::Left | YardSide::Right => yard.maximum.x - yard.minimum.x,
+                                YardSide::Rear => yard.maximum.y - yard.minimum.y,
+                            };
+                            assert!((fitted_depth - depth).abs() < 0.01);
+                            let position = BuildingPosition(at);
+                            let building = PlacedBuilding {
+                                building_type: art,
+                                rotation: yaw,
+                            };
+                            let player_position = PlayerPosition(at);
+                            let rotation = PlayerRotation(yaw);
+                            let mut cache = NavigationBuildingCache::default();
+                            cache.rebuild(
+                                std::iter::once((&building, &position)),
+                                std::iter::empty(),
+                                std::iter::once((&yard, &player_position, &rotation)),
+                            );
+                            let mut local_start = yard.center();
+                            if yard.use_kind == YardUse::Firewood {
+                                // The stack has real collision. Start in the open
+                                // work strip instead of placing a body inside logs.
+                                match side {
+                                    YardSide::Left => local_start.x = yard.maximum.x - 0.20,
+                                    YardSide::Right => local_start.x = yard.minimum.x + 0.20,
+                                    YardSide::Rear => local_start.y = yard.minimum.y + 0.20,
+                                }
+                            }
+                            let start =
+                                at.xz() + shared::rotation::local_to_world_xz(local_start, yaw);
+                            let goal = at.xz()
+                                + shared::rotation::local_to_world_xz(
+                                    Vec2::new(0.0, lo.y - 3.0),
+                                    yaw,
+                                );
+                            assert!(!cache.spatial.point_blocked(start));
+                            // This is the production local A* survey, with both the
+                            // actual upgraded home and replicated fence/stack geometry.
+                            let route = survey_agent_route(
+                                &terrain,
+                                start,
+                                goal,
+                                &cache.blockers,
+                                Some(&cache.spatial),
+                                &props,
+                                &mut scratch,
+                                AGENT_SURVEY_MAX_NODES,
+                            );
+                            assert!(
+                                !route.is_empty(),
+                                "resident trapped in {art:?}/{side:?}, depth={depth}, yaw={yaw}, offset={offset:?}, use={:?}",
+                                yard.use_kind,
+                            );
+                            assert!(
+                                route
+                                    .windows(2)
+                                    .all(|leg| !cache.spatial.segment_blocked(leg[0], leg[1])),
+                                "route crosses the actual house/fence collision",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn residents_can_route_through_road_shaped_yards_at_rotated_homes() {
+    use shared::components::{HouseAppearance, HouseholdYardLand, YardSide};
+    let base = Vec3::new(1700., 80., 0.);
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(base, Vec2::splat(55.), 0., 4.);
+    let definition = SettlementBuildingKind::House.placement_definition();
+    let lo = definition.footprint_center - definition.footprint * 0.5;
+    let hi = definition.footprint_center + definition.footprint * 0.5;
+    let props = PropBlockers::default();
+    let mut scratch = SurveyScratch::default();
+    for art in [BuildingType::CabinL2, BuildingType::LongCabinL2] {
+        for side in [YardSide::Left, YardSide::Right, YardSide::Rear] {
+            for step in 0..16 {
+                let yaw = step as f32 * std::f32::consts::TAU / 16.;
+                for offset in [Vec2::ZERO, Vec2::new(0.37, 0.61), Vec2::new(0.96, 1.21)] {
+                    let at = base + Vec3::new(offset.x, 0., offset.y);
+                    let mut land = HouseholdYardLand::default();
+                    land.reserve_building(SettlementBuildingKind::House, at, yaw);
+                    let (a, b) = match side {
+                        YardSide::Right => (Vec2::new(hi.x + 2.9, -9.), Vec2::new(hi.x + 5.2, 10.)),
+                        YardSide::Left => (Vec2::new(lo.x - 2.9, -9.), Vec2::new(lo.x - 5.2, 10.)),
+                        YardSide::Rear => (Vec2::new(-9., hi.y + 2.9), Vec2::new(10., hi.y + 5.2)),
+                    };
+                    land.reserve_segment(
+                        at.xz() + shared::rotation::local_to_world_xz(a, yaw),
+                        at.xz() + shared::rotation::local_to_world_xz(b, yaw),
+                        0.55,
+                    );
+                    let yard = land
+                        .fit_yard(
+                            HouseAppearance::default(),
+                            at,
+                            yaw,
+                            0,
+                            |p, _| {
+                                let p = shared::rotation::world_to_local_xz(p - at.xz(), yaw);
+                                match side {
+                                    YardSide::Left => p.x < lo.x,
+                                    YardSide::Right => p.x > hi.x,
+                                    YardSide::Rear => p.y > hi.y,
+                                }
+                            },
+                            |_| Some(at.y),
+                        )
+                        .unwrap();
+                    assert_eq!(yard.side, side);
+                    let span = yard.maximum - yard.minimum;
+                    assert!(
+                        yard.area() < span.x * span.y - 0.1,
+                        "scenario must exercise a real clipped road edge"
+                    );
+                    let building = PlacedBuilding {
+                        building_type: art,
+                        rotation: yaw,
+                    };
+                    let position = BuildingPosition(at);
+                    let player_position = PlayerPosition(at);
+                    let rotation = PlayerRotation(yaw);
+                    let mut cache = NavigationBuildingCache::default();
+                    cache.rebuild(
+                        std::iter::once((&building, &position)),
+                        std::iter::empty(),
+                        std::iter::once((&yard, &player_position, &rotation)),
+                    );
+                    let start = at.xz() + shared::rotation::local_to_world_xz(yard.center(), yaw);
+                    let goal = at.xz()
+                        + shared::rotation::local_to_world_xz(Vec2::new(0., lo.y - 3.), yaw);
+                    let route = survey_agent_route(
+                        &terrain,
+                        start,
+                        goal,
+                        &cache.blockers,
+                        Some(&cache.spatial),
+                        &props,
+                        &mut scratch,
+                        AGENT_SURVEY_MAX_NODES,
+                    );
+                    assert!(
+                        !route.is_empty(),
+                        "road-shaped {art:?}/{side:?} trapped a resident, yaw={yaw}, offset={offset:?}"
+                    );
+                    assert!(route
+                        .windows(2)
+                        .all(|leg| !cache.spatial.segment_blocked(leg[0], leg[1])));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn certified_diagonal_ignores_only_off_path_building_cells() {
+    let start = Vec2::new(1700., 0.);
+    let side = start + Vec2::X * SURVEY_CELL;
+    let end = start + Vec2::splat(SURVEY_CELL);
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(Vec3::new(start.x, 80., start.y), Vec2::splat(40.), 0., 4.);
+    let props = PropBlockers::default();
+    let mut grid = SpatialObstacleGrid::default();
+    grid.insert(shared::spatial::ObstacleEntry {
+        center: side,
+        half_extents: Vec2::splat(0.35),
+        rotation: 0.,
+        obstacle_type: BuildingType::CabinL2 as u32,
+    });
+    let survey = RoadSurvey {
+        terrain: &terrain,
+        buildings: &[],
+        live_buildings: Some(&grid),
+        props: &props,
+        start,
+        goal: start + Vec2::X * 20.,
+        min: start - Vec2::splat(30.),
+        max: start + Vec2::splat(30.),
+        max_nodes: AGENT_SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.,
+    };
+    let mut scratch = SurveyScratch::default();
+    assert!(survey.blocked(side, &mut scratch));
+    assert!(survey.line_clear(start, end, &mut scratch));
+    assert!(!survey.diagonal_side_blocked(side, &mut scratch));
+
+    // The relaxed side-cell rule must never relax swept building/fence edges.
+    for obstacle_type in [
+        BuildingType::CabinL2 as u32,
+        shared::components::YARD_OBSTACLE_TYPE,
+        shared::components::FARM_FENCE_OBSTACLE_TYPE,
+    ] {
+        let mut crossing = SpatialObstacleGrid::default();
+        crossing.insert(shared::spatial::ObstacleEntry {
+            center: start.lerp(end, 0.5),
+            half_extents: Vec2::new(0.9, 0.02),
+            rotation: std::f32::consts::FRAC_PI_4,
+            obstacle_type,
+        });
+        let crossed = RoadSurvey {
+            live_buildings: Some(&crossing),
+            ..survey
+        };
+        let mut scratch = SurveyScratch::default();
+        assert!(!crossed.line_clear(start, end, &mut scratch));
+    }
+
+    // Props are still sampled conservatively, so an unsafe side prop keeps
+    // preventing diagonal corner cutting even when the centre ray is clear.
+    let mut props = PropBlockers::default();
+    props.insert_radius(side, 0.35);
+    let survey = RoadSurvey {
+        props: &props,
+        ..survey
+    };
+    let mut scratch = SurveyScratch::default();
+    assert!(survey.diagonal_side_blocked(side, &mut scratch));
+}
+
+#[test]
+fn certified_building_diagonals_do_not_relax_water_corner_checks() {
+    let terrain = WorldTerrain::default();
+    let water = terrain
+        .rivers()
+        .iter()
+        .flatten()
+        .find(|point| {
+            terrain
+                .water_surface_height(point.x, point.z)
+                .is_some_and(|height| terrain.get_height(point.x, point.z) < height)
+        })
+        .expect("fixture has a real wet river sample");
+    let point = Vec2::new(water.x, water.z);
+    let props = PropBlockers::default();
+    let survey = RoadSurvey {
+        terrain: &terrain,
+        buildings: &[],
+        live_buildings: None,
+        props: &props,
+        start: point - Vec2::splat(10.),
+        goal: point + Vec2::splat(10.),
+        min: point - Vec2::splat(20.),
+        max: point + Vec2::splat(20.),
+        max_nodes: AGENT_SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.,
+    };
+    let mut scratch = SurveyScratch::default();
+    assert!(survey.diagonal_side_blocked(point, &mut scratch));
+    assert!(!survey.line_clear(survey.start, survey.goal, &mut scratch));
 }

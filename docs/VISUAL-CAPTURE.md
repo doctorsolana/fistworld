@@ -33,6 +33,14 @@ The implementation separates orchestration from fixture data:
 - `town_fixtures.rs` imports an actual server growth snapshot, including terrain
   earthworks, through the normal settlement/road rendering systems. See
   [TOWN-GROWTH-LAB.md](TOWN-GROWTH-LAB.md) and `capture/town_growth.py`.
+- `town_art_fields.rs` and `town_art_yards.rs` fit that snapshot's crop land and
+  household plots using the shared production geometry. These are offline scene
+  fixtures; synthetic household membership only exercises occupancy lighting.
+- `farming_live.rs` observes a real connected farmer working inside accepted crop
+  ground, carrying a public wheat load, then depositing it at the owning farm.
+  It never inserts cargo or forces production. Its deposit evidence correlates
+  public load disappearance with a nearby farm-stock increase; private personal
+  inventory is inspected only when normal replication already exposes it.
 - `client/src/capture_artifact.rs` owns scenario RON, readiness, semantic assertions, Bevy
   screenshot observers, PNG/JSON artifacts and baseline comparison.
 
@@ -164,6 +172,31 @@ settled camera XZ/zoom, and complete through Bevy's screenshot observer. Inspect
 the PNG and `.capture.json`; `.session.json` adds the replicated gameplay state. These are
 live-world evidence, not deterministic pixel baselines: the actual market and NPCs continue
 to run. All outputs belong under ignored `logs/`, never in the asset tree or Git.
+
+## Town art and planted land
+
+`capture/scenarios/town-art-direction.ron` keeps the same camera composition for
+daylight, reverse, nearby yards and crops, evening and night comparisons.
+`town-road-borders.ron` examines road shoulders crossing the actual 64 m terrain
+chunk boundaries. `green-broadleaf.ron` checks the canonical near/far tree meshes
+and their underside silhouettes. Outputs are review evidence under `logs/`, not
+automatically approved pixel baselines.
+
+`python3 capture/town_art_zoom.py --help` describes the continuous zoom round trip
+and its verification command. It checks recovery of terrain, planted fields,
+yards and roadside detail after leaving the local view. `capture/crop_wind.py`
+creates a continuous close crop sequence so ground-fixed roots and moving heads
+can be reviewed together with capture metadata.
+
+For connected farming, launch matching current client/server binaries and set
+`FISTWORLD_FARM_CAPTURE_DIR` on the client together with
+`FISTFORCE_NO_SETTINGS_FILE=1`. `FISTWORLD_FARM_CAPTURE_EXIT=1` exits the observer
+after evidence is saved; `FISTWORLD_FARM_CAPTURE_TIMEOUT_SECONDS` bounds the wait.
+The observer may bypass its own new-character screen, but does not create a hero
+or modify villagers, fields or stock. Review `farming.json`, all three PNGs and
+their `.capture.json` companions. Repeat this connected proof after changing
+field boundaries, work positions or fence navigation; an offline picture cannot
+show whether farmers can still reach and leave their crops.
 
 ## Scenario format
 

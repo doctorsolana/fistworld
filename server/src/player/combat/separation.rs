@@ -245,6 +245,16 @@ pub fn separate_melee_bodies(
         // for every combatant, including displacement by neighboring bodies.
         let defense_blocked = obstacles.as_deref().is_some_and(|grid| {
             grid.segment_blocked_by_type(current, next, shared::components::DEFENSE_OBSTACLE_TYPE)
+                || grid.segment_blocked_by_type(
+                    current,
+                    next,
+                    shared::components::YARD_OBSTACLE_TYPE,
+                )
+                || grid.segment_blocked_by_type(
+                    current,
+                    next,
+                    shared::components::FARM_FENCE_OBSTACLE_TYPE,
+                )
         });
         if (mounted
             && !crate::player::siege::ground_clear(

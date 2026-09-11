@@ -7,12 +7,11 @@
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 #[cfg(test)]
-use shared::components::MootAdministration;
+use shared::components::{AttachedTo, FarmField, MootAdministration};
 use shared::components::{
-    AttachedTo, BuildingDoorUse, BuildingId, BuildingOf, CharacterActivity, CharacterKind,
-    CharacterMotion, CivicEmployment, CivicRole, EmployedAt, FarmField, OperatedBy, PlayerPosition,
-    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
-    WorldTime,
+    BuildingDoorUse, BuildingId, BuildingOf, CharacterActivity, CharacterKind, CharacterMotion,
+    CivicEmployment, CivicRole, EmployedAt, OperatedBy, PlayerPosition, PlayerRotation, Settlement,
+    SettlementBuilding, SettlementBuildingKind, SettlementId, WorldTime,
 };
 use shared::economy::{
     BusinessAccount, BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
@@ -961,7 +960,7 @@ pub fn advance_strategic_villages(
     workers: Query<(&EmployedAt, Option<&StrategicPerson>)>,
     civic_workers: Query<(&CivicEmployment, Option<&StrategicPerson>)>,
     private_porters: Query<(&CompanyPorter, Option<&StrategicPerson>)>,
-    fields: Query<(&FarmField, &AttachedTo)>,
+    mut fields: super::trades::farm_productivity::FarmProductivity,
     hall_index: Query<(Entity, &SettlementId, Option<&PlayerPosition>), With<Settlement>>,
     mut halls: Query<
         (&mut GoodsInventory, &mut MootMarket),
@@ -985,6 +984,7 @@ pub fn advance_strategic_villages(
         (With<SettlementBuilding>, Without<Settlement>),
     >,
 ) {
+    fields.refresh();
     if step.serial == 0 || *last_serial == step.serial {
         return;
     }
@@ -1031,10 +1031,6 @@ pub fn advance_strategic_villages(
                     .then_some((porter.settlement_id, porter.company))
             })
             .collect();
-    let mut fields_by_building: HashMap<BuildingId, u32> = HashMap::new();
-    for (_, attached) in fields.iter() {
-        *fields_by_building.entry(attached.0).or_default() += 1;
-    }
     let mut live_buildings = HashSet::new();
     let branch_policies: HashMap<_, _> = company_branch_policies
         .iter()
@@ -1273,7 +1269,7 @@ pub fn advance_strategic_villages(
             }
         } else {
             let field_factor = if building.kind == SettlementBuildingKind::Farmstead {
-                fields_by_building.get(id).copied().unwrap_or(0).min(2) as f64 / 2.0
+                f64::from(fields.fraction(*id))
             } else {
                 1.0
             };
@@ -1785,13 +1781,15 @@ mod tests {
     }
 
     #[test]
-    fn two_fields_give_a_strategic_farm_full_output_and_one_field_gives_half() {
+    fn strategic_farm_output_tracks_accepted_area_and_missing_subareas() {
         let mut app = App::new();
         app.init_resource::<StrategicStep>();
         app.init_resource::<StrategicProductionProgress>();
         app.init_resource::<SettlementEconomyRuntime>();
         app.init_resource::<BusinessEventQueue>();
         app.add_systems(Update, advance_strategic_villages);
+        // Keep all three measured intervals inside the ordinary workday;
+        // crossing 18:00 would correctly stop production, obscuring capacity.
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
 
         let settlement_id = SettlementId(1);
@@ -1839,9 +1837,11 @@ mod tests {
             .id();
         app.world_mut().spawn((
             FarmField {
+                shape: None,
                 settlement: "Test".into(),
                 farmstead: farm_position,
                 plot_index: 0,
+                layout_version: 0,
                 quality: 1.0,
             },
             AttachedTo(building_id),
@@ -1850,9 +1850,11 @@ mod tests {
             .world_mut()
             .spawn((
                 FarmField {
+                    shape: None,
                     settlement: "Test".into(),
                     farmstead: farm_position,
                     plot_index: 1,
+                    layout_version: 0,
                     quality: 1.0,
                 },
                 AttachedTo(building_id),
@@ -1862,6 +1864,32 @@ mod tests {
             .spawn((EmployedAt(building_id), StrategicPerson));
 
         app.world_mut().resource_mut::<StrategicStep>().serial = 1;
+        app.world_mut()
+            .resource_mut::<StrategicStep>()
+            .elapsed_world_seconds = 120.0;
+        app.world_mut()
+            .get_mut::<WorldTime>(clock)
+            .unwrap()
+            .advance(120.0, 0.0);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(farm)
+                .unwrap()
+                .amount(Good::Wheat),
+            1
+        );
+
+        let mut half = shared::components::FarmFieldShape::legacy_rectangle();
+        for section in &mut half.sections {
+            section.left *= 0.5;
+            section.right *= 0.5;
+        }
+        app.world_mut()
+            .get_mut::<FarmField>(second_field)
+            .unwrap()
+            .shape = Some(half);
+        app.world_mut().resource_mut::<StrategicStep>().serial = 2;
         app.world_mut()
             .resource_mut::<StrategicStep>()
             .elapsed_world_seconds = 240.0;
@@ -1875,18 +1903,27 @@ mod tests {
                 .get::<GoodsInventory>(farm)
                 .unwrap()
                 .amount(Good::Wheat),
-            2
+            2,
+            "one full and one half field give every worker 75% capacity"
+        );
+
+        assert_eq!(
+            app.world()
+                .resource::<StrategicProductionProgress>()
+                .seconds[&building_id],
+            60.,
+            "240 seconds at 75% capacity produce one Wheat and retain 60 seconds of labour"
         );
 
         app.world_mut().despawn(second_field);
-        app.world_mut().resource_mut::<StrategicStep>().serial = 2;
+        app.world_mut().resource_mut::<StrategicStep>().serial = 3;
         app.world_mut()
             .resource_mut::<StrategicStep>()
-            .elapsed_world_seconds = 240.0;
+            .elapsed_world_seconds = 120.0;
         app.world_mut()
             .get_mut::<WorldTime>(clock)
             .unwrap()
-            .advance(240.0, 0.0);
+            .advance(120.0, 0.0);
         app.update();
         assert_eq!(
             app.world()

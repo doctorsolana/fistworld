@@ -1,0 +1,122 @@
+// Maintained presentation map for capture/fixtures/town-art-direction.json.
+// Same immutable terrain recipe and original timber as village_lab; only the
+// map identity and fourteen ordinary authored plot-edge trees differ.
+// See capture/fixtures/README.md. Never alter the gameplay lab to dress this study.
+(
+  map_id: "town_art_study",
+  bounds: (
+    min: (-560.0, -560.0),
+    max: (560.0, 560.0),
+  ),
+  terrain: (
+    // Generated maps ignore this filename. Keeping it explicit makes the
+    // definition valid without shipping a large diagnostic heightmap.
+    heightmap: "height.png",
+    minimap: None,
+    water_level: Some(0.0),
+    height_min: -34.0,
+    height_max: 82.0,
+  ),
+  generated: Some((
+    style: Mainland,
+    seed: 3,
+    generator_version: 12,
+        scatter_vegetation: false,
+    half_extent: 560.0,
+  )),
+  player_spawn: Some((0.0, 8.0, 0.0)),
+  // Authored timber is shared by rendering, collision, construction gathering,
+  // lumber-work permits, and chopping. The sparse grid keeps both climate
+  // fixtures supplied; the mixed southwestern grove gives Lab Meadow a compact
+  // forest on the same walkable landmass as its hall.
+  objects: [
+    // Lab Meadow grove. It deliberately stays beyond the civic centre and
+    // clear of the eastern fishing shore, while remaining inside a hut's 120 m
+    // working radius. Uneven rows keep it reading as woodland rather than an
+    // orchard and leave routes between trunks.
+    (kind: "tree_01", position: ( 42.0, 0.0, -208.0), rotation_degrees:  18.0, scale: 0.94),
+    (kind: "tree_08", position: ( 54.0, 0.0, -201.0), rotation_degrees:  73.0, scale: 1.07),
+    (kind: "tree_02", position: ( 64.0, 0.0, -215.0), rotation_degrees: 131.0, scale: 0.91),
+    (kind: "tree_09", position: ( 76.0, 0.0, -205.0), rotation_degrees: 207.0, scale: 1.04),
+    (kind: "tree_01", position: ( 88.0, 0.0, -216.0), rotation_degrees: 279.0, scale: 0.89),
+    (kind: "tree_08", position: (100.0, 0.0, -207.0), rotation_degrees: 336.0, scale: 1.10),
+
+    (kind: "tree_09", position: ( 43.0, 0.0, -188.0), rotation_degrees:  42.0, scale: 1.03),
+    (kind: "tree_02", position: ( 56.0, 0.0, -181.0), rotation_degrees:  96.0, scale: 0.92),
+    (kind: "tree_01", position: ( 67.0, 0.0, -194.0), rotation_degrees: 154.0, scale: 1.08),
+    (kind: "tree_08", position: ( 79.0, 0.0, -183.0), rotation_degrees: 223.0, scale: 0.96),
+    (kind: "tree_09", position: ( 91.0, 0.0, -195.0), rotation_degrees: 291.0, scale: 1.05),
+    (kind: "tree_02", position: (102.0, 0.0, -184.0), rotation_degrees: 349.0, scale: 0.90),
+
+    (kind: "tree_08", position: ( 63.0, 0.0, -169.0), rotation_degrees:  61.0, scale: 0.95),
+    (kind: "tree_01", position: ( 76.0, 0.0, -171.0), rotation_degrees: 143.0, scale: 1.06),
+    (kind: "tree_09", position: ( 89.0, 0.0, -165.0), rotation_degrees: 251.0, scale: 0.93),
+
+    // Lab Greenwood grove. This third stress settlement needs enough distinct
+    // tree interactions that 200 residents test a forestry district rather
+    // than queueing around the map's one incidental northern tree.
+    (kind: "tree_01", position: (-205.0, 0.0, 176.0), rotation_degrees:  11.0, scale: 1.04),
+    (kind: "tree_08", position: (-191.0, 0.0, 184.0), rotation_degrees:  57.0, scale: 0.92),
+    (kind: "tree_02", position: (-176.0, 0.0, 174.0), rotation_degrees: 103.0, scale: 1.08),
+    (kind: "tree_09", position: (-161.0, 0.0, 187.0), rotation_degrees: 149.0, scale: 0.96),
+    (kind: "tree_01", position: (-211.0, 0.0, 201.0), rotation_degrees: 194.0, scale: 0.89),
+    (kind: "tree_09", position: (-196.0, 0.0, 211.0), rotation_degrees: 238.0, scale: 1.10),
+    (kind: "tree_08", position: (-179.0, 0.0, 199.0), rotation_degrees: 281.0, scale: 1.01),
+    (kind: "tree_02", position: (-163.0, 0.0, 215.0), rotation_degrees: 327.0, scale: 0.94),
+    (kind: "tree_08", position: (-207.0, 0.0, 228.0), rotation_degrees:  34.0, scale: 1.07),
+    (kind: "tree_01", position: (-190.0, 0.0, 235.0), rotation_degrees:  79.0, scale: 0.91),
+    (kind: "tree_09", position: (-174.0, 0.0, 226.0), rotation_degrees: 126.0, scale: 1.05),
+    (kind: "tree_02", position: (-157.0, 0.0, 241.0), rotation_degrees: 172.0, scale: 0.98),
+    (kind: "tree_01", position: (-202.0, 0.0, 254.0), rotation_degrees: 219.0, scale: 0.93),
+    (kind: "tree_08", position: (-184.0, 0.0, 263.0), rotation_degrees: 266.0, scale: 1.09),
+    (kind: "tree_09", position: (-166.0, 0.0, 254.0), rotation_degrees: 313.0, scale: 0.90),
+
+    (kind: "tree_02", position: (-360.0, 0.0, -360.0), rotation_degrees: 12.0, scale: 0.90),
+    (kind: "tree_02", position: (-180.0, 0.0, -360.0), rotation_degrees: 43.0, scale: 1.05),
+    (kind: "tree_02", position: (   0.0, 0.0, -360.0), rotation_degrees: 91.0, scale: 0.95),
+    (kind: "tree_02", position: ( 180.0, 0.0, -360.0), rotation_degrees: 137.0, scale: 1.10),
+    (kind: "tree_02", position: ( 360.0, 0.0, -360.0), rotation_degrees: 204.0, scale: 0.88),
+
+    (kind: "tree_02", position: (-360.0, 0.0, -180.0), rotation_degrees: 27.0, scale: 1.12),
+    (kind: "tree_02", position: (-180.0, 0.0, -180.0), rotation_degrees: 68.0, scale: 0.92),
+    (kind: "tree_02", position: (   0.0, 0.0, -180.0), rotation_degrees: 116.0, scale: 1.00),
+    (kind: "tree_02", position: ( 180.0, 0.0, -180.0), rotation_degrees: 173.0, scale: 0.96),
+    (kind: "tree_02", position: ( 360.0, 0.0, -180.0), rotation_degrees: 248.0, scale: 1.08),
+
+    (kind: "tree_02", position: (-360.0, 0.0,    0.0), rotation_degrees: 38.0, scale: 0.94),
+    (kind: "tree_02", position: (-180.0, 0.0,    0.0), rotation_degrees: 82.0, scale: 1.07),
+    (kind: "tree_02", position: (   0.0, 0.0,    0.0), rotation_degrees: 129.0, scale: 0.91),
+    (kind: "tree_02", position: ( 180.0, 0.0,    0.0), rotation_degrees: 188.0, scale: 1.04),
+    (kind: "tree_02", position: ( 360.0, 0.0,    0.0), rotation_degrees: 263.0, scale: 0.98),
+
+    (kind: "tree_02", position: (-360.0, 0.0,  180.0), rotation_degrees: 54.0, scale: 1.06),
+    (kind: "tree_02", position: (-180.0, 0.0,  180.0), rotation_degrees: 103.0, scale: 0.89),
+    (kind: "tree_02", position: (   0.0, 0.0,  180.0), rotation_degrees: 151.0, scale: 1.11),
+    (kind: "tree_02", position: ( 180.0, 0.0,  180.0), rotation_degrees: 218.0, scale: 0.93),
+    (kind: "tree_02", position: ( 360.0, 0.0,  180.0), rotation_degrees: 287.0, scale: 1.02),
+
+    (kind: "tree_02", position: (-360.0, 0.0,  360.0), rotation_degrees: 71.0, scale: 0.97),
+    (kind: "tree_02", position: (-180.0, 0.0,  360.0), rotation_degrees: 124.0, scale: 1.09),
+    (kind: "tree_02", position: (   0.0, 0.0,  360.0), rotation_degrees: 179.0, scale: 0.90),
+    (kind: "tree_02", position: ( 180.0, 0.0,  360.0), rotation_degrees: 236.0, scale: 1.03),
+    (kind: "tree_02", position: ( 360.0, 0.0,  360.0), rotation_degrees: 311.0, scale: 0.95),
+    // Art study meadow trees. Ground-relative Y=0 keeps each root bedded by
+    // its canonical trunk base. These use ordinary prop collision/harvest/survey
+    // semantics; roads, crop claims and buildings retain their normal clearing.
+    (kind: "oak_a", position: (-143.0, 0.0, 78.0), rotation_degrees: 23.0, scale: 0.91),
+    (kind: "chestnut_a", position: (-147.0, 0.0, 84.0), rotation_degrees: 171.0, scale: 1.06),
+    (kind: "oak_a", position: (-143.0, 0.0, 112.0), rotation_degrees: 54.0, scale: 0.98),
+    (kind: "oak_a", position: (-137.0, 0.0, 83.0), rotation_degrees: 237.0, scale: 0.90),
+    (kind: "chestnut_a", position: (-163.0, 0.0, 129.0), rotation_degrees: 119.0, scale: 1.04),
+    (kind: "oak_a", position: (-160.0, 0.0, 138.0), rotation_degrees: 307.0, scale: 0.95),
+    (kind: "oak_a", position: (-68.0, 0.0, 88.0), rotation_degrees: 75.0, scale: 0.92),
+    (kind: "oak_a", position: (-64.0, 0.0, 95.0), rotation_degrees: 201.0, scale: 1.04),
+    (kind: "chestnut_a", position: (-21.0, 0.0, 116.0), rotation_degrees: 13.0, scale: 0.94),
+    (kind: "oak_a", position: (-26.0, 0.0, 126.0), rotation_degrees: 159.0, scale: 1.02),
+    (kind: "oak_a", position: (-85.0, 0.0, 130.0), rotation_degrees: 282.0, scale: 0.98),
+    (kind: "chestnut_a", position: (-83.0, 0.0, 142.0), rotation_degrees: 94.0, scale: 0.90),
+    (kind: "oak_a", position: (-151.0, 0.0, 32.0), rotation_degrees: 224.0, scale: 0.97),
+    (kind: "oak_a", position: (-143.0, 0.0, 35.0), rotation_degrees: 348.0, scale: 1.04),
+  ],
+  blockers: [],
+)

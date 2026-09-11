@@ -6,9 +6,12 @@ use shared::components::{ActiveMapState, CharacterKind, CharacterNavigationStatu
 
 use super::presentation::CapturePresentationTarget;
 use crate::camera_rts::CommanderCamera;
-use crate::capture_artifact::{CaptureWorldSnapshot, CaptureWriteRequest};
+use crate::capture_artifact::{
+    CaptureAppliedColorSnapshot, CaptureGraphicsSnapshot, CaptureWorldSnapshot, CaptureWriteRequest,
+};
 use crate::props::{is_tree_kind, ChunkedGroundCover, EnvironmentProp, PropKindTag};
 use crate::render::systems::scaled_target::SceneRenderTarget;
+use crate::render::systems::GraphicsSettings;
 use crate::terrain::LoadedChunks;
 
 #[derive(SystemParam)]
@@ -17,6 +20,16 @@ pub(crate) struct CaptureInspection<'w, 's> {
     pub(super) scene_target: Option<Res<'w, SceneRenderTarget>>,
     pub(super) presentation_target: Option<Res<'w, CapturePresentationTarget>>,
     frame_count: Res<'w, bevy::diagnostic::FrameCount>,
+    graphics: Option<Res<'w, GraphicsSettings>>,
+    camera_colors: Query<
+        'w,
+        's,
+        (
+            &'static bevy::core_pipeline::tonemapping::Tonemapping,
+            &'static bevy::render::view::ColorGrading,
+        ),
+        With<Camera3d>,
+    >,
     all_entities: Query<'w, 's, Entity>,
     character_kinds: Query<'w, 's, &'static CharacterKind>,
     settlements: Query<'w, 's, (), With<shared::components::Settlement>>,
@@ -34,6 +47,25 @@ pub(crate) struct CaptureInspection<'w, 's> {
     >,
     grass_batches: Query<'w, 's, (), With<ChunkedGroundCover>>,
     buildings: Query<'w, 's, (), With<shared::components::SettlementBuilding>>,
+    yards: Query<'w, 's, (), With<shared::components::HouseholdYard>>,
+    fields: Query<'w, 's, (), With<shared::components::FarmField>>,
+    field_visuals: Query<'w, 's, &'static crate::settlement::FarmFieldVisual>,
+    sun_cascades: Query<
+        'w,
+        's,
+        (
+            &'static DirectionalLight,
+            &'static bevy::light::CascadeShadowConfig,
+        ),
+        With<crate::render::systems::SunLight>,
+    >,
+    smoke: Query<
+        'w,
+        's,
+        Option<&'static crate::settlement::smoke::InactiveSmoke>,
+        With<crate::settlement::smoke::SmokeParticle>,
+    >,
+    roadside: Query<'w, 's, &'static crate::settlement::roadside::RoadsideChunk>,
     building_lods: Query<'w, 's, &'static crate::render::building_lod::BuildingLod>,
     fortifications: Query<'w, 's, &'static shared::components::FortificationSegment>,
     navigation: Query<'w, 's, &'static CharacterNavigationStatus>,
@@ -78,6 +110,34 @@ impl CaptureInspection<'_, '_> {
             building_triangles_selected += selected;
         }
         CaptureWorldSnapshot {
+            graphics: self
+                .graphics
+                .as_ref()
+                .map(|settings| CaptureGraphicsSnapshot {
+                    tonemapping: format!("{:?}", settings.tonemapping),
+                    grade_exposure: settings.grade_exposure,
+                    render_scale: settings.render_scale,
+                    applied_camera: self.camera_colors.single().ok().map(|(curve, grade)| {
+                        let sections = [grade.shadows, grade.midtones, grade.highlights];
+                        CaptureAppliedColorSnapshot {
+                            tonemapping: format!("{curve:?}"),
+                            grade_exposure: grade.global.exposure,
+                            temperature: grade.global.temperature,
+                            tint: grade.global.tint,
+                            hue: grade.global.hue,
+                            post_saturation: grade.global.post_saturation,
+                            midtones_range: [
+                                grade.global.midtones_range.start,
+                                grade.global.midtones_range.end,
+                            ],
+                            saturation: sections.map(|s| s.saturation),
+                            contrast: sections.map(|s| s.contrast),
+                            gamma: sections.map(|s| s.gamma),
+                            gain: sections.map(|s| s.gain),
+                            lift: sections.map(|s| s.lift),
+                        }
+                    }),
+                }),
             building_lod_counts,
             building_lod_pending,
             building_triangles_full,
@@ -101,6 +161,34 @@ impl CaptureInspection<'_, '_> {
             grass_batches: self.grass_batches.iter().count(),
             settlements: self.settlements.iter().count(),
             settlement_buildings: self.buildings.iter().count(),
+            household_yards: self.yards.iter().count(),
+            farm_fields: self.fields.iter().count(),
+            farm_field_triangles: self.field_visuals.iter().fold([0; 3], |mut sum, visual| {
+                for (sum, count) in sum.iter_mut().zip(visual.triangle_counts) {
+                    *sum += count;
+                }
+                sum
+            }),
+            sun_shadow_cascades: self
+                .sun_cascades
+                .iter()
+                .map(|(light, cascades)| {
+                    if light.shadow_maps_enabled {
+                        cascades.bounds.clone()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect(),
+            active_smoke_particles: self
+                .smoke
+                .iter()
+                .filter(|inactive| inactive.is_none())
+                .count(),
+            allocated_smoke_particles: self.smoke.iter().count(),
+            roadside_batches: self.roadside.iter().count(),
+            roadside_clusters: self.roadside.iter().map(|chunk| chunk.clusters).sum(),
+            roadside_triangles: self.roadside.iter().map(|chunk| chunk.triangles).sum(),
             fortification_sections: self
                 .fortifications
                 .iter()
@@ -174,6 +262,80 @@ mod tests {
     use super::*;
     use crate::capture_artifact::CaptureTarget;
     use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn graphics_snapshot_records_live_settings_and_applied_camera_overrides() {
+        use bevy::core_pipeline::tonemapping::Tonemapping;
+        use bevy::render::view::ColorGrading;
+        let mut world = World::new();
+        world.insert_resource(bevy::diagnostic::FrameCount(1));
+        world.insert_resource(GraphicsSettings {
+            tonemapping: Tonemapping::AgX,
+            grade_exposure: 0.35,
+            render_scale: 0.65,
+            ..default()
+        });
+        let mut grade = ColorGrading::default();
+        grade.global.exposure = -0.25;
+        grade.midtones.saturation = 1.12;
+        grade.shadows.lift = 0.03;
+        let camera = world
+            .spawn((Camera3d::default(), Tonemapping::TonyMcMapface, grade))
+            .id();
+        let mut state = SystemState::<CaptureInspection>::new(&mut world);
+        let first = state
+            .get(&world)
+            .unwrap()
+            .world_snapshot(None)
+            .graphics
+            .unwrap();
+        assert_eq!(first.tonemapping, "AgX");
+        assert_eq!(first.grade_exposure, 0.35);
+        assert_eq!(first.render_scale, 0.65);
+        let applied = first.applied_camera.as_ref().unwrap();
+        assert_eq!(applied.tonemapping, "TonyMcMapface");
+        assert_eq!(applied.grade_exposure, -0.25);
+        assert_eq!(applied.saturation, [1., 1.12, 1.]);
+        assert_eq!(applied.lift, [0.03, 0., 0.]);
+
+        // The offline ablation mutates camera sections without rewriting the
+        // user's GraphicsSettings. Metadata must report that actual change.
+        world.entity_mut(camera).insert(ColorGrading::default());
+        let second = state
+            .get(&world)
+            .unwrap()
+            .world_snapshot(None)
+            .graphics
+            .unwrap();
+        assert_eq!(second.tonemapping, first.tonemapping);
+        let applied = second.applied_camera.unwrap();
+        assert_eq!(applied.saturation, [1.; 3]);
+        assert_eq!(applied.contrast, [1.; 3]);
+        assert_eq!(applied.gamma, [1.; 3]);
+        assert_eq!(applied.gain, [1.; 3]);
+        assert_eq!(applied.lift, [0.; 3]);
+        let json = serde_json::to_string(&first).unwrap();
+        let roundtrip: CaptureGraphicsSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, first);
+    }
+
+    #[test]
+    fn old_world_sidecars_and_headless_fixtures_keep_graphics_unknown() {
+        let old: CaptureWorldSnapshot =
+            serde_json::from_str(r#"{"frame":12,"loaded_chunks":25}"#).unwrap();
+        assert!(old.graphics.is_none());
+        assert_eq!(old.frame, 12);
+        assert_eq!(old.loaded_chunks, 25);
+        let mut world = World::new();
+        world.insert_resource(bevy::diagnostic::FrameCount(1));
+        let mut state = SystemState::<CaptureInspection>::new(&mut world);
+        let snapshot = state.get(&world).unwrap().world_snapshot(None);
+        assert!(snapshot.graphics.is_none());
+        assert!(serde_json::to_value(snapshot)
+            .unwrap()
+            .get("graphics")
+            .is_none());
+    }
 
     #[test]
     fn vegetation_snapshot_distinguishes_roots_visibility_and_grass_batches() {

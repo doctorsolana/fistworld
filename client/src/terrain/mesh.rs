@@ -79,6 +79,16 @@ fn cell_touches_shore_band(signed_heights: [f32; 4]) -> bool {
     min_height <= SHORE_TERRAIN_REFINE_BAND && max_height >= -SHORE_TERRAIN_REFINE_BAND
 }
 
+/// Shared with grounded cosmetic surfaces so shoreline detail uses the same
+/// topology as this renderer, including the existing shore-refinement band.
+pub(crate) fn terrain_cell_subdivisions(signed_heights: [f32; 4]) -> usize {
+    if cell_touches_shore_band(signed_heights) {
+        SHORE_TERRAIN_SUBDIVISIONS
+    } else {
+        1
+    }
+}
+
 fn river_segments_for_chunk(
     generator: &TerrainGenerator,
     coord: ChunkCoord,
@@ -195,7 +205,8 @@ fn shore_refined_buffers(
             let positions = corner_indices.map(|index| mesh_data.positions[index]);
 
             let signed_heights = corner_indices.map(|index| signed_vertex_heights[index]);
-            if !cell_touches_shore_band(signed_heights) {
+            let subdivisions = terrain_cell_subdivisions(signed_heights);
+            if subdivisions == 1 {
                 buffers.indices.extend_from_slice(&[
                     i0 as u32, i2 as u32, i1 as u32, i1 as u32, i2 as u32, i3 as u32,
                 ]);
@@ -205,13 +216,13 @@ fn shore_refined_buffers(
             let normals = corner_indices.map(|index| mesh_data.normals[index]);
             let uvs = corner_indices.map(|index| mesh_data.uvs[index]);
             let tangent_corners = tangents.map(|values| corner_indices.map(|index| values[index]));
-            let row = SHORE_TERRAIN_SUBDIVISIONS + 1;
+            let row = subdivisions + 1;
             let base = buffers.positions.len() as u32;
 
-            for sub_z in 0..=SHORE_TERRAIN_SUBDIVISIONS {
-                let v = sub_z as f32 / SHORE_TERRAIN_SUBDIVISIONS as f32;
-                for sub_x in 0..=SHORE_TERRAIN_SUBDIVISIONS {
-                    let u = sub_x as f32 / SHORE_TERRAIN_SUBDIVISIONS as f32;
+            for sub_z in 0..=subdivisions {
+                let v = sub_z as f32 / subdivisions as f32;
+                for sub_x in 0..=subdivisions {
+                    let u = sub_x as f32 / subdivisions as f32;
                     buffers.positions.push(bilerp3(positions, u, v));
                     let normal = Vec3::from_array(bilerp3(normals, u, v)).normalize_or_zero();
                     buffers.normals.push(normal.to_array());
@@ -232,8 +243,8 @@ fn shore_refined_buffers(
                 }
             }
 
-            for sub_z in 0..SHORE_TERRAIN_SUBDIVISIONS {
-                for sub_x in 0..SHORE_TERRAIN_SUBDIVISIONS {
+            for sub_z in 0..subdivisions {
+                for sub_x in 0..subdivisions {
                     let m0 = base + (sub_z * row + sub_x) as u32;
                     let m1 = m0 + 1;
                     let m2 = m0 + row as u32;

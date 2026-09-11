@@ -292,8 +292,8 @@ pub const FARM_FIELD_LATERAL_OFFSET: f32 = 4.45;
 
 /// A planted crop field belonging to one Farmstead.
 ///
-/// Separate from `SettlementBuilding`: the field is a walkable environmental
-/// prop, not architecture, and deliberately has no collider.
+/// Separate from `SettlementBuilding`: crop ground is walkable. Only its
+/// accepted perimeter fences become thin shared navigation obstacles.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct FarmField {
     pub settlement: String,
@@ -304,6 +304,38 @@ pub struct FarmField {
     #[serde(default)]
     pub plot_index: u8,
     pub quality: f32,
+    /// Accepted local row boundary. Old snapshots without this field retain
+    /// their nominal footprint until authoritative parcel fitting runs.
+    #[serde(default)]
+    pub shape: Option<super::FarmFieldShape>,
+    /// Zero: legacy and eligible for a neighbour-respecting survey. One: land
+    /// accepted, fence awaiting clear bodies. Two: accepted fences published.
+    /// Even rejected enlargement reaches one, avoiding repeated terrain fits.
+    #[serde(default)]
+    pub layout_version: u8,
+}
+
+impl FarmField {
+    pub fn productive_fraction(&self) -> f32 {
+        self.shape
+            .as_ref()
+            .map_or(1.0, super::FarmFieldShape::productive_fraction)
+    }
+
+    pub fn contains_world_point(
+        &self,
+        point: Vec2,
+        position: Vec3,
+        rotation: f32,
+        margin: f32,
+    ) -> bool {
+        if let Some(shape) = &self.shape {
+            shape.contains_world_point(point, position, rotation, margin)
+        } else {
+            let local = crate::rotation::world_to_local_xz(point - position.xz(), rotation);
+            local.x.abs() <= 4.0 + margin && local.y.abs() <= 5.5 + margin
+        }
+    }
 }
 
 /// One fenced grazing plot belonging to a completed Livestock Farm.

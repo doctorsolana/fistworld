@@ -804,28 +804,39 @@ impl RoadSurvey<'_> {
                 scratch.metrics.blocked_cache_hits.saturating_add(1);
             return blocked;
         }
-        let blocked = if point.x < self.min.x
+        let blocked = self.environment_blocked(point)
+            || self.live_buildings.map_or_else(
+                || self.buildings.iter().any(|blocker| blocker.contains(point)),
+                |grid| grid.point_blocked(point),
+            );
+        scratch.blocked.insert(key, blocked);
+        blocked
+    }
+
+    /// Terrain and props still need the conservative diagonal-side guard.
+    /// Buildings/fences have an exact swept-segment test; a blocked cell beside
+    /// a certified segment is not itself an obstruction along that segment.
+    fn environment_blocked(&self, point: Vec2) -> bool {
+        if point.x < self.min.x
             || point.y < self.min.y
             || point.x > self.max.x
             || point.y > self.max.y
             || !road_sample_is_dry(self.terrain, point)
         {
-            true
-        } else {
-            // Props may overlap a chosen chopping/interaction target, so the
-            // goal gets a small exemption: the job routine begins work once it
-            // reaches interaction range. Buildings never receive exemptions.
-            let endpoint_clear = point.distance_squared(self.start)
-                <= (NAVIGATION_SAMPLE_STEP * 0.25).powi(2)
-                || point.distance_squared(self.goal) < 2.0f32.powi(2);
-            let building_blocked = self.live_buildings.map_or_else(
-                || self.buildings.iter().any(|blocker| blocker.contains(point)),
-                |grid| grid.point_blocked(point),
-            );
-            building_blocked || (!endpoint_clear && self.props.blocks(point))
-        };
-        scratch.blocked.insert(key, blocked);
-        blocked
+            return true;
+        }
+        // Preserve interaction-target exemptions for props only. Building and
+        // fence geometry never receives an endpoint exemption.
+        let endpoint_clear = point.distance_squared(self.start)
+            <= (NAVIGATION_SAMPLE_STEP * 0.25).powi(2)
+            || point.distance_squared(self.goal) < 2.0f32.powi(2);
+        !endpoint_clear && self.props.blocks(point)
+    }
+
+    fn diagonal_side_blocked(&self, point: Vec2, scratch: &mut SurveyScratch) -> bool {
+        // Keep the ordinary cached fast path; only a rejected side point needs
+        // to distinguish an off-path building from unsafe terrain or a prop.
+        self.blocked(point, scratch) && self.environment_blocked(point)
     }
 
     fn height(&self, point: Vec2, scratch: &mut SurveyScratch) -> f32 {
@@ -1070,7 +1081,9 @@ fn resume_survey_a_star(
                         },
                         survey.cell_size,
                     );
-                    if survey.blocked(side_x, scratch) || survey.blocked(side_z, scratch) {
+                    if survey.diagonal_side_blocked(side_x, scratch)
+                        || survey.diagonal_side_blocked(side_z, scratch)
+                    {
                         continue;
                     }
                 }
@@ -1567,6 +1580,30 @@ pub(crate) fn reachable_farm_work_stand(
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
 ) -> Option<Vec3> {
+    reachable_farm_work_stand_in_shape(
+        terrain,
+        farm,
+        rotation,
+        field,
+        worker_salt,
+        obstacles,
+        colliders,
+        derived,
+        None,
+    )
+}
+
+pub(crate) fn reachable_farm_work_stand_in_shape(
+    terrain: &WorldTerrain,
+    farm: Vec3,
+    rotation: f32,
+    field: Vec3,
+    worker_salt: u32,
+    obstacles: Option<&SpatialObstacleGrid>,
+    colliders: Option<&StaticColliders>,
+    derived: Option<&DerivedColliderLibrary>,
+    shape: Option<&shared::components::FarmFieldShape>,
+) -> Option<Vec3> {
     let kind = SettlementBuildingKind::Farmstead;
     let side = if worker_salt & 1 == 0 { -1.5 } else { 1.5 };
     let candidates = [
@@ -1579,6 +1616,10 @@ pub(crate) fn reachable_farm_work_stand(
         Vec2::new(side, -2.5),
         Vec2::new(-side, -2.5),
     ];
+    let candidates = shape.map_or_else(
+        || candidates.to_vec(),
+        |shape| shape.work_candidates(worker_salt),
+    );
     let door = kind.entrance_position(farm, rotation);
     let outward = Vec2::new(door.x - farm.x, door.z - farm.z).normalize_or_zero();
     let start = Vec2::new(door.x, door.z) + outward * 0.75;
@@ -1612,7 +1653,30 @@ pub(crate) fn reachable_farm_work_stand(
         };
         for sign in [preferred_sign, -preferred_sign] {
             let side_x = sign * (footprint_half.x + 0.55);
-            let local_route = [Vec2::new(side_x, front_y), Vec2::new(side_x, local_goal.y)];
+            let field_offset =
+                shared::rotation::world_to_local_xz(field.xz() - farm.xz(), rotation);
+            let local_route = if let Some(gate) = shape.and_then(|s| s.entrance_local(field_offset))
+            {
+                let gate = gate + field_offset;
+                if gate.x.abs() <= footprint_half.x + 0.1 {
+                    // The 8m shared entrance clears the farmhouse shell: pass
+                    // beside the house through it, then turn inside the crops.
+                    vec![
+                        Vec2::new(side_x, front_y),
+                        Vec2::new(side_x, gate.y + 0.85),
+                        Vec2::new(gate.x, gate.y + 0.85),
+                    ]
+                } else {
+                    vec![
+                        Vec2::new(side_x, front_y),
+                        Vec2::new(side_x, gate.y - 0.75),
+                        Vec2::new(gate.x, gate.y - 0.75),
+                        Vec2::new(gate.x, gate.y + 0.85),
+                    ]
+                }
+            } else {
+                vec![Vec2::new(side_x, front_y), Vec2::new(side_x, local_goal.y)]
+            };
             let mut route = vec![start];
             route.extend(local_route.into_iter().map(|local| {
                 let world = shared::rotation::local_to_world_xz(local, rotation);
@@ -2258,10 +2322,33 @@ pub(crate) struct NavigationBuildingCache {
 }
 
 impl NavigationBuildingCache {
+    #[cfg(test)]
     fn rebuild<'a>(
         &mut self,
         placed: impl Iterator<Item = (&'a PlacedBuilding, &'a BuildingPosition)>,
         defenses: impl Iterator<Item = &'a shared::components::FortificationSegment>,
+        yards: impl Iterator<
+            Item = (
+                &'a shared::components::HouseholdYard,
+                &'a PlayerPosition,
+                &'a PlayerRotation,
+            ),
+        >,
+    ) -> Vec<BuildingBlocker> {
+        self.rebuild_with_fields(placed, defenses, yards, std::iter::empty())
+    }
+    fn rebuild_with_fields<'a>(
+        &mut self,
+        placed: impl Iterator<Item = (&'a PlacedBuilding, &'a BuildingPosition)>,
+        defenses: impl Iterator<Item = &'a shared::components::FortificationSegment>,
+        yards: impl Iterator<
+            Item = (
+                &'a shared::components::HouseholdYard,
+                &'a PlayerPosition,
+                &'a PlayerRotation,
+            ),
+        >,
+        fields: impl Iterator<Item = shared::spatial::ObstacleEntry>,
     ) -> Vec<BuildingBlocker> {
         let previous = std::mem::take(&mut self.blockers);
         self.buildings.clear();
@@ -2294,6 +2381,24 @@ impl NavigationBuildingCache {
             self.buildings.push(navigation);
         }
         for obstacle in defenses.flat_map(|section| section.ground_obstacles()) {
+            self.blockers.push(BuildingBlocker {
+                center: obstacle.center,
+                half: obstacle.half_extents,
+                rotation: obstacle.rotation,
+            });
+            self.spatial.insert(obstacle);
+        }
+        for obstacle in fields {
+            self.blockers.push(BuildingBlocker {
+                center: obstacle.center,
+                half: obstacle.half_extents,
+                rotation: obstacle.rotation,
+            });
+            self.spatial.insert(obstacle);
+        }
+        for obstacle in yards
+            .flat_map(|(yard, position, rotation)| yard.ground_obstacles(position.0, rotation.0))
+        {
             self.blockers.push(BuildingBlocker {
                 center: obstacle.center,
                 half: obstacle.half_extents,

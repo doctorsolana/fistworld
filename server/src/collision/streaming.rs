@@ -3,7 +3,9 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use shared::building::{build_zones_by_chunk, point_in_any_build_zone_entries, BuildZoneEntry};
+use shared::building::{
+    point_in_any_build_zone_entries, BuildZoneEntry, FarmFieldClaimChanges, FarmFieldClaimIndex,
+};
 use shared::components::PlayerPosition;
 use shared::terrain::{ChunkCoord, WorldTerrain};
 
@@ -26,6 +28,7 @@ pub struct ColliderStreamingState {
     center_scratch: HashSet<ChunkCoord>,
     desired_chunks: HashSet<ChunkCoord>,
     cached_building_version: u64,
+    field_claims: FarmFieldClaimIndex,
     zones_by_chunk: HashMap<ChunkCoord, Vec<BuildZoneEntry>>,
 }
 
@@ -107,21 +110,30 @@ pub fn update_static_collider_streaming(
     roads: Query<&shared::components::VillageRoad>,
     mut colliders: ResMut<StaticColliders>,
     mut state: ResMut<ColliderStreamingState>,
+    mut field_changes: FarmFieldClaimChanges,
 ) {
     let Some(library) = library else { return };
-    let mut zone_chunks_to_refresh = Vec::new();
+    let field_version = state.field_claims.version();
+    let mut zone_chunks_to_refresh = field_changes.sync(&mut state.field_claims);
 
-    if state.cached_building_version != building_index.version {
+    if state.cached_building_version != building_index.version
+        || field_version != state.field_claims.version()
+    {
         let buildings: Vec<(Vec3, shared::building::BuildingType, f32)> = building_index
             .snapshot()
             .iter()
             .map(|entry| (entry.position, entry.building_type, entry.rotation))
             .collect();
-        let new_zones_by_chunk = build_zones_by_chunk(&buildings);
-        zone_chunks_to_refresh = changed_zone_chunks(&state.zones_by_chunk, &new_zones_by_chunk);
+        let new_zones_by_chunk = state.field_claims.building_zones_by_chunk(&buildings);
+        zone_chunks_to_refresh.extend(changed_zone_chunks(
+            &state.zones_by_chunk,
+            &new_zones_by_chunk,
+        ));
         state.zones_by_chunk = new_zones_by_chunk;
         state.cached_building_version = building_index.version;
     }
+    zone_chunks_to_refresh.sort_unstable_by_key(|c| (c.x, c.z));
+    zone_chunks_to_refresh.dedup();
 
     // Distant wildlife is a cheap record, not a request to load terrain/prop
     // colliders across the whole map. Ridden horses remain physical actors.
@@ -148,16 +160,9 @@ pub fn update_static_collider_streaming(
         }
 
         unload_chunk(&mut colliders, chunk);
-        if state.desired_chunks.contains(&chunk) {
-            load_chunk(
-                &terrain,
-                &library,
-                &mut colliders,
-                chunk,
-                state.zones_by_chunk.get(&chunk).map(Vec::as_slice),
-                roads.iter(),
-            );
-        }
+        // Re-enter through the ordinary six-chunk budget below. A batch of
+        // accepted farm edits must not regenerate every nearby prop recipe in
+        // one fixed tick. Cleared trees disappear from collision immediately.
     }
 
     // Unloading above leaves loaded_chunks a subset of desired_chunks. Building
@@ -192,6 +197,7 @@ pub fn update_static_collider_streaming(
                 &mut colliders,
                 chunk,
                 state.zones_by_chunk.get(&chunk).map(Vec::as_slice),
+                Some(&state.field_claims),
                 roads.iter(),
             );
             loaded_this_tick += 1;
@@ -232,6 +238,7 @@ fn load_chunk<'a>(
     colliders: &mut StaticColliders,
     chunk: ChunkCoord,
     chunk_zones: Option<&[BuildZoneEntry]>,
+    fields: Option<&FarmFieldClaimIndex>,
     roads: impl Iterator<Item = &'a shared::components::VillageRoad> + Clone,
 ) {
     let spawns = shared::props::generate_chunk_prop_spawns(&terrain.generator, chunk);
@@ -241,6 +248,9 @@ fn load_chunk<'a>(
         let Some(kind) = spawn.kind else {
             continue;
         };
+        if fields.is_some_and(|fields| fields.contains_point(spawn.position.xz())) {
+            continue;
+        }
         if let Some(zones) = chunk_zones {
             let point_xz = Vec2::new(spawn.position.x, spawn.position.z);
             if point_in_any_build_zone_entries(point_xz, zones) {
@@ -301,6 +311,7 @@ pub(crate) fn survey_settlement_props(
                 library,
                 &mut colliders,
                 chunk,
+                None,
                 None,
                 std::iter::empty(),
             );
@@ -399,6 +410,61 @@ mod tests {
             app.world().resource::<StaticColliders>().version,
             settled_version
         );
+
+        // Crop geometry has its own invalidation source: no building marker
+        // changes when a parcel is accepted, clipped, moved or removed.
+        let field_at = Vec3::new(24.0, 0.0, 24.0);
+        let field = app
+            .world_mut()
+            .spawn((
+                shared::components::FarmField {
+                    settlement: "Test".into(),
+                    farmstead: field_at,
+                    plot_index: 0,
+                    quality: 1.0,
+                    layout_version: 0,
+                    shape: None,
+                },
+                PlayerPosition(field_at),
+                shared::components::PlayerRotation(0.0),
+            ))
+            .id();
+        app.update();
+        let field_revision = app.world().resource::<StaticColliders>().chunk_versions[&origin];
+        assert!(app
+            .world()
+            .resource::<ColliderStreamingState>()
+            .field_claims
+            .contains_point(field_at.xz()));
+        app.world_mut()
+            .entity_mut(field)
+            .get_mut::<shared::components::FarmField>()
+            .unwrap()
+            .quality = 0.4;
+        app.update();
+        assert_eq!(
+            app.world().resource::<StaticColliders>().chunk_versions[&origin],
+            field_revision
+        );
+        app.world_mut()
+            .entity_mut(field)
+            .get_mut::<shared::components::FarmField>()
+            .unwrap()
+            .shape = Some(shared::components::FarmFieldShape::default());
+        app.update();
+        assert!(app.world().resource::<StaticColliders>().chunk_versions[&origin] > field_revision);
+        assert!(!app
+            .world()
+            .resource::<ColliderStreamingState>()
+            .field_claims
+            .contains_point(field_at.xz()));
+        app.world_mut().despawn(field);
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<ColliderStreamingState>()
+            .field_claims
+            .has_farm(field_at));
 
         let before = app.world().resource::<StaticColliders>().chunk_versions[&origin];
         let building = app

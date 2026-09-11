@@ -26,9 +26,9 @@ use crate::{
             KnownPeople, SelectedPerson,
         },
         hud::{
-            GodNotice,
             chrome::{HudArtwork, HudIcon},
             portrait::PortraitReadiness,
+            GodNotice,
         },
         world_map::MapOpen,
     },

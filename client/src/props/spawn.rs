@@ -1,7 +1,5 @@
 use bevy::prelude::*;
-use shared::building::{
-    build_zones_by_chunk, clearance_zones_for_building, point_in_any_build_zone_entries,
-};
+use shared::building::{point_in_any_build_zone_entries, FarmFieldClaimChanges};
 use shared::building::{BuildingPosition, PlacedBuilding};
 use shared::components::VillageRoad;
 use shared::props::PropSpawn;
@@ -25,6 +23,33 @@ use super::{
 
 /// Maximum prop instances realized per frame across all pending chunks.
 const MAX_PROP_INSTANCE_SPAWNS_PER_FRAME: usize = 48;
+
+/// Accepted crop edits replace only their old/new chunks, including releasing
+/// any inferred legacy rectangle. Re-entry uses the ordinary spawn budget.
+pub(super) fn invalidate_props_for_farm_fields(
+    mut commands: Commands,
+    mut changes: FarmFieldClaimChanges,
+    mut zones: ResMut<BuildZoneChunkIndex>,
+    mut loaded: ResMut<LoadedPropChunks>,
+    mut pending: ResMut<PendingPropSpawns>,
+    mut props: ResMut<PropChunkIndex>,
+) {
+    let previous = zones.fields.version();
+    let touched = changes.sync(&mut zones.bypass_change_detection().fields);
+    if zones.fields.version() == previous {
+        return;
+    }
+    zones.dirty = true;
+    for coord in touched {
+        if let Some(entities) = props.by_chunk.remove(&coord) {
+            for entity in entities {
+                commands.entity(entity).try_despawn();
+            }
+        }
+        pending.discard_chunk(coord);
+        loaded.chunks.remove(&coord);
+    }
+}
 
 /// When a new building is placed, invalidate prop chunks that overlap with its build zone.
 pub(super) fn invalidate_props_for_new_buildings(
@@ -72,7 +97,11 @@ pub(super) fn invalidate_props_for_new_buildings(
     let zones = new_buildings
         .iter()
         .flat_map(|(_, building, position)| {
-            clearance_zones_for_building(position.0, building.building_type, building.rotation)
+            build_zone_index.fields.building_zones(
+                position.0,
+                building.building_type,
+                building.rotation,
+            )
         })
         .chain(new_squares.iter().map(|(_, square)| {
             shared::building::BuildZoneEntry::from_rotated_rect(
@@ -195,7 +224,7 @@ pub(super) fn sync_build_zone_chunk_index(
         .iter()
         .map(|(building, position)| (position.0, building.building_type, building.rotation))
         .collect();
-    build_zone_index.by_chunk = build_zones_by_chunk(&buildings);
+    build_zone_index.by_chunk = build_zone_index.fields.building_zones_by_chunk(&buildings);
     for square in &squares {
         let zone = shared::building::BuildZoneEntry::from_rotated_rect(
             square.center.xz(),
@@ -308,6 +337,7 @@ pub(super) fn spawn_chunk_props(
                 !point_in_any_build_zone_entries(point_xz, chunk_zones)
             });
         }
+        spawns.retain(|spawn| !build_zone_index.fields.contains_point(spawn.position.xz()));
         spawns.retain(|spawn| {
             // Brush yields to a finished ribbon. Trees do too, but only after
             // the embodied road worker has chopped them and advanced this
@@ -676,12 +706,87 @@ mod tests {
             .add_systems(
                 Update,
                 (
+                    invalidate_props_for_farm_fields,
                     invalidate_props_for_new_buildings,
                     sync_build_zone_chunk_index,
                 )
                     .chain(),
             );
         app
+    }
+
+    #[test]
+    fn accepted_field_updates_release_only_touched_prop_chunks() {
+        use shared::components::{FarmField, FarmFieldShape, PlayerPosition, PlayerRotation};
+        let mut app = square_app();
+        let at = Vec3::new(32.0, 0.0, 32.0);
+        let local = resident_prop(&mut app, at);
+        let remote = resident_prop(&mut app, Vec3::new(720.0, 0.0, 720.0));
+        let entity = app
+            .world_mut()
+            .spawn((
+                FarmField {
+                    settlement: "Test".into(),
+                    farmstead: at,
+                    plot_index: 0,
+                    quality: 1.0,
+                    layout_version: 0,
+                    shape: None,
+                },
+                PlayerPosition(at),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        app.update();
+        assert!(app.world().get_entity(local).is_err());
+        assert!(app.world().get_entity(remote).is_ok());
+        assert!(app
+            .world()
+            .resource::<BuildZoneChunkIndex>()
+            .fields
+            .contains_point(at.xz()));
+
+        let untouched = resident_prop(&mut app, at + Vec3::X * 12.0);
+        let version = app
+            .world()
+            .resource::<BuildZoneChunkIndex>()
+            .fields
+            .version();
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<FarmField>()
+            .unwrap()
+            .quality = 0.2;
+        app.update();
+        assert!(app.world().get_entity(untouched).is_ok());
+        assert_eq!(
+            app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .fields
+                .version(),
+            version
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<FarmField>()
+            .unwrap()
+            .shape = Some(FarmFieldShape::default());
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<BuildZoneChunkIndex>()
+            .fields
+            .contains_point(at.xz()));
+        assert!(app.world().get_entity(remote).is_ok());
+        app.world_mut().despawn(entity);
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<BuildZoneChunkIndex>()
+            .fields
+            .has_farm(at));
+        assert!(app.world().get_entity(remote).is_ok());
     }
 
     fn square_at(x: f32) -> SettlementCivicSquare {

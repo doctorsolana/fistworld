@@ -45,6 +45,14 @@ public storage. Changes to company/civic account privacy are a separate policy.
 - `simulation_time.rs` and `time.rs`: the one real/world/warp clock and world-day state.
 - `regions.rs`: interest management, region visibility and tactical/strategic level.
 - `settlement_directory.rs`: tiny globally replicated settlement summaries.
+- `household_yards.rs`: bounded household land fitting, local refitting after roads or
+  neighbouring buildings change, and shared yard obstacles. See
+  [HOUSEHOLD-YARDS.md](../docs/HOUSEHOLD-YARDS.md).
+- `farm_boundaries.rs`: publishes accepted crop fences only when their physical
+  segments are clear of actor bodies, and refreshes the local navigation geometry.
+  `village/field_parcels.rs` owns deterministic crop surveys; `farm_productivity.rs`
+  shares area-limited output between tactical and strategic work. See
+  [FARM-FIELDS.md](../docs/FARM-FIELDS.md).
 - `settlement_development.rs`: Hamlet → Village → Town → City gates, civic projects and
   main-road upgrades.
 - `village.rs`: public village state/facade. Implementation is split by domain under

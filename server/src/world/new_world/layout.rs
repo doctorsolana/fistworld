@@ -39,8 +39,9 @@ impl Layout {
         for plot in &self.plots {
             include(plot.position, plot.kind.clearance());
             if let (Some(fields), Some(half)) = (
-                plot.kind.field_positions(plot.position, plot.rotation),
-                plot.kind.field_half_extents(),
+                plot.kind
+                    .intended_field_positions(plot.position, plot.rotation),
+                plot.kind.intended_field_half_extents(),
             ) {
                 for field in fields {
                     include(
@@ -163,8 +164,8 @@ impl Planner<'_> {
             let rotation = approval.rotation;
             self.occupied.push((position, kind.clearance()));
             if let (Some(fields), Some(half)) = (
-                kind.field_positions(position, rotation),
-                kind.field_half_extents(),
+                kind.intended_field_positions(position, rotation),
+                kind.intended_field_half_extents(),
             ) {
                 self.occupied.extend(fields.into_iter().map(|p| {
                     (
@@ -179,9 +180,10 @@ impl Planner<'_> {
             ) {
                 self.occupied.push((pasture, half.length() + 2.0));
             }
-            self.blockers.extend(village::road_access_blockers_for_plot(
-                kind, position, rotation,
-            ));
+            self.blockers
+                .extend(village::road_access_blockers_for_new_plot(
+                    kind, position, rotation,
+                ));
             self.plots.push(Plot {
                 kind,
                 position,

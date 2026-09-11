@@ -31,6 +31,8 @@ fn building_record(
     position: Vec3,
     rotation: f32,
     house: Option<HouseAppearance>,
+    household: Option<Household>,
+    yard: Option<shared::components::HouseholdYard>,
     market_level: Option<MarketLevel>,
     construction: Option<shared::components::ConstructionSite>,
     civic_upgrade: Option<CivicHallUpgradeWorksite>,
@@ -45,6 +47,8 @@ fn building_record(
         position,
         rotation,
         house,
+        household,
+        yard,
         market_level,
         construction,
         civic_upgrade,
@@ -138,12 +142,14 @@ fn snapshot(
             Option<&PlayerRotation>,
             Option<&BuildingId>,
             Option<&HouseAppearance>,
+            Option<&Household>,
+            Option<&shared::components::HouseholdYard>,
             Option<&MarketLevel>,
             Option<&GoodsInventory>,
         )>()
         .iter(world)
         .map(
-            |(building, town, at, rotation, id, house, market, inventory)| {
+            |(building, town, at, rotation, id, house, household, yard, market, inventory)| {
                 building_record(
                     id.copied(),
                     town.0,
@@ -151,6 +157,8 @@ fn snapshot(
                     at.0,
                     rotation.map_or(0.0, |r| r.0),
                     house.copied(),
+                    household.cloned(),
+                    yard.cloned(),
                     market.copied(),
                     None,
                     None,
@@ -186,6 +194,8 @@ fn snapshot(
                     site.rotation,
                     house.copied(),
                     None,
+                    None,
+                    None,
                     Some(site.clone()),
                     upgrade.copied(),
                     inventory.cloned(),
@@ -218,15 +228,16 @@ fn snapshot(
     let fields = world
         .query::<(&FarmField, &PlayerPosition, &PlayerRotation)>()
         .iter(world)
-        .map(|(component, at, rotation)| SnapshotField {
-            component: component.clone(),
-            position: at.0,
-            rotation: rotation.0,
-            footprint: SettlementBuildingKind::Farmstead
-                .field_half_extents()
-                .unwrap()
-                * 2.0,
-            footprint_center: at.0.xz(),
+        .map(|(component, at, rotation)| {
+            let mut field = SnapshotField {
+                component: component.clone(),
+                position: at.0,
+                rotation: rotation.0,
+                footprint: Vec2::ZERO,
+                footprint_center: at.0.xz(),
+            };
+            field.refresh_footprint();
+            field
         })
         .collect();
     let pastures = world
@@ -610,9 +621,41 @@ fn town_growth_lab() {
             state
                 .write(&path)
                 .expect("write actual accepted town snapshot");
-            println!("TOWN snapshot={} elapsed={:.1}m day={} seed={} profile={} residents={} housed={} buildings={}/{} roads={}/{} neighbors={}/{} planning_p95={:.2}ms", path.display(), elapsed / 60.0, state.day, seed, profile_name, state.metrics.residents, state.metrics.housed, state.metrics.completed_buildings, state.metrics.pending_buildings, state.metrics.completed_roads, state.metrics.pending_roads, state.metrics.houses_with_neighbor, state.metrics.houses, state.metrics.permit_planning_p95_ms);
+            println!(
+                "TOWN snapshot={} elapsed={:.1}m day={} seed={} profile={} residents={} housed={} buildings={}/{} roads={}/{} neighbors={}/{} planning_p95={:.2}ms",
+                path.display(),
+                elapsed / 60.0,
+                state.day,
+                seed,
+                profile_name,
+                state.metrics.residents,
+                state.metrics.housed,
+                state.metrics.completed_buildings,
+                state.metrics.pending_buildings,
+                state.metrics.completed_roads,
+                state.metrics.pending_roads,
+                state.metrics.houses_with_neighbor,
+                state.metrics.houses,
+                state.metrics.permit_planning_p95_ms
+            );
             for town in &state.settlements {
-                println!("TOWN development id={} tier={:?} gate={:?} progress={}/{} prosperity={:.1} food_stock={} produced={:.1}/day consumed={:.1}/day unmet={} reserve={:.1}days clusters={} largest_cluster={} radius={:.1}m", town.id.0, town.tier, town.development.next_gate, town.development.progress_days, town.development.required_days, state.metrics.mean_prosperity, state.metrics.food_inventory, state.metrics.recent_food_production, state.metrics.recent_food_consumption, state.metrics.unmet_food, state.metrics.food_reserve_days, state.metrics.residential_clusters, state.metrics.largest_residential_cluster, state.metrics.outermost_house_distance);
+                println!(
+                    "TOWN development id={} tier={:?} gate={:?} progress={}/{} prosperity={:.1} food_stock={} produced={:.1}/day consumed={:.1}/day unmet={} reserve={:.1}days clusters={} largest_cluster={} radius={:.1}m",
+                    town.id.0,
+                    town.tier,
+                    town.development.next_gate,
+                    town.development.progress_days,
+                    town.development.required_days,
+                    state.metrics.mean_prosperity,
+                    state.metrics.food_inventory,
+                    state.metrics.recent_food_production,
+                    state.metrics.recent_food_consumption,
+                    state.metrics.unmet_food,
+                    state.metrics.food_reserve_days,
+                    state.metrics.residential_clusters,
+                    state.metrics.largest_residential_cluster,
+                    state.metrics.outermost_house_distance
+                );
             }
             print_report(app.world_mut(), elapsed, false);
             capture_index += 1;
@@ -633,7 +676,10 @@ fn town_growth_lab() {
             "growth never completed a building"
         );
     }
-    println!("TOWN complete snapshots={capture_index} updates={ticks} update_p95={:.2}ms update_max={:.2}ms", state.metrics.update_p95_ms, state.metrics.update_max_ms);
+    println!(
+        "TOWN complete snapshots={capture_index} updates={ticks} update_p95={:.2}ms update_max={:.2}ms",
+        state.metrics.update_p95_ms, state.metrics.update_max_ms
+    );
     print_business_report(app.world_mut());
     print_structure_report(app.world_mut());
     print_resource_flow_report(app.world_mut());

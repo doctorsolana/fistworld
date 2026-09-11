@@ -42,11 +42,34 @@ pub fn sync_obstacle_grid(
     walls: Query<&FortificationSegment>,
     changed_walls: Query<(), Changed<FortificationSegment>>,
     mut removed_walls: RemovedComponents<FortificationSegment>,
+    yards: Query<(
+        &shared::components::HouseholdYard,
+        &shared::components::PlayerPosition,
+        &shared::components::PlayerRotation,
+    )>,
+    changed_yards: Query<
+        (),
+        (
+            With<shared::components::HouseholdYard>,
+            Or<(
+                Changed<shared::components::HouseholdYard>,
+                Changed<shared::components::PlayerPosition>,
+                Changed<shared::components::PlayerRotation>,
+            )>,
+        ),
+    >,
+    mut removed_yards: RemovedComponents<shared::components::HouseholdYard>,
+    mut fields: crate::world::farm_boundaries::FarmBoundarySource,
 ) {
+    let fields_changed = fields.refresh();
     let walls_removed = removed_walls.read().count() > 0;
+    let yards_removed = removed_yards.read().count() > 0;
     if state.last_building_version == Some(building_index.version)
         && changed_walls.is_empty()
         && !walls_removed
+        && changed_yards.is_empty()
+        && !yards_removed
+        && !fields_changed
     {
         return;
     }
@@ -72,7 +95,9 @@ pub fn sync_obstacle_grid(
             obstacle_type: building.building_type as u32,
         });
         if building.building_type == shared::building::BuildingType::Tavern {
-            for obstacle in shared::building::tavern::table_obstacles(building.position, building.rotation) {
+            for obstacle in
+                shared::building::tavern::table_obstacles(building.position, building.rotation)
+            {
                 grid.insert(obstacle);
             }
         }
@@ -82,6 +107,15 @@ pub fn sync_obstacle_grid(
         for obstacle in wall.ground_obstacles() {
             grid.insert(obstacle);
         }
+    }
+    for (yard, position, rotation) in &yards {
+        for obstacle in yard.ground_obstacles(position.0, rotation.0) {
+            grid.insert(obstacle);
+        }
+    }
+
+    for obstacle in fields.obstacles() {
+        grid.insert(obstacle);
     }
 
     if !buildings.is_empty() {
@@ -117,6 +151,130 @@ mod tests {
         for _ in 0..8 {
             app.update();
         }
+        assert_eq!(
+            app.world().resource::<SpatialObstacleGrid>().version,
+            version
+        );
+    }
+
+    #[test]
+    fn farm_fences_block_the_boundary_keep_gate_open_and_ignore_quality_churn() {
+        use shared::components::{
+            FarmField, FarmFieldShape, PlayerPosition, PlayerRotation, FARM_FENCE_OBSTACLE_TYPE,
+        };
+        let mut app = navigation_app();
+        let origin = Vec3::new(-4.45, 0., 9.);
+        let shape = FarmFieldShape::legacy_rectangle();
+        let entity = app
+            .world_mut()
+            .spawn((
+                FarmField {
+                    settlement: "Farm".into(),
+                    farmstead: Vec3::ZERO,
+                    plot_index: 0,
+                    quality: 1.,
+                    shape: Some(shape),
+                    layout_version: 2,
+                },
+                PlayerPosition(origin),
+                PlayerRotation(0.),
+            ))
+            .id();
+        app.update();
+        let grid = app.world().resource::<SpatialObstacleGrid>();
+        assert!(grid.segment_blocked_by_type(
+            Vec2::new(-10., 9.),
+            Vec2::new(-7., 9.),
+            FARM_FENCE_OBSTACLE_TYPE
+        ));
+        assert!(!grid.segment_blocked_by_type(
+            Vec2::new(-2., 2.),
+            Vec2::new(-2., 6.),
+            FARM_FENCE_OBSTACLE_TYPE
+        ));
+        let revision = grid.version;
+        app.world_mut()
+            .get_mut::<FarmField>(entity)
+            .unwrap()
+            .quality = 0.3;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SpatialObstacleGrid>().version,
+            revision
+        );
+        app.world_mut().get_mut::<PlayerPosition>(entity).unwrap().0 += Vec3::X * 50.;
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<SpatialObstacleGrid>()
+            .segment_blocked_by_type(
+                Vec2::new(-10., 9.),
+                Vec2::new(-7., 9.),
+                FARM_FENCE_OBSTACLE_TYPE
+            ));
+        app.world_mut().entity_mut(entity).remove::<FarmField>();
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<SpatialObstacleGrid>()
+            .segment_blocked_by_type(
+                Vec2::new(40., 9.),
+                Vec2::new(43., 9.),
+                FARM_FENCE_OBSTACLE_TYPE
+            ));
+    }
+
+    #[test]
+    fn yard_fences_track_transform_and_removal_while_the_entrance_stays_open() {
+        use shared::components::{
+            HouseholdYard, PlayerPosition, PlayerRotation, YardSide, YardUse, YARD_OBSTACLE_TYPE,
+        };
+        let mut app = navigation_app();
+        let entity = app
+            .world_mut()
+            .spawn((
+                HouseholdYard {
+                    boundary: Vec::new(),
+                    minimum: Vec2::new(5., -2.),
+                    maximum: Vec2::new(7., 3.),
+                    side: YardSide::Right,
+                    use_kind: YardUse::Laundry,
+                    seed: 1,
+                },
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        app.update();
+        let grid = app.world().resource::<SpatialObstacleGrid>();
+        assert!(grid.segment_blocked_by_type(
+            Vec2::new(6., 0.),
+            Vec2::new(8., 0.),
+            YARD_OBSTACLE_TYPE
+        ));
+        assert!(!grid.segment_blocked(Vec2::new(4., 0.), Vec2::new(6., 0.)));
+        let version = grid.version;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SpatialObstacleGrid>().version,
+            version
+        );
+
+        app.world_mut().entity_mut(entity).insert((
+            PlayerPosition(Vec3::new(100., 0., 0.)),
+            PlayerRotation(std::f32::consts::FRAC_PI_2),
+        ));
+        app.update();
+        let grid = app.world().resource::<SpatialObstacleGrid>();
+        assert!(!grid.point_blocked(Vec2::new(7., 0.)));
+        assert!(grid.point_blocked(Vec2::new(100., -7.)));
+        assert!(!grid.segment_blocked(Vec2::new(100., -4.), Vec2::new(100., -6.)));
+
+        app.world_mut().entity_mut(entity).remove::<HouseholdYard>();
+        app.update();
+        assert!(app.world().resource::<SpatialObstacleGrid>().is_empty());
+        let version = app.world().resource::<SpatialObstacleGrid>().version;
+        app.update();
         assert_eq!(
             app.world().resource::<SpatialObstacleGrid>().version,
             version
@@ -235,10 +393,7 @@ mod tests {
                     BuildingType::LivestockFarm,
                     SettlementBuildingKind::LivestockFarm,
                 ),
-                (
-                    BuildingType::Tavern,
-                    SettlementBuildingKind::Tavern,
-                ),
+                (BuildingType::Tavern, SettlementBuildingKind::Tavern),
                 (BuildingType::Church, SettlementBuildingKind::Church),
                 (
                     BuildingType::StorageHall,

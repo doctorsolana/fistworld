@@ -14,15 +14,15 @@ pub(super) fn spawn_tree_review(
     mut spawned: Local<bool>,
 ) {
     let mode = std::env::var("FISTFORCE_CAPTURE_TREES").unwrap_or_default();
-    if *spawned || !matches!(mode.as_str(), "lineup" | "trio") {
+    if *spawned || !matches!(mode.as_str(), "lineup" | "trio" | "green-broadleaf") {
         return;
     }
     settings.props_enabled = false;
     use shared::props::PropKind::*;
-    let kinds: &[shared::props::PropKind] = if mode == "trio" {
-        &[FieldMapleA, CopperBeechA, WildCherryA]
-    } else {
-        &[FieldMapleA, CopperBeechA, WildCherryA, OakA, PineA]
+    let kinds: &[shared::props::PropKind] = match mode.as_str() {
+        "trio" => &[FieldMapleA, CopperBeechA, WildCherryA],
+        "green-broadleaf" => &[OakA, ChestnutA],
+        _ => &[FieldMapleA, CopperBeechA, WildCherryA, OakA, PineA],
     };
     // Wait for both real LOD meshes and their material, not a fixed delay.
     for kind in kinds {

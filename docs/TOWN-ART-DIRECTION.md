@@ -19,6 +19,8 @@ Concept PNG SHA-256:
 These review images stay out of Git. The description below is maintained so the
 direction remains understandable on machines without the local reference files.
 The image is an art concept, not a Bevy capture or proof of performance/navigation.
+The implemented pass, inspected captures, tests and remaining differences are
+recorded in [the September verification report](TOWN-ART-VERIFICATION-2026-09.md).
 
 The subsequent same-view comparison uses the actual test town:
 
@@ -41,8 +43,9 @@ how people use those spaces while leaving room to walk, work and see units.
 
 The user specifically approved the warm irregular roads, little house yards, flowers,
 roadside stones, bushes, rounded trees, distant golden wheat fields and outdoor laundry.
-Fields fitted to their surroundings are a requested future behavior; a still image
-cannot demonstrate that adaptation. The earlier meadow texture experiment was rejected
+Fields must fit their surroundings; a still image cannot demonstrate that adaptation.
+The implementation and verification contracts are recorded in [FARM-FIELDS.md](FARM-FIELDS.md)
+and [HOUSEHOLD-YARDS.md](HOUSEHOLD-YARDS.md). The earlier meadow texture experiment was rejected
 because its repeating pattern was too conspicuous. Preserve subtle ground variation.
 
 ### Target refinement after the first same-view paintover
@@ -60,8 +63,31 @@ available land**, instead of repeating the existing pair of fixed rectangular
 patches. Meaningful variation in outline, area and row length should follow usable
 agricultural ground while preserving roads, plot access and workable field entrances.
 Merely making the edges of the same repeated rectangles wavy does not meet this target.
-Both refinements are pending implementation; revised generated images remain visual
-studies rather than evidence of changed world generation.
+Revised generated images remain visual studies rather than evidence of changed world
+generation. Real captures and connected tests must establish the implemented result.
+
+### Feedback during implementation
+
+The first pass was too sparse and mechanically regular. The user emphasized that
+the roads must match the reference's shape and colour, not merely receive a warmer
+palette. Broad gentle bends, longer changes in width, small door approaches, worn
+shoulders and occasional pale grit are essential. Gardens must use the land between
+roads and neighbours, sometimes following a road boundary, and must adapt to house
+upgrades. A small identical rectangular fence behind every house is insufficient.
+
+Wheat parcels need to be larger, visibly planned and fenced, with a usable entrance.
+The user explicitly granted freedom to change their rendering: cultivated ground
+with wheat growing out of it is preferable to a raised asset that resembles a tray
+placed on the terrain. Avoid a visible brown canopy or a hard elevated soil slab.
+White/yellow flowers and leafy bushes need to read at normal play distance, not only
+in a close-up. Maintain quiet grass and space around these clusters.
+
+The user reiterated that the reference's **brighter pathway surface** is a priority:
+readable pale angular grit, broad natural curves, irregular worn shoulders and
+occasional roadside stones/bushes must work together. A uniformly tan ribbon with
+nearly invisible texture is still short of the target. Compare the same town camera
+and a close road view; raising global exposure or stamping equally spaced white
+dots onto every lane would not reproduce that surface.
 
 ## What makes the approved image work
 
@@ -90,18 +116,18 @@ The full scene stays in focus and people remain recognizable at ordinary RTS zoo
 
 ## Area-adapted wheat fields
 
-Current baseline: each Farmstead has two fixed 8 × 11 m crop plots, defined in
+Before this art pass, each Farmstead had two fixed 8 × 11 m crop plots, defined in
 [`building_kinds.rs`](../shared/src/components/building_kinds.rs).
 [`planning/plots.rs`](../server/src/world/village/planning/plots.rs) validates the
-whole rectangles against water, permanent props and occupied land; it rejects
-unsuitable candidates instead of reshaping the fields.
-[`grounds.rs`](../client/src/settlement/grounds.rs) attaches the authored
-`WheatField.glb` using each replicated field's position and rotation. Suitable-site
-selection already exists; flexible plot boundaries and row lengths are new work.
+whole rectangles against water, permanent props and occupied land. The replacement
+fits accepted crop shapes and publishes shared fence geometry; see
+[FARM-FIELDS.md](FARM-FIELDS.md) for the current implementation and compatibility rules.
+The old renderer attached `WheatField.glb` at each worker area's position and rotation.
+The replacement generates ground-following soil and crop rows within accepted shapes.
 
 The desired result is a field that uses an available piece of agricultural land,
 with golden crop rows inside a believable boundary. The distant field's colour and
-placement are visible in the concept; the following adaptation rules are proposals:
+placement are visible in the concept; these are the design and review criteria:
 
 1. Derive the plot from suitable dry agricultural land near its farm, respecting
    terrain slope, water, existing buildings, roads, occupied plots and access.
@@ -127,7 +153,8 @@ placement are visible in the concept; the following adaptation rules are proposa
 The useful effect is the transition from homes and gardens to productive farmland
 at the town's edge. Fertile open land can support broad fields; constrained sites
 should show smaller or fewer valid fields. The concept is not evidence that the
-current field generator already follows these rules.
+implemented generator satisfies every visual criterion; judge the inspected captures
+and connected farming evidence as well as the geometry tests.
 
 ## Clotheslines and household dressing
 
@@ -172,11 +199,14 @@ For meadow towns specifically, preserve broad open grass and sparse appropriate 
 placement. Choose density from the biome and site; crown improvements must not quietly
 increase the tree population or replace open meadow with ornamental woodland.
 
-### Planned tree remake pass
+### Tree remake and review contract
 
 The user specifically requested trees closer to the approved concept, made as cheaply
-as possible while retaining that appearance. On 2026-09-11 they clarified that this
-should be added to the plan before a later work session. Implementation is pending.
+as possible while retaining that appearance. The first OakA/ChestnutA remake is now
+implemented; [GREEN_BROADLEAF.md](../asset_creation/GREEN_BROADLEAF.md) records the
+canonical sources, actual geometry/file budgets and Bevy inspection evidence. The
+following contract also applies to later species. It does not authorize higher
+global tree density.
 
 1. Capture the existing green broadleaf trees beside buildings as a comparison.
    Start with two oak/chestnut-style prototypes; retain conifers and distinctive
@@ -212,7 +242,8 @@ church and paved market. The initial real-renderer views are under ignored
 `logs/town-art-study/before/`; there are no simulated residents in this static
 presentation fixture. Preserve its camera and layout for the art comparison.
 
-Suggested order for a future implementation, not an authorization to rewrite systems:
+The implementation follows these priorities; the linked subsystem documents describe
+what is present and the remaining limitations:
 
 1. Refine road/yard ground transitions and settle the overall palette/light balance.
 2. Fit household plots with paths, selective borders and a small reusable dressing kit.

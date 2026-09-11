@@ -49,6 +49,12 @@ pub enum VillageConstructionSet {
 }
 
 pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut App, schedule: M) {
+    app.add_systems(
+        schedule.clone(),
+        world::household_yards::refresh_household_yards
+            .after(crate::collision::building_index::sync_building_spatial_index)
+            .before(world::navgrid::sync_obstacle_grid),
+    );
     app.init_resource::<world::simulation_time::SimulationDelta>();
     app.init_resource::<player::combat::fronts::CombatFormations>();
     app.init_resource::<player::combat::fronts::CombatSpace>();

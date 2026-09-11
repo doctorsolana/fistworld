@@ -175,6 +175,7 @@ pub(super) fn handle_name_submission_result(
                 } else if needs_hero_creation
                     && !automated_god_spawn
                     && std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_none()
+                    && std::env::var_os("FISTWORLD_FARM_CAPTURE_DIR").is_none()
                 {
                     *creator_purpose = crate::ui::hero_creator::HeroCreatorPurpose::NewPlayerVoyage;
                     creator_open.0 = true;

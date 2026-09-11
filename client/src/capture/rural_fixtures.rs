@@ -3,8 +3,8 @@
 use super::CaptureConfig;
 use bevy::prelude::*;
 use shared::components::{
-    BuildingDoorDemand, FARM_FIELD_TERRACE_MARGIN, FarmField, LivestockPasture, PlayerPosition,
-    PlayerRotation, SettlementBuilding, SettlementBuildingKind,
+    BuildingDoorDemand, FarmField, LivestockPasture, PlayerPosition, PlayerRotation,
+    SettlementBuilding, SettlementBuildingKind, FARM_FIELD_TERRACE_MARGIN,
 };
 use shared::terrain::WorldTerrain;
 
@@ -75,7 +75,9 @@ pub(super) fn stage_capture_rural(mut commands: Commands) {
                             settlement: "Rural Art".into(),
                             farmstead: at,
                             plot_index: index as u8,
+                            layout_version: 0,
                             quality: 0.9,
+                            shape: None,
                         },
                         PlayerPosition(position),
                         PlayerRotation(0.0),

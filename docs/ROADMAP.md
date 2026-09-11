@@ -250,8 +250,18 @@ results establish their original fixtures, not every later balance revision.
       animation → bounded carried load → hut deposit → Moot consignment. Revenue
       reaches the business only when a real customer buys it; workers receive wages
       and the company may distribute only retained profit above protected working cash.
-- [x] Farmstead → two authored nearby wheat fields → visible field work → bounded
-      wheat carry → Farmstead deposit → hall haul under storage pressure.
+- [x] Farmstead → two durable worker areas with terrain-fitted, fenced wheat
+      parcels → visible field work → bounded wheat carry → Farmstead deposit →
+      hall haul under storage pressure. The 2026-09-11 town art pass replaces the
+      fixed crop assets with ground-following soil and wind-driven crop meshes;
+      larger accepted parcels retain the existing two-worker production cap.
+      See [FARM-FIELDS.md](FARM-FIELDS.md).
+- [x] Household yards fit between neighbouring plots and road reservations,
+      reserve access and upgrade space, and supply shared fence/collision geometry.
+      Bounded client meshes add gardens, laundry, firewood, flowers and occupied
+      chimney smoke. See [HOUSEHOLD-YARDS.md](HOUSEHOLD-YARDS.md) and
+      [TOWN-DRESSING.md](TOWN-DRESSING.md). Seasonal crop states and cloth motion
+      remain future work.
 - [x] Fisherman's Hut → authored paired pier → safe over-water deck traversal →
       placeholder visible work → bounded Food carry → hut deposit → hall haul
       under storage pressure. Hut and pier use authored-anchor lighting after dark.
@@ -306,13 +316,13 @@ results establish their original fixtures, not every later balance revision.
       the same building/nav indexes as completed houses and workplaces, and a
       forced short front apron makes every surveyed path enter its destination
       from the authored door rather than finding a side or rear shortcut.
-- [x] Progressive path rendering and surgical clearance. Each path is one
-      terrain-following crowned ribbon mesh with naturally varied width and worn
-      vertex colour. Only the completed prefix clears grass, flowers and shrubs;
-      mature trees and rocks remain because the survey routed around them, and
-      later permit siting treats completed paths as occupied infrastructure. The
-      render ribbon resamples the compact route at 45cm intervals so terrain
-      triangles cannot crest through it without increasing network data.
+- [x] Progressive path rendering and surgical clearance. Built route prefixes
+      paint the actual terrain through bounded, chunk-indexed weightmap updates,
+      with varied width, curved presentation, worn shoulders and packed-earth grit.
+      Coverage remains inside surveyed reservations, joins independently of entity
+      order and agrees at chunk boundaries. Removing a road restores the underlying
+      surface. Only completed paths clear their ground cover; mature props and
+      future construction retain the authoritative survey/permit constraints.
 - [x] 100x headless village soak: migration, permits, incremental construction
       supply, construction, staffing, indoor/work/carry states and both production
       loops run through the real systems.

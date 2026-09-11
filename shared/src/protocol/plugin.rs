@@ -137,6 +137,8 @@ impl Plugin for ProtocolPlugin {
         app.component::<CivicHallUpgradeWorksite>().replicate();
         app.component::<MarketLevel>().replicate();
         app.component::<HouseAppearance>().replicate();
+        app.component::<crate::components::HouseholdYard>()
+            .replicate();
         app.component::<SettlementDevelopment>().replicate();
         app.component::<SettlementOpportunityBoard>().replicate();
         app.component::<SettlementPropertyBoard>().replicate();

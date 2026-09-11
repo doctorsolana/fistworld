@@ -45,10 +45,13 @@ These are exported vertices, including flat-normal splits, summed across all pri
 
 | Asset | Previous vertices | New vertices | Reduction | Triangles | GLB bytes |
 |---|---:|---:|---:|---:|---:|
-| `LogCabin` (compact L1) | 8,424 | 4,958 | 41.1% | 2,480 | 198,252 |
-| `LongCabin` (long L1) | 4,656 | 4,604 | 1.1% | 2,296 | 184,396 |
-| `CabinL2` (compact L2) | 8,808 | 7,066 | 19.8% | 3,534 | 280,504 |
-| `LongCabinL2` (long L2) | 11,280 | 6,400 | 43.3% | 3,194 | 254,464 |
+| `LogCabin` (compact L1) | 8,424 | 4,958 | 41.1% | 2,480 | 198,352 |
+| `LongCabin` (long L1) | 4,656 | 4,604 | 1.1% | 2,296 | 184,496 |
+| `CabinL2` (compact L2) | 8,808 | 7,066 | 19.8% | 3,534 | 280,604 |
+| `LongCabinL2` (long L2) | 11,280 | 6,400 | 43.3% | 3,194 | 254,564 |
+
+Current bytes include the `FX_ChimneySmoke` anchor, authored from the chimney-cap
+position. The anchor adds 100 bytes per GLB without changing vertex or triangle counts.
 
 Every variant has three mesh nodes/primitives (body, door, glass) and two materials,
 down from three materials. There are no textures, skins, extensions or degenerate

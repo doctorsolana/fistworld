@@ -37,62 +37,235 @@ pub(super) fn workplace_road_is_ready(
         )
 }
 
-/// Plant the two authored wheat fields beside every completed Farmstead.
+#[path = "field_parcels.rs"]
+mod field_parcels;
+
+#[path = "farm_productivity.rs"]
+pub(super) mod farm_productivity;
+
+/// Fit one connected crop parcel and retain its two authoritative worker records.
+/// Fitting happens once per missing/legacy parcel; ordinary ticks only inspect IDs.
 pub fn ensure_farm_fields(
     mut commands: Commands,
     terrain: Option<Res<WorldTerrain>>,
+    derived: Option<Res<DerivedColliderLibrary>>,
     farms: Query<(
+        Entity,
         &SettlementBuilding,
         &PlayerPosition,
         &PlayerRotation,
         &shared::components::BuildingId,
     )>,
-    fields: Query<(&FarmField, &shared::components::AttachedTo)>,
+    fields: Query<(
+        Entity,
+        &FarmField,
+        &shared::components::AttachedTo,
+        &PlayerPosition,
+        &PlayerRotation,
+    )>,
+    roads: Query<&VillageRoad>,
+    pending: Query<&UnderConstruction>,
+    accesses: Query<&crate::world::village_roads::PlannedRoadAccess>,
+    yards: Query<(
+        &shared::components::HouseholdYard,
+        &PlayerPosition,
+        &PlayerRotation,
+    )>,
+    walls: Query<&shared::components::FortificationSegment>,
+    bodies: Query<
+        (
+            &PlayerPosition,
+            Has<shared::components::Horse>,
+            Has<shared::components::Mounted>,
+        ),
+        (
+            Or<(With<CharacterKind>, With<shared::components::Horse>)>,
+            Without<strategic::StrategicPerson>,
+            Without<shared::components::AboardBoat>,
+            Without<crate::player::hero::OfflineHero>,
+        ),
+    >,
 ) {
     let Some(terrain) = terrain else {
         return;
     };
-    let planted: HashSet<(shared::components::BuildingId, u8)> = fields
-        .iter()
-        .map(|(field, attached_to)| (attached_to.0, field.plot_index))
-        .collect();
-    for (farm, position, rotation, building_id) in farms.iter() {
-        if farm.kind != SettlementBuildingKind::Farmstead {
+    // Surveyed crop land can exist before its fence. Publish solid rails only
+    // when no embodied actor intersects them; never close geometry through a
+    // stationary hero, a mounted rider or a passing farm worker.
+    let mut granted = 0;
+    for (entity, field, _, position, rotation) in &fields {
+        if field.layout_version != 1 {
             continue;
         }
-        for plot_index in 0..shared::components::FARM_FIELDS_PER_FARMSTEAD {
-            if planted.contains(&(*building_id, plot_index)) {
-                continue;
+        let mut fenced = field.clone();
+        fenced.layout_version = 2;
+        let proposed = fenced.ground_obstacles(position.0, rotation.0);
+        let occupied = bodies.iter().any(|(p, horse, mounted)| {
+            if p.0.xz().distance_squared(position.0.xz()) > 60_f32.powi(2) {
+                return false;
             }
-            let Some(mut field_position) = farm
+            let extra = if horse || mounted { 0.55 } else { 0.06 };
+            proposed.iter().any(|obstacle| {
+                shared::rotation::world_to_local_xz(p.0.xz() - obstacle.center, obstacle.rotation)
+                    .abs()
+                    .cmple(obstacle.half_extents + Vec2::splat(extra))
+                    .all()
+            })
+        });
+        if !occupied {
+            commands.entity(entity).insert(fenced);
+            granted += 1;
+            if granted >= 4 {
+                break;
+            }
+        }
+    }
+    let planted: HashMap<_, _> = fields
+        .iter()
+        .map(|(entity, field, attached, _, _)| ((attached.0, field.plot_index), (entity, field)))
+        .collect();
+    let mut ordered: Vec<_> = farms
+        .iter()
+        .filter(|(_, farm, _, _, id)| {
+            farm.kind == SettlementBuildingKind::Farmstead
+                && !(0..shared::components::FARM_FIELDS_PER_FARMSTEAD).all(|i| {
+                    planted
+                        .get(&(**id, i))
+                        .is_some_and(|(_, f)| f.layout_version >= 1)
+                })
+        })
+        .collect();
+    if ordered.is_empty() {
+        return;
+    }
+    let mut accepted: Vec<_> = fields
+        .iter()
+        .map(|(_, f, a, p, r)| (a.0, f.clone(), p.0, r.0))
+        .collect();
+    ordered.sort_by_key(|(_, _, _, _, id)| id.0);
+    // A large-world migration never performs an unbounded set of terrain surveys
+    // in one tick. Stable BuildingId order also decides simultaneous open land.
+    for (farm_entity, farm, position, rotation, building_id) in ordered.into_iter().take(2) {
+        let nearby_buildings: Vec<_> = farms
+            .iter()
+            .filter(|(entity, _, other, _, _)| {
+                *entity != farm_entity && other.0.xz().distance(position.0.xz()) < 90.
+            })
+            .map(|(_, b, p, r, _)| (b.kind, p.0, r.0))
+            .collect();
+        let nearby_roads: Vec<_> = roads
+            .iter()
+            .filter(|r| r.contains_reserved_point(position.0.xz(), 80.))
+            .collect();
+        let sites: Vec<_> = pending
+            .iter()
+            .filter(|site| site.position.xz().distance(position.0.xz()) < 90.)
+            .collect();
+        let local_yards: Vec<_> = yards
+            .iter()
+            .filter(|(_, p, _)| p.0.xz().distance(position.0.xz()) < 90.)
+            .collect();
+        let wall_obstacles: Vec<_> = walls
+            .iter()
+            .flat_map(|wall| wall.ground_obstacles())
+            .collect();
+        let shapes = field_parcels::fit(
+            &terrain,
+            position.0,
+            rotation.0,
+            &nearby_buildings,
+            &nearby_roads,
+            derived.as_deref(),
+            |point| {
+                !accepted.iter().any(|(owner, field, p, r)| {
+                    *owner != *building_id && field.contains_world_point(point, *p, *r, 2.0)
+                }) && !local_yards
+                    .iter()
+                    .any(|(yard, p, r)| yard.contains_world_point(point, p.0, r.0, 1.0))
+                    && !accesses
+                        .iter()
+                        .any(|access| access.intersects_circle(point, 2.0))
+                    && !wall_obstacles.iter().any(|obstacle| {
+                        let p = shared::rotation::world_to_local_xz(
+                            point - obstacle.center,
+                            obstacle.rotation,
+                        );
+                        p.abs()
+                            .cmple(obstacle.half_extents + Vec2::splat(2.0))
+                            .all()
+                    })
+                    && !sites.iter().any(|site| {
+                        shared::building::clearance_zones_for_building(
+                            site.position,
+                            site.kind.placement_definition().building_type,
+                            site.rotation,
+                        )
+                        .iter()
+                        .any(|zone| zone.contains_point(point))
+                            || site
+                                .kind
+                                .intended_field_positions(site.position, site.rotation)
+                                .is_some_and(|centers| {
+                                    centers.iter().any(|center| {
+                                        shared::rotation::world_to_local_xz(
+                                            point - center.xz(),
+                                            site.rotation,
+                                        )
+                                        .abs()
+                                        .cmple(
+                                            site.kind.intended_field_half_extents().unwrap()
+                                                + Vec2::splat(2.),
+                                        )
+                                        .all()
+                                    })
+                                })
+                    })
+            },
+        );
+        accepted.retain(|(owner, _, _, _)| *owner != *building_id);
+        for (index, shape) in shapes.into_iter().enumerate() {
+            let index = index as u8;
+            let mut field_position = farm
                 .kind
-                .field_position_at(position.0, rotation.0, plot_index)
-            else {
-                continue;
-            };
+                .field_position_at(position.0, rotation.0, index)
+                .unwrap();
             field_position.y = terrain.get_height(field_position.x, field_position.z);
-            let field = commands
-                .spawn((
-                    FarmField {
-                        settlement: farm.settlement.clone(),
-                        farmstead: position.0,
-                        plot_index,
-                        quality: farm.quality,
-                    },
+            let field = if let Some((_, existing)) = planted.get(&(*building_id, index)) {
+                let mut updated = (*existing).clone();
+                // Expansion never removes a previously accepted work stand or
+                // productive area just because a neighbouring site has changed.
+                let old = updated.accepted_shape();
+                let contains_old = shape.contains_shape(&old, 0.05);
+                if !old.is_valid() || (shape.area() >= old.area() && contains_old) {
+                    updated.shape = Some(shape);
+                }
+                if updated.shape.is_none() {
+                    updated.shape = Some(old);
+                }
+                updated.layout_version = 1;
+                updated
+            } else {
+                FarmField {
+                    settlement: farm.settlement.clone(),
+                    farmstead: position.0,
+                    plot_index: index,
+                    quality: farm.quality,
+                    shape: Some(shape),
+                    layout_version: 1,
+                }
+            };
+            accepted.push((*building_id, field.clone(), field_position, rotation.0));
+            if let Some((entity, _)) = planted.get(&(*building_id, index)) {
+                commands.entity(*entity).insert(field);
+            } else {
+                commands.spawn((
+                    field,
                     PlayerPosition(field_position),
                     PlayerRotation(rotation.0),
+                    shared::components::AttachedTo(*building_id),
                     Replicate::to_clients(NetworkTarget::All),
-                ))
-                .id();
-            commands
-                .entity(field)
-                .insert(shared::components::AttachedTo(*building_id));
-            info!(
-                "Village '{}': planted wheat field {}/{} beside its Farmstead",
-                farm.settlement,
-                plot_index + 1,
-                shared::components::FARM_FIELDS_PER_FARMSTEAD,
-            );
+                ));
+            }
         }
     }
 }
@@ -319,18 +492,24 @@ pub fn assign_farmer_routines(
     if eligible_by_building.is_empty() {
         return;
     }
-    let mut fields_by_farm: HashMap<shared::components::BuildingId, Vec<(Entity, u8, Vec3, f32)>> =
-        HashMap::new();
+    let mut fields_by_farm: HashMap<
+        shared::components::BuildingId,
+        Vec<(Entity, u8, Vec3, f32, &FarmField)>,
+    > = HashMap::new();
     for (field_entity, field, position, rotation, attached_to) in fields.iter() {
+        if field.productive_fraction() <= 0.0 {
+            continue;
+        }
         fields_by_farm.entry(attached_to.0).or_default().push((
             field_entity,
             field.plot_index,
             position.0,
             rotation.0,
+            field,
         ));
     }
     for farm_fields in fields_by_farm.values_mut() {
-        farm_fields.sort_by_key(|(_, plot_index, _, _)| *plot_index);
+        farm_fields.sort_by_key(|(_, plot_index, _, _, _)| *plot_index);
     }
     let mut claimed = HashSet::new();
     for (farmstead, farm, position, rotation, building_id, building_of) in farms.iter() {
@@ -380,7 +559,7 @@ pub fn assign_farmer_routines(
             .take(farm.kind.positions() as usize)
             .enumerate()
         {
-            let (field, _, field_position, field_rotation) =
+            let (field, _, field_position, field_rotation, field_record) =
                 farm_fields[worker_index % farm_fields.len()];
             let Ok((worker, name, intent, _, off_duty, progress, employment)) =
                 villagers.get(*employee)
@@ -400,7 +579,7 @@ pub fn assign_farmer_routines(
                 .map_or(0.0, |progress| progress.seconds);
             let worker_salt = stable_name_hash(&name.0);
             let work_stand = if let Some(terrain) = terrain.as_deref() {
-                crate::world::village_roads::reachable_farm_work_stand(
+                crate::world::village_roads::reachable_farm_work_stand_in_shape(
                     terrain,
                     position.0,
                     rotation.0,
@@ -409,6 +588,7 @@ pub fn assign_farmer_routines(
                     obstacles.as_deref(),
                     colliders.as_deref(),
                     derived.as_deref(),
+                    field_record.shape.as_ref(),
                 )
             } else {
                 farm_work_stand(
@@ -419,6 +599,14 @@ pub fn assign_farmer_routines(
                     colliders.as_deref(),
                     derived.as_deref(),
                 )
+                .filter(|point| {
+                    field_record.contains_world_point(
+                        point.xz(),
+                        field_position,
+                        field_rotation,
+                        -0.3,
+                    )
+                })
             };
             let Some(work_stand) = work_stand else {
                 debug!(
@@ -474,7 +662,7 @@ pub fn run_farmer_routines(
         ),
         Without<CharacterKind>,
     >,
-    fields: Query<(&FarmField, &shared::components::AttachedTo), Without<CharacterKind>>,
+    mut fields: farm_productivity::FarmProductivity,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
     mut operating_plans: Query<&mut BusinessOperatingPlan, Without<CharacterKind>>,
@@ -499,6 +687,7 @@ pub fn run_farmer_routines(
         With<CharacterKind>,
     >,
 ) {
+    fields.refresh();
     let dt = simulation_time.world_seconds();
     let Some(clock) = world_time.iter().next() else {
         return;
@@ -563,7 +752,7 @@ pub fn run_farmer_routines(
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
-        let Ok((field, attached_to)) = fields.get(routine.field) else {
+        let Some((_field, attached_to)) = fields.field(routine.field) else {
             continue;
         };
         let Ok(settlement_id) = halls.get(routine.hall) else {
@@ -646,10 +835,7 @@ pub fn run_farmer_routines(
             if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
                 warn!(
                     "Farmer {} could not reach the workplace at {:.1},{:.1} after {} routes; ending the empty-handed shift",
-                    name.0,
-                    failed.goal.x,
-                    failed.goal.z,
-                    routine.failed_workplace_routes,
+                    name.0, failed.goal.x, failed.goal.z, routine.failed_workplace_routes,
                 );
                 finish_farmer_shift(
                     &mut commands,
@@ -794,7 +980,11 @@ pub fn run_farmer_routines(
                 routine.phase = FarmerPhase::WalkingToField { stand };
             }
             FarmerPhase::WalkingToField { stand } => {
-                if ground_distance(position.0, stand) <= WORK_REACH {
+                // Work candidates are inset 0.6m into accepted crop ground.
+                // The general 2.5m interaction reach stopped farmers outside
+                // small parcels before they ever reached their crop rows.
+                const FARM_WORK_REACH: f32 = 0.45;
+                if ground_distance(position.0, stand) <= FARM_WORK_REACH {
                     routine.failed_workplace_routes = 0;
                     commands.entity(worker).remove::<MoveTarget>();
                     activity.set_if_neq(CharacterActivity::Farming);
@@ -805,8 +995,8 @@ pub fn run_farmer_routines(
             }
             FarmerPhase::Farming => {
                 activity.set_if_neq(CharacterActivity::Farming);
-                routine.harvest_seconds += dt;
-                let seconds_per_wheat = farmer_seconds_per_wheat(field.quality);
+                routine.harvest_seconds += dt * fields.fraction(*building_id);
+                let seconds_per_wheat = farmer_seconds_per_wheat(farm.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
                     // The carried bundle is a completed field basket, not a
                     // frame-by-frame progress meter. Publishing the first of
@@ -1326,9 +1516,7 @@ pub fn run_fishing_routines(
             {
                 warn!(
                     "Fisher could not reach the hut at {:.1},{:.1} after {} routes; ending the empty-handed shift",
-                    failed.goal.x,
-                    failed.goal.z,
-                    routine.failed_workplace_routes,
+                    failed.goal.x, failed.goal.z, routine.failed_workplace_routes,
                 );
                 finish_fishing_shift(
                     &mut commands,
@@ -1964,10 +2152,7 @@ pub fn run_lumberjack_routines(
             } else if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
                 warn!(
                     "Woodcutter {} could not reach the hut at {:.1},{:.1} after {} routes; ending the empty-handed shift",
-                    name.0,
-                    failed.goal.x,
-                    failed.goal.z,
-                    routine.failed_hut_routes,
+                    name.0, failed.goal.x, failed.goal.z, routine.failed_hut_routes,
                 );
                 finish_lumberjack_shift(
                     &mut commands,
