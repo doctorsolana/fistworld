@@ -80,6 +80,12 @@ loaded near/far yard mesh totals; `world.ground_paint_pending_chunks` is zero on
 the current road, square and garden-path uploads have drained. Missing values in
 older artifacts are not evidence of readiness. Garden interior views are maintained
 in `capture/scenarios/household-yard-study.ron`.
+That study also includes neighbouring laundry courts and a close clothesline view.
+Its free-look inspection uses an explicit camera altitude above the map water plane;
+free-look `eye` is water-relative when water is present, not ground-relative. Always
+inspect that PNG: semantic world readiness cannot detect an underground camera.
+`capture/scenarios/town-road-borders.ron` includes a close surface shot as well as
+opposing and town-scale views of the same actual chunk-boundary junction.
 
 On a failed visual comparison it also writes `shot.diff.png`. The process exits non-zero when a
 readiness gate times out, a semantic assertion fails, image writing fails, or a baseline exceeds

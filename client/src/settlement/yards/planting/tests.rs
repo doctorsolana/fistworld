@@ -103,7 +103,7 @@ fn planted_meshes_fit_real_boundaries_and_leave_gate_and_home_paths_empty() {
                         };
                         for [x, _, z] in vertices {
                             let p = Vec2::new(*x, *z);
-                            assert!(yard.planting_clear(p, 0.), "{side:?} narrow={narrow} entry={entry} use={use_kind:?} detail={detail}: {p:?}");
+                            assert!(plant_fits(&yard, p, 0.), "{side:?} narrow={narrow} entry={entry} use={use_kind:?} detail={detail}: {p:?}");
                         }
                     }
                 }
@@ -134,5 +134,90 @@ fn large_street_plot_has_varied_planted_boundaries_and_open_working_space() {
             .iter()
             .flat_map(|bed| &bed.points)
             .all(|p| yard.planting_clear(*p, 0.34)));
+    }
+}
+
+#[test]
+fn household_planting_is_stable_but_varies_species_size_density_and_colour() {
+    let plans: Vec<_> = (0..24)
+        .map(|seed| {
+            let yard = yard(YardSide::Right, false, true, seed);
+            let plan = PlantingPlan::new(&yard);
+            assert_eq!(
+                plan,
+                PlantingPlan::new(&yard),
+                "rebuild must preserve the household"
+            );
+            plan
+        })
+        .collect();
+    for kind in [PlantKind::Shrub, PlantKind::Perennial, PlantKind::Herbs] {
+        assert!(
+            plans
+                .iter()
+                .flat_map(|p| &p.drifts)
+                .flat_map(|d| &d.lobes)
+                .any(|l| l.kind == kind),
+            "missing {kind:?}"
+        );
+    }
+    let counts: std::collections::HashSet<_> = plans
+        .iter()
+        .map(|p| p.drifts.iter().map(|d| d.lobes.len()).sum::<usize>())
+        .collect();
+    assert!(
+        counts.len() >= 5,
+        "all households have the same planting density"
+    );
+    let flowers: Vec<_> = plans
+        .iter()
+        .flat_map(|p| &p.drifts)
+        .flat_map(|d| &d.flowers)
+        .collect();
+    assert!(flowers.iter().any(|f| f.yellow) && flowers.iter().any(|f| !f.yellow));
+    assert!(plans.windows(2).all(|p| p[0] != p[1]));
+}
+
+#[test]
+fn every_foliage_silhouette_stays_in_its_fitted_disk_at_both_lods() {
+    let terrain = WorldTerrain::default();
+    let yard = yard(YardSide::Right, false, true, 0);
+    let ground = Ground::new(&yard, Vec3::ZERO, 0., &terrain);
+    for seed in [0, 19, 291, 805, u64::MAX] {
+        for radius in [0.132, 0.28, 0.52, 0.65] {
+            for kind in [PlantKind::Shrub, PlantKind::Perennial, PlantKind::Herbs] {
+                for detail in [false, true] {
+                    let lobe = Lobe {
+                        position: Vec2::new(3., 3.),
+                        radius,
+                        height: 0.7,
+                        seed,
+                        kind,
+                        color: Vec3::splat(0.5),
+                    };
+                    let mut geometry = YardMesh::default();
+                    lobe.draw(&mut geometry, &ground, detail);
+                    let mesh = geometry.finish();
+                    let Some(VertexAttributeValues::Float32x3(vertices)) =
+                        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+                    else {
+                        panic!("missing vertices");
+                    };
+                    assert!(vertices.iter().all(|[x, y, z]| y.is_finite()
+                        && Vec2::new(*x, *z).distance(lobe.position) <= radius),
+                        "{kind:?} seed={seed} radius={radius} detail={detail} exceeds accepted footprint");
+                }
+            }
+        }
+        assert_eq!(
+            PlantingPlan::new(&HouseholdYard {
+                seed,
+                ..yard.clone()
+            }),
+            PlantingPlan::new(&HouseholdYard {
+                seed,
+                ..yard.clone()
+            })
+        );
     }
 }

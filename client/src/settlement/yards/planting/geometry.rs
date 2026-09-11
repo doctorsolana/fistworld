@@ -28,7 +28,7 @@ impl Bed {
             );
         }
         for (i, &p) in self.points.iter().enumerate() {
-            let seed = self.seed + i as u64 * 19;
+            let seed = self.seed.wrapping_add(i as u64 * 19);
             match self.crop {
                 BedCrop::Cabbage => cabbage(mesh, ground, p, seed, detail),
                 BedCrop::Herbs => herbs(mesh, ground, p, seed, LEAF * 1.02, detail),
@@ -77,33 +77,7 @@ impl Drift {
             }
         }
         for lobe in &self.lobes {
-            let Lobe {
-                position: p,
-                radius,
-                height,
-                seed,
-            } = *lobe;
-            let color = match seed % 4 {
-                0 => Vec3::new(0.43, 0.56, 0.245),
-                1 => Vec3::new(0.33, 0.48, 0.225),
-                _ => LEAF * 1.04,
-            };
-            let center = ground.at(p, height * 0.52);
-            let shape = Vec3::new(radius, height * 0.65, radius * 0.94);
-            if detail {
-                mesh.leafy_head(center, shape, color, unit(seed) * 6.28);
-            } else {
-                mesh.crown(center, shape, color, unit(seed) * 6.28);
-            }
-            if detail && radius > 0.35 {
-                let d = self.tangent * (unit(seed) - 0.5) * 0.18;
-                mesh.leaf(
-                    ground.at(p, 0.10),
-                    ground.at(p + d, height * 1.27),
-                    0.09,
-                    color * 1.10,
-                );
-            }
+            lobe.draw(mesh, ground, detail);
         }
         for flower in &self.flowers {
             blossom(
@@ -112,6 +86,7 @@ impl Drift {
                 flower.position,
                 flower.seed,
                 flower.golden,
+                flower.yellow,
                 detail,
                 flower.height,
             );
@@ -123,7 +98,7 @@ fn cabbage(mesh: &mut YardMesh, ground: &Ground, p: Vec2, seed: u64, detail: boo
     let color = if seed % 7 == 0 {
         Vec3::new(0.47, 0.35, 0.43)
     } else {
-        LEAF * (1.02 + unit(seed + 3) * 0.16)
+        LEAF * (1.02 + unit(seed.wrapping_add(3)) * 0.16)
     };
     mesh.leafy_head(
         ground.at(p, 0.14),
@@ -149,9 +124,9 @@ fn herbs(mesh: &mut YardMesh, ground: &Ground, p: Vec2, seed: u64, color: Vec3, 
         let d = Vec2::from_angle(i as f32 * 2.4 + unit(seed));
         mesh.leaf(
             ground.at(p, -0.01),
-            ground.at(p + d * 0.21, 0.33 + unit(seed + i + 7) * 0.14),
+            ground.at(p + d * 0.21, 0.33 + unit(seed.wrapping_add(i + 7)) * 0.14),
             if detail { 0.075 } else { 0.12 },
-            color * (0.95 + unit(seed + i) * 0.13),
+            color * (0.95 + unit(seed.wrapping_add(i)) * 0.13),
         );
     }
 }
@@ -162,6 +137,7 @@ fn blossom(
     p: Vec2,
     seed: u64,
     golden: bool,
+    yellow: bool,
     detail: bool,
     minimum_height: f32,
 ) {
@@ -177,7 +153,7 @@ fn blossom(
         if golden { 0.027 } else { 0.015 },
         LEAF * 0.82,
     );
-    let color = if golden || seed % 5 < 2 {
+    let color = if golden || yellow {
         Vec3::new(1.0, 0.83, 0.18)
     } else {
         Vec3::new(1.0, 0.98, 0.88)
@@ -185,7 +161,7 @@ fn blossom(
     let radius = if golden {
         0.24
     } else {
-        0.165 + unit(seed + 17) * 0.017
+        0.165 + unit(seed.wrapping_add(17)) * 0.017
     };
     // Near flowers have five broad petals; far groups keep the same height,
     // footprint and light colour so the planted border does not vanish.
@@ -212,7 +188,7 @@ fn blossom(
     );
     if golden {
         for i in 0..2 {
-            let d = Vec2::from_angle(unit(seed + i) * 6.28);
+            let d = Vec2::from_angle(unit(seed.wrapping_add(i)) * 6.28);
             let base = ground.at(p, height * (0.32 + i as f32 * 0.2));
             mesh.leaf(
                 base,

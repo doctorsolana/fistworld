@@ -314,8 +314,14 @@ fn fragment(
         // lane has a worn edge without a repeating texture or extra geometry.
         // Sand and paving transitions keep their own material boundaries.
         if (weights.y > 0.03 && weights.x > 0.03 && weights.z + weights.w < 0.05) {
-            let shoulder = cloud_vnoise(world_uv * 1.25 + vec2<f32>(2.7, 19.3));
-            let earth_share = smoothstep(0.12, 0.86, weights.y + (shoulder - 0.5) * 0.22);
+            let shoulder = smoothstep(0.22, 0.78,
+                cloud_vnoise(world_uv * 0.78 + vec2<f32>(2.7, 19.3)));
+            let mixed_edge = 1.0 - smoothstep(0.68, 0.90, weights.y);
+            // Distinct interlocking turf/earth patches, softened only enough
+            // for their projected size rather than a broad airbrushed halo.
+            let edge_aa = clamp(ground_pixel * 0.25, 0.01, 0.10);
+            let earth_share = smoothstep(0.30 - edge_aa, 0.70 + edge_aa,
+                weights.y + (shoulder - 0.5) * 0.60 * mixed_edge);
             let other_share = max(1.0 - weights.y, 0.001);
             weights = normalize_weights(vec4<f32>(
                 weights.x * (1.0 - earth_share) / other_share,
@@ -471,18 +477,42 @@ fn fragment(
             let meadow_value = clamp(luminance_safe(albedo) / 0.113, 0.90, 1.10);
             flat_albedo *= mix(1.0, meadow_value, weights.x * 0.70);
 
-            // Packed earth has small value changes and occasional embedded
+            // Packed earth has broad worn pockets and occasional embedded
             // pale grit. World-space placement never repeats an image tile;
             // meadow and sand keep their existing texture character.
             if (weights.y > 0.01) {
                 // Lighter packed earth, confined to the existing dirt layer.
                 flat_albedo *= mix(vec3<f32>(1.0), vec3<f32>(1.36, 1.48, 1.62), weights.y);
                 let earth = cloud_vnoise(world_uv * 0.55 + vec2<f32>(13.7, 4.1));
-                let packed = smoothstep(0.25, 0.75, earth);
-                flat_albedo *= mix(1.0, mix(0.86, 1.16, packed), weights.y);
                 let fine_earth = cloud_vnoise(world_uv * 4.6 + vec2<f32>(5.8, 21.3));
+                // Light worn soil and darker ochre pockets span the lane,
+                // with quiet base soil between them. Reuse the two existing
+                // fields: broad connected patches, not a new scatter layer.
+                let patch_detail = 1.0 - smoothstep(0.12, 0.40, ground_pixel);
+                let patch_field = earth + (fine_earth - 0.5) * 0.14 * patch_detail;
+                let patch_aa = clamp(ground_pixel * 0.26, 0.008, 0.10);
+                let pocket = 1.0 - smoothstep(0.36 - patch_aa, 0.44 + patch_aa, patch_field);
+                let worn = smoothstep(0.56 - patch_aa, 0.64 + patch_aa, patch_field);
+                let packed_tint = mix(vec3<f32>(1.0), vec3<f32>(0.76, 0.75, 0.71), pocket);
+                let worn_tint = mix(packed_tint, vec3<f32>(1.22, 1.20, 1.15), worn);
+                flat_albedo *= mix(vec3<f32>(1.0), worn_tint, weights.y);
                 flat_albedo *= mix(1.0, mix(0.93, 1.07, fine_earth),
                     weights.y * (1.0 - smoothstep(0.15, 0.50, ground_pixel)));
+                // Broken exposed earth only inside the existing mixed turf
+                // edge. Reuse the packed-earth field so gaps remain between
+                // patches; no continuous dark outline or extra painted land.
+                let shoulder_band = smoothstep(0.12, 0.30, base_weights.y)
+                    * (1.0 - smoothstep(0.68, 0.90, base_weights.y))
+                    * smoothstep(0.03, 0.15, base_weights.x)
+                    * (1.0 - smoothstep(0.02, 0.08, base_weights.z + base_weights.w));
+                let exposed_edge = shoulder_band
+                    * smoothstep(0.38, 0.64, earth + (fine_earth - 0.5) * 0.18) * 0.58;
+                // Keep sampled grain and the same fine earth detail within
+                // the darker patches instead of replacing them with flat ink.
+                let shoulder_earth = palette.dirt.rgb * vec3<f32>(1.02, 1.00, 0.96)
+                    * grain * mix(0.92, 1.08, fine_earth);
+                flat_albedo = mix(flat_albedo,
+                    shoulder_earth, exposed_edge);
                 let cell = floor(world_uv * 1.35);
                 let seed = cloud_hash(cell);
                 let center = vec2<f32>(

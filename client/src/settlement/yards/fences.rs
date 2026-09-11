@@ -27,7 +27,8 @@ pub(super) fn build(mesh: &mut YardMesh, ground: &Ground, yard: &HouseholdYard, 
                     1.0
                 } else {
                     (i as f32
-                        + (variation(yard.seed + segment as u64 * 37 + i as u64) - 0.5) * 0.24)
+                        + (variation(yard.seed.wrapping_add((segment * 37 + i) as u64)) - 0.5)
+                            * 0.24)
                         / count as f32
                 };
                 a.lerp(b, t)
@@ -47,7 +48,8 @@ pub(super) fn build(mesh: &mut YardMesh, ground: &Ground, yard: &HouseholdYard, 
             let height = post_height(p);
             // Subtle lean stays within the real fence width. The lower end
             // is buried; rails below use the same supported post positions.
-            let tip = p + tangent * ((variation(yard.seed + p.x.to_bits() as u64) - 0.5) * 0.035);
+            let tip = p + tangent
+                * ((variation(yard.seed.wrapping_add(p.x.to_bits() as u64)) - 0.5) * 0.035);
             mesh.beam(
                 ground.at(p, -0.12),
                 ground.at(tip, height),
@@ -70,7 +72,7 @@ pub(super) fn build(mesh: &mut YardMesh, ground: &Ground, yard: &HouseholdYard, 
                 mesh.beam(
                     ground.at(pair[0], level * post_height(pair[0]) / YARD_FENCE_HEIGHT),
                     ground.at(pair[1], level * post_height(pair[1]) / YARD_FENCE_HEIGHT),
-                    0.075 + variation(seed + 9) * 0.025,
+                    0.075 + variation(seed.wrapping_add(9)) * 0.025,
                     0.11,
                     WOOD * tone,
                 );

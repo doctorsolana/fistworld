@@ -75,6 +75,21 @@ and its 1.6 m working apron must fit inside the parcel and avoid the entrance ro
 constrained plots omit it. Supports touch rendered terrain and rails meet posts.
 Plants remain traversable decoration, with no implied food production or inventory.
 
+Each house seed also chooses stable planting preferences. Border patches share
+species and a dominant white/yellow flower colour, with irregular gaps and varying
+widths rather than a repeating flower stripe. Rooted multi-lobed shrubs, low leafy
+perennials and grey-green herbs (occasionally flowering sage) use distinct silhouettes.
+This variation stays within the same fitted planting clearances and survives reloads
+and camera/LOD changes. It does not create seasonal growth or a gardening simulation.
+
+Laundry yards hang occasional household loads: tunics, trousers, towels and linen
+sheets, with muted cloth colours and different counts, sizes and spacing. The available
+intact fence span limits the wash; unfenced or cramped plots omit it. Grounded posts
+sit on existing authoritative fence spans, so they introduce no hidden solid obstacles.
+Both LODs keep garment outlines, including sleeves and separated trouser legs; only
+folds, pegs and rope detail simplify. Cloth is static opaque geometry, not a cloth
+simulation or a new texture asset.
+
 Higher-priority construction and road reservations revoke conflicting yards.
 Authoring runs after the building index and before obstacle-grid synchronization,
 so revocation and navigation removal occur in the same simulation schedule.
@@ -133,7 +148,8 @@ that its yard is ready. Use `capture/scenarios/town-art-direction.ron`; inspect 
 PNG and `.capture.json`, particularly `07-yard-detail`, reversed views and zoom
 transitions. `capture/scenarios/household-yard-study.ron` adds closer views into
 flower courts, a kitchen garden, a laundry court and an open working yard;
-its cameras expose the interiors instead of looking across house roofs.
+its cameras expose the interiors instead of looking across house roofs. It also
+compares neighbouring washes and inspects clothes/pegs/hem clearance close up.
 Captures and recordings belong in ignored `logs/`.
 
 Focused regressions cover fitting/serialization, nearby-versus-remote invalidation,

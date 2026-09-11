@@ -101,3 +101,41 @@ its PNG/JSON companions. The runner stopped only its own client and server.
 These captures were made from the verified working tree above base commit
 `aa0427942f6f`; their recorded Git ID is that pre-commit base. The follow-up commit
 containing this record contains the exact final source used for those captures.
+
+## Household variation and road surface follow-up (12 September)
+
+The follow-up above `b14d17b9` gives household planting a stable species/palette
+preference and breaks continuous borders into irregular patches. Rooted shrubs,
+low flowering perennials and herbs have distinct silhouettes and sizes. Kitchen
+rows retain their practical clearances. Laundry has real tunic, trouser, towel and
+sheet outlines, variable loads and muted colours; both LODs keep the same garments.
+Cloth height accounts for rope sag, folds and the tallest fence uprights. Fence
+seed offsets now wrap consistently, including valid `u64::MAX` seeds.
+
+The terrain shader keeps the existing road geometry and pale overall colour, but
+uses sharper grass/earth transitions, broken darker shoulders and visible pale/ochre
+patches across the dirt itself. It reuses the existing two earth-noise fields and
+grit; no new texture/noise samples, mesh decals, shader bindings or runtime assets
+were introduced. Pixel-size smoothing softens fine contours at distant zoom.
+This is an art-direction approximation, not an exact match to the generated image.
+
+Verification: `cargo check --workspace --all-targets`, full workspace playtest build,
+and the full workspace playtest test suite passed. There are now 1,306 passing tests
+(387 client, 636 server, 282 shared, 1 tool), with the same 20 ignored tests.
+New regressions cover household variation/rebuild determinism, foliage footprints,
+actual planting clearance including wood access, garment load/shape/support/hem
+constraints and both mesh budgets. Formatting and diff whitespace checks pass.
+
+Evidence is under ignored `logs/yard-variation/`. The garden, close garment and
+ground-level captures in `interiors-complete/` were personally inspected, as were
+all four road views in `roads-patched/`. Their sidecars passed after 90 readiness
+frames with zero paint backlog. Twenty fitted yards now total 24,362 near / 18,330
+far triangles, below the preceding pass; this is mesh complexity, not an FPS claim.
+Earlier `roads-before/` and `roads-detail/` show why the initial subtle edge-only
+pass was insufficient. Discarded camera attempts are not visual validation.
+
+The 1,021-frame continuous tour in `zoom/` passed all 35 probes. Initial/recovered
+PNGs show the same planting, clothesline silhouettes and painted surfaces after
+zooming from 27 to 2,200 and back, with no final paint backlog. The source changes
+are client presentation only; the preceding connected movement result remains
+historical evidence, and no new connected-behaviour result is claimed here.

@@ -7,6 +7,7 @@
 mod dressing;
 mod fences;
 mod ground;
+mod laundry;
 mod mesh;
 mod planting;
 

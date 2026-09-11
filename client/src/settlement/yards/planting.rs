@@ -3,7 +3,9 @@
 //! A single deterministic plan drives both LODs: mixed planted drifts soften
 //! several boundary runs, vegetable beds occupy selected remaining pockets,
 //! and the actual entrance/house working strip stays empty. No plant entities.
+mod foliage;
 mod geometry;
+mod style;
 use super::{
     dressing::{LEAF, WOOD},
     ground::Ground,
@@ -11,6 +13,7 @@ use super::{
 };
 use bevy::prelude::*;
 use shared::components::{HouseholdYard, YardUse};
+use style::{GardenStyle, PlantKind};
 
 pub(super) fn unit(seed: u64) -> f32 {
     (shared::worldgen::splitmix64(seed) % 1000) as f32 / 999.0
@@ -75,29 +78,36 @@ fn soil_fits(yard: &HouseholdYard, polygon: &[Vec2]) -> bool {
     })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Lobe {
     position: Vec2,
     radius: f32,
     height: f32,
     seed: u64,
+    kind: PlantKind,
+    color: Vec3,
 }
+#[derive(Debug, PartialEq)]
 struct Flower {
     position: Vec2,
     height: f32,
     golden: bool,
+    yellow: bool,
     seed: u64,
 }
+#[derive(Debug, PartialEq)]
 struct Drift {
     tangent: Vec2,
     lobes: Vec<Lobe>,
     flowers: Vec<Flower>,
 }
+#[derive(Debug, PartialEq)]
 enum BedCrop {
     Cabbage,
     Herbs,
 }
 
+#[derive(Debug, PartialEq)]
 struct Bed {
     points: Vec<Vec2>,
     tangent: Vec2,
@@ -105,6 +115,7 @@ struct Bed {
     crop: BedCrop,
 }
 
+#[derive(Debug, PartialEq)]
 pub(super) struct PlantingPlan {
     drifts: Vec<Drift>,
     beds: Vec<Bed>,
@@ -115,6 +126,7 @@ impl PlantingPlan {
             drifts: Vec::new(),
             beds: Vec::new(),
         };
+        let style = GardenStyle::new(yard.seed);
         let boundary = yard.boundary_points();
         // Planting is land use, not a consequence of how many individual
         // fence pieces survive the gate/house cuts. A border can continue
@@ -151,7 +163,9 @@ impl PlantingPlan {
             }
             let tangent = (b - a) / length;
             let inward = Vec2::new(-tangent.y, tangent.x);
-            let count = (length / 0.58).ceil().max(1.) as usize;
+            let edge_seed = yard.seed.wrapping_add(edge as u64 * 197);
+            let spacing = 0.56 + unit(edge_seed.wrapping_add(27)) * 0.19;
+            let count = (length / spacing).ceil().max(1.) as usize;
             let mut drift = Drift {
                 tangent,
                 lobes: Vec::new(),
@@ -195,12 +209,31 @@ impl PlantingPlan {
                 if !permitted {
                     continue;
                 }
-                let edge_point = a.lerp(b, t);
+                let Some(patch_seed) = style.patch(along, length, edge_seed) else {
+                    if !drift.lobes.is_empty() {
+                        plan.drifts.push(drift);
+                        drift = Drift {
+                            tangent,
+                            lobes: Vec::new(),
+                            flowers: Vec::new(),
+                        };
+                    }
+                    continue;
+                };
+                let kind = style.kind(patch_seed, yard.use_kind);
+                let edge_point =
+                    a.lerp(b, t) + tangent * (unit(seed.wrapping_add(29)) - 0.5) * 0.18;
+                let size = match kind {
+                    PlantKind::Shrub => 0.92 + unit(seed.wrapping_add(31)) * 0.33,
+                    PlantKind::Perennial => 0.72 + unit(seed.wrapping_add(31)) * 0.24,
+                    PlantKind::Herbs => 0.66 + unit(seed.wrapping_add(31)) * 0.22,
+                };
                 let mut fitted = None;
                 // Fit each visible lobe once, adapting to a wedge's actual
                 // depth. Rendering no longer rejects most of a nominal group.
-                for radius in [0.52, 0.44, 0.36, 0.28, 0.20] {
-                    let p = edge_point + inward * (radius + 0.10 + unit(seed) * 0.09);
+                for nominal_radius in [0.52, 0.44, 0.36, 0.28, 0.20] {
+                    let radius = nominal_radius * size;
+                    let p = edge_point + inward * (radius + 0.10 + unit(seed) * 0.20);
                     if plant_fits(yard, p, radius + 0.012) {
                         fitted = Some((p, radius));
                         break;
@@ -225,37 +258,45 @@ impl PlantingPlan {
                 {
                     continue;
                 }
-                let height = if radius > 0.35 {
-                    0.43 + unit(seed + 3) * 0.40
-                } else {
-                    0.23 + unit(seed + 3) * 0.20
+                let height = match kind {
+                    PlantKind::Shrub => {
+                        (0.60 + unit(seed.wrapping_add(3)) * 0.52) * (radius / 0.52).min(1.0)
+                    }
+                    PlantKind::Perennial => 0.17 + unit(seed.wrapping_add(3)) * 0.16,
+                    PlantKind::Herbs => 0.28 + unit(seed.wrapping_add(3)) * 0.22,
                 };
                 drift.lobes.push(Lobe {
                     position: p,
                     radius,
                     height,
                     seed,
+                    kind,
+                    color: style.leaf_color(kind) * (0.94 + unit(seed.wrapping_add(5)) * 0.12),
                 });
                 lobes += 1;
-                let flowers = match yard.use_kind {
-                    YardUse::Flowers => 3,
-                    YardUse::Vegetables | YardUse::Laundry => 2,
-                    YardUse::Firewood => usize::from(seed % 3 == 0),
+                let flowers = match kind {
+                    PlantKind::Perennial => 2 + (seed % 3) as usize,
+                    PlantKind::Shrub if yard.use_kind == YardUse::Flowers => {
+                        usize::from(seed % 4 == 0)
+                    }
+                    _ => 0,
                 };
                 for j in 0..flowers {
-                    let flower_seed = seed + j as u64 * 23;
-                    let golden = radius > 0.35 && j == 0 && seed % 7 == 0;
+                    let flower_seed = seed.wrapping_add(j as u64 * 23);
+                    let golden =
+                        kind == PlantKind::Perennial && radius > 0.35 && j == 0 && seed % 11 == 0;
                     let flower_radius = if golden { 0.27 } else { 0.20 };
                     // Search a small band at the front of the leaf mass.
                     // Every accepted flower has its complete footprint clear.
-                    let sideways = (j as f32 - (flowers - 1) as f32 * 0.5) * 0.25;
+                    let sideways = (j as f32 - (flowers - 1) as f32 * 0.5) * 0.22;
                     for depth in [radius * 0.63, radius * 0.30, 0.] {
                         let flower = p + tangent * sideways + inward * depth;
                         if plant_fits(yard, flower, flower_radius) {
                             drift.flowers.push(Flower {
                                 position: flower,
-                                height: height * 0.80 + 0.18,
+                                height: height * 0.90 + 0.17,
                                 golden,
+                                yellow: style.yellow(patch_seed),
                                 seed: flower_seed,
                             });
                             break;
@@ -336,7 +377,7 @@ impl PlantingPlan {
                     let p = a + tangent * t + inward * depth;
                     // Every household leaves some open lawn/work space. Bed
                     // lengths differ, including the end nearest the street.
-                    let end = length * (0.62 + unit(seed + row as u64) * 0.27);
+                    let end = length * (0.62 + unit(seed.wrapping_add(row as u64)) * 0.27);
                     let available = t < end
                         && plant_fits(yard, p, 0.34)
                         && !plan.drifts.iter().any(|d| {
@@ -358,7 +399,7 @@ impl PlantingPlan {
                             &mut plants,
                             std::mem::take(&mut run),
                             tangent,
-                            seed + row as u64 * 37,
+                            seed.wrapping_add(row as u64 * 37),
                             yard.use_kind,
                         );
                     }
@@ -372,7 +413,7 @@ impl PlantingPlan {
                         &mut plants,
                         run,
                         tangent,
-                        seed + row as u64 * 37,
+                        seed.wrapping_add(row as u64 * 37),
                         yard.use_kind,
                     );
                 }
