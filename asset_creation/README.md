@@ -5,6 +5,10 @@ sources and maintained generators live here. Read [PROP_PIPELINE.md](PROP_PIPELI
 for buildings/props or [CHARACTER_PIPELINE.md](CHARACTER_PIPELINE.md) for characters.
 [ASSET_NAMING.md](ASSET_NAMING.md) maps runtime names and identities.
 
+[Town art direction](../docs/TOWN-ART-DIRECTION.md) records the approved town concept:
+warm irregular lanes, household yards, planted clusters, rounded trees, fitted fields
+and domestic details, with visual checks and proposed cost targets for future work.
+
 Run commands from the repository root using your installed Blender executable.
 A `build_*.py` script is not automatically interchangeable with another exporter:
 current self-exporting buildings already face Blender +Y; the older prop exporter
