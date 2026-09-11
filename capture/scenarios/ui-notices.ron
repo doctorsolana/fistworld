@@ -1,0 +1,30 @@
+// Production notice controls: quiet default, unread result, expand, clear,
+// collapse and reopen. Fixture messages do not claim a connected market trade.
+(
+    version: 1,
+    name: "exploration-notices",
+    map: "village_lab",
+    output_dir: "logs/captures/ui-notices",
+    resolution: (1600, 1000),
+    target: window,
+    show_window: false,
+    warmup_frames: 180,
+    readiness: (minimum_frames: 60, maximum_frames: 1200, minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_HUD": "play",
+        "FISTFORCE_CAPTURE_HERO": "default",
+        "FISTFORCE_CAPTURE_HERO_OFFSET": "20,0",
+        "FISTFORCE_CAPTURE_SELECT": "1",
+        "FISTFORCE_CAPTURE_SETTLEMENT": "village",
+        "FISTFORCE_CAPTURE_NOTICES": "1",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "01-minimal", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64)]),
+        (name: "02-unread", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64)]),
+        (name: "03-expanded", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64)]),
+        (name: "04-cleared", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64)]),
+        (name: "05-collapsed", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64)]),
+        (name: "06-reopened", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64)]),
+    ],
+)

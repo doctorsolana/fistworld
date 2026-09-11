@@ -45,6 +45,7 @@ mod rural_fixtures;
 mod square_fixtures;
 pub(crate) use presentation::{setup_capture_presentation, sync_capture_presentation};
 mod fortification_fixtures;
+mod journey_tour;
 mod scene_fixtures;
 mod town_fixtures;
 mod tree_fixtures;
@@ -363,6 +364,7 @@ pub fn run(mut config: CaptureConfig) {
     app.insert_resource(config);
     asset_fixtures::install(&mut app);
     ui_tour::install(&mut app);
+    journey_tour::install(&mut app);
 
     app.add_systems(PreStartup, configure_capture_window);
     app.add_systems(Startup, enter_world_offline);

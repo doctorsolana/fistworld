@@ -83,7 +83,7 @@ impl Plugin for HudPlugin {
     }
 }
 
-/// A short action result, shown in the journey plate and developer controls.
+/// A short action result, retained by the notice tray and shown in developer controls.
 ///
 /// Exists because a refused placement used to be indistinguishable from a
 /// broken button — the click was consumed, the arm reset, and the reason lived
@@ -92,6 +92,7 @@ impl Plugin for HudPlugin {
 pub struct GodNotice {
     pub text: String,
     pub seconds_left: f32,
+    sequence: u64,
 }
 
 /// Village Lab camera state for an explicitly requested physical immigrant.
@@ -121,6 +122,7 @@ impl GodNotice {
     pub fn show(&mut self, text: impl Into<String>) {
         self.text = text.into();
         self.seconds_left = 4.5;
+        self.sequence = self.sequence.wrapping_add(1);
     }
 }
 

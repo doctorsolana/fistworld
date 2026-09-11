@@ -208,8 +208,8 @@ uses that server's recipe automatically. Explicit lab commands keep their fixed 
 
 ### First journey
 
-Create your hero, then right-click land to sail ashore and continue on foot. The **Your
-Journey** plate shows the nearest inhabited town, coin and carried cargo. **View Town**
+Create your hero, then right-click land to sail ashore and continue on foot. The compact **Notices** button below the clock expands to recent messages,
+nearby-town information and your hero's coin/cargo. **View Town**
 helps choose a destination; **Home** selects and finds your hero again, and **M** opens
 the world map. Press **E** near a Hall or Marketplace counter to trade.
 

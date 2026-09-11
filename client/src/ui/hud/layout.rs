@@ -1,5 +1,5 @@
-//! Clock/developer and selection plates. The ordinary journey plate is owned
-//! separately by `journey.rs` in the upper-left corner.
+//! Clock/developer and selection plates. The optional notice tray is composed
+//! below the clock; its contents and actions are owned by `journey.rs`.
 //!
 //! Composition:
 //!
@@ -72,7 +72,7 @@ fn top_right_column() -> impl Bundle {
             ..default()
         },
         Pickable::IGNORE,
-        children![clock_plate(), god_plate()],
+        children![clock_plate(), god_plate(), super::journey::view()],
     )
 }
 

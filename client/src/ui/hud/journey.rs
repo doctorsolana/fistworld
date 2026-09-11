@@ -1,21 +1,32 @@
-//! Small, contextual controls for the ordinary arrival and trading loop.
+//! Optional notice tray and local view controls for ordinary exploration.
 //!
 //! These change the local view/selection only. The existing right-click and
 //! market systems remain the sole senders of movement and trading intent.
 
+mod notices;
+mod view;
+
 use super::*;
 use crate::camera_rts::{CommanderCamera, LocalPeerId};
+use notices::Notices;
 use shared::components::{
     AboardBoat, BuildingOf, CharacterName, Hero, PlayerPosition, PlayerRotation,
     SettlementBuilding, SettlementBuildingKind, SettlementId, SettlementSummary,
 };
 use shared::economy::{format_money, GoodsInventory, MootMarket, Wallet};
+pub(super) use view::view;
 
 #[derive(Component)]
 struct JourneyPlate;
 
 #[derive(Component)]
+struct JourneyDetails;
+
+#[derive(Component)]
 enum JourneyText {
+    Unread,
+    Toggle,
+    Message(usize),
     Hero,
     Town,
     Hint,
@@ -23,101 +34,37 @@ enum JourneyText {
 
 #[derive(Component, Clone, Copy)]
 enum JourneyAction {
+    Toggle,
+    Clear,
     Hero,
     Town(Option<Vec3>),
     Map,
 }
 
 pub(super) fn install(app: &mut App) {
-    app.add_systems(OnEnter(GameState::Playing), spawn);
+    app.init_resource::<Notices>();
+    app.add_systems(OnEnter(GameState::Playing), reset);
+    app.add_systems(Update, collect_notices.run_if(in_state(GameState::Playing)));
     app.add_systems(
         Update,
         (
             handle_actions.after(crate::selection::SelectionGestureSet),
-            bind,
+            bind.after(handle_actions).after(collect_notices),
         )
             .run_if(in_state(GameState::Playing)),
     );
 }
 
-fn spawn(mut commands: Commands, capture: Option<Res<crate::capture::CaptureConfig>>) {
-    if capture.is_some() && std::env::var_os("FISTFORCE_CAPTURE_HUD").is_none() {
-        return;
+fn reset(mut notices: ResMut<Notices>, notice: Res<GodNotice>) {
+    *notices = Notices::default();
+    // Ignore the previous connection's last action result.
+    notices.observe(notice.sequence, "");
+}
+
+fn collect_notices(notice: Res<GodNotice>, mut notices: ResMut<Notices>) {
+    if !notices.has_seen(notice.sequence) {
+        notices.observe(notice.sequence, &notice.text);
     }
-    commands
-        .spawn((
-            HudRoot,
-            JourneyPlate,
-            Name::new("Player journey"),
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(18.0),
-                left: Val::Px(18.0),
-                width: Val::Px(460.0),
-                max_width: Val::Percent(46.0),
-                display: Display::None,
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                padding: UiRect::all(Val::Px(14.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                ..default()
-            },
-            BackgroundColor(LIMEWASH),
-            BorderColor::all(PLATE_RULE),
-            plate_shadow(),
-            Interaction::default(),
-            GlobalZIndex(crate::ui::foundation::layer::HUD),
-        ))
-        .with_children(|plate| {
-            plate.spawn((
-                Text::new("YOUR JOURNEY"),
-                crate::ui::typography::heading(18.0),
-                TextColor(INK),
-            ));
-            for field in [JourneyText::Hero, JourneyText::Town, JourneyText::Hint] {
-                plate.spawn((
-                    field,
-                    Text::new(""),
-                    crate::ui::typography::body(14.0),
-                    TextColor(INK),
-                ));
-            }
-            plate
-                .spawn(Node {
-                    column_gap: Val::Px(8.0),
-                    flex_wrap: FlexWrap::Wrap,
-                    ..default()
-                })
-                .with_children(|row| {
-                    for (action, label) in [
-                        (JourneyAction::Hero, "HERO [HOME]"),
-                        (JourneyAction::Town(None), "VIEW TOWN"),
-                        (JourneyAction::Map, "MAP [M]"),
-                    ] {
-                        row.spawn((
-                            action,
-                            Button,
-                            Name::new(format!("journey-{label}")),
-                            Node {
-                                min_height: Val::Px(32.0),
-                                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                                align_items: AlignItems::Center,
-                                border: UiRect::all(Val::Px(1.0)),
-                                ..default()
-                            },
-                            button_chrome(UiButtonVariant::Secondary),
-                        ))
-                        .with_child((
-                            Text::new(label),
-                            UiButtonLabel,
-                            crate::ui::typography::body(13.0),
-                            TextColor(INK),
-                            Pickable::IGNORE,
-                        ));
-                    }
-                });
-        });
 }
 
 fn handle_actions(
@@ -127,7 +74,11 @@ fn handle_actions(
     opening: Option<Res<crate::boat::OpeningCinematic>>,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<(Entity, &Hero, &PlayerPosition)>,
-    buttons: Query<(&Interaction, &JourneyAction), Changed<Interaction>>,
+    buttons: Query<
+        (&Interaction, &JourneyAction),
+        (Changed<Interaction>, Without<bevy::ui::InteractionDisabled>),
+    >,
+    mut notices: ResMut<Notices>,
     mut selection: ResMut<crate::selection::Selection>,
     mut cameras: Query<&mut CommanderCamera>,
     mut map: ResMut<crate::ui::world_map::MapOpen>,
@@ -163,6 +114,8 @@ fn handle_actions(
         clicked
     };
     match action {
+        Some(JourneyAction::Toggle) => notices.toggle(),
+        Some(JourneyAction::Clear) => notices.clear(),
         Some(JourneyAction::Hero) => {
             // Selecting the aboard hero already controls their paired vessel
             // through the normal order handler; no special sailing command.
@@ -188,10 +141,13 @@ fn bind(
     time: Res<Time>,
     mut elapsed: Local<f32>,
     local: Option<Res<LocalPeerId>>,
-    input: Res<InputState>,
-    opening: Res<crate::boat::OpeningCinematic>,
-    combat: Res<crate::combat_mode::CombatMode>,
-    notice: Res<GodNotice>,
+    (input, opening, combat, mode): (
+        Res<InputState>,
+        Res<crate::boat::OpeningCinematic>,
+        Res<crate::combat_mode::CombatMode>,
+        Res<HudMode>,
+    ),
+    mut notices: ResMut<Notices>,
     heroes: Query<(
         &Hero,
         &PlayerPosition,
@@ -208,8 +164,26 @@ fn bind(
         &PlayerPosition,
         &PlayerRotation,
     )>,
-    mut plates: Query<&mut Node, With<JourneyPlate>>,
-    mut labels: Query<(&JourneyText, &mut Text)>,
+    mut plates: Query<
+        &mut Node,
+        (
+            With<JourneyPlate>,
+            Without<JourneyDetails>,
+            Without<JourneyText>,
+        ),
+    >,
+    mut details: Query<
+        &mut Node,
+        (
+            With<JourneyDetails>,
+            Without<JourneyPlate>,
+            Without<JourneyText>,
+        ),
+    >,
+    mut labels: Query<
+        (&JourneyText, &mut Text, &mut Node),
+        (Without<JourneyPlate>, Without<JourneyDetails>),
+    >,
     mut buttons: Query<(
         Entity,
         &mut JourneyAction,
@@ -222,7 +196,11 @@ fn bind(
             .iter()
             .find(|(hero, ..)| shared::player::peer_id_to_u64(hero.owner) == local.0)
     });
-    let showing = hero.is_some() && !input.ui_blocking() && !opening.is_active() && !combat.0;
+    let showing = hero.is_some()
+        && !input.ui_blocking()
+        && !opening.is_active()
+        && !combat.0
+        && *mode == HudMode::Play;
     for mut node in &mut plates {
         let display = if showing {
             Display::Flex
@@ -233,8 +211,38 @@ fn bind(
             node.display = display;
         }
     }
+    for mut node in &mut details {
+        set_display(&mut node, showing && notices.expanded);
+    }
+    if showing && notices.expanded && notices.unread() > 0 {
+        notices.mark_read();
+    }
+    // Expansion and unread state respond immediately; world facts only bind
+    // while expanded and at most five times per second.
+    if notices.is_changed() {
+        for (field, mut text, mut node) in &mut labels {
+            match field {
+                JourneyText::Unread => {
+                    let count = notices.unread();
+                    set_display(&mut node, count > 0);
+                    if count > 0 {
+                        set_text(&mut text, &count.to_string());
+                    }
+                }
+                JourneyText::Toggle => {
+                    set_text(&mut text, if notices.expanded { "-" } else { "+" })
+                }
+                JourneyText::Message(index) if notices.expanded => {
+                    let message = notices.entry(*index);
+                    set_display(&mut node, *index == 0 || message.is_some());
+                    set_text(&mut text, message.unwrap_or("No recent messages."));
+                }
+                _ => {}
+            }
+        }
+    }
     *elapsed += time.delta_secs();
-    if !showing || *elapsed < 0.2 {
+    if !showing || !notices.expanded || (*elapsed < 0.2 && !notices.is_changed()) {
         return;
     }
     *elapsed = 0.0;
@@ -284,27 +292,37 @@ fn bind(
             )
         },
     );
-    let hint = if notice.seconds_left > 0.0 {
-        notice.text.as_str()
-    } else if aboard {
-        "Right-click water to sail, or land to sail ashore and walk there. VIEW TOWN helps you choose a destination."
+    let hint = if aboard {
+        "At sea. Choose a shore to land and continue on foot."
     } else if at_counter {
-        "E opens this market. Buy goods or list carried goods for sale; you are paid only when someone buys them."
+        "Market in reach. Press E to trade."
     } else {
-        "Right-click to walk. Visit a Hall or Marketplace and press E to trade. HOME brings your hero back into view."
+        "Trade at the town Hall or market stalls."
     };
-    for (field, mut text) in &mut labels {
+    for (field, mut text, _) in &mut labels {
         let value = match field {
             JourneyText::Hero => &hero_text,
             JourneyText::Town => &town_text,
             JourneyText::Hint => hint,
+            _ => continue,
         };
-        if text.0 != value {
-            text.0.clear();
-            text.0.push_str(value);
-        }
+        set_text(&mut text, value);
     }
     for (entity, mut action, disabled) in &mut buttons {
+        if matches!(*action, JourneyAction::Clear) {
+            let empty = notices.entry(0).is_none();
+            if empty != disabled {
+                if empty {
+                    commands
+                        .entity(entity)
+                        .insert(bevy::ui::InteractionDisabled);
+                } else {
+                    commands
+                        .entity(entity)
+                        .remove::<bevy::ui::InteractionDisabled>();
+                }
+            }
+        }
         if let JourneyAction::Town(current) = &mut *action {
             let destination = nearest.map(|(_, position)| position.0);
             if *current != destination {
@@ -324,9 +342,46 @@ fn bind(
     }
 }
 
+fn set_text(text: &mut Mut<Text>, value: &str) {
+    if text.0 != value {
+        text.0.clear();
+        text.0.push_str(value);
+    }
+}
+
+fn set_display(node: &mut Mut<Node>, showing: bool) {
+    let display = if showing {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    if node.display != display {
+        node.display = display;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notice_countdown_does_not_dirty_retained_history() {
+        let mut app = App::new();
+        app.init_resource::<GodNotice>()
+            .init_resource::<Notices>()
+            .add_systems(Update, collect_notices);
+        app.world_mut().resource_mut::<GodNotice>().show("Moving");
+        app.update();
+        app.world_mut().clear_trackers();
+        app.world_mut().resource_mut::<GodNotice>().seconds_left -= 0.1;
+        app.update();
+        assert!(!app
+            .world()
+            .get_resource_ref::<Notices>()
+            .unwrap()
+            .is_changed());
+        assert_eq!(app.world().resource::<Notices>().unread(), 1);
+    }
 
     #[test]
     fn home_finds_only_the_local_hero_and_respects_modal_input() {
@@ -334,6 +389,7 @@ mod tests {
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<InputState>()
+            .init_resource::<Notices>()
             .init_resource::<crate::selection::Selection>()
             .init_resource::<crate::ui::world_map::MapOpen>()
             .insert_resource(LocalPeerId(41))

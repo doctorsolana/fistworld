@@ -96,7 +96,7 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Application/plugin registration | `client/src/app_wiring/` |
 | Camera and streaming anchor | `client/src/camera_rts.rs` |
 | Selection and command input | `client/src/selection/`, `client/src/hero/control.rs` |
-| First-session guidance and hero/town camera controls | `client/src/ui/hud/journey.rs` |
+| Exploration notices and hero/town camera controls | `client/src/ui/hud/journey.rs` |
 | Market presentation, eligibility and retained bindings | `client/src/ui/market.rs` and `market/model.rs` |
 | Character plugin ordering | `client/src/hero/mod.rs` |
 | Character rigs, wardrobe and skin | `client/src/hero/appearance.rs` |

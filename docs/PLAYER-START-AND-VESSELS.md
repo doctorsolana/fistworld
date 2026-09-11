@@ -35,11 +35,12 @@ the client only presents the vessel and sends destinations.
    toward the requested destination. Nearby shore clicks can disembark immediately.
    The starter Dinghy becomes a slack, non-commandable shoreline wreck and selection passes
    to the Hero.
-7. The **Your Journey** plate shows the hero's coin, cargo, nearest inhabited town and
-   contextual sailing/walking/trading hints. **Home** selects and centres the owned hero;
+7. The **Notices** button below the clock starts collapsed. Its optional tray groups
+   recent action results, nearby-town information and hero coin/cargo. It retains three
+   distinct messages, coalesces repeats and marks new results with an unread count. **Home** selects and centres the owned hero;
    **View Town** centres the nearest inhabited town without moving the hero or changing
    selection. **M** opens the map. At a Hall or Marketplace counter, **E** opens trading.
-   Modal pages suspend these world controls. Refused movement orders also appear here.
+   Modal pages suspend these world controls. Refused movement orders are retained in Notices; new messages never open the tray automatically.
 
 **BUY** takes one unit from another seller at no more than the displayed price. **POST**
 consigns one carried unit; it does not sell instantly to the Hall. The market shows carried

@@ -1576,7 +1576,7 @@ exercised:
    disembarkation and an embodied Hero are live. The Hero can move, trade and fight;
    see [PLAYER-START-AND-VESSELS.md](PLAYER-START-AND-VESSELS.md). A fresh ordinary
    world now includes inhabited starting settlements without operator/lab setup.
-   Contextual journey guidance, Home to select/find the hero, and View Town to inspect the
+   An optional Notices tray, Home to select/find the hero, and View Town to inspect the
    nearest inhabited settlement support that ordinary arrival without developer controls.
 2. **First coin.** Nearby Hall buy/consign actions and company businesses are live.
    A personally purchasable cart, paid escort contracts and bandit bounties remain

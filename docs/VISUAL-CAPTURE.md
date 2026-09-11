@@ -70,6 +70,19 @@ its configured tolerances.
 Run `cargo run -p client --bin capture -- --help` for all one-off flags. Existing presets and
 fixture environment variables remain supported.
 
+## Exploration notices
+
+`capture/scenarios/ui-notices.ron` captures the compact default, an unread action result,
+expansion, clearing, collapse and reopening through the production button handlers. The
+fixture provides an offline hero/town and an explicitly synthetic incoming result; it
+does not claim connected trading. Each PNG and `.capture.json` has a `.notices.json`
+companion confirming the real toggle/clear results and panel dimensions. Run at both sizes:
+
+```bash
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/scenarios/ui-notices.ron --out logs/captures/notices-normal
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/scenarios/ui-notices.ron --resolution 1280x720 --out logs/captures/notices-small
+```
+
 ## Ordinary connected first-session regression
 
 Build both binaries together (market messages include a protocol-versioned purchase price
