@@ -95,9 +95,11 @@ market so changing pages cannot show another town's feedback.
 - Use `typography::body` / `typography::heading` with `foundation::type_scale`: caption 12,
   body 14, value 15, heading 18, title 26 on the 1600×900 design canvas. `typography::text`
   applies the existing screens’ 17 px heading boundary. `ledger::reading` uses Libre
-  Baskerville for dense book records; headings retain Cinzel. Fonts are bundled under OFL
+  Baskerville at weight 450 for dense book records; `reading_strong` / `body_strong`
+  use the same variable font at 700 for names, controls and key values. Headings retain Cinzel. Fonts are bundled under OFL
   and installed once; do not load another font per screen or depend on system fonts.
-- Book frames use a 3 px brass-brown edge and separately sized aged corner hardware.
+- Book frames use a 3 px brass-brown edge, a projecting bevel and aged corner hardware
+  aligned to the outside binding. Decorative borders never intercept input or cover text.
   Compact plates use a one-pixel rule, 2–3 px radius and `plate_shadow()`. Nested content uses
   soft dividers more often than boxes inside boxes.
 - Authored HUD frames use nine-sliced `ImageNode`s. They replace chrome,
@@ -105,10 +107,21 @@ market so changing pages cannot show another town's feedback.
 
 ## Encyclopedia materials and portraits
 
-The five spreads and nested pages use the same `ledger` catalogue. `paper()` and
-`wood()` deliberately contain no Node: pages own layout, input and scrolling. Framed
+The five spreads and nested pages use the same `ledger` catalogue. `paper()`,
+`directory_paper()` and `wood()` deliberately contain no Node: pages own layout,
+input and scrolling. The directory surface tints the same shared paper texture
+slightly darker; `directory_gutter()` adds a non-interactive paper lip and fading
+edge shadow without changing column or scrollbar geometry. The detail page stays
+lighter for reading. Framed
 portraits place a `PersonPortrait` on their inner image, keeping its mutable identity
-separate from the retained frame. Illustration components change image handles in place.
+separate from the retained frame. Illustration components bind shared `UiMaterial`
+handles by artwork and finish. Printed vignettes contain the whole illustration
+with transparent, irregular paper fades; medallions fill their circular frame.
+Fixed shader grain stays still, and the source image is never copied per widget.
+`LedgerIllustration::settlement` maps Hamlet, Village, Town and City to separate
+paintings in the directory, Overview and page header. Settlement upgrades update
+those retained instances without replacing observed building appearances. Ruins
+currently use the Hamlet plate until dedicated ruin art is authored.
 Use `LedgerIllustration::building` and observed Hall/House appearance for canonical
 thumbnails; do not infer a completed upgrade solely from a town's tier. The shared village
 vignette is illustrative scenery, not a literal world-map view.
@@ -117,6 +130,25 @@ vignette is illustrative scenery, not a literal world-map view.
 component with a subsequent `.insert(...)`, never a duplicate entry in the same bundle.
 Generated material images are sized and compressed for delivery; maintained generators,
 recipes, budgets and licenses are documented in `asset_creation/ui/LEDGER-ART.md`.
+
+Major section rules use a small native diamond ornament. Outer triangular brass
+caps cover the panel's outside border; inner viewports own clipping. Ledger button
+faces retain native rectangular targets, focus and spring feedback while sharing
+worn paper/dark-leather/amber artwork. Selected-row borders are separate, non-picking
+children: `Outline` remains owned exclusively by keyboard focus. Troop checkbox
+decoration follows the existing selection action instead of embedding brackets in
+the person's name.
+
+The close control uses its own small square face from the same button generator:
+scaling a wide nine-slice into a square otherwise shrinks the brass rim below a pixel.
+`UiButtonLabelTint` supplies enabled engraved lettering colour while foundation
+continues to own spring motion, focus and disabled contrast.
+
+`ledger/scrollbars.rs` supplies bronze scroll indicators beside actual book
+viewports. They are retained siblings positioned from resolved bounds and
+`ScrollPosition`, so they cannot scroll with the content or increase its extent.
+They disappear when the content fits; wheel/touchpad ownership remains in
+`ui::scroll`. These indicators do not introduce a separate drag-input system.
 
 Personal money and inventory are visible only for the own hero and currently commanded
 people. The book clears these cached fields when access is lost. The server applies a

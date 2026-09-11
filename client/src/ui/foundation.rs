@@ -116,6 +116,12 @@ pub struct UiButtonStyleExempt;
 #[require(bevy::ui::UiTransform)]
 pub struct UiButtonLabel;
 
+/// Optional lettering tint for an enabled control, such as engraved brass on
+/// dark wood. Disabled contrast and the shared label spring remain authoritative.
+#[derive(Component, Clone, Copy, Debug)]
+#[require(UiButtonLabel)]
+pub(crate) struct UiButtonLabelTint(pub Color);
+
 /// Authored ImageNode artwork supplies the full face and border. Keep standard
 /// focus/label/spring behavior while leaving its imperfect transparent edges clear.
 #[derive(Component)]
@@ -229,7 +235,14 @@ fn style_ui_button_labels(
         &super::button_motion::ButtonMotion,
     )>,
     children: Query<&Children>,
-    mut labels: Query<(&mut TextColor, &mut bevy::ui::UiTransform), With<UiButtonLabel>>,
+    mut labels: Query<
+        (
+            &mut TextColor,
+            &mut bevy::ui::UiTransform,
+            Option<&UiButtonLabelTint>,
+        ),
+        With<UiButtonLabel>,
+    >,
     mut pending: Local<Vec<Entity>>,
 ) {
     for (style, disabled, button_children, motion) in buttons.iter() {
@@ -256,7 +269,12 @@ fn style_ui_button_labels(
         pending.clear();
         pending.extend(button_children.iter());
         while let Some(entity) = pending.pop() {
-            if let Ok((mut color, mut transform)) = labels.get_mut(entity) {
+            if let Ok((mut color, mut transform, tint)) = labels.get_mut(entity) {
+                let desired = if disabled {
+                    desired
+                } else {
+                    tint.map_or(desired, |tint| tint.0)
+                };
                 if color.0 != desired {
                     color.0 = desired;
                 }
@@ -532,6 +550,83 @@ mod tests {
         assert_eq!(
             app.world().get::<BackgroundColor>(button).unwrap().0,
             BUTTON_DISABLED
+        );
+    }
+
+    #[test]
+    fn engraved_label_tint_keeps_shared_motion_and_yields_to_disabled_contrast() {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        app.insert_resource(time).add_systems(
+            Update,
+            (
+                super::super::button_motion::animate_buttons,
+                style_ui_button_labels,
+            )
+                .chain(),
+        );
+        let gold = Color::srgb(0.84, 0.68, 0.39);
+        let controls: Vec<_> = [UiButtonVariant::Inverse, UiButtonVariant::Secondary]
+            .into_iter()
+            .map(|variant| {
+                let label = app
+                    .world_mut()
+                    .spawn((UiButtonLabelTint(gold), TextColor(INK)))
+                    .id();
+                let button = app
+                    .world_mut()
+                    .spawn((Button, Interaction::Hovered, button_chrome(variant)))
+                    .add_child(label)
+                    .id();
+                (button, label, variant)
+            })
+            .collect();
+        for _ in 0..60 {
+            app.update();
+        }
+        for &(button, label, _) in &controls {
+            assert_eq!(app.world().get::<TextColor>(label).unwrap().0, gold);
+            assert!(
+                matches!(app.world().get::<bevy::ui::UiTransform>(label).unwrap().translation.y, Val::Px(y) if y < -1.0)
+            );
+            assert_eq!(
+                app.world()
+                    .get::<bevy::ui::UiTransform>(button)
+                    .unwrap()
+                    .translation,
+                bevy::ui::Val2::ZERO
+            );
+            app.world_mut()
+                .entity_mut(button)
+                .insert(InteractionDisabled);
+        }
+        app.update();
+        for &(button, label, variant) in &controls {
+            let muted = if variant == UiButtonVariant::Inverse {
+                super::super::styles::INK_INVERSE_MUTED
+            } else {
+                INK_MUTED
+            };
+            assert_eq!(app.world().get::<TextColor>(label).unwrap().0, muted);
+            app.world_mut()
+                .entity_mut(button)
+                .remove::<InteractionDisabled>();
+        }
+        for _ in 0..180 {
+            app.update();
+        }
+        for &(_, label, _) in &controls {
+            assert_eq!(app.world().get::<TextColor>(label).unwrap().0, gold);
+        }
+        app.world_mut().clear_trackers();
+        app.update();
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, (With<UiButtonLabel>, Changed<TextColor>)>()
+                .iter(app.world())
+                .count(),
+            0
         );
     }
 

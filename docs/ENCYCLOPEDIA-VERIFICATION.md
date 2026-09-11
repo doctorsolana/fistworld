@@ -10,12 +10,13 @@ existing market, history, business, founding and route destinations.
 The approved images guided the paper, wood binding, brass hardware, circular
 portraits, typography and page hierarchy. Text and hit targets remain native UI;
 the assets contain no baked labels. Actual known outfits and building variants
-replace illustrative concept characters and buildings. Village panoramas are
+replace illustrative concept characters and buildings. Settlement-tier panoramas are
 decorative illustrations, not claims about an exact generated town layout.
 
 Inspected real Bevy PNGs and capture/semantic sidecars at both **1600×1000** and
 **1280×720**. The checked-in `ui-encyclopedia-ledger.ron` visits all five tabs,
-the hero's own inventory, then a previously rendered person. It waits for loaded
+the hero's own inventory, a previously rendered person, all four settlement tiers,
+and a checked Army member. It waits for loaded
 art, visible portrait completion and actual panel geometry. The small Army view
 also requires usable heights for both membership lists. Long records scroll;
 their details are not discarded to fit the concept pictures.
@@ -44,6 +45,43 @@ portrait rings and panel borders, a narrow label collision, route arrows outside
 their card, and activity labels confusing absent people with present heroes.
 Permission/readiness changes now invalidate the retained inventory display.
 
+## Comparison-driven refinement
+
+A further pass compared actual PNGs with all five approved concepts. It replaced
+striped wood with quieter chocolate leather, moved triangular screw caps onto a
+projecting outer binding, and added a darker directory with a paper lip. Shared
+reading type now separates ordinary text from stronger names/values. Native
+section ornaments and worn paper/amber buttons retain focus and spring behavior.
+The gold close control has a dedicated 64×64 face: a wide nine-slice shrank its rim
+below a pixel when squeezed into a square.
+
+Character portraits show more shoulders and blurred scenery while preserving
+helmet/hair headroom. One cached illustration material adds a fixed irregular
+alpha fade, with contained panoramas and circular directory medallions. Hamlet,
+Village, Town and City have distinct compressed artwork selected by the actual
+settlement tier. Observed building upgrade images remain independent of that tier.
+These paintings are illustrative; their houses do not assert a literal map layout.
+
+The maintained tour now checks all four tier images in the header, expanded
+Overview and directory, plus an actual checked Army row. It uses production
+selection handlers and source-image readiness. The review caught and corrected
+an offscreen raw-roster selection in the rehearsal, and incomplete one-pixel
+unchecked borders at reduced UI scale. Selected rows have their own decorative
+border so keyboard focus cannot remove the persistent selection highlight.
+
+The final visual evidence set is:
+
+| Capture directory | Evidence |
+|---|---|
+| `ledger-delivery-1600x1000`, `ledger-delivery-1280x720` | Twelve checkpoints each; latest buttons/icons, four tier pictures, private/own record, warm portraits and checked Army row |
+| `ledger-final-nested-business`, `ledger-final-nested-history`, `ledger-final-nested-founding`, `ledger-final-nested-route` | Thirteen small-window nested page checkpoints; contents, draft editing, scrolling and Back |
+| `ledger-delivery-nested-market` | Latest Places actions and three small-window market/Back checkpoints |
+| `ledger-final-hud` | Twelve small-window HUD states after portrait/material refinements |
+| `ledger-refined-army-connected` | Latest real client/server roster rehearsal and continuous bombardment sequence |
+
+These outputs and their capture/semantic sidecars are review artifacts under
+ignored `logs/captures/`. No screenshot baselines were modified.
+
 ## Connected behavior and privacy
 
 `capture/first_session.py run --seed 12345` passed ordinary arrival, real market
@@ -53,7 +91,8 @@ is `logs/first-session/ledger-12345/arrival/04-first-trade.png`, with its captur
 sidecar; `report.json` records the behavioral assertions. This was a first-session
 flow, not a sustained multi-town soak or an FPS benchmark.
 
-The connected `army-management.ron` rehearsal passed with 24 soldiers. Bulk
+The connected `army-management.ron` rehearsal was repeated after the visual
+refinement and passed with 24 soldiers. Bulk
 remove/refill, a transfer and its return, and Hold Line replication succeeded.
 Ten troops in each battalion took real splash damage; every Defensive soldier
 travelled at least **13.312 m**, and maximum held displacement was **0.000 m**.
@@ -75,13 +114,13 @@ change bumps the protocol to **CE03**: restart/update both server and client tog
 ## Delivery size and bounded portrait work
 
 `python3 asset_creation/ui/check_ledger_assets.py` verifies the maintained budget.
-The complete new image catalogue is **29 files / 360,922 bytes** (352.5 KiB).
-Its decoded RGBA equivalent is **11,200,512 bytes** (10.68 MiB). The bundled reading
-font and licence add 176,348 bytes, for **537,270 bytes** of new art/font delivery.
+The current image catalogue is **33 files / 469,175 bytes** (458.2 KiB).
+Its decoded RGBA equivalent is **12,107,264 bytes** (11.55 MiB). The bundled reading
+font and licence add 176,348 bytes, for **645,523 bytes** (630.4 KiB) of art/font delivery.
 Large generation originals, screenshots, recordings and build artifacts stay ignored.
 
 Building images are 384×224 JPEGs captured from 18 canonical model variants. Shared
-materials are at most 768 pixels wide, using JPEG or indexed PNG with alpha. The
+materials are at most 640 pixels wide, using JPEG or indexed PNG with alpha. The
 art generator, source-model hashes, prompts and capture recipes are maintained.
 See [the art workflow](../asset_creation/ui/LEDGER-ART.md).
 
@@ -92,7 +131,7 @@ the cache ended at **3,391,488 bytes**, with 17 completed jobs. Returning to Sig
 did not add jobs or prepare the source again; no work was pending or queued. The
 720p tour needed 15 jobs and **3,096,576 bytes** because fewer rows were visible.
 
-Instrumented full-size tour windows measured `sync_portraits` at 1.6 and 1.9 ms
+Initial implementation instrumented full-size tour windows measured `sync_portraits` at 1.6 and 1.9 ms
 **total over 300 calls each** (approximately 0.005–0.006 ms/call). The connected
 first-session flow measured approximately 0.014–0.020 ms/call. These are elapsed
 system timings, excluding worker raster/GPU cost, with no before/after FPS claim.
@@ -102,11 +141,11 @@ Actual source preparation, output jobs and row changes have separate counters.
 
 The final isolated workspace completed `cargo check --workspace --all-targets`,
 `cargo test --workspace`, and `cargo build --workspace --profile playtest`.
-Tests: **1,154 passed, zero failed, 20 ignored** (306 client, 608 server,
+Tests: **1,161 passed, zero failed, 20 ignored** (313 client, 608 server,
 239 shared and one collider test). The existing ignored tests were not enabled.
-All 60 changed Rust files pass formatting checks; a whole-workspace formatting
+All changed Rust files pass formatting checks; a whole-workspace formatting
 check still reports pre-existing differences in untouched files. Both Git diff
-whitespace checks, Python compilation of the three art scripts and the image
+whitespace checks, Python compilation of the maintained art scripts and the image
 budget checker also passed.
 
 ## Reproduction and remaining limits
@@ -117,7 +156,7 @@ Cargo target directories when different worktrees change shared wire types:
 concurrent reuse can leave mismatched workspace metadata even when third-party
 dependencies are reusable. Final verification uses an isolated target cache.
 
-No screenshot baseline was silently replaced. These are inspected functional and
+No screenshot baseline was replaced. These are inspected functional and
 visual rehearsals, not pixel-identical comparisons against generated concept art.
 Native pointer coverage, full socket-client privacy across region transitions,
 and a portrait worker crossing asset hot reload/session reset remain useful future

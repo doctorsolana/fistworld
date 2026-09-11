@@ -97,7 +97,7 @@ pub(super) fn portfolio_card(
             ));
             card.spawn((
                 Text::new(value),
-                crate::ui::ledger::reading(17.0),
+                ledger::reading_strong(17.0),
                 TextColor(INK),
             ));
             card.spawn((
@@ -152,9 +152,9 @@ pub(super) fn spawn_company_row(
             button_chrome(UiButtonVariant::Row),
         ))
         .with_children(|row| {
-            row.spawn(ledger::illustration(
+            row.spawn(ledger::illustration_medallion(
                 LedgerIllustration::Company,
-                Vec2::splat(68.0),
+                68.0,
             ));
             row.spawn(Node {
                 flex_grow: 1.0,
@@ -187,7 +187,7 @@ pub(super) fn spawn_company_row(
                     } else {
                         company.status().into()
                     }),
-                    ledger::reading(12.0),
+                    ledger::reading_strong(12.0),
                     TextColor(EMBER),
                 ));
             });

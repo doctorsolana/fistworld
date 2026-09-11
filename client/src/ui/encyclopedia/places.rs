@@ -27,6 +27,7 @@ use shared::economy::{
 
 use super::*;
 use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
+use crate::ui::hud::chrome::HudIcon;
 use crate::ui::hud::GodCapability;
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::{INK, INK_MUTED};
@@ -877,7 +878,7 @@ pub(super) fn rebuild_place_list(
                     SelectedPlaceEntry::Overview,
                     "Overview",
                     "",
-                    LedgerIllustration::Village,
+                    LedgerIllustration::settlement(record.tier),
                 );
                 spawn_place_building_row(
                     list,
@@ -954,9 +955,9 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
                 ..default()
             },
         ));
-        row.spawn(ledger::illustration(
-            LedgerIllustration::Village,
-            Vec2::splat(64.0),
+        row.spawn(ledger::illustration_medallion(
+            LedgerIllustration::settlement(record.tier),
+            64.0,
         ));
         row.spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -966,7 +967,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
             ..default()
         })
         .with_children(|copy| {
-            copy.spawn(ledger::body(record.name.clone(), 21.0));
+            copy.spawn(ledger::body_strong(record.name.clone(), 21.0));
             copy.spawn(ledger::body(book_label(record.tier.label()), 17.0))
                 .insert(TextColor(INK_MUTED));
         });
@@ -1046,20 +1047,17 @@ pub(super) fn sync_place_illustration(
     let Some(place) = selected.0.and_then(|id| places.find_by_id(id)) else {
         return;
     };
+    let overview = LedgerIllustration::settlement(place.tier);
     let next = match *entry {
-        SelectedPlaceEntry::Overview => LedgerIllustration::Village,
+        SelectedPlaceEntry::Overview => overview,
         SelectedPlaceEntry::Hall => hall_illustration(place.hall_appearance),
         SelectedPlaceEntry::Building(index) => place
             .buildings
             .get(index)
-            .map_or(LedgerIllustration::Village, |building| {
-                record_illustration(building)
-            }),
+            .map_or(overview, |building| record_illustration(building)),
         SelectedPlaceEntry::Worksite(entity) => worksites
             .get(entity)
-            .map_or(LedgerIllustration::Village, |site| {
-                LedgerIllustration::building(site.kind)
-            }),
+            .map_or(overview, |site| LedgerIllustration::building(site.kind)),
     };
     for mut kind in &mut art {
         if *kind != next {
@@ -1279,14 +1277,21 @@ pub(super) fn sync_place_detail(
             Without<WorksiteAssignButton>,
         ),
     >,
-    mut tiles: Query<
-        (&PlaceDetailTile, &mut Node),
-        (
-            Without<PlaceDetailCard>,
-            Without<PlaceDetailEmptyState>,
-            Without<PlaceDetailLine>,
-        ),
-    >,
+    mut tile_art: (
+        Query<
+            (&PlaceDetailTile, &mut Node),
+            (
+                Without<PlaceDetailCard>,
+                Without<PlaceDetailEmptyState>,
+                Without<PlaceDetailLine>,
+            ),
+        >,
+        Query<(
+            &super::layout::places::PlaceDetailIcon,
+            &mut HudIcon,
+            &mut Visibility,
+        )>,
+    ),
     mut tile_text: Query<
         (
             &mut Text,
@@ -1393,7 +1398,7 @@ pub(super) fn sync_place_detail(
             text.0 = next;
         }
     }
-    for (PlaceDetailTile(index), mut node) in tiles.iter_mut() {
+    for (PlaceDetailTile(index), mut node) in tile_art.0.iter_mut() {
         let display = if *index < model.tiles.len() {
             Display::Flex
         } else {
@@ -1401,6 +1406,32 @@ pub(super) fn sync_place_detail(
         };
         if node.display != display {
             node.display = display;
+        }
+    }
+    for (marker, mut icon, mut visibility) in tile_art.1.iter_mut() {
+        use super::layout::places::PlaceDetailIcon;
+        let label = match marker {
+            PlaceDetailIcon::Summary(index) => {
+                model.tiles.get(*index).map(|(label, _)| label.as_str())
+            }
+            PlaceDetailIcon::Section(index) => match model.rows.get(*index) {
+                Some(DetailRow::Section(label)) => Some(label.as_str()),
+                _ => None,
+            },
+        };
+        let next_visibility = if label.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != next_visibility {
+            *visibility = next_visibility;
+        }
+        if let Some(label) = label {
+            let next = detail_icon(label);
+            if *icon != next {
+                *icon = next;
+            }
         }
     }
     for (mut text, label, value) in tile_text.iter_mut() {
@@ -1481,8 +1512,16 @@ pub(super) fn sync_place_detail(
         if node.flex_basis != basis {
             node.flex_basis = basis;
         }
+        let inset = if section && label.is_some() {
+            Val::Px(35.0)
+        } else {
+            Val::Px(0.0)
+        };
+        if node.padding.left != inset {
+            node.padding.left = inset;
+        }
         let (next, next_size, next_color) = match (row, label.is_some()) {
-            (DetailRow::Section(name), true) => (book_label(name), 21.0, INK),
+            (DetailRow::Section(name), true) => (book_label(name), 22.0, INK),
             (DetailRow::Section(_), false) => (String::new(), 16.0, INK),
             (DetailRow::Line(row_label, _), true) => (book_label(row_label), 17.0, INK),
             (DetailRow::Line(_, row_value), false) => (row_value.clone(), 17.0, INK),
@@ -1701,6 +1740,20 @@ fn book_label(label: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+fn detail_icon(label: &str) -> HudIcon {
+    match label {
+        "POPULATION" | "UNEMPLOYMENT" | "PEOPLE" => HudIcon::Person,
+        "FOOD" => HudIcon::Bag,
+        "PROSPERITY" | "MARKET" | "TRADE" => HudIcon::Scales,
+        "TREASURY" | "ECONOMY" | "BUSINESS" => HudIcon::Purse,
+        "UNREST" => HudIcon::Bell,
+        "STABILITY" | "OWNERSHIP" | "OFFICE" => HudIcon::Crest,
+        "GROWTH" | "PERMITS & WORKS" | "WORKSITE" => HudIcon::Compass,
+        "LOCATION" => HudIcon::Pin,
+        _ => HudIcon::Book,
     }
 }
 
@@ -2859,6 +2912,87 @@ mod tests {
         assert_eq!(
             record_illustration(building),
             LedgerIllustration::HouseLongL2
+        );
+    }
+
+    #[test]
+    fn retained_settlement_art_updates_after_upgrade_without_upgrading_its_hall() {
+        let mut world = World::new();
+        let mut place = explorer_place();
+        place.tier = SettlementTier::Hamlet;
+        place.hall_level = CivicHallLevel::Moot;
+        place.hall_appearance = Some(CivicHallLevel::Moot);
+        let id = place.id;
+        world.insert_resource(KnownPlaces {
+            records: vec![place],
+        });
+        world.insert_resource(SelectedPlace(Some(id)));
+        world.insert_resource(SelectedPlaceEntry::Overview);
+        world.init_resource::<crate::ui::perf::UiPerf>();
+        world.spawn((PlacesListContent, Node::default()));
+        let header = world
+            .spawn((
+                super::super::layout::places::PlaceIllustration,
+                LedgerIllustration::Village,
+            ))
+            .id();
+        let mut schedule = Schedule::default();
+        schedule.add_systems((rebuild_place_list, sync_place_illustration).chain());
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<LedgerIllustration>(header),
+            Some(&LedgerIllustration::Hamlet)
+        );
+        assert_eq!(
+            world
+                .query::<&LedgerIllustration>()
+                .iter(&world)
+                .filter(|kind| **kind == LedgerIllustration::Hamlet)
+                .count(),
+            3,
+            "directory, expanded Overview and retained header must agree"
+        );
+
+        world.resource_mut::<KnownPlaces>().records[0].tier = SettlementTier::City;
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<LedgerIllustration>(header),
+            Some(&LedgerIllustration::City)
+        );
+        assert_eq!(
+            world
+                .query::<&LedgerIllustration>()
+                .iter(&world)
+                .filter(|kind| **kind == LedgerIllustration::City)
+                .count(),
+            3
+        );
+        assert!(!world
+            .query::<&LedgerIllustration>()
+            .iter(&world)
+            .any(|kind| *kind == LedgerIllustration::Hamlet));
+
+        *world.resource_mut::<SelectedPlaceEntry>() = SelectedPlaceEntry::Hall;
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<LedgerIllustration>(header),
+            Some(&LedgerIllustration::Hall),
+            "a settlement promotion must not invent an observed hall upgrade"
+        );
+        *world.resource_mut::<SelectedPlaceEntry>() = SelectedPlaceEntry::Building(0);
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<LedgerIllustration>(header),
+            Some(&LedgerIllustration::Farm)
+        );
+
+        let missing_site = world.spawn_empty().id();
+        *world.resource_mut::<SelectedPlaceEntry>() = SelectedPlaceEntry::Worksite(missing_site);
+        schedule.run(&mut world);
+        assert_eq!(
+            world.get::<LedgerIllustration>(header),
+            Some(&LedgerIllustration::City),
+            "an unavailable detail falls back to the current settlement's scale"
         );
     }
 

@@ -2,7 +2,7 @@
 use super::*;
 use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
 use crate::ui::ledger;
-use crate::ui::styles::{INK, INK_MUTED, PLATE_RULE_SOFT};
+use crate::ui::styles::{BRASS_DARK, INK, INK_MUTED, PARCHMENT, PLATE_RULE_SOFT};
 
 #[derive(Component, Default)]
 pub(crate) struct BattalionPortrait(pub Option<PersonId>);
@@ -10,11 +10,21 @@ pub(crate) struct BattalionPortrait(pub Option<PersonId>);
 #[derive(Component)]
 pub(crate) struct TroopPortrait(pub Entity);
 
+#[derive(Component)]
+pub(crate) struct TroopCheckbox {
+    pub soldier: Entity,
+    pub checked: bool,
+}
+
 fn label(parent: &mut ChildSpawnerCommands<'_>, slot: BoundText, size: f32, muted: bool) {
     parent.spawn((
         slot,
         Text::new(""),
-        ledger::reading(size),
+        if muted {
+            ledger::reading(size)
+        } else {
+            ledger::reading_strong(size)
+        },
         TextColor(if muted { INK_MUTED } else { INK }),
     ));
 }
@@ -40,7 +50,7 @@ fn button(parent: &mut ChildSpawnerCommands<'_>, action: ArmyAction, variant: Ui
         .with_child((
             BoundText::Button(action),
             UiButtonLabel,
-            ledger::body("", 13.0),
+            ledger::body_strong("", 13.0),
         ));
 }
 fn row() -> Node {
@@ -109,8 +119,10 @@ pub(crate) fn spawn_army_tab(body: &mut ChildSpawnerCommands<'_>) {
                 ..column()
             },
             BorderColor::from(PLATE_RULE_SOFT),
+            crate::ui::ledger::directory_paper(),
         ))
         .with_children(|side| {
+            side.spawn(ledger::directory_gutter());
             side.spawn(Node {
                 justify_content: JustifyContent::SpaceBetween,
                 flex_wrap: FlexWrap::Wrap,
@@ -121,8 +133,8 @@ pub(crate) fn spawn_army_tab(body: &mut ChildSpawnerCommands<'_>) {
                 heading(head, "Your Army", 23.0);
                 button(head, ArmyAction::New, UiButtonVariant::Primary);
             });
-            label(side, BoundText::Summary, 14.0, true);
-            side.spawn(ledger::rule());
+            label(side, BoundText::Summary, 14.0, false);
+            side.spawn(ledger::ornament_rule());
             list(side, ListKind::Battalions);
         });
         page.spawn(Node {
@@ -181,7 +193,7 @@ pub(crate) fn spawn_army_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     });
                                 });
                             label(summary, BoundText::Capacity, 19.0, false);
-                            summary.spawn(ledger::rule());
+                            summary.spawn(ledger::ornament_rule());
                             summary
                                 .spawn(Node {
                                     column_gap: Val::Px(16.0),
@@ -276,7 +288,7 @@ pub(crate) fn spawn_army_tab(body: &mut ChildSpawnerCommands<'_>) {
                         });
                 });
             label(detail, BoundText::Equipment, 12.0, true);
-            detail.spawn(ledger::rule());
+            detail.spawn(ledger::ornament_rule());
             detail
                 .spawn(Node {
                     flex_grow: 1.0,
@@ -330,7 +342,7 @@ fn membership_pane(parent: &mut ChildSpawnerCommands<'_>, members: bool) {
                 },
                 ledger::heading("", 17.0),
             ));
-            pane.spawn(ledger::rule());
+            pane.spawn(ledger::ornament_rule());
             pane.spawn(Node {
                 min_height: Val::Px(32.0),
                 flex_wrap: FlexWrap::Wrap,
@@ -454,25 +466,7 @@ pub(super) fn spawn_entries(
                     BorderColor::from(PLATE_RULE_SOFT),
                 ))
                 .with_children(|row| {
-                    if let Some(soldier) = roster.soldiers.get(&entity) {
-                        row.spawn(ledger::portrait_frame(48.0)).with_child((
-                            crate::ui::portraits::person(
-                                soldier.person_id.unwrap_or_default(),
-                                36.0,
-                            ),
-                            TroopPortrait(entity),
-                        ));
-                    }
-                    row.spawn(Node {
-                        flex_grow: 1.0,
-                        flex_basis: Val::Px(0.0),
-                        row_gap: Val::Px(3.0),
-                        ..column()
-                    })
-                    .with_children(|person| {
-                        button(person, ArmyAction::Toggle(entity), UiButtonVariant::Row);
-                        label(person, BoundText::SoldierInfo(entity), 12.0, true);
-                    });
+                    troop_selection(row, entity, roster);
                     button(
                         row,
                         if kind == ListKind::Members {
@@ -485,4 +479,87 @@ pub(super) fn spawn_entries(
                 });
         }
     }
+}
+
+fn troop_selection(parent: &mut ChildSpawnerCommands<'_>, entity: Entity, roster: &ArmyRoster) {
+    parent
+        .spawn((
+            ArmyAction::Toggle(entity),
+            Button,
+            Node {
+                flex_grow: 1.0,
+                flex_basis: Val::Px(0.0),
+                min_height: Val::Px(48.0),
+                column_gap: Val::Px(8.0),
+                align_items: AlignItems::Center,
+                min_width: Val::Px(0.0),
+                ..default()
+            },
+            button_chrome(UiButtonVariant::Row),
+        ))
+        .with_children(|choice| {
+            choice
+                .spawn((
+                    TroopCheckbox {
+                        soldier: entity,
+                        checked: false,
+                    },
+                    Node {
+                        width: Val::Px(18.0),
+                        height: Val::Px(18.0),
+                        flex_shrink: 0.0,
+                        // Keep every edge visible below 1x UI scale.
+                        border: UiRect::all(Val::Px(2.0)),
+                        border_radius: BorderRadius::all(Val::Px(2.0)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                    BorderColor::all(BRASS_DARK),
+                    Pickable::IGNORE,
+                ))
+                .with_child((
+                    Node {
+                        width: Val::Px(10.0),
+                        height: Val::Px(6.0),
+                        border: UiRect {
+                            left: Val::Px(2.0),
+                            bottom: Val::Px(2.0),
+                            ..default()
+                        },
+                        ..default()
+                    },
+                    UiTransform::from_rotation(Rot2::degrees(-45.0)),
+                    BorderColor::all(PARCHMENT),
+                    Visibility::Hidden,
+                    Pickable::IGNORE,
+                ));
+            if let Some(soldier) = roster.soldiers.get(&entity) {
+                choice.spawn(ledger::portrait_frame(48.0)).with_child((
+                    crate::ui::portraits::person(soldier.person_id.unwrap_or_default(), 36.0),
+                    TroopPortrait(entity),
+                ));
+            }
+            choice
+                .spawn(Node {
+                    flex_grow: 1.0,
+                    flex_basis: Val::Px(0.0),
+                    row_gap: Val::Px(3.0),
+                    overflow: Overflow::clip_x(),
+                    ..column()
+                })
+                .with_children(|person| {
+                    person.spawn((
+                        BoundText::Button(ArmyAction::Toggle(entity)),
+                        UiButtonLabel,
+                        ledger::body_strong("", 16.0),
+                        TextLayout {
+                            linebreak: LineBreak::NoWrap,
+                            ..default()
+                        },
+                    ));
+                    label(person, BoundText::SoldierInfo(entity), 12.0, true);
+                });
+        });
 }

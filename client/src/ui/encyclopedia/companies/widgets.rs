@@ -25,7 +25,7 @@ pub(super) fn detail_button<M: Component>(
             },
             button_chrome(UiButtonVariant::Secondary),
         ))
-        .with_child((UiButtonLabel, ledger::body(label, 12.0)));
+        .with_child((UiButtonLabel, ledger::body_strong(label, 12.0)));
 }
 
 pub(super) fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) {
@@ -46,10 +46,10 @@ pub(super) fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, va
         .with_children(|stat| {
             stat.spawn((
                 Text::new(label),
-                ledger::reading(12.0),
+                ledger::reading_strong(12.0),
                 TextColor(INK_MUTED),
             ));
-            stat.spawn(ledger::body(value, 17.0));
+            stat.spawn(ledger::body_strong(value, 17.0));
         });
 }
 
@@ -68,7 +68,27 @@ pub(super) fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: 
             BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|title_row| {
-            title_row.spawn(ledger::heading(title, 19.0));
+            title_row
+                .spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|heading| {
+                    use crate::ui::hud::chrome::{icon, HudIcon};
+                    let symbol = match title {
+                        "Your Position" => HudIcon::Person,
+                        "Today's Ledger" => HudIcon::Book,
+                        "Operating Sites" => HudIcon::Pin,
+                        "Trade Routes" => HudIcon::Compass,
+                        _ => HudIcon::Scales,
+                    };
+                    heading.spawn(icon(symbol, 24.0)).insert(ImageNode {
+                        color: Color::srgb(0.42, 0.25, 0.10),
+                        ..default()
+                    });
+                    heading.spawn(ledger::heading(title, 20.0));
+                });
             if !note.is_empty() {
                 title_row.spawn((Text::new(note), ledger::reading(12.0), TextColor(INK_MUTED)));
             }
@@ -91,8 +111,8 @@ pub(super) fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, valu
         .with_children(|row| {
             row.spawn((
                 Text::new(label),
-                ledger::reading(13.0),
-                TextColor(INK_MUTED),
+                ledger::reading(14.0),
+                TextColor(INK),
                 Node {
                     width: Val::Px(112.0),
                     flex_shrink: 0.0,
@@ -101,7 +121,7 @@ pub(super) fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, valu
             ));
             row.spawn((
                 Text::new(value),
-                ledger::reading(14.0),
+                ledger::reading_strong(14.0),
                 TextColor(INK),
                 TextLayout::justify(Justify::Right),
                 Node {

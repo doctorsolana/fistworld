@@ -28,7 +28,13 @@ pub(super) fn install(app: &mut App) {
 }
 
 pub fn reading(size: f32) -> TextFont {
-    TextFont::from_font_size(size.max(12.0)).with_font(READING)
+    TextFont::from_font_size(size.max(12.0))
+        .with_font(READING)
+        .with_font_weight(FontWeight(450))
+}
+
+pub fn reading_strong(size: f32) -> TextFont {
+    reading(size).with_font_weight(FontWeight::BOLD)
 }
 
 pub fn body(size: f32) -> TextFont {

@@ -50,8 +50,10 @@ pub(in crate::ui::encyclopedia) fn spawn_companies_tab(body: &mut ChildSpawnerCo
                     ..default()
                 },
                 BorderColor::from(PLATE_RULE_SOFT),
+                crate::ui::ledger::directory_paper(),
             ))
             .with_children(|sidebar| {
+                sidebar.spawn(crate::ui::ledger::directory_gutter());
                 sidebar
                     .spawn(Node {
                         flex_wrap: FlexWrap::Wrap,

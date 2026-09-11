@@ -1,7 +1,7 @@
 //! Shared, lazily bound material and canonical illustration handles.
 
 use bevy::prelude::*;
-use shared::components::SettlementBuildingKind;
+use shared::components::{SettlementBuildingKind, SettlementTier};
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LedgerIcon {
@@ -9,9 +9,12 @@ pub(crate) enum LedgerIcon {
     Retinue,
 }
 
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum LedgerIllustration {
+    Hamlet,
     Village,
+    Town,
+    City,
     HallVillage,
     HallTown,
     HouseL2,
@@ -34,6 +37,17 @@ pub(crate) enum LedgerIllustration {
 }
 
 impl LedgerIllustration {
+    /// A settlement's scale is separate from the physical upgrade of its hall.
+    /// Ruins use the smallest plate until a dedicated ruin illustration exists.
+    pub(crate) fn settlement(tier: SettlementTier) -> Self {
+        match tier {
+            SettlementTier::Ruins | SettlementTier::Hamlet => Self::Hamlet,
+            SettlementTier::Village => Self::Village,
+            SettlementTier::Town => Self::Town,
+            SettlementTier::City => Self::City,
+        }
+    }
+
     pub(crate) fn building(kind: SettlementBuildingKind) -> Self {
         match kind {
             SettlementBuildingKind::Hall => Self::Hall,
@@ -52,9 +66,12 @@ impl LedgerIllustration {
         }
     }
 
-    fn path(self) -> &'static str {
+    pub(super) fn path(self) -> &'static str {
         match self {
+            Self::Hamlet => "ui/ledger/hamlet.jpg",
             Self::Village => "ui/ledger/village.jpg",
+            Self::Town => "ui/ledger/town.jpg",
+            Self::City => "ui/ledger/city.jpg",
             Self::HallVillage => "ui/ledger/buildings/hall-village.jpg",
             Self::HallTown => "ui/ledger/buildings/hall-town.jpg",
             Self::HouseL2 => "ui/ledger/buildings/house-l2.jpg",
@@ -81,6 +98,7 @@ impl LedgerIllustration {
 #[derive(Component, Clone, Copy)]
 pub(super) enum Surface {
     Paper,
+    DirectoryPaper,
     Wood,
     Pennant,
     Corner,
@@ -101,6 +119,7 @@ pub(crate) struct LedgerArtwork {
     retinue: Handle<Image>,
     pub(super) button_paper: Handle<Image>,
     pub(super) button_wood: Handle<Image>,
+    pub(super) button_close: Handle<Image>,
 }
 
 impl LedgerArtwork {
@@ -115,6 +134,7 @@ impl LedgerArtwork {
             &self.retinue,
             &self.button_paper,
             &self.button_wood,
+            &self.button_close,
         ]
         .into_iter()
         .all(|image| assets.is_loaded_with_dependencies(image.id()))
@@ -132,6 +152,7 @@ pub(super) fn load_artwork(mut commands: Commands, assets: Res<AssetServer>) {
         retinue: assets.load("ui/ledger/retinue.png"),
         button_paper: assets.load("ui/ledger/button-paper.png"),
         button_wood: assets.load("ui/ledger/button-wood.png"),
+        button_close: assets.load("ui/ledger/button-close.png"),
     });
 }
 
@@ -163,24 +184,17 @@ pub(super) fn bind_surfaces(
 ) {
     for (surface, mut image) in &mut surfaces {
         image.image = match surface {
-            Surface::Paper => &art.paper,
+            Surface::Paper | Surface::DirectoryPaper => &art.paper,
             Surface::Wood => &art.wood,
             Surface::Pennant => &art.pennant,
             Surface::Corner => &art.corner,
         }
         .clone();
-    }
-}
-
-pub(super) fn bind_illustrations(
-    assets: Res<AssetServer>,
-    mut illustrations: Query<
-        (&LedgerIllustration, &mut ImageNode),
-        (Changed<LedgerIllustration>, Without<Surface>),
-    >,
-) {
-    for (kind, mut image) in &mut illustrations {
-        image.image = assets.load(kind.path());
+        image.color = match surface {
+            Surface::DirectoryPaper => Color::srgb(0.93, 0.91, 0.85),
+            Surface::Wood => Color::srgb(0.67, 0.65, 0.61),
+            _ => Color::WHITE,
+        };
     }
 }
 
@@ -197,37 +211,46 @@ pub(super) fn bind_icons(
     }
 }
 
-/// Cover the requested frame without squeezing the actual building/village.
-/// Fixed image/widget dimensions make this a few arithmetic operations; no
-/// texture is copied and unchanged rectangles never dirty the image node.
-pub(super) fn fit_illustrations(
-    images: Res<Assets<Image>>,
-    mut illustrations: Query<(&ComputedNode, &mut ImageNode), With<LedgerIllustration>>,
-) {
-    for (node, mut image) in &mut illustrations {
-        let Some(source) = images.get(&image.image) else {
-            continue;
-        };
-        let rect = cover_rect(source.size().as_vec2(), node.size());
-        if image.rect != rect {
-            image.rect = rect;
-        }
-    }
-}
-
-fn cover_rect(source: Vec2, target: Vec2) -> Option<Rect> {
-    if source.min_element() <= 0.0 || target.min_element() <= 0.0 {
-        return None;
-    }
-    let scale = (target.x / source.x).max(target.y / source.y);
-    let cropped = target / scale;
-    let offset = (source - cropped) * 0.5;
-    Some(Rect::from_corners(offset, offset + cropped))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settlement_tiers_have_distinct_shared_illustrations() {
+        let cases = [
+            (
+                SettlementTier::Hamlet,
+                LedgerIllustration::Hamlet,
+                "ui/ledger/hamlet.jpg",
+            ),
+            (
+                SettlementTier::Village,
+                LedgerIllustration::Village,
+                "ui/ledger/village.jpg",
+            ),
+            (
+                SettlementTier::Town,
+                LedgerIllustration::Town,
+                "ui/ledger/town.jpg",
+            ),
+            (
+                SettlementTier::City,
+                LedgerIllustration::City,
+                "ui/ledger/city.jpg",
+            ),
+        ];
+        let mut paths = std::collections::HashSet::new();
+        for (tier, expected, path) in cases {
+            let illustration = LedgerIllustration::settlement(tier);
+            assert_eq!(illustration, expected);
+            assert_eq!(illustration.path(), path);
+            assert!(paths.insert(path));
+        }
+        assert_eq!(
+            LedgerIllustration::settlement(SettlementTier::Ruins),
+            LedgerIllustration::Hamlet
+        );
+    }
+
     #[test]
     fn brass_ring_is_above_the_mutable_face_and_is_only_created_once() {
         let mut app = App::new();
@@ -241,6 +264,7 @@ mod tests {
             retinue: default(),
             button_paper: default(),
             button_wood: default(),
+            button_close: default(),
         });
         app.add_systems(Update, bind_portrait_frames);
         let frame = app
@@ -290,21 +314,5 @@ mod tests {
                 bevy::ui::VisualBox::PaddingBox
             );
         }
-    }
-
-    #[test]
-    fn portrait_and_landscape_frames_crop_without_changing_building_proportions() {
-        let source = Vec2::new(384.0, 224.0);
-        for target in [
-            Vec2::splat(44.0),
-            Vec2::new(310.0, 168.0),
-            Vec2::new(44.0, 26.0),
-        ] {
-            let rect = cover_rect(source, target).unwrap();
-            assert!((rect.width() / rect.height() - target.x / target.y).abs() < 0.0001);
-            assert!(rect.min.min_element() >= -0.001);
-            assert!((source - rect.max).min_element() >= -0.001);
-        }
-        assert_eq!(cover_rect(source, Vec2::ZERO), None);
     }
 }

@@ -49,20 +49,8 @@ pub(super) fn render(
             }
         }
     }
-    let highest = parts
-        .iter()
-        .flat_map(|part| &part.geometry.vertices)
-        .map(|v| v.position.y)
-        .fold(1.7_f32, f32::max);
-    // The game humanoid faces -Z. A small three-quarter turn gives its faceted
-    // nose and hair depth while keeping both eyes legible in an 80px medallion.
-    let view = Mat4::look_at_rh(
-        Vec3::new(1.0, 1.50, -2.5),
-        Vec3::new(0.0, 1.32, 0.0),
-        Vec3::Y,
-    );
-    let top = highest - 1.32 + 0.08;
-    let height = 1.23;
+    let (view, top) = portrait_framing(&parts);
+    let height = PORTRAIT_SPAN;
     let light = Vec3::new(-0.8, 0.9, -1.0).normalize();
     let fill = Vec3::new(0.8, 0.2, -0.4).normalize();
     for part in parts {
@@ -203,6 +191,32 @@ pub(super) fn render(
     output
 }
 
+// A wider upper-body composition leaves room for the blurred village around
+// the subject. Keep one composition across HUD and book sizes so all consumers
+// can share the same outfit cache entries.
+const PORTRAIT_SPAN: f32 = 1.55;
+const HEADROOM_FRACTION: f32 = 0.13;
+
+fn portrait_framing(parts: &[Part]) -> (Mat4, f32) {
+    // The humanoid faces -Z. A gentle three-quarter angle shows its authored
+    // faceted side while retaining both eyes in the smallest medallions.
+    let view = Mat4::look_at_rh(
+        Vec3::new(1.25, 1.48, -2.6),
+        Vec3::new(0.0, 1.32, 0.0),
+        Vec3::Y,
+    );
+    // Measure in the actual view, including the selected hair/helmet, rather
+    // than mixing world-space height with a tilted projection. This keeps air
+    // above tall headwear without clipping it behind the decorative brass rim.
+    let highest = parts
+        .iter()
+        .flat_map(|part| &part.geometry.vertices)
+        .map(|vertex| view.transform_point3(vertex.position).y)
+        .reduce(f32::max)
+        .unwrap_or(0.4);
+    (view, highest + PORTRAIT_SPAN * HEADROOM_FRACTION)
+}
+
 fn edge(a: Vec2, b: Vec2, p: Vec2) -> f32 {
     (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x)
 }
@@ -288,6 +302,52 @@ mod tests {
         }
         assert_eq!(image[(16 * 32 + 16) * 4 + 3], 255);
     }
+    #[test]
+    fn upper_body_portraits_keep_hair_clear_of_the_rim_and_faces_legible_at_hud_size() {
+        for top in [1.74, 1.9] {
+            let mut bust = triangle(Vec4::ONE, 0.0);
+            let geometry = Arc::get_mut(&mut bust.geometry).unwrap();
+            // Canonical head width with ordinary hair or a tall helmet; a
+            // separate shirt extends below it to exercise circular body crop.
+            geometry.vertices = [
+                Vec3::new(-0.35, 1.08, -0.25),
+                Vec3::new(0.35, 1.08, -0.25),
+                Vec3::new(0.35, top, -0.25),
+                Vec3::new(-0.35, top, -0.25),
+                Vec3::new(-0.43, 0.52, 0.0),
+                Vec3::new(0.43, 0.52, 0.0),
+                Vec3::new(0.43, 1.08, 0.0),
+                Vec3::new(-0.43, 1.08, 0.0),
+            ]
+            .map(|position| Vertex {
+                position,
+                normal: Vec3::NEG_Z,
+                color: Vec4::ONE,
+                uv: Vec2::ZERO,
+            })
+            .into();
+            geometry.indices = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+            for size in [48, 192, 384] {
+                let pixels = render(vec![bust.clone()], None, size);
+                let coverage = |x, y| pixels[((y * size + x) * 4 + 3) as usize] > 0;
+                let first_row = (0..size)
+                    .find(|y| (0..size).any(|x| coverage(x, *y)))
+                    .unwrap();
+                assert!(first_row as f32 >= size as f32 * 0.10);
+                assert!((first_row as f32) < size as f32 * 0.17);
+                // The face still occupies at least a third of the diameter;
+                // zooming out must not sacrifice the small HUD portrait.
+                let face_row = size / 3;
+                let face_width = (0..size).filter(|x| coverage(*x, face_row)).count();
+                assert!(face_width >= size as usize / 3);
+                // There is visible scenery beside the upper body, not a face
+                // enlarged all the way to the ring on either side.
+                assert!(!coverage(size / 8, size / 2));
+                assert!(!coverage(size * 7 / 8, size / 2));
+            }
+        }
+    }
+
     #[test]
     fn prepared_backdrop_fills_the_circle_without_blurring_the_subject() {
         let background = Arc::new(RgbaImage::from_pixel(4, 4, image::Rgba([30, 90, 20, 255])));

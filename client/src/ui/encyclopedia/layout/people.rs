@@ -1,6 +1,7 @@
 //! The People spread: portrait directory and a readable personal record.
 use super::super::*;
 use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::hud::chrome::{self, HudIcon};
 use crate::ui::ledger;
 use crate::ui::styles::{PLATE_RULE_SOFT, STATUS_GOOD};
 use bevy::prelude::*;
@@ -60,8 +61,10 @@ pub(super) fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                     ..default()
                 },
                 BorderColor::from(PLATE_RULE_SOFT),
+                crate::ui::ledger::directory_paper(),
             ))
             .with_children(|directory| {
+                directory.spawn(ledger::directory_gutter());
                 directory
                     .spawn(Node {
                         align_items: AlignItems::Center,
@@ -188,7 +191,12 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
                             },
                         ))
                         .with_children(|health| {
-                            health.spawn(ledger::body("Health", 18.0));
+                            health
+                                .spawn((Name::new("Health"), chrome::icon(HudIcon::Heart, 23.0)))
+                                .insert(ImageNode {
+                                    color: Color::srgb(0.48, 0.31, 0.15),
+                                    ..default()
+                                });
                             health
                                 .spawn((
                                     Node {
@@ -215,9 +223,9 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
                         spawn_retinue_button(copy);
                     });
             });
-            card.spawn(ledger::rule());
+            card.spawn(ledger::ornament_rule());
             card.spawn(Node {
-                column_gap: Val::Px(32.0),
+                column_gap: Val::Px(16.0),
                 align_items: AlignItems::FlexStart,
                 ..default()
             })
@@ -235,14 +243,22 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
                                 .enumerate()
                             {
                                 attributes
-                                    .spawn(Node {
-                                        flex_grow: 1.0,
-                                        flex_basis: Val::Percent(33.3),
-                                        flex_direction: FlexDirection::Column,
-                                        align_items: AlignItems::Center,
-                                        row_gap: Val::Px(3.0),
-                                        ..default()
-                                    })
+                                    .spawn((
+                                        Node {
+                                            flex_grow: 1.0,
+                                            flex_basis: Val::Percent(33.3),
+                                            flex_direction: FlexDirection::Column,
+                                            align_items: AlignItems::Center,
+                                            row_gap: Val::Px(3.0),
+                                            border: UiRect::right(Val::Px(if index < 2 {
+                                                1.0
+                                            } else {
+                                                0.0
+                                            })),
+                                            ..default()
+                                        },
+                                        BorderColor::from(PLATE_RULE_SOFT),
+                                    ))
                                     .with_children(|attribute| {
                                         attribute.spawn((
                                             DetailAttribute(index),
@@ -282,6 +298,17 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
                         },
                     );
                 });
+                spread.spawn((
+                    Node {
+                        width: Val::Px(1.0),
+                        flex_shrink: 0.0,
+                        align_self: AlignSelf::Stretch,
+                        margin: UiRect::vertical(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(PLATE_RULE_SOFT),
+                    Pickable::IGNORE,
+                ));
                 spread.spawn(detail_column()).with_children(|column| {
                     section(column, "Daily life", DetailField::Home, |part| {
                         for field in [
@@ -331,13 +358,27 @@ fn section(
             },
         ))
         .with_children(|part| {
-            part.spawn((
-                ledger::heading(title, 21.0),
-                Node {
-                    margin: UiRect::bottom(Val::Px(6.0)),
+            part.spawn(Node {
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(9.0),
+                margin: UiRect::bottom(Val::Px(6.0)),
+                ..default()
+            })
+            .with_children(|header| {
+                let icon = match field {
+                    DetailField::Attributes => HudIcon::Person,
+                    DetailField::Wealth => HudIcon::Purse,
+                    DetailField::Affiliation => HudIcon::Crest,
+                    DetailField::Home => HudIcon::Pin,
+                    DetailField::Activity => HudIcon::Sun,
+                    _ => HudIcon::Book,
+                };
+                header.spawn(chrome::icon(icon, 27.0)).insert(ImageNode {
+                    color: Color::srgb(0.48, 0.31, 0.15),
                     ..default()
-                },
-            ));
+                });
+                header.spawn(ledger::heading(title, 22.0));
+            });
             part.spawn(ledger::rule());
             contents(part);
         });

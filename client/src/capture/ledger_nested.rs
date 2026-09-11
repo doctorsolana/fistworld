@@ -11,7 +11,7 @@ use crate::ui::{
         EncyclopediaPanel, EncyclopediaTab, TabBody,
     },
     history::{CompanyHistoryButton, HistoryPanelTarget, HistoryView},
-    ledger::{LedgerArtwork, LedgerIllustration},
+    ledger::{IllustrationMaterial, LedgerArtwork, LedgerIllustration},
     market::{MarketPageTarget, PlaceMarketAction},
 };
 use bevy::{
@@ -515,9 +515,12 @@ fn check(world: &mut World, name: &str) -> Result<(), String> {
     for entity in entities::<LedgerIllustration>(world) {
         if visible(world, entity) {
             require!(
-                world.get::<ImageNode>(entity).is_some_and(|image| world
-                    .resource::<AssetServer>()
-                    .is_loaded_with_dependencies(image.image.id())),
+                world
+                    .get::<MaterialNode<IllustrationMaterial>>(entity)
+                    .and_then(|node| world
+                        .resource::<Assets<IllustrationMaterial>>()
+                        .get(&node.0))
+                    .is_some_and(|material| material.ready(world.resource::<AssetServer>())),
                 "visible building illustration loading"
             );
         }

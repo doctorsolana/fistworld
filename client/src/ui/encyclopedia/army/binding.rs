@@ -1,4 +1,4 @@
-use super::view::{spawn_entries, BattalionPortrait, TroopPortrait};
+use super::view::{spawn_entries, BattalionPortrait, TroopCheckbox, TroopPortrait};
 use super::*;
 use crate::ui::foundation::UiButtonStyle;
 
@@ -11,6 +11,7 @@ pub(crate) fn sync_army_panel(
     mut hosts: Query<(Entity, &ListKind, &mut ListSignature)>,
     mut portraits: Query<(Entity, &mut BattalionPortrait)>,
     mut troop_portraits: Query<(&TroopPortrait, &mut crate::ui::portraits::PersonPortrait)>,
+    mut checkboxes: Query<(&mut TroopCheckbox, &mut BackgroundColor, &Children)>,
     mut texts: Query<(&BoundText, &mut Text)>,
     added: Query<(), Added<BoundText>>,
     mut buttons: Query<(
@@ -164,6 +165,10 @@ pub(crate) fn sync_army_panel(
                 };
                 format!("{} / STR {} / {:.0} HP / {source}{}", s.role.label(), s.strength, s.current_health, if s.role == SoldierRole::Archer { format!(" / {} arrows",s.arrows) } else { String::new() })
             }),
+            BoundText::Button(ArmyAction::Toggle(e)) => roster
+                .soldiers
+                .get(&e)
+                .map_or(String::new(), |soldier| soldier.name.clone()),
             BoundText::Button(action) => model.button(action, &state, &roster, pending).0,
         };
         if text.0 != next {
@@ -191,6 +196,34 @@ pub(crate) fn sync_army_panel(
             } else {
                 commands.entity(entity).insert(InteractionDisabled);
             }
+        }
+    }
+    for (mut checkbox, mut background, children) in &mut checkboxes {
+        let (_, enabled, selected) = model.button(
+            ArmyAction::Toggle(checkbox.soldier),
+            &state,
+            &roster,
+            pending,
+        );
+        if checkbox.checked != selected {
+            checkbox.checked = selected;
+            for child in children {
+                commands.entity(*child).insert(if selected {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+            }
+        }
+        let colour = if !selected {
+            Color::NONE
+        } else if enabled {
+            crate::ui::styles::EMBER
+        } else {
+            crate::ui::styles::BRASS_DARK
+        };
+        if background.0 != colour {
+            background.0 = colour;
         }
     }
     // Queue row replacement last: the button pass above can still need to

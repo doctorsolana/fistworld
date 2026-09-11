@@ -1,22 +1,28 @@
 //! Shared book artwork, widgets and button styling. Pages own their data/input.
 
 mod artwork;
+mod illustrations;
+mod scrollbars;
 mod skin;
 mod widgets;
 
 pub(crate) use artwork::{LedgerArtwork, LedgerIcon, LedgerIllustration};
+pub(crate) use illustrations::IllustrationMaterial;
 pub(crate) use widgets::{
-    body, corners, heading, icon, illustration, paper, pennant, person_portrait, portrait_frame,
-    reading, rule, wood,
+    binding_ornament_rule, body, body_strong, corners, directory_gutter, directory_paper, heading,
+    icon, illustration, illustration_medallion, ornament_rule, paper, pennant, person_portrait,
+    portrait_frame, reading, reading_strong, rule, wood,
 };
 
 use bevy::{prelude::*, ui::UiSystems};
 
 pub(crate) fn install(app: &mut App) {
-    app.add_systems(Startup, artwork::load_artwork)
+    app.add_plugins(UiMaterialPlugin::<IllustrationMaterial>::default())
+        .init_resource::<illustrations::IllustrationMaterials>()
+        .add_systems(Startup, artwork::load_artwork)
         .add_systems(
             PostUpdate,
-            artwork::fit_illustrations.after(UiSystems::PostLayout),
+            scrollbars::sync_scrollbars.after(UiSystems::PostLayout),
         )
         .add_systems(
             PostUpdate,
@@ -24,7 +30,8 @@ pub(crate) fn install(app: &mut App) {
                 artwork::bind_icons,
                 artwork::bind_surfaces,
                 artwork::bind_portrait_frames,
-                artwork::bind_illustrations,
+                illustrations::bind_illustrations,
+                scrollbars::bind_scrollbars,
                 skin::bind_buttons,
             )
                 .before(UiSystems::Prepare),

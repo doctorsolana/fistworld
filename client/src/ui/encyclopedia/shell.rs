@@ -1,7 +1,7 @@
 //! The bound-book window and navigation; page layouts live beside it.
 use super::*;
 use crate::ui::{
-    foundation::{button_chrome, UiButtonLabel, UiButtonVariant},
+    foundation::{button_chrome, UiButtonLabel, UiButtonLabelTint, UiButtonVariant},
     modal::{spawn_modal, ModalLayout},
     styles::{BRASS, BRASS_DARK, PARCHMENT, RADIUS, SIGN_WOOD},
 };
@@ -50,7 +50,9 @@ pub(super) fn spawn_encyclopedia(
             align_items: AlignItems::Stretch,
             border: UiRect::all(Val::Px(3.0)),
             border_radius: BorderRadius::all(Val::Px(RADIUS)),
-            overflow: Overflow::clip(),
+            // The inner body owns content clipping. Outer hardware must be
+            // allowed to cover the full border instead of floating inside it.
+            overflow: Overflow::visible(),
             ..default()
         },
         crate::ui::ledger::paper(),
@@ -71,6 +73,51 @@ pub(super) fn spawn_encyclopedia(
         spawn_header(panel);
         super::layout::spawn_body(panel);
         spawn_footer(panel);
+        // The binding projects past the page. Directional border tones create
+        // a raised lip without painting over content or changing its layout.
+        for (inset, width, light, shade) in [
+            (-7.0, 4.0, BRASS, SIGN_WOOD),
+            (-3.0, 1.0, Color::srgb(0.83, 0.66, 0.40), BRASS_DARK),
+        ] {
+            panel.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(inset),
+                    right: Val::Px(inset),
+                    top: Val::Px(inset),
+                    bottom: Val::Px(inset),
+                    border: UiRect::all(Val::Px(width)),
+                    ..default()
+                },
+                BorderColor {
+                    top: light,
+                    left: light,
+                    bottom: shade,
+                    right: shade,
+                },
+                ZIndex(19),
+                Pickable::IGNORE,
+            ));
+        }
+        for (inset, color) in [
+            (1.0, Color::srgb(0.55, 0.39, 0.18)),
+            (4.0, Color::srgba(0.10, 0.06, 0.03, 0.65)),
+        ] {
+            panel.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(inset),
+                    right: Val::Px(inset),
+                    top: Val::Px(inset),
+                    bottom: Val::Px(inset),
+                    border: UiRect::all(Val::Px(1.0)),
+                    ..default()
+                },
+                BorderColor::all(color),
+                ZIndex(19),
+                Pickable::IGNORE,
+            ));
+        }
         crate::ui::ledger::corners(panel);
     });
 }
@@ -118,15 +165,7 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
                                 crate::ui::typography::heading(32.0),
                                 TextColor(PARCHMENT),
                             ));
-                            title.spawn((
-                                Node {
-                                    height: Val::Px(1.0),
-                                    width: Val::Percent(100.0),
-                                    ..default()
-                                },
-                                BackgroundColor(BRASS),
-                                Pickable::IGNORE,
-                            ));
+                            title.spawn(crate::ui::ledger::binding_ornament_rule());
                         });
                 });
             header
@@ -157,8 +196,8 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
                             Button,
                             EncyclopediaCloseButton,
                             Node {
-                                width: Val::Px(38.0),
-                                height: Val::Px(38.0),
+                                width: Val::Px(50.0),
+                                height: Val::Px(50.0),
                                 flex_shrink: 0.0,
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
@@ -171,8 +210,9 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
                         .with_child((
                             Text::new("X"),
                             UiButtonLabel,
-                            crate::ui::typography::text(16.0),
-                            TextColor(PARCHMENT),
+                            UiButtonLabelTint(Color::srgb(0.84, 0.68, 0.39)),
+                            crate::ui::typography::heading(22.0),
+                            TextColor(Color::srgb(0.84, 0.68, 0.39)),
                         ));
                 });
         });
@@ -184,7 +224,7 @@ fn spawn_tab(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab) {
             Button,
             TabButton(tab),
             Node {
-                padding: UiRect::axes(Val::Px(11.0), Val::Px(11.0)),
+                padding: UiRect::axes(Val::Px(11.0), Val::Px(14.0)),
                 flex_grow: 1.0,
                 column_gap: Val::Px(7.0),
                 justify_content: JustifyContent::Center,
@@ -237,7 +277,7 @@ fn spawn_footer(panel: &mut ChildSpawnerCommands<'_>) {
                 justify_content: JustifyContent::FlexEnd,
                 align_items: AlignItems::Center,
                 flex_shrink: 0.0,
-                padding: UiRect::axes(Val::Px(26.0), Val::Px(7.0)),
+                padding: UiRect::axes(Val::Px(26.0), Val::Px(12.0)),
                 border: UiRect::top(Val::Px(1.0)),
                 ..default()
             },
@@ -246,6 +286,16 @@ fn spawn_footer(panel: &mut ChildSpawnerCommands<'_>) {
             BorderColor::from(BRASS),
         ))
         .with_children(|footer| {
+            footer
+                .spawn(crate::ui::ledger::binding_ornament_rule())
+                .insert(Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Px(160.0),
+                    height: Val::Px(1.0),
+                    left: Val::Percent(44.0),
+                    top: Val::Percent(50.0),
+                    ..default()
+                });
             footer.spawn((
                 Text::new("N / ESC   Close book"),
                 crate::ui::typography::body(13.5),

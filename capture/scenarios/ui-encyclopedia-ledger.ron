@@ -1,5 +1,7 @@
 // Five production tabs, native typography, authored art and actual character appearances.
+// Includes all four settlement tier illustrations and a checked Army member.
 // Offline facts exercise presentation; connected labs still own authoritative actions.
+// Kingsbridge is a directory-only City summary, not a simulated settlement.
 (
     version: 1,
     name: "encyclopedia-ledger",
@@ -28,5 +30,10 @@
         (name: "05-companies", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
         (name: "06-own-record", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
         (name: "07-people-warm", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "08-places-hamlet", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "09-places-village", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "10-places-town", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "11-places-city", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "12-army-checked", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
     ],
 )

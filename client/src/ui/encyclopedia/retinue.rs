@@ -13,6 +13,7 @@ use shared::components::{Hero, PersonId, PlayerPosition};
 use super::*;
 use crate::camera_rts::{CommanderCamera, LocalPeerId};
 use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::hud::chrome::{self, HudIcon};
 use crate::ui::ledger;
 use crate::ui::styles::{INK_MUTED, PLATE_RULE_SOFT, STATUS_GOOD};
 use bevy::ui::InteractionDisabled;
@@ -124,8 +125,25 @@ pub(super) fn spawn_retinue_tab(body: &mut ChildSpawnerCommands<'_>) {
             ..default()
         })
         .with_children(|header| {
-            header.spawn(ledger::heading("Your retinue", 36.0));
-            header.spawn((RetinueCountText, ledger::body("Your hero", 21.0)));
+            header
+                .spawn(Node {
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(20.0),
+                    ..default()
+                })
+                .with_children(|title| {
+                    title.spawn(chrome::icon(HudIcon::Crest, 76.0));
+                    title
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(7.0),
+                            ..default()
+                        })
+                        .with_children(|copy| {
+                            copy.spawn(ledger::heading("Your retinue", 38.0));
+                            copy.spawn((RetinueCountText, ledger::body("Your hero", 21.0)));
+                        });
+                });
             header
                 .spawn((Node {
                     width: Val::Px(500.0),
@@ -133,7 +151,7 @@ pub(super) fn spawn_retinue_tab(body: &mut ChildSpawnerCommands<'_>) {
                     margin: UiRect::top(Val::Px(12.0)),
                     ..default()
                 },))
-                .with_child(ledger::rule());
+                .with_child(ledger::ornament_rule());
         });
         tab.spawn(Node {
             flex_grow: 1.0,
@@ -187,7 +205,7 @@ fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord)
             ..default()
         })
         .with_children(|copy| {
-            copy.spawn(ledger::body(
+            copy.spawn(ledger::body_strong(
                 if record.is_self {
                     format!("{} (you)", record.name)
                 } else {
@@ -211,9 +229,9 @@ fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord)
             presence.spawn((
                 RetinuePresenceDot(record.id),
                 Node {
-                    width: Val::Px(12.0),
-                    height: Val::Px(12.0),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    width: Val::Px(14.0),
+                    height: Val::Px(14.0),
+                    border_radius: BorderRadius::all(Val::Px(7.0)),
                     ..default()
                 },
                 BackgroundColor(INK_MUTED),
@@ -236,7 +254,7 @@ fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord)
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
-            button_chrome(UiButtonVariant::Secondary),
+            button_chrome(UiButtonVariant::Primary),
         ))
         .with_child((UiButtonLabel, ledger::heading("LOCATE", 15.0)));
     });

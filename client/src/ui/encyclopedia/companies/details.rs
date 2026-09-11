@@ -32,9 +32,9 @@ pub(super) fn spawn_company_detail(
             ..default()
         })
         .with_children(|header| {
-            header.spawn(ledger::illustration(
+            header.spawn(ledger::illustration_medallion(
                 LedgerIllustration::Company,
-                Vec2::splat(112.0),
+                112.0,
             ));
             header
                 .spawn(Node {
@@ -168,7 +168,7 @@ pub(super) fn spawn_company_detail(
             );
         });
 
-    parent.spawn(ledger::rule());
+    parent.spawn(ledger::ornament_rule());
     parent
         .spawn(Node {
             column_gap: Val::Px(24.0),
@@ -319,7 +319,7 @@ pub(super) fn spawn_company_detail(
                     } else {
                         holder.name.clone()
                     }),
-                    crate::ui::ledger::reading(14.0),
+                    ledger::reading_strong(14.0),
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
@@ -329,7 +329,7 @@ pub(super) fn spawn_company_detail(
                         holder.shares,
                         f32::from(holder.shares) / 10.0
                     )),
-                    crate::ui::ledger::reading(13.5),
+                    ledger::reading_strong(13.5),
                     TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
@@ -482,7 +482,7 @@ fn spawn_position(
         );
         return;
     }
-    parent.spawn(ledger::body(
+    parent.spawn(ledger::body_strong(
         format!(
             "{} / 1,000 shares · {:.1}%",
             shares,
@@ -562,7 +562,7 @@ fn spawn_today_ledger(parent: &mut ChildSpawnerCommands<'_>, day: CompanyDayLedg
             })
             .with_children(|row| {
                 row.spawn(ledger::body(label, 15.0));
-                row.spawn(ledger::body(
+                row.spawn(ledger::body_strong(
                     format!(
                         "{}{} coin",
                         if expense { "−" } else { "" },
@@ -572,17 +572,17 @@ fn spawn_today_ledger(parent: &mut ChildSpawnerCommands<'_>, day: CompanyDayLedg
                 ));
             });
     }
-    parent.spawn(ledger::rule());
+    parent.spawn(ledger::ornament_rule());
     parent
         .spawn(Node {
             justify_content: JustifyContent::SpaceBetween,
             ..default()
         })
         .with_children(|row| {
-            row.spawn(ledger::body("Profit", 17.0));
+            row.spawn(ledger::body_strong("Profit", 17.0));
             row.spawn((
                 Text::new(signed_money(day.profit())),
-                ledger::reading(17.0),
+                ledger::reading_strong(17.0),
                 TextColor(if day.profit() >= 0 {
                     Color::srgb(0.19, 0.36, 0.16)
                 } else {

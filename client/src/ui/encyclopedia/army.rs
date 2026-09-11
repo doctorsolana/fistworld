@@ -14,6 +14,7 @@ pub(crate) use binding::sync_army_panel;
 use model::*;
 pub(crate) use model::{ArmyAction, ArmyManagement, BoundText};
 pub(crate) use view::spawn_army_tab;
+pub(crate) use view::TroopCheckbox;
 
 pub(super) fn army_tab_active(tab: Res<EncyclopediaTab>) -> bool {
     *tab == EncyclopediaTab::Army

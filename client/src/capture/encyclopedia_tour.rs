@@ -7,7 +7,7 @@ use crate::ui::{
         self, EncyclopediaOpen, EncyclopediaPanel, EncyclopediaTab, KnownPeople, PersonKind,
         SelectedPerson, TabBody, TabButton,
     },
-    ledger::{LedgerArtwork, LedgerIllustration},
+    ledger::{IllustrationMaterial, LedgerArtwork, LedgerIllustration},
     portraits::{PersonPortrait, PortraitMetrics, PortraitStatus},
 };
 use bevy::{
@@ -15,6 +15,12 @@ use bevy::{
     input::InputSystems,
     prelude::*,
     ui::{InteractionDisabled, UiGlobalTransform, UiSystems},
+};
+use encyclopedia::{
+    army::{ArmyAction, ArmyManagement, TroopCheckbox},
+    places::{
+        KnownPlaces, PlaceBuildingRow, PlaceDetailCard, PlaceRow, SelectedPlace, SelectedPlaceEntry,
+    },
 };
 use shared::components::*;
 
@@ -72,6 +78,41 @@ fn stage(
         name: "Wanderer".into(),
         submitted: true,
     });
+    // A directory-only City record exercises the supported tier without
+    // pretending that a populated city was simulated in this offline map.
+    // Its local structures, residents and inventories remain unobserved.
+    commands.spawn((
+        SettlementSummary {
+            id: SettlementId(9000),
+            name: "Kingsbridge".into(),
+            tier: SettlementTier::City,
+            residents: 240,
+            treasury: 18_500,
+            prosperity: 0.72,
+            reserve_days: 4.0,
+            recent_food_production: 250.0,
+            recent_food_consumption: 240.0,
+            hungry: 0,
+            housing_capacity: 264,
+            homeless: 0,
+            job_seekers: 6,
+            unpaid_workers: 0,
+            unrest: 8.0,
+            unrest_change: 0.0,
+            unrest_target: 8.0,
+            unrest_hunger_pressure: 0.0,
+            unrest_housing_pressure: 0.0,
+            unrest_wage_pressure: 0.0,
+            houses: 44,
+            farmsteads: 10,
+            fishing_huts: 4,
+            lumber_huts: 4,
+            windmills: 3,
+            bakeries: 3,
+            has_marketplace: true,
+        },
+        PlayerPosition(Vec3::new(2400.0, 0.0, -1800.0)),
+    ));
     // The legacy village fixture predates durable building ownership. Give its
     // real local structures identities so the same Places joins used online
     // can display them; company fixtures already carry their own valid ids.
@@ -166,12 +207,25 @@ fn stage(
 }
 
 fn expected_tab(name: &str) -> EncyclopediaTab {
+    if settlement_shot(name).is_some() {
+        return EncyclopediaTab::Places;
+    }
     match name {
         "02-places" => EncyclopediaTab::Places,
         "03-retinue" => EncyclopediaTab::Retinue,
-        "04-army" => EncyclopediaTab::Army,
+        "04-army" | "12-army-checked" => EncyclopediaTab::Army,
         "05-companies" => EncyclopediaTab::Companies,
         _ => EncyclopediaTab::People,
+    }
+}
+
+fn settlement_shot(name: &str) -> Option<(&'static str, SettlementTier)> {
+    match name {
+        "08-places-hamlet" => Some(("Ashfell", SettlementTier::Hamlet)),
+        "09-places-village" => Some(("Millhollow", SettlementTier::Village)),
+        "10-places-town" => Some(("Brackwater", SettlementTier::Town)),
+        "11-places-city" => Some(("Kingsbridge", SettlementTier::City)),
+        _ => None,
     }
 }
 
@@ -215,12 +269,94 @@ fn stage_army(commands: &mut Commands, manifest: &crate::hero::HeroManifest) {
     }
 }
 
+#[derive(SystemParam)]
+struct ArmyCheckboxInput<'w, 's> {
+    tab: Res<'w, EncyclopediaTab>,
+    roster: Res<'w, crate::army_roster::ArmyRoster>,
+    management: Res<'w, ArmyManagement>,
+    checkboxes: Query<
+        'w,
+        's,
+        (
+            &'static TroopCheckbox,
+            &'static ComputedNode,
+            &'static UiGlobalTransform,
+            &'static InheritedVisibility,
+        ),
+    >,
+    viewports: Query<
+        'w,
+        's,
+        (
+            &'static Name,
+            &'static ComputedNode,
+            &'static UiGlobalTransform,
+        ),
+    >,
+}
+
+impl ArmyCheckboxInput<'_, '_> {
+    fn visible_member(&self) -> Option<Entity> {
+        if *self.tab != EncyclopediaTab::Army {
+            return None;
+        }
+        let unit = self
+            .roster
+            .battalions
+            .iter()
+            .find(|unit| Some(unit.entity) == self.management.selected)?;
+        let (_, viewport, viewport_pose) = self
+            .viewports
+            .iter()
+            .find(|(name, ..)| name.as_str() == "Army member viewport")?;
+        if viewport.size().min_element() <= 0.0 {
+            return None;
+        }
+        let bounds = |node: &ComputedNode, pose: &UiGlobalTransform| {
+            let half = node.size() * 0.5;
+            Rect::from_corners(pose.transform_point2(-half), pose.transform_point2(half))
+        };
+        let clip = bounds(viewport, viewport_pose);
+        self.checkboxes
+            .iter()
+            .filter(|(checkbox, node, _, inherited)| {
+                unit.members.contains(&checkbox.soldier)
+                    && !checkbox.checked
+                    && inherited.get()
+                    && node.size().min_element() > 0.0
+            })
+            .filter_map(|(checkbox, node, pose, _)| {
+                let rect = bounds(node, pose);
+                (rect.min.x >= clip.min.x
+                    && rect.max.x <= clip.max.x
+                    && rect.min.y >= clip.min.y
+                    && rect.max.y <= clip.max.y)
+                    .then_some((checkbox.soldier, rect.min.y))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(soldier, _)| soldier)
+    }
+}
+
 fn input(
     config: Res<CaptureConfig>,
     state: Res<CaptureState>,
     mut rehearsal: ResMut<Rehearsal>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
-    mut tabs: Query<(&TabButton, &mut Interaction, Has<InteractionDisabled>), With<Button>>,
+    mut tabs: Query<
+        (&TabButton, &mut Interaction, Has<InteractionDisabled>),
+        (With<Button>, Without<PlaceRow>, Without<ArmyAction>),
+    >,
+    mut places_buttons: Query<
+        (&PlaceRow, &mut Interaction, Has<InteractionDisabled>),
+        (With<Button>, Without<TabButton>, Without<ArmyAction>),
+    >,
+    mut army_buttons: Query<
+        (&ArmyAction, &mut Interaction, Has<InteractionDisabled>),
+        (With<Button>, Without<TabButton>, Without<PlaceRow>),
+    >,
+    places: Res<KnownPlaces>,
+    army_selection: ArmyCheckboxInput,
     mut commands: Commands,
     manifest: Res<crate::hero::HeroManifest>,
     mut selected: ResMut<SelectedPerson>,
@@ -229,13 +365,20 @@ fn input(
     for (_, mut interaction, _) in &mut tabs {
         interaction.set_if_neq(Interaction::None);
     }
+    for (_, mut interaction, _) in &mut places_buttons {
+        interaction.set_if_neq(Interaction::None);
+    }
+    for (_, mut interaction, _) in &mut army_buttons {
+        interaction.set_if_neq(Interaction::None);
+    }
     let CaptureState::Settling { shot, .. } = *state else {
         return;
     };
     if rehearsal.issued == Some(shot) {
         return;
     }
-    let desired = expected_tab(&config.shots[shot].name);
+    let name = &config.shots[shot].name;
+    let desired = expected_tab(name);
     let Some((_, mut interaction, false)) =
         tabs.iter_mut().find(|(button, ..)| button.0 == desired)
     else {
@@ -253,6 +396,34 @@ fn input(
     if config.shots[shot].name == "07-people-warm" {
         selected.0 = Some(PersonId(2));
     }
+    if let Some((place_name, tier)) = settlement_shot(name) {
+        let Some(place) = places.find(place_name).filter(|place| place.tier == tier) else {
+            return;
+        };
+        let Some((_, mut interaction, false)) = places_buttons
+            .iter_mut()
+            .find(|(row, ..)| row.0 == place.id)
+        else {
+            return;
+        };
+        *interaction = Interaction::Pressed;
+    }
+    if name == "12-army-checked" {
+        // Open the page before locating a visible checkbox. Roster storage
+        // order differs from the strength-sorted retained membership rows.
+        *interaction = Interaction::Pressed;
+        mouse.press(MouseButton::Left);
+        let Some(soldier) = army_selection.visible_member() else {
+            return;
+        };
+        let Some((_, mut interaction, false)) = army_buttons
+            .iter_mut()
+            .find(|(action, ..)| **action == ArmyAction::Toggle(soldier))
+        else {
+            return;
+        };
+        *interaction = Interaction::Pressed;
+    }
     *interaction = Interaction::Pressed;
     mouse.press(MouseButton::Left);
     rehearsal.issued = Some(shot);
@@ -268,7 +439,15 @@ pub(super) struct TourWorld<'w, 's> {
     portraits: Res<'w, PortraitMetrics>,
     people: Res<'w, KnownPeople>,
     selected: Res<'w, SelectedPerson>,
+    places: Res<'w, KnownPlaces>,
+    selected_place: Res<'w, SelectedPlace>,
+    place_entry: Res<'w, SelectedPlaceEntry>,
     army: Res<'w, crate::army_roster::ArmyRoster>,
+    army_management: Res<'w, ArmyManagement>,
+    checkboxes: Query<'w, 's, (Entity, &'static TroopCheckbox)>,
+    place_cards: Query<'w, 's, Entity, With<PlaceDetailCard>>,
+    place_rows: Query<'w, 's, (Entity, &'static PlaceRow)>,
+    place_entries: Query<'w, 's, (Entity, &'static PlaceBuildingRow)>,
     geometry: Query<
         'w,
         's,
@@ -283,12 +462,33 @@ pub(super) struct TourWorld<'w, 's> {
     panels: Query<'w, 's, Entity, With<EncyclopediaPanel>>,
     bodies: Query<'w, 's, (Entity, &'static TabBody)>,
     portraits_nodes: Query<'w, 's, (Entity, &'static PersonPortrait, &'static PortraitStatus)>,
-    illustrations: Query<'w, 's, (Entity, &'static ImageNode), With<LedgerIllustration>>,
+    illustrations: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static LedgerIllustration,
+            &'static MaterialNode<IllustrationMaterial>,
+        ),
+    >,
+    illustration_materials: Res<'w, Assets<IllustrationMaterial>>,
     texts: Query<'w, 's, (Entity, &'static Text)>,
     named: Query<'w, 's, (Entity, &'static Name)>,
 }
 
 impl TourWorld<'_, '_> {
+    fn descendant_of(&self, mut entity: Entity, ancestor: Entity) -> bool {
+        loop {
+            if entity == ancestor {
+                return true;
+            }
+            let Ok((_, _, _, _, Some(parent))) = self.geometry.get(entity) else {
+                return false;
+            };
+            entity = parent.parent();
+        }
+    }
+
     fn bounds(&self, entity: Entity) -> Option<Rect> {
         let (_, computed, pose, _, _) = self.geometry.get(entity).ok()?;
         let half = computed.size() * 0.5;
@@ -383,10 +583,12 @@ impl TourWorld<'_, '_> {
                 == 1,
             "exactly one top-level page must be visible",
         )?;
-        for (entity, image) in &self.illustrations {
+        for (entity, kind, image) in &self.illustrations {
             if self.visible(entity) {
                 require(
-                    self.assets.is_loaded_with_dependencies(image.image.id()),
+                    self.illustration_materials
+                        .get(&image.0)
+                        .is_some_and(|material| material.ready_for(*kind, &self.assets)),
                     "visible illustration is not ready",
                 )?;
             }
@@ -479,13 +681,13 @@ impl TourWorld<'_, '_> {
                 "unavailable retainer must not claim a cached activity is current",
             )?;
         }
-        if name == "04-army" {
+        if matches!(name, "04-army" | "12-army-checked") {
             require(
                 self.army.battalions.len() == 3,
                 "three real battalion component fixtures must reach army roster",
             )?;
         }
-        if name == "04-army" {
+        if matches!(name, "04-army" | "12-army-checked") {
             for name in ["Army member viewport", "Army available viewport"] {
                 let entity = self
                     .named
@@ -498,6 +700,81 @@ impl TourWorld<'_, '_> {
                     self.bounds(entity)
                         .is_some_and(|bounds| bounds.height() >= 100.0),
                     "each troop viewport must retain at least 100 physical pixels for readable rows",
+                )?;
+            }
+        }
+        if name == "12-army-checked" {
+            require(
+                self.army_management.members.len() == 1,
+                "production troop Toggle must select exactly one member",
+            )?;
+            require(
+                self.checkboxes.iter().any(|(entity, checkbox)| {
+                    checkbox.checked
+                        && self.army_management.members.contains(&checkbox.soldier)
+                        && self.visible(entity)
+                }),
+                "the selected member must have a visible checked checkbox",
+            )?;
+        }
+        if let Some((expected_name, tier)) = settlement_shot(name) {
+            let place = self
+                .selected_place
+                .0
+                .and_then(|id| self.places.find_by_id(id))
+                .ok_or("production place row has not selected a settlement")?;
+            require(
+                place.name == expected_name && place.tier == tier,
+                "production place row selected the wrong settlement tier",
+            )?;
+            require(
+                *self.place_entry == SelectedPlaceEntry::Overview,
+                "settlement row must open its Overview",
+            )?;
+            let expected_art = LedgerIllustration::settlement(tier);
+            let card = self
+                .place_cards
+                .single()
+                .map_err(|_| "one place detail card is required")?;
+            let row = self
+                .place_rows
+                .iter()
+                .find(|(_, row)| row.0 == place.id)
+                .map(|(entity, _)| entity)
+                .ok_or("selected directory row missing")?;
+            let overview = self
+                .place_entries
+                .iter()
+                .find(|(_, row)| row.place == place.id && row.entry == SelectedPlaceEntry::Overview)
+                .map(|(entity, _)| entity)
+                .ok_or("expanded Overview row missing")?;
+            for (ancestor, reason) in [
+                (
+                    card,
+                    "large illustration must match the selected settlement tier",
+                ),
+                (
+                    row,
+                    "directory medallion must match the selected settlement tier",
+                ),
+                (
+                    overview,
+                    "expanded Overview thumbnail must match the selected settlement tier",
+                ),
+            ] {
+                require(
+                    self.illustrations.iter().any(|(entity, kind, image)| {
+                        *kind == expected_art
+                            && self.descendant_of(entity, ancestor)
+                            && self.visible(entity)
+                            && self
+                                .illustration_materials
+                                .get(&image.0)
+                                .is_some_and(|material| {
+                                    material.ready_for(expected_art, &self.assets)
+                                })
+                    }),
+                    reason,
                 )?;
             }
         }
@@ -594,8 +871,27 @@ fn inspect(
         .iter()
         .filter(|(entity, _, status)| status.known && world.visible(*entity))
         .count();
-    let evidence = serde_json::json!({"shot":name,"passed":true,"input":"production tab button handlers",
+    let settlement = (*world.tab == EncyclopediaTab::Places)
+        .then(|| {
+            world
+                .selected_place
+                .0
+                .and_then(|id| world.places.find_by_id(id))
+                .map(|place| {
+                    serde_json::json!({"name":place.name,"tier":format!("{:?}", place.tier),
+                "illustration":format!("{:?}",LedgerIllustration::settlement(place.tier))})
+                })
+        })
+        .flatten();
+    let checked_rows = world
+        .checkboxes
+        .iter()
+        .filter(|(entity, checkbox)| checkbox.checked && world.visible(*entity))
+        .count();
+    let evidence = serde_json::json!({"shot":name,"passed":true,"input":"production tab, place row and troop Toggle button handlers",
         "fixture":"offline economic and personal facts, not server action validation",
+        "settlement":settlement,
+        "visible_checked_troops":checked_rows,
         "panel_bounds":{"min":bounds.min.to_array(),"max":bounds.max.to_array()},
         "portraits":{"visible":visible_portraits,"known":known_portraits,"bytes":world.portraits.bytes,
             "queued":world.portraits.queued,"pending":world.portraits.pending,"source_preparations":world.portraits.source_preparations,

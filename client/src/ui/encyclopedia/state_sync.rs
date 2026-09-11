@@ -653,7 +653,7 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
             ..default()
         })
         .with_children(|copy| {
-            copy.spawn(ledger::body(
+            copy.spawn(ledger::body_strong(
                 if record.is_self {
                     format!("{} (you)", record.name)
                 } else {
