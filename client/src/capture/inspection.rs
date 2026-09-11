@@ -34,6 +34,7 @@ pub(crate) struct CaptureInspection<'w, 's> {
     >,
     grass_batches: Query<'w, 's, (), With<ChunkedGroundCover>>,
     buildings: Query<'w, 's, (), With<shared::components::SettlementBuilding>>,
+    building_lods: Query<'w, 's, &'static crate::render::building_lod::BuildingLod>,
     fortifications: Query<'w, 's, &'static shared::components::FortificationSegment>,
     navigation: Query<'w, 's, &'static CharacterNavigationStatus>,
     maps: Query<'w, 's, &'static ActiveMapState>,
@@ -65,7 +66,22 @@ impl CaptureInspection<'_, '_> {
                 }
             }
         }
+        let mut building_lod_counts = [0; 3];
+        let mut building_lod_pending = 0;
+        let mut building_triangles_full = 0;
+        let mut building_triangles_selected = 0;
+        for lod in &self.building_lods {
+            building_lod_counts[lod.level] += 1;
+            building_lod_pending += usize::from(!lod.ready);
+            let [full, selected] = lod.triangles();
+            building_triangles_full += full;
+            building_triangles_selected += selected;
+        }
         CaptureWorldSnapshot {
+            building_lod_counts,
+            building_lod_pending,
+            building_triangles_full,
+            building_triangles_selected,
             frame: self.frame_count.0,
             entity_count: self.all_entities.iter().count(),
             loaded_chunks: self

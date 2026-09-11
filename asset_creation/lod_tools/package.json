@@ -1,0 +1,6 @@
+{
+  "name": "fistworld-asset-lod-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": { "meshoptimizer": "1.2.0" }
+}

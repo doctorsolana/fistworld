@@ -54,6 +54,7 @@ pub struct SettlementPlugin;
 
 impl Plugin for SettlementPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(crate::render::building_lod::BuildingLodPlugin);
         app.add_plugins(smoke::BakerySmokePlugin);
         app.add_plugins(fortifications::FortificationPlugin);
         app.init_resource::<BuildingDoorAssets>();

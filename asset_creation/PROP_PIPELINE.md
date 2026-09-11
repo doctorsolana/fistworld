@@ -6,7 +6,7 @@ skeleton. The contracts differ enough that conflating them causes real bugs, so 
 
 Older workshops demonstrate the original log construction pipeline.
 The rebuilt [houses](HOUSE_HANDOVER.md), [lumberjack workshop](LUMBERJACK_HUT.md)
-[windmill](WINDMILL.md), [storage hall](STORAGE_HALL.md) and [bakery](BAKERY.md)
+[windmill](WINDMILL.md), [storage hall](STORAGE_HALL.md) and [bakery](BAKERY.md) and [fisherman’s hut](FISHERMANS_HUT.md)
 use self-contained builders that author directly in Blender +Y and export their own GLBs.
 Use each building's documented entry point: the older `export_prop_glb.py` applies a
 −90° facing correction and must not process these newer sources. Shared scale, timber,
@@ -17,6 +17,12 @@ The current civic ladder is documented in [CIVIC_LEVELS_INTEGRATION.md](CIVIC_LE
 and self-exports through `houses/build_civic_halls.py`.
 The [rural buildings and wheat](RURAL_BUILDINGS.md) use individual `build_*.py`
 entry points and the shared `houses/rural_architecture.py` construction/export helpers.
+
+All 19 village building variants have derived mesh LOD libraries. After exporting any
+building, regenerate and validate them with the commands in [BUILDING_LODS.md](BUILDING_LODS.md).
+The canonical GLB and editable Blender source remain full detail; the client swaps meshes
+on the existing animated scene nodes. Review lower levels too: a simplifier can erase
+sailcloth, roof undersides or supports even when the full-detail model is correct.
 
 ### Building detail checks learned from the September 2026 review
 

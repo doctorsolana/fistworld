@@ -74,6 +74,8 @@ pub enum CaptureAssertion {
     GrassBatchesAtMost { count: usize },
     SettlementsAtLeast { count: usize },
     SettlementBuildingsAtLeast { count: usize },
+    BuildingLodsReady { count: usize },
+    BuildingLodsAtLevel { level: usize, count: usize },
     FortificationSectionsAtLeast { count: usize },
     PlanningRoutesAtMost { count: usize },
     BlockedRoutesAtMost { count: usize },
@@ -338,6 +340,11 @@ impl CaptureScenarioShot {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CaptureWorldSnapshot {
+    /// Loaded roots [full, reduced, hidden]; these are not GPU visibility counts.
+    pub building_lod_counts: [usize; 3],
+    pub building_lod_pending: usize,
+    pub building_triangles_full: usize,
+    pub building_triangles_selected: usize,
     pub frame: u32,
     pub entity_count: usize,
     pub loaded_chunks: usize,

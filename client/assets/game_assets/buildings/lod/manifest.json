@@ -1,0 +1,1537 @@
+[
+  {
+    "source": "game_assets/buildings/village/Bakery.glb",
+    "sha256": "234e64ad85139be99168f1184654383f568f0d4259809c1e221974b9f3184367",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "0a7882da02eb783b2644b85d8b38ba47e78acfae58f394bc263494619cc8025f",
+    "library": "game_assets/buildings/lod/Bakery.glb",
+    "center": [
+      0.09749996662139893,
+      2.8375000953674316,
+      0.43749988079071045
+    ],
+    "radius": 5.997142429163562,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          4622,
+          2379
+        ],
+        "vertices": [
+          9114,
+          5272
+        ],
+        "errors": [
+          0.0,
+          0.014292306266725063
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          196,
+          104
+        ],
+        "vertices": [
+          384,
+          222
+        ],
+        "errors": [
+          0.0,
+          0.011265103705227375
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          28,
+          28
+        ],
+        "vertices": [
+          56,
+          56
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "source": "Mesh3/Primitive0",
+        "levels": [
+          "Mesh3/Primitive0"
+        ],
+        "triangles": [
+          96,
+          72
+        ],
+        "vertices": [
+          184,
+          172
+        ],
+        "errors": [
+          0.0,
+          0.008911489509046078
+        ]
+      },
+      {
+        "source": "Mesh4/Primitive0",
+        "levels": [
+          "Mesh4/Primitive0"
+        ],
+        "triangles": [
+          96,
+          72
+        ],
+        "vertices": [
+          184,
+          176
+        ],
+        "errors": [
+          0.0,
+          0.008909233845770359
+        ]
+      },
+      {
+        "source": "Mesh5/Primitive0",
+        "levels": [
+          "Mesh5/Primitive0"
+        ],
+        "triangles": [
+          96,
+          72
+        ],
+        "vertices": [
+          184,
+          180
+        ],
+        "errors": [
+          0.0,
+          0.008911785669624805
+        ]
+      },
+      {
+        "source": "Mesh6/Primitive0",
+        "levels": [
+          "Mesh6/Primitive0"
+        ],
+        "triangles": [
+          96,
+          72
+        ],
+        "vertices": [
+          184,
+          180
+        ],
+        "errors": [
+          0.0,
+          0.008912713266909122
+        ]
+      },
+      {
+        "source": "Mesh7/Primitive0",
+        "levels": [
+          "Mesh7/Primitive0"
+        ],
+        "triangles": [
+          96,
+          72
+        ],
+        "vertices": [
+          184,
+          176
+        ],
+        "errors": [
+          0.0,
+          0.008910717442631721
+        ]
+      },
+      {
+        "source": "Mesh8/Primitive0",
+        "levels": [
+          "Mesh8/Primitive0"
+        ],
+        "triangles": [
+          96,
+          72
+        ],
+        "vertices": [
+          184,
+          172
+        ],
+        "errors": [
+          0.0,
+          0.008911489509046078
+        ]
+      }
+    ],
+    "triangles": [
+      5422,
+      2943
+    ],
+    "vertices": [
+      10658,
+      6606
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/CabinL2.glb",
+    "sha256": "e7174c24269077ad0b0e5661b340bca3fa8a31ecb363020a7a09cab62bc872d4",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "b700585603e5be1ec27b68ab1034ac3ca3ecfeb08a9e044d8b9f59c995515bfb",
+    "library": "game_assets/buildings/lod/CabinL2.glb",
+    "center": [
+      0.0,
+      3.3310000896453857,
+      -0.09749996662139893
+    ],
+    "radius": 6.065248318688889,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          3334,
+          1564
+        ],
+        "vertices": [
+          6666,
+          4070
+        ],
+        "errors": [
+          0.0,
+          0.015673846006393433
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          168,
+          144
+        ],
+        "vertices": [
+          336,
+          296
+        ],
+        "errors": [
+          0.0,
+          0.010882499627768993
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          32,
+          32
+        ],
+        "vertices": [
+          64,
+          64
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      3534,
+      1740
+    ],
+    "vertices": [
+      7066,
+      4430
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/Church.glb",
+    "sha256": "2dcc20aacb305b09472603b9145fdb6f65cbab4dc0e421c030be5b1642cb5539",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "21d0a2ffed55ef11ae8156ea45fda66b93b29c21a2059e0eecb1595af0914a66",
+    "library": "game_assets/buildings/lod/Church.glb",
+    "center": [
+      0.0,
+      7.395000457763672,
+      -0.03669142723083496
+    ],
+    "radius": 10.30187528816088,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          7552,
+          2410
+        ],
+        "vertices": [
+          15125,
+          5561
+        ],
+        "errors": [
+          0.0,
+          0.016874205321073532
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          196,
+          90
+        ],
+        "vertices": [
+          384,
+          230
+        ],
+        "errors": [
+          0.0,
+          0.012154619209468365
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          330,
+          330
+        ],
+        "vertices": [
+          574,
+          574
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      8078,
+      2830
+    ],
+    "vertices": [
+      16083,
+      6365
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/Farmstead.glb",
+    "sha256": "45ddc75909ba5991353d41d1fc39a12fa01acef2910caf9734621a1ff28bd676",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "ef35c65139f429827a490c2d6b2dc1e1861c8c0f68abebbdc8f7395fb2fc470e",
+    "library": "game_assets/buildings/lod/Farmstead.glb",
+    "center": [
+      0.0,
+      2.4085569381713867,
+      -0.03500020503997803
+    ],
+    "radius": 4.923719998859272,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          3116,
+          1469
+        ],
+        "vertices": [
+          6204,
+          3121
+        ],
+        "errors": [
+          0.0,
+          0.01371068973094225
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          196,
+          104
+        ],
+        "vertices": [
+          384,
+          222
+        ],
+        "errors": [
+          0.0,
+          0.011265103705227375
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          26,
+          26
+        ],
+        "vertices": [
+          52,
+          52
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      3338,
+      1599
+    ],
+    "vertices": [
+      6640,
+      3395
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/FishermansHut.glb",
+    "sha256": "53144ebe9bd66ed6a7e9fed6034096566b7dc690f0017bf84a2c28fd2f37b9f2",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "7d9bd485f56f0ab44d3045bf45c83c95dd5e0e43c7823b67757668358601c3ec",
+    "library": "game_assets/buildings/lod/FishermansHut.glb",
+    "center": [
+      -0.41474997997283936,
+      2.0950002670288086,
+      -0.19749999046325684
+    ],
+    "radius": 4.815617777567107,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          3983,
+          1979
+        ],
+        "vertices": [
+          7931,
+          4396
+        ],
+        "errors": [
+          0.0,
+          0.015356183983385563
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          196,
+          132
+        ],
+        "vertices": [
+          384,
+          284
+        ],
+        "errors": [
+          0.0,
+          0.013122194446623325
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          22,
+          22
+        ],
+        "vertices": [
+          44,
+          44
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      4201,
+      2133
+    ],
+    "vertices": [
+      8359,
+      4724
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/LivestockFarm.glb",
+    "sha256": "014a1f589258a100e4fb9f29e52a7284b82e4c6923ed04e3fb35e4ff2f368bd3",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "edd7dd6a204461b31694ab0b217633d6623f1d50cf166514531518c117f19054",
+    "library": "game_assets/buildings/lod/LivestockFarm.glb",
+    "center": [
+      0.3250002861022949,
+      3.25,
+      0.28000009059906006
+    ],
+    "radius": 6.895491008578697,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          3864,
+          1342
+        ],
+        "vertices": [
+          7728,
+          2710
+        ],
+        "errors": [
+          0.0,
+          0.01315531600266695
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          196,
+          102
+        ],
+        "vertices": [
+          384,
+          224
+        ],
+        "errors": [
+          0.0,
+          0.01257241889834404
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          44,
+          44
+        ],
+        "vertices": [
+          88,
+          88
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      4104,
+      1488
+    ],
+    "vertices": [
+      8200,
+      3022
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/LogCabin.glb",
+    "sha256": "2d658dcd020453c5aea8937b224b7d3a2099107412da8bdb38c8c22a0a85be23",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "b355292c4ddefeb1d84c558ca1186fe0c571390292392aeeb3fc08a4f06c7faa",
+    "library": "game_assets/buildings/lod/LogCabin.glb",
+    "center": [
+      0.0,
+      2.0210001468658447,
+      -0.19749987125396729
+    ],
+    "radius": 5.219580258780426,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          168,
+          144
+        ],
+        "vertices": [
+          336,
+          296
+        ],
+        "errors": [
+          0.0,
+          0.010882499627768993
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          22,
+          22
+        ],
+        "vertices": [
+          44,
+          44
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          2290,
+          1198
+        ],
+        "vertices": [
+          4578,
+          3132
+        ],
+        "errors": [
+          0.0,
+          0.015582865104079247
+        ]
+      }
+    ],
+    "triangles": [
+      2480,
+      1364
+    ],
+    "vertices": [
+      4958,
+      3472
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/LongCabin.glb",
+    "sha256": "0f3f56cc7472b632cb0b307c6dcd08b984c15e633d166313f0629100f6aa596f",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "71b542ff3ce5aec9bbf5fa94611e52ae6d678164c78283fac2c7ea9a5f96fe7f",
+    "library": "game_assets/buildings/lod/LongCabin.glb",
+    "center": [
+      0.0,
+      2.5310001373291016,
+      -0.18250000476837158
+    ],
+    "radius": 5.596133315774486,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          168,
+          144
+        ],
+        "vertices": [
+          336,
+          296
+        ],
+        "errors": [
+          0.0,
+          0.010882499627768993
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          20,
+          20
+        ],
+        "vertices": [
+          40,
+          40
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          2108,
+          1092
+        ],
+        "vertices": [
+          4228,
+          2976
+        ],
+        "errors": [
+          0.0,
+          0.015010331757366657
+        ]
+      }
+    ],
+    "triangles": [
+      2296,
+      1256
+    ],
+    "vertices": [
+      4604,
+      3312
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/LongCabinL2.glb",
+    "sha256": "26e77f46ad28d8df5b5ca8732637354403fd04c03d126a7ef439c23364a0ba9c",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "0d090e07301c8abb6292e9345813c4b6cfb84c0b215e5ceab5a06f1d4c4cd386",
+    "library": "game_assets/buildings/lod/LongCabinL2.glb",
+    "center": [
+      0.0,
+      3.315999984741211,
+      -0.18999993801116943
+    ],
+    "radius": 6.258203082331393,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          168,
+          144
+        ],
+        "vertices": [
+          336,
+          296
+        ],
+        "errors": [
+          0.0,
+          0.010882499627768993
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          30,
+          30
+        ],
+        "vertices": [
+          60,
+          60
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          2996,
+          1338
+        ],
+        "vertices": [
+          6004,
+          3546
+        ],
+        "errors": [
+          0.0,
+          0.014907346107065678
+        ]
+      }
+    ],
+    "triangles": [
+      3194,
+      1512
+    ],
+    "vertices": [
+      6400,
+      3902
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/LumberjackHut.glb",
+    "sha256": "eefaf60def8e48e5bf93cbf6e560d0428d02c6f36883bbf24a9d8f35361d2017",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "8a8bd596d5aec1b898cf5421043d704854c0f7f9927607a07612f1ad33fa8a89",
+    "library": "game_assets/buildings/lod/LumberjackHut.glb",
+    "center": [
+      0.31772005558013916,
+      1.7879999876022339,
+      -0.1545475721359253
+    ],
+    "radius": 4.042609452209081,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          156,
+          136
+        ],
+        "vertices": [
+          312,
+          280
+        ],
+        "errors": [
+          0.0,
+          0.013978809118270874
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          36,
+          36
+        ],
+        "vertices": [
+          72,
+          72
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          3230,
+          1951
+        ],
+        "vertices": [
+          6350,
+          4548
+        ],
+        "errors": [
+          0.0,
+          0.015510768629610538
+        ]
+      }
+    ],
+    "triangles": [
+      3422,
+      2123
+    ],
+    "vertices": [
+      6734,
+      4900
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/Market.glb",
+    "sha256": "bd196989dfb4670321841a06870c3454105635ddfa82ae0a6e7e15af3302a843",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "26d89479a54b301f022123e39fbae6b98f6bb6abdecd081f05ec6816b6501de7",
+    "library": "game_assets/buildings/lod/Market.glb",
+    "center": [
+      0.0,
+      1.4299999475479126,
+      0.0
+    ],
+    "radius": 8.630186926186502,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          4200,
+          1590
+        ],
+        "vertices": [
+          8400,
+          3426
+        ],
+        "errors": [
+          0.0,
+          0.01837768591940403
+        ]
+      }
+    ],
+    "triangles": [
+      4200,
+      1590
+    ],
+    "vertices": [
+      8400,
+      3426
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/MarketPaved.glb",
+    "sha256": "0e716605940e54e8e694ef19c084af231e4ed3929b89959166d883d0c9228bea",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "94156aa09e0fb72a408e36e4ebd3c1109b858af8e46c687db0f7ff10a1b1f034",
+    "library": "game_assets/buildings/lod/MarketPaved.glb",
+    "center": [
+      0.0,
+      1.4299999475479126,
+      0.0
+    ],
+    "radius": 8.630186926186502,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          3624,
+          1476
+        ],
+        "vertices": [
+          7248,
+          3094
+        ],
+        "errors": [
+          0.0,
+          0.01837768591940403
+        ]
+      }
+    ],
+    "triangles": [
+      3624,
+      1476
+    ],
+    "vertices": [
+      7248,
+      3094
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/MootHall.glb",
+    "sha256": "cf432c6df68605fe5da901f661f05cad32f19a0492c21f1d00210e22be6aff32",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "fefef7bf4886fa1f429d6100eff3d29e8b58a6da23f80e1a09a9986a4b22cfbf",
+    "library": "game_assets/buildings/lod/MootHall.glb",
+    "center": [
+      0.0,
+      4.019999980926514,
+      -0.19000005722045898
+    ],
+    "radius": 7.07138751377225,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          5159,
+          2546
+        ],
+        "vertices": [
+          10295,
+          5785
+        ],
+        "errors": [
+          0.0,
+          0.01631844975054264
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          252,
+          188
+        ],
+        "vertices": [
+          504,
+          408
+        ],
+        "errors": [
+          0.0,
+          0.013641780242323875
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          66,
+          66
+        ],
+        "vertices": [
+          132,
+          132
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      5477,
+      2800
+    ],
+    "vertices": [
+      10931,
+      6325
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/StoneQuarry.glb",
+    "sha256": "84862fc101a9210a7d9fc670b70046801b8b3bb3881786b4c259ec534d7ae465",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "7c836248c61ef55d98b66c32b51a4919949ce7cf5a7f11c9924ccee8348d575c",
+    "library": "game_assets/buildings/lod/StoneQuarry.glb",
+    "center": [
+      0.0,
+      2.554837465286255,
+      0.02499985694885254
+    ],
+    "radius": 6.283291461241796,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          2256,
+          1364
+        ],
+        "vertices": [
+          4464,
+          2919
+        ],
+        "errors": [
+          0.0,
+          0.017588559538125992
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          196,
+          104
+        ],
+        "vertices": [
+          384,
+          222
+        ],
+        "errors": [
+          0.0,
+          0.011265103705227375
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          39,
+          39
+        ],
+        "vertices": [
+          57,
+          57
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      2491,
+      1507
+    ],
+    "vertices": [
+      4905,
+      3198
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/StorageHall.glb",
+    "sha256": "a76e9994a1ee40f8fc946eafd68c5c7c594561185c90d5b323d49b50317fa90f",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "7d28308e607c42780e6a321df91208886e11fd6c70a5592346f9cb1deccae051",
+    "library": "game_assets/buildings/lod/StorageHall.glb",
+    "center": [
+      0.28000009059906006,
+      3.0275001525878906,
+      -0.2250000238418579
+    ],
+    "radius": 6.449967468534536,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          3760,
+          1885
+        ],
+        "vertices": [
+          7436,
+          4327
+        ],
+        "errors": [
+          0.0,
+          0.012989899143576622
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          272,
+          192
+        ],
+        "vertices": [
+          540,
+          364
+        ],
+        "errors": [
+          0.0,
+          0.012921559624373913
+        ]
+      }
+    ],
+    "triangles": [
+      4032,
+      2077
+    ],
+    "vertices": [
+      7976,
+      4691
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/Tavern.glb",
+    "sha256": "d01dfdcea3c9ec4b2477c1675468ae64bc6ed450f68fa4f9a2e1b579f61a9044",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "61b1d4e2637523759e5879a0f696b7bb152fcbefa34f4e3ab80de69229da7999",
+    "library": "game_assets/buildings/lod/Tavern.glb",
+    "center": [
+      0.0,
+      4.09499979019165,
+      -2.017500400543213
+    ],
+    "radius": 8.717290831392912,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          6294,
+          2376
+        ],
+        "vertices": [
+          12476,
+          5775
+        ],
+        "errors": [
+          0.0,
+          0.01587606407701969
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          1224,
+          358
+        ],
+        "vertices": [
+          2368,
+          808
+        ],
+        "errors": [
+          0.0,
+          0.016465289518237114
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          196,
+          104
+        ],
+        "vertices": [
+          384,
+          232
+        ],
+        "errors": [
+          0.0,
+          0.011191868223249912
+        ]
+      },
+      {
+        "source": "Mesh3/Primitive0",
+        "levels": [
+          "Mesh3/Primitive0"
+        ],
+        "triangles": [
+          66,
+          66
+        ],
+        "vertices": [
+          132,
+          132
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      7780,
+      2904
+    ],
+    "vertices": [
+      15360,
+      6947
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/TownHall.glb",
+    "sha256": "e8214f303666097fc62217e2aba051417883876a614875f4d477173971608b38",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "d2840d70b4b828511bedfa62b4b4d503cac83e1a0ad8e3cb1d24c51b67f1ff16",
+    "library": "game_assets/buildings/lod/TownHall.glb",
+    "center": [
+      0.0,
+      10.609999656677246,
+      2.684999942779541
+    ],
+    "radius": 14.022280674560829,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          19605,
+          4730
+        ],
+        "vertices": [
+          39223,
+          11755
+        ],
+        "errors": [
+          0.0,
+          0.013584297150373459
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          312,
+          164
+        ],
+        "vertices": [
+          624,
+          358
+        ],
+        "errors": [
+          0.0,
+          0.013259905390441418
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          464,
+          464
+        ],
+        "vertices": [
+          586,
+          586
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      20381,
+      5358
+    ],
+    "vertices": [
+      40433,
+      12699
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/VillageHall.glb",
+    "sha256": "cee108c6dcc484670a7ab6c595135ed1fe3b51a4ba65545863542dcbe30ce7f9",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "c470b1339d850050411109b729dc952d2eabf0264a23bb41ec48a08d43ff6d8b",
+    "library": "game_assets/buildings/lod/VillageHall.glb",
+    "center": [
+      0.0,
+      4.769999980926514,
+      0.4700000286102295
+    ],
+    "radius": 8.173678664068118,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          6433,
+          2703
+        ],
+        "vertices": [
+          12839,
+          6555
+        ],
+        "errors": [
+          0.0,
+          0.016455335542559624
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          288,
+          172
+        ],
+        "vertices": [
+          576,
+          381
+        ],
+        "errors": [
+          0.0,
+          0.017797034233808517
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          115,
+          115
+        ],
+        "vertices": [
+          181,
+          181
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      6836,
+      2990
+    ],
+    "vertices": [
+      13596,
+      7117
+    ]
+  },
+  {
+    "source": "game_assets/buildings/village/WindMill.glb",
+    "sha256": "37e26a9639bb63d332a92d1352214ebe3401aed95899d6781c377c74d8f30fda",
+    "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
+    "library_sha256": "2e8998b55de255bc81243408f2eca7977dcfe8f0e563a251807bac05de7322e3",
+    "library": "game_assets/buildings/lod/WindMill.glb",
+    "center": [
+      0.0031203031539916992,
+      5.743562698364258,
+      -0.6170492172241211
+    ],
+    "radius": 7.569879761601404,
+    "primitives": [
+      {
+        "source": "Mesh0/Primitive0",
+        "levels": [
+          "Mesh0/Primitive0"
+        ],
+        "triangles": [
+          3688,
+          1907
+        ],
+        "vertices": [
+          7360,
+          5249
+        ],
+        "errors": [
+          0.0,
+          0.013829641044139862
+        ]
+      },
+      {
+        "source": "Mesh1/Primitive0",
+        "levels": [
+          "Mesh1/Primitive0"
+        ],
+        "triangles": [
+          744,
+          744
+        ],
+        "vertices": [
+          1528,
+          1528
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "source": "Mesh2/Primitive0",
+        "levels": [
+          "Mesh2/Primitive0"
+        ],
+        "triangles": [
+          1348,
+          694
+        ],
+        "vertices": [
+          2640,
+          1919
+        ],
+        "errors": [
+          0.0,
+          0.014380564913153648
+        ]
+      },
+      {
+        "source": "Mesh3/Primitive0",
+        "levels": [
+          "Mesh3/Primitive0"
+        ],
+        "triangles": [
+          196,
+          160
+        ],
+        "vertices": [
+          384,
+          326
+        ],
+        "errors": [
+          0.0,
+          0.014630228281021118
+        ]
+      },
+      {
+        "source": "Mesh4/Primitive0",
+        "levels": [
+          "Mesh4/Primitive0"
+        ],
+        "triangles": [
+          144,
+          144
+        ],
+        "vertices": [
+          288,
+          288
+        ],
+        "errors": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "triangles": [
+      6120,
+      3649
+    ],
+    "vertices": [
+      12200,
+      9310
+    ]
+  }
+]

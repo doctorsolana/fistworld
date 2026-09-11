@@ -195,11 +195,30 @@ normal building footprint/terrain blend contract. `bakery-door.ron` records a
 continuous demand-driven door cycle with the counters and entrance visible.
 See [the bakery handover](../asset_creation/BAKERY.md) for stock and light contracts.
 
+`fishermans-hut.ron` uses the rural workplace fixture to inspect the shore workshop,
+net shelter, supported table/barrels, all roof undersides, night windows and gameplay
+scale. `fishermans-hut-door.ron` drives a continuous 271-frame door cycle. Its
+`building_lods_ready` assertions wait for source and derived meshes. Repeat with
+`FISTFORCE_BUILDING_LOD=1` to inspect the reduced asset; normal close views use full detail.
+The pier and authoritative shore-work anchors retain their existing placement contract.
+See [FISHERMANS_HUT.md](../asset_creation/FISHERMANS_HUT.md).
+
 `tavern.ron` covers the inn, courtyard, dormer, night lighting and roof undersides;
 `tavern-door.ron` continuously exercises its door. The opt-in connected eight-guest
 review follows authoritative purchases, seating and departure. See
 [the tavern handover](../asset_creation/TAVERN_PROCEDURAL_HANDOVER.md) for launch
 commands and shared furniture/navigation contracts.
+
+`building-lods.ron` stages all 19 building variants with production LOD selection.
+`building-lods-angles.ron` checks their backs and low eaves. The capture-only
+`FISTFORCE_BUILDING_LOD=0|1|2` selects full, reduced or hidden. Fixtures wait for all
+source scenes and shared LOD libraries. `building-lods-zoom.ron` is a continuous
+481-frame close → town → maximum-distance → close round trip; omit the force flag.
+At 12,000 zoom it asserts that all 19 buildings reached hidden state 2.
+PNG sidecars record `building_lod_counts` as `[full, reduced, hidden]`,
+`building_lod_pending`, `building_triangles_full` and `building_triangles_selected`.
+These describe loaded roots, not GPU-visible draws. The force flag also works with
+normal door/night scenarios. See [the LOD build and inspection recipe](../asset_creation/BUILDING_LODS.md).
 
 `house-cabin-l1.ron`, `house-cabin-l2.ron`, `house-long-l1.ron` and
 `house-long-l2.ron` inspect each occupied home at daylight, midnight, rear and gameplay

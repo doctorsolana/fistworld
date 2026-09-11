@@ -119,6 +119,14 @@ fn all_authored_roofs_have_outward_facing_undersides() {
     // nearby framing, so two-sided materials cannot conceal an open mesh.
     let cases: &[(&str, &[(f32, f32, f32, f32)])] = &[
         (
+            "FishermansHut",
+            &[
+                (2.24, 0.0, 2.63, 2.70),
+                (0.4, -2.85, 2.50, 2.58),
+                (-3.12, 0.0, 2.15, 2.23),
+            ],
+        ),
+        (
             "Bakery",
             &[(3.10, 0.3, 3.02, 3.20), (1.5, -3.0, 2.65, 2.80)],
         ),
@@ -423,6 +431,7 @@ fn civic_front_window_panes_are_in_front_of_the_wall_finish() {
 fn rural_roofs_close_their_eaves_and_entries_stay_at_grade() {
     for (name, side, facade, roof_low, roof_high) in [
         ("Farmstead", 2.45, -2.70, 2.68, 2.90),
+        ("FishermansHut", 2.24, -2.30, 2.63, 2.70),
         ("LivestockFarm", 4.02, -2.80, 3.13, 3.39),
         ("StoneQuarry", -2.56, -3.20, 2.76, 3.03),
         ("Church", 3.14, -5.40, 5.25, 5.52),

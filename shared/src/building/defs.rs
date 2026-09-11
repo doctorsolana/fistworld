@@ -244,7 +244,7 @@ impl BuildingType {
                 display_name: "Fisherman's Hut",
                 footprint: Vec2::new(6.44, 6.51),
                 footprint_center: Vec2::new(-0.4000, -0.5125),
-                height: 3.86,
+                height: 4.59,
                 flatten_radius: 1.4,
                 color: Color::srgb(0.41, 0.28, 0.18),
                 model_path: Some("game_assets/buildings/village/FishermansHut.glb#Scene0"),

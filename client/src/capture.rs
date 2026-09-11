@@ -31,6 +31,7 @@ mod wildlife_live;
 pub(crate) use wildlife_live::drive as drive_wildlife_capture;
 mod asset_animation;
 mod asset_fixtures;
+mod building_lods;
 mod character_fixtures;
 mod civic_fixtures;
 mod history_fixtures;
@@ -363,6 +364,7 @@ pub fn run(mut config: CaptureConfig) {
     );
     app.insert_resource(config);
     asset_fixtures::install(&mut app);
+    building_lods::install(&mut app);
     ui_tour::install(&mut app);
     journey_tour::install(&mut app);
 
@@ -412,6 +414,7 @@ pub fn run(mut config: CaptureConfig) {
             drive_capture
                 .before(crate::camera_rts::update_commander_camera)
                 .run_if(asset_fixtures::ready)
+                .run_if(building_lods::ready)
                 .run_if(character_fixtures::ready)
                 .run_if(journey_tour::ready)
                 .run_if(wildlife::ready)
@@ -835,6 +838,17 @@ fn evaluate_assertions(
                 CaptureAssertion::LoadedChunksAtLeast { count } => {
                     (snapshot.loaded_chunks, snapshot.loaded_chunks >= count)
                 }
+                CaptureAssertion::BuildingLodsReady { count } => {
+                    let roots = snapshot.building_lod_counts.iter().sum::<usize>();
+                    (
+                        roots.saturating_sub(snapshot.building_lod_pending),
+                        snapshot.building_lod_pending == 0 && roots == count,
+                    )
+                }
+                CaptureAssertion::BuildingLodsAtLevel { level, count } => (
+                    snapshot.building_lod_counts.get(level).copied().unwrap_or(0),
+                    snapshot.building_lod_counts.get(level).copied() == Some(count),
+                ),
                 CaptureAssertion::EntitiesAtLeast { count } => {
                     (snapshot.entity_count, snapshot.entity_count >= count)
                 }

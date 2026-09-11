@@ -3,8 +3,8 @@
 use super::CaptureConfig;
 use bevy::prelude::*;
 use shared::components::{
-    BuildingDoorDemand, FarmField, LivestockPasture, PlayerPosition, PlayerRotation,
-    SettlementBuilding, SettlementBuildingKind, FARM_FIELD_TERRACE_MARGIN,
+    BuildingDoorDemand, FARM_FIELD_TERRACE_MARGIN, FarmField, LivestockPasture, PlayerPosition,
+    PlayerRotation, SettlementBuilding, SettlementBuildingKind,
 };
 use shared::terrain::WorldTerrain;
 
@@ -14,7 +14,7 @@ pub(super) fn stage_capture_rural(mut commands: Commands) {
     };
     assert!(matches!(
         mode.as_str(),
-        "farmstead" | "livestock" | "quarry" | "church" | "lineup"
+        "farmstead" | "livestock" | "quarry" | "church" | "fisherman" | "lineup"
     ));
     commands.queue(move |world: &mut World| {
         let focus = world.resource::<CaptureConfig>().shots[0].focus;
@@ -23,11 +23,12 @@ pub(super) fn stage_capture_rural(mut commands: Commands) {
             ("livestock", SettlementBuildingKind::LivestockFarm),
             ("quarry", SettlementBuildingKind::StoneQuarry),
             ("church", SettlementBuildingKind::Church),
+            ("fisherman", SettlementBuildingKind::FishermansHut),
         ]
         .into_iter()
         .enumerate()
         {
-            if mode != "lineup" && mode != name {
+            if (mode == "lineup" && name == "fisherman") || (mode != "lineup" && mode != name) {
                 continue;
             }
             let offset = if mode == "lineup" {

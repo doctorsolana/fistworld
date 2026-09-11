@@ -56,6 +56,7 @@ fn window_material(kind: SettlementBuildingKind) -> Option<&'static str> {
         SettlementBuildingKind::Church => Some("ChurchGlass"),
         SettlementBuildingKind::Bakery => Some("BakeryGlass"),
         SettlementBuildingKind::Tavern => Some("TavernGlass"),
+        SettlementBuildingKind::FishermansHut => Some("FishermansHutGlass"),
         _ => None,
     }
 }
@@ -78,6 +79,7 @@ fn windows_occupied(
                     | SettlementBuildingKind::Church
                     | SettlementBuildingKind::Bakery
                     | SettlementBuildingKind::Tavern
+                    | SettlementBuildingKind::FishermansHut
             ) && !site.workers.is_empty()
         })
 }
@@ -358,7 +360,7 @@ pub(super) fn setup_building_night_lighting(
         } else {
             match building_kind {
                 Some(SettlementBuildingKind::FishermansHut) => {
-                    &[("Light_Interior", 820_000.0, 10.0)]
+                    &[("Light_Lantern", 440_000.0, 7.5)]
                 }
                 // Authored rural sites and the windmill share the bounded window-light path.
                 Some(SettlementBuildingKind::Tavern) => &[("Light_Lantern", 620_000.0, 8.5)],

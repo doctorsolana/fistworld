@@ -189,9 +189,17 @@ This is the most technically demanding choice on the board. It requires:
   you are not tactically simulating (as icons/abstract), and you must simulate a region
   no one is rendering (strategic tick). Do not couple them.
 - **Transitions must not pop.** Cross-fade or match silhouettes across LOD bands.
-  **[partial]** — terrain/water streaming and prop LOD have dedicated implementations;
+  **[partial]** — terrain/water streaming, prop LOD and building mesh LOD have dedicated implementations;
   characters already have a full-rig/proxy split. Smoothness across moving zoom bands
   still needs renderer evidence; this document does not establish a current popping defect.
+- **Authored building LOD** lives in `client/src/render/building_lod/`: asset catalog,
+  scene binding, and screen-size selection have separate owners. All 19 village variants
+  retain the source scene and switch between full and reduced meshes at 120 projected
+  pixels, hiding below 4 pixels, with 12% hysteresis. Selection runs at 10 Hz after
+  transform propagation and before Bevy propagates visibility and recalculates mesh
+  bounds. Doors, materials, window glow, windmill mechanisms,
+  collision and NPC anchors keep their existing ownership. Source replacements and hot
+  reload rebind the primitive entities. See [asset build/verification](../asset_creation/BUILDING_LODS.md).
 - **Near and far water are one visual contract.** Detailed ocean and sloping rivers use the
   terrain-crossing water mesh. The far mesh supplies an opaque ocean underlay and a widened
   cartographic river only outside the streamed detail hole. Its river marker must be removed
@@ -370,7 +378,7 @@ The engine steps this section listed map onto it as follows, with their real sta
 | 2. Strategic tick | **Partial.** Villager production, workplace stock, porter commerce and household purchasing run in aggregate. Embodied civic cargo, player merchant routes and bounded NPC merchant trials are live; aggregate caravan/army travel and strategic construction remain future work. | Phases 2–5 |
 | 3. Tactical units + flow fields | **Partial.** Local shared reverse-Dijkstra fields, battalions and flexible combat are live. Regional connectivity and narrow-passage coordination remain. | Phase 6 |
 | 4. Promotion/demotion | **Partial for ordinary villagers.** Tactical routine state is shed/rebuilt across `SimLevel`; army and travelling-party aggregate contracts remain. | Phase 2 |
-| 5. Zoom bands + render LOD | Camera range and dense-villager full-rig/proxy split done; buildings, armies and effects still need representation across bands. | as needed |
+| 5. Zoom bands + render LOD | Camera range, dense-villager full-rig/proxy split and full/reduced/hidden rendering for all 19 authored village building variants done; armies and effects still need representation across bands. | as needed |
 | 6. Art pass | ongoing | — |
 
 **The parting advice of this section still stands, and is why the order changed.** "Step 4
