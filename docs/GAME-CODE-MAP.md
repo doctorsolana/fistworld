@@ -55,6 +55,8 @@ arithmetic remain distinct.
 | Bootstrap and fixed-update wiring | `server/src/app/` |
 | Connection/account ingress | `server/src/net/`, `server/src/persistence/` |
 | Hero, boat, movement and player trade commands | `server/src/player/` |
+| Individual hero walking and regional detours | `server/src/player/orders.rs`, `server/src/world/village_roads/routing.rs` |
+| Physical hero market trades and purchase price ceilings | `server/src/player/market.rs` |
 | Persistent melee fronts and independent approaches | `server/src/player/combat/{fronts,skirmish}.rs` + `fronts/` |
 | Combat clip timing and attachments | `client/src/hero/{combat_animation,attachments}.rs` |
 | Archer equipment, firing lanes and swept arrow impacts | `server/src/player/archery.rs` + `archery/` |
@@ -94,6 +96,8 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Application/plugin registration | `client/src/app_wiring/` |
 | Camera and streaming anchor | `client/src/camera_rts.rs` |
 | Selection and command input | `client/src/selection/`, `client/src/hero/control.rs` |
+| First-session guidance and hero/town camera controls | `client/src/ui/hud/journey.rs` |
+| Market presentation, eligibility and retained bindings | `client/src/ui/market.rs` and `market/model.rs` |
 | Character plugin ordering | `client/src/hero/mod.rs` |
 | Character rigs, wardrobe and skin | `client/src/hero/appearance.rs` |
 | Snapshot smoothing | `client/src/hero/motion.rs` |
@@ -106,6 +110,7 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Visible bakery stock | `client/src/settlement/stock.rs` |
 | Shared UI behavior and styling | `client/src/ui/foundation.rs`, `modal.rs`, `scroll.rs`, `styles.rs`, `typography.rs`, `motion.rs`, `button_motion.rs`, `frame.rs` |
 | Capture readiness, orchestration and fixture ownership | `client/src/capture.rs` and `capture/` |
+| Connected creation, travel, trading and reconnect regression | `client/src/capture/session.rs`, `capture/first_session.py` |
 | Company directory and management presentation | `client/src/ui/encyclopedia/companies.rs` and `companies/` |
 
 The company page keeps snapshots in `model.rs`/`directory.rs`, input handling in

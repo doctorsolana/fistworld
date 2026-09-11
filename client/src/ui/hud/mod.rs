@@ -1,9 +1,10 @@
-//! Persistent gameplay HUD (world clock, god-mode toggle, simulation speed).
+//! Persistent gameplay HUD (journey guidance, world clock and developer controls).
 //!
 //! Unlike the modal panels this never sets an `InputState` flag — the camera must keep
 //! panning underneath it.
 
 pub mod actions;
+mod journey;
 pub mod layout;
 pub mod state_sync;
 
@@ -34,6 +35,7 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
+        journey::install(app);
         app.init_resource::<GodCapability>();
         app.init_resource::<HudMode>();
         app.init_resource::<GodNotice>();
@@ -81,8 +83,7 @@ impl Plugin for HudPlugin {
     }
 }
 
-/// A short message shown under the god controls: why the last action was
-/// refused.
+/// A short action result, shown in the journey plate and developer controls.
 ///
 /// Exists because a refused placement used to be indistinguishable from a
 /// broken button — the click was consumed, the arm reset, and the reason lived

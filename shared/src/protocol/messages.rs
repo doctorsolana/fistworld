@@ -447,8 +447,14 @@ pub struct HeroBusinessResult {
 /// when a later buyer clears the listing.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum HeroMarketAction {
-    Buy,
-    PostSellOrder { unit_price: u64 },
+    /// The displayed per-unit quote is a ceiling, not permission to spend the
+    /// entire wallet if another buyer clears that offer before this arrives.
+    Buy {
+        maximum_unit_price: u64,
+    },
+    PostSellOrder {
+        unit_price: u64,
+    },
 }
 
 /// Client -> server request to trade physical goods at a Hall market.
@@ -856,6 +862,23 @@ mod tests {
             bincode::deserialize::<HeroMarketOrder>(&bytes).unwrap(),
             message
         );
+    }
+
+    #[test]
+    fn hero_buy_preserves_the_quoted_price_ceiling() {
+        for maximum_unit_price in [0, 72, u64::MAX] {
+            let message = HeroMarketOrder {
+                market: Entity::from_raw_u32(17).unwrap(),
+                good: crate::economy::Good::Wheat,
+                action: HeroMarketAction::Buy { maximum_unit_price },
+                units: MAX_HERO_MARKET_ORDER_UNITS,
+            };
+            let bytes = bincode::serialize(&message).unwrap();
+            assert_eq!(
+                bincode::deserialize::<HeroMarketOrder>(&bytes).unwrap(),
+                message
+            );
+        }
     }
 
     #[test]

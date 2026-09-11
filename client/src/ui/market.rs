@@ -6,6 +6,9 @@
 //! Live prices bind into stable widgets so a fast simulation never despawns a
 //! button from under the pointer.
 
+mod model;
+use model::{market_page_model, MarketPageModel, MarketRowModel};
+
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
@@ -84,6 +87,10 @@ struct OpenMarketButton(MarketPage);
 struct MarketFeedback {
     message: String,
     success: bool,
+    market: Option<Entity>,
+    // Orders and replies share an ordered reliable stream. Keep the owning
+    // page even if the player changes markets before a reply arrives.
+    pending: std::collections::VecDeque<Entity>,
 }
 
 #[derive(Component)]
@@ -152,74 +159,6 @@ struct MarketActionLabel {
     kind: MarketButtonKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct MarketRowModel {
-    good: Good,
-    condition: String,
-    store: String,
-    listed: String,
-    last_sale: String,
-    best_offer: String,
-    today: String,
-    hero_cargo: String,
-    buy_label: String,
-    offer_label: String,
-    buy_enabled: bool,
-    offer_enabled: bool,
-    offer_price: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct MarketPageModel {
-    settlement: Entity,
-    place: String,
-    title: String,
-    subtitle: String,
-    access: String,
-    access_enabled: bool,
-    summaries: [String; 5],
-    rows: Vec<MarketRowModel>,
-    feedback: String,
-    feedback_success: Option<bool>,
-}
-
-impl MarketPageModel {
-    fn summary(&self, field: MarketSummaryField) -> &str {
-        &self.summaries[match field {
-            MarketSummaryField::OnOffer => 0,
-            MarketSummaryField::CommonStore => 1,
-            MarketSummaryField::Today => 2,
-            MarketSummaryField::Lifetime => 3,
-            MarketSummaryField::HeroFunds => 4,
-        }]
-    }
-
-    fn row(&self, good: Good) -> &MarketRowModel {
-        &self.rows[good.index()]
-    }
-
-    fn text(&self, field: MarketBoundText) -> &str {
-        match field {
-            MarketBoundText::Title => &self.title,
-            MarketBoundText::Subtitle => &self.subtitle,
-            MarketBoundText::Access => &self.access,
-            MarketBoundText::Summary(field) => self.summary(field),
-            MarketBoundText::Row(good, field) => {
-                let row = self.row(good);
-                match field {
-                    MarketRowField::Condition => &row.condition,
-                    MarketRowField::Store => &row.store,
-                    MarketRowField::Listed => &row.listed,
-                    MarketRowField::LastSale => &row.last_sale,
-                    MarketRowField::BestOffer => &row.best_offer,
-                    MarketRowField::Today => &row.today,
-                    MarketRowField::HeroCargo => &row.hero_cargo,
-                }
-            }
-        }
-    }
-}
-
 #[derive(SystemParam)]
 struct MarketWorld<'w, 's> {
     settlements: Query<
@@ -253,6 +192,7 @@ struct MarketWorld<'w, 's> {
             &'static PlayerPosition,
             Option<&'static GoodsInventory>,
             Option<&'static Wallet>,
+            Option<&'static shared::components::PersonId>,
         ),
     >,
     local: Option<Res<'w, crate::camera_rts::LocalPeerId>>,
@@ -348,9 +288,10 @@ fn sync_place_market_action(
         match (&target, current) {
             (Some(target), Some(current)) if current.0 == *target => {}
             (Some(target), _) => {
-                commands
-                    .entity(entity)
-                    .insert(OpenMarketButton(target.clone()));
+                commands.entity(entity).insert((
+                    OpenMarketButton(target.clone()),
+                    Name::new("open-town-market"),
+                ));
             }
             (None, Some(_)) => {
                 commands.entity(entity).remove::<OpenMarketButton>();
@@ -461,206 +402,6 @@ fn open_nearby_market_on_interact(
     target.0 = Some(page);
 }
 
-fn market_page_model(
-    target: &MarketPage,
-    world: &MarketWorld<'_, '_>,
-    feedback: &MarketFeedback,
-) -> Option<MarketPageModel> {
-    let market = world.markets.get(target.settlement).ok()?;
-    let (settlement, settlement_id, hall_level, hall_position, hall_rotation) =
-        world.settlements.get(target.settlement).ok()?;
-    let inventory = world.inventories.get(target.settlement).ok();
-    let hall_level = hall_level
-        .copied()
-        .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
-    let local_hero = world.local.as_ref().and_then(|local| {
-        world
-            .heroes
-            .iter()
-            .find(|(hero, ..)| shared::player::peer_id_to_u64(hero.owner) == local.0)
-    });
-    let hero_inventory = local_hero.and_then(|(_, _, inventory, _)| inventory);
-    let hero_wallet = local_hero.and_then(|(_, _, _, wallet)| wallet);
-    let counter = local_hero.map(|(_, hero_position, ..)| {
-        let hall_entrance = SettlementBuildingKind::Hall.entrance_position(
-            hall_position.0,
-            hall_rotation.map_or(0.0, |rotation| rotation.0),
-        );
-        nearest_public_market_entrance(
-            hero_position.0,
-            hall_entrance,
-            world
-                .buildings
-                .iter()
-                .filter(|(building, owner, ..)| {
-                    building.kind == SettlementBuildingKind::Market
-                        && owner.is_some_and(|owner| owner.0 == *settlement_id)
-                })
-                .filter_map(|(building, _, position, rotation)| {
-                    Some(building.kind.entrance_position(position?.0, rotation?.0))
-                }),
-        )
-    });
-    let hero_distance = local_hero.zip(counter).map(|((_, position, ..), counter)| {
-        Vec2::new(position.0.x, position.0.z).distance(Vec2::new(counter.x, counter.z))
-    });
-    let can_trade = hero_distance.is_some_and(|distance| distance <= HERO_MARKET_INTERACTION_RANGE);
-    let access = if local_hero.is_none() {
-        "VIEW ONLY / CREATE A HERO TO TRADE".to_string()
-    } else if can_trade {
-        "AT THE COUNTER / TRADING ENABLED".to_string()
-    } else {
-        hero_distance.map_or_else(
-            || "VIEW ONLY / MARKET LOCATION UNKNOWN".to_string(),
-            |distance| format!("VIEW ONLY / {distance:.0}M FROM THE COUNTER"),
-        )
-    };
-    let rows: Vec<_> = Good::ALL
-        .into_iter()
-        .map(|good| {
-            market_row_model(
-                good,
-                inventory,
-                market,
-                hero_inventory,
-                hero_wallet,
-                can_trade,
-            )
-        })
-        .collect();
-    let listed_units = Good::ALL
-        .into_iter()
-        .map(|good| market.listed_units(good))
-        .fold(0u32, u32::saturating_add);
-    let today_coin = Good::ALL
-        .into_iter()
-        .map(|good| market.pool(good).day.consumer_coin)
-        .fold(0u64, u64::saturating_add);
-    let today_units = Good::ALL
-        .into_iter()
-        .map(|good| market.pool(good).day.consumer_units)
-        .fold(0u64, u64::saturating_add);
-    let common_store = inventory.map_or_else(
-        || "No common store".to_string(),
-        |stock| format!("{} / {} bulk", stock.used_bulk(), stock.bulk_capacity()),
-    );
-    let hero_funds = hero_wallet.map_or_else(
-        || "No wallet".to_string(),
-        |wallet| format!("{} coin", format_money(wallet.balance())),
-    );
-    let feedback_present = !feedback.message.is_empty();
-    let feedback_text = if feedback_present {
-        feedback.message.clone()
-    } else if can_trade {
-        "You are at the exchange. BUY clears the cheapest physical offer; POST OFFER consigns one carried unit at the shown price.".to_string()
-    } else {
-        "Market records are readable from anywhere. To transact, take your hero within 12m of this town's Hall or Marketplace counter.".to_string()
-    };
-    Some(MarketPageModel {
-        settlement: target.settlement,
-        place: settlement.name.clone(),
-        title: format!("{} MARKET", settlement.name.to_uppercase()),
-        subtitle: format!(
-            "{} / {} / {} / {:.2}% FEE",
-            settlement.tier.label().to_uppercase(),
-            hall_level.label(),
-            market.trade_tier().label().to_uppercase(),
-            market.market_fee_bps() as f32 / 100.0,
-        ),
-        access,
-        access_enabled: can_trade,
-        summaries: [
-            format!("{listed_units} units"),
-            common_store,
-            format!("{} coin / {today_units} units", format_money(today_coin)),
-            format!("{} coin", format_money(market.total_volume())),
-            hero_funds,
-        ],
-        rows,
-        feedback: feedback_text,
-        feedback_success: feedback_present.then_some(feedback.success),
-    })
-}
-
-fn market_row_model(
-    good: Good,
-    inventory: Option<&GoodsInventory>,
-    market: &MootMarket,
-    hero_inventory: Option<&GoodsInventory>,
-    hero_wallet: Option<&Wallet>,
-    can_trade: bool,
-) -> MarketRowModel {
-    let pool = market.pool(good);
-    let stock = inventory.map_or(0, |inventory| inventory.amount(good));
-    let listed = market.listed_units(good);
-    let unlocked = market.can_trade(good);
-    let unmet = pool.day.unmet_units();
-    let condition = if !unlocked {
-        format!(
-            "UNLOCKS AT {}",
-            good.minimum_market_tier().label().to_uppercase()
-        )
-    } else if unmet > 0 {
-        format!("{unmet} REQUESTED UNITS UNFILLED TODAY")
-    } else if listed == 0 {
-        "NO LIVE OFFERS".to_string()
-    } else if stock < pool.target_stock {
-        "SHORT SUPPLY".to_string()
-    } else if pool.target_stock > 0 && stock > pool.target_stock.saturating_mul(2) {
-        "SURPLUS".to_string()
-    } else {
-        "BALANCED".to_string()
-    };
-    let hero_units = hero_inventory.map_or(0, |stock| stock.amount(good));
-    let hero_balance = hero_wallet.map_or(0, |wallet| wallet.balance());
-    let buy_enabled = can_trade && unlocked && listed > 0 && hero_balance >= pool.ask;
-    let offer_enabled = can_trade && unlocked && hero_units > 0;
-    let offer_price = market.suggested_price(good);
-    let buy_label = if !unlocked {
-        "BUY / LOCKED".to_string()
-    } else if !can_trade {
-        "BUY / VISIT".to_string()
-    } else if listed == 0 {
-        "BUY / NO OFFER".to_string()
-    } else if hero_balance < pool.ask {
-        "BUY / NEED COIN".to_string()
-    } else {
-        format!("BUY 1 / {}", format_money(pool.ask))
-    };
-    let offer_label = if !unlocked {
-        "POST / LOCKED".to_string()
-    } else if !can_trade {
-        "POST / VISIT".to_string()
-    } else if hero_units == 0 {
-        "POST / EMPTY".to_string()
-    } else {
-        format!("POST 1 / {}", format_money(offer_price))
-    };
-    MarketRowModel {
-        good,
-        condition,
-        store: format!("{stock} / {}", pool.target_stock),
-        listed: format!("{listed}"),
-        last_sale: if pool.bid == 0 {
-            "No sale".to_string()
-        } else {
-            format!("{} coin", format_money(pool.bid))
-        },
-        best_offer: if listed == 0 {
-            "None".to_string()
-        } else {
-            format!("{} coin", format_money(pool.ask))
-        },
-        today: format!("{} / {unmet}", pool.day.consumer_units),
-        hero_cargo: format!("{hero_units}"),
-        buy_label,
-        offer_label,
-        buy_enabled,
-        offer_enabled,
-        offer_price,
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn sync_market_page(
     mut commands: Commands,
@@ -767,7 +508,12 @@ fn bind_market_page(
     for (entity, mut button, disabled, mut style) in ui.actions.iter_mut() {
         let row = model.row(button.good);
         let (enabled, action) = match button.kind {
-            MarketButtonKind::Buy => (row.buy_enabled, HeroMarketAction::Buy),
+            MarketButtonKind::Buy => (
+                row.buy_enabled,
+                HeroMarketAction::Buy {
+                    maximum_unit_price: row.buy_price,
+                },
+            ),
             MarketButtonKind::Offer => (
                 row.offer_enabled,
                 HeroMarketAction::PostSellOrder {
@@ -1108,7 +854,7 @@ fn spawn_market_row(
                     spawn_market_fact(
                         facts,
                         MarketBoundText::Row(row.good, MarketRowField::BestOffer),
-                        "BEST OFFER",
+                        "BUY PRICE",
                         &row.best_offer,
                     );
                     spawn_market_fact(
@@ -1120,7 +866,7 @@ fn spawn_market_row(
                     spawn_market_fact(
                         facts,
                         MarketBoundText::Row(row.good, MarketRowField::HeroCargo),
-                        "YOUR CARGO",
+                        "YOUR GOODS",
                         &row.hero_cargo,
                     );
                 });
@@ -1207,7 +953,9 @@ fn spawn_trade_button(
     let (enabled, action, label, variant, width) = match kind {
         MarketButtonKind::Buy => (
             row.buy_enabled,
-            HeroMarketAction::Buy,
+            HeroMarketAction::Buy {
+                maximum_unit_price: row.buy_price,
+            },
             row.buy_label.as_str(),
             UiButtonVariant::Primary,
             112.0,
@@ -1223,6 +971,7 @@ fn spawn_trade_button(
         ),
     };
     let mut button = parent.spawn((
+        Name::new(format!("market-{:?}-{:?}", kind, row.good)),
         MarketTradeButton {
             market: settlement,
             good: row.good,
@@ -1261,6 +1010,7 @@ fn spawn_trade_button(
 
 fn handle_market_trade_buttons(
     mouse: Res<ButtonInput<MouseButton>>,
+    mut feedback: ResMut<MarketFeedback>,
     buttons: Query<(&Interaction, &MarketTradeButton), Changed<Interaction>>,
     mut senders: Query<
         &mut MessageSender<HeroMarketOrder>,
@@ -1275,6 +1025,7 @@ fn handle_market_trade_buttons(
             continue;
         }
         if let Ok(mut sender) = senders.single_mut() {
+            feedback.pending.push_back(order.market);
             sender.send::<ReliableChannel>(HeroMarketOrder {
                 market: order.market,
                 good: order.good,
@@ -1294,6 +1045,7 @@ fn receive_market_trade_results(
 ) {
     for mut receiver in receivers.iter_mut() {
         for result in receiver.receive() {
+            feedback.market = feedback.pending.pop_front();
             feedback.message = result.message;
             feedback.success = result.success;
         }
@@ -1311,39 +1063,4 @@ fn despawn_market_page(
     }
     target.0 = None;
     *feedback = default();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_good_has_one_stable_row_slot() {
-        let market = MootMarket::founding();
-        let rows: Vec<_> = Good::ALL
-            .into_iter()
-            .map(|good| market_row_model(good, None, &market, None, None, false))
-            .collect();
-        assert_eq!(rows.len(), Good::COUNT);
-        for good in Good::ALL {
-            assert_eq!(rows[good.index()].good, good);
-        }
-    }
-
-    #[test]
-    fn remote_market_is_readable_but_not_actionable() {
-        let market = MootMarket::founding();
-        let row = market_row_model(
-            Good::Wood,
-            None,
-            &market,
-            None,
-            Some(&Wallet::new(10_000)),
-            false,
-        );
-        assert!(!row.buy_enabled);
-        assert!(!row.offer_enabled);
-        assert_eq!(row.buy_label, "BUY / VISIT");
-        assert_eq!(row.offer_label, "POST / VISIT");
-    }
 }

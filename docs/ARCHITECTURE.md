@@ -322,6 +322,19 @@ confirmed targeting to client presentation.
 `hero::step_units` remains the only marching position integrator. Civilian road planners
 do not own commanded formations. The client derives its army roster only when membership,
 identity, formation preferences or vitals change.
+An individual, unmounted hero's plain move uses `NavigationRoutePending` and the existing
+incremental road planner instead of a formation field. Long personal trips receive its
+bounded regional survey window and reuse road connectivity; a battlefield grid that grows
+coarser with journey length cannot reliably represent village exits and river detours.
+Regional trips over 512m use a wider 768m detour margin and a 12m middle lattice, with
+fine endpoint cells and the existing 24,000-node ceiling. Coarse cells share one aligned
+grid; every candidate edge and the completed route still receive collision checks.
+Cold deterministic prop chunks are prepared across planner ticks before building the
+route's collision snapshot. Visible-path simplification probes progressively farther
+points and refines failed spans, avoiding quadratic resampling of long clear stretches.
+Swimming, mounted units, battalions and explicit formation/attack-move orders retain their
+own movement contracts. Changing an order clears the prior route and pending state before
+the new intent commits.
 `BattalionFormation` retains preferred files/spacing; sparse `FormationSeat` offsets
 keep rank assignment consistent despite client/server walking delay. The drag preview
 caches layouts and retains its footprint/count UI while the pointer is stationary.

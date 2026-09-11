@@ -24,6 +24,101 @@ fn selected(entity: Entity, command: UnitCommand) -> UnitOrder {
         command,
     }
 }
+
+#[test]
+fn a_heroes_long_journey_uses_a_certified_detour_and_can_be_cancelled() {
+    use crate::player::hero::step_units;
+    use crate::world::pathfinding::PathfindingBudgetSettings;
+    use crate::world::village_roads::{plan_villager_travel_routes, VillageRoadGraph};
+    use shared::region::RegionCoord;
+    use shared::spatial::SpatialObstacleGrid;
+    use shared::terrain::WorldTerrain;
+
+    let mut app = App::new();
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(
+        Vec3::new(100.0, 80.0, 0.0),
+        Vec2::new(200.0, 160.0),
+        0.0,
+        4.0,
+    );
+    app.insert_resource(terrain)
+        .init_resource::<PathfindingBudgetSettings>()
+        .init_resource::<VillageRoadGraph>();
+    let mut obstacles = SpatialObstacleGrid::default();
+    let wall = FortificationSegment {
+        settlement_id: SettlementId(1),
+        circuit: 0,
+        start: Vec3::new(100.0, 80.0, -40.0),
+        end: Vec3::new(100.0, 80.0, 40.0),
+        kind: FortificationKind::Wall,
+        material: FortificationMaterial::Palisade,
+        complete: true,
+    };
+    obstacles.insert(wall.navigation_obstacle().unwrap());
+    app.world_mut().spawn(wall);
+    app.insert_resource(obstacles);
+    let hero = soldier(app.world_mut(), "alice", Vec3::new(0.0, 80.0, 0.0));
+    app.world_mut().entity_mut(hero).insert((
+        CharacterKind::Hero,
+        Hero {
+            owner: lightyear::prelude::PeerId::Netcode(41),
+        },
+        RegionCoord::default(),
+    ));
+    app.world_mut().spawn(TimeWarp::clamped(100.0));
+    app.add_systems(
+        Update,
+        (advance_marches, plan_villager_travel_routes, step_units).chain(),
+    );
+    let destination = Vec3::new(200.0, 80.0, 0.0);
+    assert_eq!(
+        apply_unit_order(
+            app.world_mut(),
+            "alice",
+            UnitOrder::move_to(vec![hero], destination)
+        )
+        .0,
+        1
+    );
+    let mut arrived = false;
+    for _ in 0..1800 {
+        app.update();
+        let at = app.world().get::<PlayerPosition>(hero).unwrap().0;
+        assert!(!app
+            .world()
+            .resource::<SpatialObstacleGrid>()
+            .point_blocked(at.xz()));
+        if at.xz().distance(destination.xz()) < 0.5 {
+            arrived = true;
+            break;
+        }
+    }
+    assert!(arrived, "a valid long journey must not strand the hero: at={:?} pending={} failed={} route={:?} target={:?}",
+        app.world().get::<PlayerPosition>(hero).unwrap().0,
+        app.world().get::<NavigationRoutePending>(hero).is_some(),
+        app.world().get::<NavigationRouteFailed>(hero).is_some(),
+        app.world().get::<TravelRoute>(hero).map(|r| (r.next, r.waypoints.len(), r.goal)),
+        app.world().get::<MoveTarget>(hero).map(|t| t.0));
+    assert_eq!(
+        apply_unit_order(
+            app.world_mut(),
+            "alice",
+            UnitOrder::move_to(vec![hero], Vec3::new(0.0, 80.0, 0.0))
+        )
+        .0,
+        1
+    );
+    apply_unit_order(app.world_mut(), "alice", selected(hero, UnitCommand::Hold));
+    let stopped = app.world().get::<PlayerPosition>(hero).unwrap().0;
+    for _ in 0..5 {
+        app.update();
+    }
+    assert_eq!(app.world().get::<PlayerPosition>(hero).unwrap().0, stopped);
+    assert!(app.world().get::<NavigationRoutePending>(hero).is_none());
+    assert!(app.world().get::<TravelRoute>(hero).is_none());
+}
+
 #[test]
 fn mixed_verbs_obey_last_intent_and_keep_weapon_cooldowns() {
     let mut world = World::new();

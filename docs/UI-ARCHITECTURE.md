@@ -20,10 +20,23 @@ screen-specific hover logic, accidental world input, or full-tree churn at simul
 | Screen modules | Data model, layout and actions specific to that screen |
 | `client/src/app_wiring/window.rs` | Resolution-aware UI scale; 3D render scale never makes UI blurry |
 | `client/src/ui/pause_menu/display.rs` | Explicit display-mode choices, supported output sizes, actual scene-pixel labels and retained confirmation/resize state |
+| `client/src/ui/hud/journey.rs` | Ordinary hero summary, contextual guidance, owned-hero selection and camera/map actions |
+| `client/src/ui/market/model.rs` | Pure market presentation: eligible purchase quote, cargo/listed ownership and disabled reasons |
 
 Do not put a new palette alias, hover state machine, modal scrim or scroll algorithm in a
 screen module. Screen-specific data colours (for example chart series or a health grade) are
 allowed; reusable chrome colours belong in `styles.rs`.
+
+The journey plate binds text at most five times per second and changes existing widgets
+only when their values change. Its buttons move the local view or selection; normal order
+handlers remain responsible for movement and trading intent. It hides behind modal screens
+and during combat or the opening cinematic.
+
+The market layout and actions remain in `market.rs`; its read-only model lives in
+`market/model.rs`. Quote another seller's eligible offer, not the exchange's headline ask
+(which may be the player's own offer). The displayed BUY price also becomes the order's
+server-enforced price ceiling. Ordered trade replies are associated with the originating
+market so changing pages cannot show another town's feedback.
 
 ## Visual contract
 

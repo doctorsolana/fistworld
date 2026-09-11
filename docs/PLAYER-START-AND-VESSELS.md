@@ -1,6 +1,6 @@
 # Player start and vessels
 
-Audited against the executable state on 2026-08-18. This document describes the normal
+Audited against the executable state on 2026-09-11. This document describes the normal
 player arrival and the reusable water-navigation seam. The server remains authoritative;
 the client only presents the vessel and sends destinations.
 
@@ -31,8 +31,21 @@ the client only presents the vessel and sends destinations.
    hands off at the normal RTS angle with the Dinghy selected. Reconnects do not replay
    either the camera or the cue.
 6. Right-clicking water issues a server-authoritative sailing order. Right-clicking dry
-   ground within 11 metres disembarks the Hero. The starter Dinghy becomes a slack,
-   non-commandable shoreline wreck and selection passes to the Hero.
+   land selects a reachable shore approach, sails there, disembarks and continues on foot
+   toward the requested destination. Nearby shore clicks can disembark immediately.
+   The starter Dinghy becomes a slack, non-commandable shoreline wreck and selection passes
+   to the Hero.
+7. The **Your Journey** plate shows the hero's coin, cargo, nearest inhabited town and
+   contextual sailing/walking/trading hints. **Home** selects and centres the owned hero;
+   **View Town** centres the nearest inhabited town without moving the hero or changing
+   selection. **M** opens the map. At a Hall or Marketplace counter, **E** opens trading.
+   Modal pages suspend these world controls. Refused movement orders also appear here.
+
+**BUY** takes one unit from another seller at no more than the displayed price. **POST**
+consigns one carried unit; it does not sell instantly to the Hall. The market shows carried
+and listed quantities separately. Payment follows a real purchase, less the town's fee.
+An account reconnecting to the same running server retains its hero, cargo, wallet and
+unsold offers; sales made while it is offline still pay that retained hero.
 
 The server intentionally starts a fresh world and account state on process restart. This
 flow does not claim durable cross-restart world persistence. Development God Mode remains
@@ -56,6 +69,10 @@ Dinghy, disembarks on certified dry ground and joins the ordinary land route and
 registration queue.
 
 ## Navigation contract
+
+An individual on-foot hero's ordinary land order uses the bounded incremental road planner,
+including regional detours and road speed. It does not use the combat formation grid for a
+kilometre-scale journey. New move/hold/attack orders replace the pending journey normally.
 
 `Vessel` is the generic server-side opt-in for Dinghies, future merchant ships and war
 ships. `PlayerBoat` currently selects the Dinghy presentation; it is not the general

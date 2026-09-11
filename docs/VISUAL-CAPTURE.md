@@ -20,6 +20,9 @@ The implementation separates orchestration from fixture data:
   inhabited Hall. `FISTWORLD_LAB_CAPTURE_ACTIVITY=settlement` frames the nearest actual
   Hall after the opening cinematic and waits for dressed residents; no lab fixture or
   God access is required.
+- `client/src/capture/session.rs` owns opt-in connected player-session inspection and
+  input driving. `capture/first_session.py` exercises creation, arrival, trading and
+  reconnect with ordinary production input handlers and authoritative replicated state.
 - `client/src/capture/inspection.rs` reads shared world counters and live camera evidence;
   `presentation.rs` owns the offline scene-and-UI render target.
 - `world_fixture.rs`, `scene_fixtures.rs`, `ui_fixtures.rs` and `history_fixtures.rs`
@@ -66,6 +69,47 @@ its configured tolerances.
 
 Run `cargo run -p client --bin capture -- --help` for all one-off flags. Existing presets and
 fixture environment variables remain supported.
+
+## Ordinary connected first-session regression
+
+Build both binaries together (market messages include a protocol-versioned purchase price
+ceiling), then run against a free local UDP port 5000:
+
+```bash
+cargo build --workspace --profile playtest
+python3 capture/first_session.py run --seed 12345 \
+  --out logs/first-session/seed12345 --resolution 1600x1000
+python3 capture/first_session.py run --seed 918273 \
+  --out logs/first-session/seed918273 --resolution 1280x720 --soak-seconds 1800
+```
+
+Each output directory must be fresh. The runner starts and stops only its own processes,
+isolates settings, disables developer access, and preserves server/client logs plus a
+`report.json`. It does not grant money, manufacture stock, teleport actors or alter prices.
+On macOS it holds an AC-power sleep assertion for its own server process; the assertion
+ends with the run and does not change saved power preferences. Battery exhaustion or
+manual suspension must not be counted as connected play time.
+The one-time character creation is clicked through the normal creator; movement uses
+right-click orders and market tests press the actual retained BUY/POST buttons. The
+optional sustained phase visits ordinary generated towns without disconnecting.
+It records authoritative positions in `movement.jsonl`, periodically returns the
+camera to the walking hero and captures the streamed view. An accepted order
+that makes no progress for 90 seconds fails the run; long journeys receive a
+distance-based arrival budget.
+
+`FISTWORLD_SESSION_CAPTURE_DIR` enables the driver only in an explicitly isolated test
+session (`FISTFORCE_NO_SETTINGS_FILE=1`). A separate controller can submit numbered JSON
+commands using `capture/first_session.py command DIRECTORY '{"action":"key","key":"Home"}'`.
+Supported keys are Home, E, N, M and Escape. Other commands click a named visible button,
+right-click a terrain point, adjust only the camera view, capture, or quit. `status.json`
+publishes hero, market, UI and camera evidence once per second; `reply-N.json` reports
+command completion. A disabled-button attempt returns a failure without applying a trade.
+
+Captures use the connected composed presentation image, wait for loaded chunks and
+settled camera XZ/zoom, and complete through Bevy's screenshot observer. Inspect **both**
+the PNG and `.capture.json`; `.session.json` adds the replicated gameplay state. These are
+live-world evidence, not deterministic pixel baselines: the actual market and NPCs continue
+to run. All outputs belong under ignored `logs/`, never in the asset tree or Git.
 
 ## Scenario format
 

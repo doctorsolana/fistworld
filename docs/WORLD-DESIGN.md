@@ -1293,12 +1293,16 @@ for price or insufficient buyer cash are retained separately for the current and
 preceding market day. Those readings let the Hall distinguish “nobody asked” from
 “people asked but the monopoly was too expensive.” This is a local order book,
 not a global market: offers exist only where their goods were physically delivered.
-The first player trading verb is live: an embodied hero within 12 metres of a Hall can buy
+The first player trading verb is live: an embodied hero within 12 metres of a Hall or Marketplace can buy
 real listed stock into bounded personal cargo or consign carried stock under their own
 `PersonId`. A sale does not make the Hall pay them; coin arrives only when a real later buyer
 clears that listing, minus the enacted fee. The personal-consignment UI currently lists at
 the exchange's current ask; custom personal asks and quantities remain future merchant
-controls. Company Masters already set their business sites' asking prices and collection policy.
+controls. The ledger separates carried cargo from unsold listings and quotes only other
+sellers' offers. A BUY order carries that displayed price ceiling so an intervening purchase
+cannot silently charge the hero a higher replacement ask. Same-server reconnect retains
+both cargo and unsold claims; offline sales pay the retained hero's wallet. Company Masters
+already set their business sites' asking prices and collection policy.
 The first ownership verb is live too: the same Hall exposes exact permit quotes and lets the
 hero place any tier-unlocked entry from one shared permit catalogue, including a House,
 Farmstead, Fisherman's Hut, Livestock Farm, Lumberjack Hut, Stone Quarry, Windmill,
@@ -1572,6 +1576,8 @@ exercised:
    disembarkation and an embodied Hero are live. The Hero can move, trade and fight;
    see [PLAYER-START-AND-VESSELS.md](PLAYER-START-AND-VESSELS.md). A fresh ordinary
    world now includes inhabited starting settlements without operator/lab setup.
+   Contextual journey guidance, Home to select/find the hero, and View Town to inspect the
+   nearest inhabited settlement support that ordinary arrival without developer controls.
 2. **First coin.** Nearby Hall buy/consign actions and company businesses are live.
    A personally purchasable cart, paid escort contracts and bandit bounties remain
    future work. Existing company merchant routes provide the physical cargo foundation.

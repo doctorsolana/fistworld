@@ -37,6 +37,8 @@ mod history_fixtures;
 mod house_fixtures;
 mod inspection;
 mod live;
+mod session;
+pub(crate) use session::install as install_session_capture;
 mod performance;
 mod presentation;
 mod rural_fixtures;

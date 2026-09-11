@@ -1149,8 +1149,10 @@ fn resume_incremental_route(
     telemetry: &mut RoutePlannerTelemetry,
 ) -> IncrementalRouteResult {
     let extended_local = !job.regional_corridor && job.max_nodes > AGENT_SURVEY_MAX_NODES;
+    let (regional_stride, regional_padding) =
+        regional_survey_profile(job.start.survey.distance(job.goal.survey));
     let survey_padding = if job.regional_corridor {
-        INTERSETTLEMENT_SURVEY_PADDING
+        regional_padding
     } else {
         SURVEY_PADDING
     };
@@ -1166,7 +1168,7 @@ fn resume_incremental_route(
         max_nodes: job.max_nodes,
         cell_size: SURVEY_CELL,
         coarse_stride: if job.regional_corridor {
-            INTERSETTLEMENT_SURVEY_STRIDE
+            regional_stride
         } else if extended_local {
             EXTENDED_LOCAL_SURVEY_STRIDE
         } else {
@@ -1577,6 +1579,7 @@ pub fn plan_villager_travel_routes(
     mut building_cache: Local<NavigationBuildingCache>,
     mut telemetry: Local<RoutePlannerTelemetry>,
     mut aux: RoutePlannerAux,
+    heroes: Query<(), With<shared::components::Hero>>,
     mut movers: Query<
         (
             Entity,
@@ -1813,7 +1816,16 @@ pub fn plan_villager_travel_routes(
             continue;
         };
         let local_distance = position.0.distance(target.0);
-        let survey_max_nodes = agent_survey_max_nodes(local_distance, objective);
+        // Personal travel enters this same bounded planner. A long hero trip
+        // needs the regional detour window just like a certified immigrant
+        // approach; the local worker budget cannot represent a river bend.
+        let intersettlement_route = needs_regional_corridor(objective, local_distance)
+            || (heroes.contains(entity) && local_distance > EXTENDED_LOCAL_SURVEY_MIN_DISTANCE);
+        let survey_max_nodes = if intersettlement_route {
+            INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES
+        } else {
+            agent_survey_max_nodes(local_distance, objective)
+        };
         if pending.goal.distance_squared(target.0) > 0.01 {
             *pending = NavigationRoutePending::new(target.0);
             // A changed destination is a new request: reset its wait age so a
@@ -2045,7 +2057,22 @@ pub fn plan_villager_travel_routes(
         // coarse, incremental corridor mechanics as a caravan, while keeping
         // it in the ordinary committed priority bucket so a wave cannot starve
         // established work. Local migration retains the cheap town planner.
-        let intersettlement_route = needs_regional_corridor(objective, local_distance);
+        let connector_reach = if intersettlement_route {
+            regional_survey_profile(start.survey.distance(goal.survey)).1
+        } else {
+            ROAD_ROUTE_JOIN_DISTANCE
+        };
+        if !prop_cache.prepare_agent_route(
+            &terrain,
+            start.survey,
+            goal.survey,
+            connector_reach,
+            planner_started + planner_duration,
+        ) {
+            telemetry.prop_time += prop_started.elapsed();
+            telemetry.budget_yields = telemetry.budget_yields.saturating_add(1);
+            continue;
+        }
         let prop_blockers = blockers_for_agent_route(
             &terrain,
             start.survey,
@@ -2053,11 +2080,7 @@ pub fn plan_villager_travel_routes(
             &building_cache.spatial,
             derived,
             colliders,
-            if intersettlement_route {
-                INTERSETTLEMENT_SURVEY_PADDING
-            } else {
-                ROAD_ROUTE_JOIN_DISTANCE
-            },
+            connector_reach,
             &mut prop_cache,
         );
         telemetry.prop_time += prop_started.elapsed();

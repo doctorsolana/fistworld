@@ -506,6 +506,7 @@ fn spawn_action_button(
 ) {
     row.spawn((
         Button,
+        Name::new(format!("creator-{label}")),
         marker,
         RelativeCursorPosition::default(),
         Node {

@@ -36,7 +36,9 @@ pub(crate) fn setup_capture_presentation(
             return;
         }
         (config.resolution, config.show_window)
-    } else if std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_some() {
+    } else if std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_some()
+        || std::env::var_os("FISTWORLD_SESSION_CAPTURE_DIR").is_some()
+    {
         ([window.physical_width(), window.physical_height()], true)
     } else {
         return;

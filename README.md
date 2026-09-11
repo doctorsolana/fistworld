@@ -206,6 +206,19 @@ is printed in the terminal and in `logs/game-*/server.log`. Reproduce its initia
 and settlements with `FISTWORLD_WORLD_SEED=12345 ./run.sh`. Joining another running server
 uses that server's recipe automatically. Explicit lab commands keep their fixed scenarios.
 
+### First journey
+
+Create your hero, then right-click land to sail ashore and continue on foot. The **Your
+Journey** plate shows the nearest inhabited town, coin and carried cargo. **View Town**
+helps choose a destination; **Home** selects and finds your hero again, and **M** opens
+the world map. Press **E** near a Hall or Marketplace counter to trade.
+
+**BUY** purchases one unit from another seller at up to the displayed price. **POST**
+lists one carried unit for sale; payment arrives only when someone buys it, less the
+market fee. **Your Goods** separates carried cargo from unsold listings. Reconnecting
+to the same running server retains the hero and possessions; restarting the server
+still creates a fresh world.
+
 ### Display settings
 
 Open **Pause → Graphics**. The three display modes are explicit buttons at the top:

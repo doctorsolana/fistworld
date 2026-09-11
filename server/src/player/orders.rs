@@ -451,9 +451,28 @@ pub(super) fn apply_local_unit_order(
         interrupt_previous_order(world, *entity);
     }
     match order.command {
-        UnitCommand::Move { mode, .. } => {
+        UnitCommand::Move { mode, frontage, .. } => {
             world.init_resource::<navigation::FormationRoutes>();
             for block in blocks {
+                // An individual on-foot hero is a regional traveller. The
+                // bounded battlefield field coarsens to ~13m cells across a
+                // 1.6km journey and can lose town exits or river detours.
+                // Reuse the incremental road planner, including its certified
+                // endpoints and road speed, without changing battalion orders.
+                if mode == MovementMode::Move && frontage.is_none() && block.slots.len() == 1 {
+                    let (entity, destination) = block.slots[0];
+                    if world.get::<Hero>(entity).is_some()
+                        && world.get::<MemberOfBattalion>(entity).is_none()
+                        && world.get::<Mounted>(entity).is_none()
+                    {
+                        world.entity_mut(entity).insert((
+                            MoveTarget(destination),
+                            NavigationRoutePending::new(destination),
+                            CommandStance::Move,
+                        ));
+                        continue;
+                    }
+                }
                 if let Some(&(entity, old)) = shapes
                     .get(&block.key)
                     .filter(|_| cohesive.contains(&block.key))

@@ -11,6 +11,7 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
     parent
         .spawn((
             Button,
+            Name::new(format!("pause-{text}")),
             action,
             Node {
                 width: Val::Px(280.0),
@@ -396,8 +397,8 @@ pub(super) fn spawn_controls_panel(
 
             // Help text
             panel.spawn((
-                Text::new("Adjust input settings"),
-                crate::ui::typography::text(12.0),
+                Text::new("WASD / pan the view     Mouse wheel / zoom\nLeft-click / select     Right-click / move or sail\nHOME / select and find your hero     M / world map\nE / trade at a nearby Hall or Marketplace\nN / encyclopedia     ESC / close a page or pause"),
+                crate::ui::typography::body(14.0),
                 TextColor(INK_INVERSE_MUTED),
                 Node {
                     margin: UiRect::bottom(Val::Px(20.0)),

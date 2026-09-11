@@ -739,6 +739,15 @@ upgrades can reuse the pipeline instead of adding timer-only promotions.
 
 ## Inspection and history
 
+Nearby hero trading uses the same seller-aware offers as the ordinary economy. The market
+shows **BUY PRICE** excluding the hero's own offers and **YOUR GOODS** split into carried
+and listed units. BUY sends the displayed price as a ceiling; a more expensive replacement
+offer is rejected without changing the wallet, inventory or order book. Cargo space,
+physical stock, affordability and Hall storage capacity also determine button availability,
+with the authoritative server checking those constraints again. POST remains consignment:
+no money is created by listing, and a later actual sale pays the retained seller even while
+that account is disconnected from the running server.
+
 Clicking either a Moot Hall or its Marketplace exposes the same public inventory and exchange.
 The Marketplace currently adds no jobs; its future staff remain disabled until they have an
 explicit civic role, useful behaviour and treasury payroll. The shared panel exposes:

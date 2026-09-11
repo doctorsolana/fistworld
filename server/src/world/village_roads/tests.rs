@@ -4,6 +4,199 @@ use shared::components::{SettlementTier, TimeWarp, WorkStatus};
 use shared::props::PropKind;
 use shared::region::RegionCoord;
 
+#[test]
+fn cold_route_prop_preparation_yields_without_losing_collision() {
+    let terrain = WorldTerrain::default();
+    let start = Vec2::new(1700.0, 0.0);
+    let goal = start + Vec2::X * 180.0;
+    let mut cache = RoutePropChunkCache::default();
+    let chunk_count = agent_route_prop_chunks(start, goal, 64.0).count();
+    assert!(chunk_count > 1);
+    assert!(!cache.prepare_agent_route(&terrain, start, goal, 64.0, Instant::now()));
+    assert_eq!(
+        cache.chunks.len(),
+        1,
+        "an expired slice admits one cold chunk, not the whole region"
+    );
+    let mut ready = false;
+    for _ in 0..chunk_count {
+        if cache.prepare_agent_route(&terrain, start, goal, 64.0, Instant::now()) {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready, "yielding preparation must eventually finish");
+    let grid = SpatialObstacleGrid::default();
+    let prepared =
+        blockers_for_agent_route(&terrain, start, goal, &grid, None, None, 64.0, &mut cache);
+    let reference = blockers_for_agent_route(
+        &terrain,
+        start,
+        goal,
+        &grid,
+        None,
+        None,
+        64.0,
+        &mut RoutePropChunkCache::default(),
+    );
+    assert!(
+        !reference.cells.is_empty(),
+        "fixture must contain collidable props"
+    );
+    for props in reference.cells.values() {
+        for prop in props {
+            for offset in [
+                Vec2::ZERO,
+                Vec2::X * prop.radius * 0.9,
+                Vec2::Y * prop.radius * 1.1,
+            ] {
+                assert_eq!(
+                    prepared.blocks(prop.point + offset),
+                    reference.blocks(prop.point + offset)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn long_visible_route_simplification_checks_fewer_rays_and_preserves_endpoints() {
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(
+        Vec3::new(500.0, 80.0, 0.0),
+        Vec2::new(700.0, 100.0),
+        0.0,
+        4.0,
+    );
+    let props = PropBlockers::default();
+    let survey = RoadSurvey {
+        terrain: &terrain,
+        buildings: &[],
+        live_buildings: None,
+        props: &props,
+        start: Vec2::ZERO,
+        goal: Vec2::new(1000.0, 0.0),
+        min: Vec2::new(-20.0, -20.0),
+        max: Vec2::new(1020.0, 20.0),
+        max_nodes: SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.0,
+    };
+    let path: Vec<_> = (0..=200).map(|i| Vec2::new(i as f32 * 5.0, 0.0)).collect();
+    let mut scratch = SurveyScratch::default();
+    assert_eq!(
+        simplify_visible(&path, &survey, &mut scratch),
+        vec![survey.start, survey.goal]
+    );
+    assert!(
+        scratch.metrics.line_checks < 20,
+        "long clear stretches must not resample every growing prefix"
+    );
+}
+
+#[test]
+fn regional_journey_can_round_a_seeded_river_head() {
+    // Recorded ordinary first-session trip: the river spans the entire old
+    // 192m corridor. Preserve the natural terrain and baked prop collision.
+    let terrain = WorldTerrain::from_loaded_map(
+        shared::map::load_session_map(&shared::map::new_world_recipe(918273)).unwrap(),
+    );
+    let mut app = App::new();
+    app.add_systems(Update, crate::collision::library::setup_baked_colliders);
+    app.update();
+    let derived = app
+        .world_mut()
+        .remove_resource::<DerivedColliderLibrary>()
+        .unwrap();
+    let start = Vec2::new(-128.03137, -396.22748);
+    let goal = Vec2::new(-1710.8392, -591.6);
+    let (stride, padding) = regional_survey_profile(start.distance(goal));
+    let props = blockers_for_agent_route(
+        &terrain,
+        start,
+        goal,
+        &SpatialObstacleGrid::default(),
+        Some(&derived),
+        None,
+        padding,
+        &mut RoutePropChunkCache::default(),
+    );
+    let survey = RoadSurvey {
+        terrain: &terrain,
+        buildings: &[],
+        live_buildings: None,
+        props: &props,
+        start,
+        goal,
+        min: start.min(goal) - Vec2::splat(padding),
+        max: start.max(goal) + Vec2::splat(padding),
+        max_nodes: INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: stride,
+        fine_endpoint_radius: INTERSETTLEMENT_FINE_ENDPOINT_RADIUS,
+    };
+    let mut scratch = SurveyScratch::default();
+    let path = survey_a_star(&survey, &mut scratch);
+    assert!(
+        !path.is_empty(),
+        "the river detour must fit the existing node budget"
+    );
+    assert_eq!(path.first(), Some(&start));
+    assert_eq!(path.last(), Some(&goal));
+    assert!(path
+        .iter()
+        .any(|p| p.y > start.y + INTERSETTLEMENT_SURVEY_PADDING));
+    assert!(path
+        .windows(2)
+        .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
+}
+
+#[test]
+fn regional_survey_reaches_a_distant_goal_within_its_node_budget() {
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(
+        Vec3::new(500.0, 80.0, 0.0),
+        Vec2::new(700.0, 250.0),
+        0.0,
+        4.0,
+    );
+    let mut grid = SpatialObstacleGrid::default();
+    grid.insert(shared::spatial::ObstacleEntry {
+        center: Vec2::new(500.0, 0.0),
+        half_extents: Vec2::new(1.0, 40.0),
+        rotation: 0.0,
+        obstacle_type: 0,
+    });
+    let props = PropBlockers::default();
+    let survey = RoadSurvey {
+        terrain: &terrain,
+        buildings: &[],
+        live_buildings: Some(&grid),
+        props: &props,
+        start: Vec2::ZERO,
+        goal: Vec2::new(1000.0, 0.0),
+        min: Vec2::new(-192.0, -192.0),
+        max: Vec2::new(1192.0, 192.0),
+        max_nodes: INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: INTERSETTLEMENT_SURVEY_STRIDE,
+        fine_endpoint_radius: INTERSETTLEMENT_FINE_ENDPOINT_RADIUS,
+    };
+    let mut scratch = SurveyScratch::default();
+    let path = survey_a_star(&survey, &mut scratch);
+    assert!(
+        !path.is_empty(),
+        "exhausted after {} nodes",
+        scratch.metrics.expanded_nodes
+    );
+    assert_eq!(path.first(), Some(&survey.start));
+    assert_eq!(path.last(), Some(&survey.goal));
+    assert!(path
+        .windows(2)
+        .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
+}
+
 fn road_test_app() -> App {
     let mut app = App::new();
     app.init_resource::<crate::world::identity::WorldIdAllocator>()

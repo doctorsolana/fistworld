@@ -287,6 +287,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_offline_heroes_sale_pays_once_and_survives_readoption() {
+        let person = shared::components::PersonId(81);
+        let settlement_id = shared::components::SettlementId(82);
+        let mut app = App::new();
+        app.init_resource::<BusinessEventQueue>()
+            .add_systems(Update, apply_business_events);
+        app.world_mut().spawn(WorldTime::new_default());
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Elderham".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 0,
+                    treasury: 0,
+                },
+            ))
+            .id();
+        let hero = app
+            .world_mut()
+            .spawn((person, Wallet::new(1856), crate::player::hero::OfflineHero))
+            .id();
+        let mut market = shared::economy::MootMarket::founding();
+        market.consign(MarketSeller::Person(person), Good::Wheat, 1, 72);
+        let purchase = market.purchase(Good::Wheat, 1, 72, None, None);
+        let fee = purchase
+            .fills
+            .iter()
+            .map(|fill| fill.market_fee)
+            .sum::<u64>();
+        assert_eq!(purchase.trade.pennies, 72);
+        assert_eq!(
+            market.seller_listed_units(MarketSeller::Person(person), Good::Wheat),
+            0
+        );
+        app.world_mut()
+            .resource_mut::<BusinessEventQueue>()
+            .record_market_purchase(0, settlement_id, purchase.fills);
+        app.update();
+        assert_eq!(
+            app.world().get::<Wallet>(hero).unwrap().balance(),
+            1856 + 72 - fee
+        );
+        assert_eq!(app.world().get::<Settlement>(hall).unwrap().treasury, fee);
+        app.world_mut()
+            .entity_mut(hero)
+            .remove::<crate::player::hero::OfflineHero>();
+        app.update();
+        assert_eq!(
+            app.world().get::<Wallet>(hero).unwrap().balance(),
+            1856 + 72 - fee
+        );
+        assert_eq!(
+            app.world()
+                .resource::<BusinessEventQueue>()
+                .pending_sale_count(),
+            0
+        );
+    }
+
+    #[test]
     fn a_dead_persons_unsettled_sale_becomes_a_local_treasury_claim() {
         let person = shared::components::PersonId(91);
         let settlement = shared::components::SettlementId(92);

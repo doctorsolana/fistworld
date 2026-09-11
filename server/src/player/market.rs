@@ -55,7 +55,7 @@ fn execute_hero_market_order(
         ));
     }
     match action {
-        HeroMarketAction::Buy => {
+        HeroMarketAction::Buy { maximum_unit_price } => {
             let cargo_units = hero_store.free_bulk() / good.bulk_per_unit();
             let physical_units = hall_store.amount(good);
             let requested = units.min(cargo_units).min(physical_units);
@@ -64,7 +64,7 @@ fn execute_hero_market_order(
                 good,
                 requested,
                 hero_wallet.balance(),
-                None,
+                Some(maximum_unit_price),
                 Some(self_seller),
             );
             if preview.units == 0 {
@@ -72,6 +72,13 @@ fn execute_hero_market_order(
                     "Your hero has no cargo space."
                 } else if physical_units == 0 || market.listed_units(good) == 0 {
                     "No listed stock is available."
+                } else if market.best_competing_price(self_seller, good).is_none() {
+                    "Only your own offers are listed; you cannot buy your own goods."
+                } else if market
+                    .best_competing_price(self_seller, good)
+                    .is_some_and(|price| price > maximum_unit_price)
+                {
+                    "The offer price changed. Review the current price and try again."
                 } else {
                     "Your hero cannot afford the cheapest offer."
                 };
@@ -81,7 +88,7 @@ fn execute_hero_market_order(
                 good,
                 preview.units,
                 preview.pennies,
-                None,
+                Some(maximum_unit_price),
                 Some(self_seller),
             );
             debug_assert_eq!(purchase.trade, preview);
@@ -344,7 +351,9 @@ mod tests {
         let completed = execute_hero_market_order(
             buyer,
             Good::Bread,
-            HeroMarketAction::Buy,
+            HeroMarketAction::Buy {
+                maximum_unit_price: 250,
+            },
             1,
             &mut buyer_store,
             &mut buyer_wallet,
@@ -359,5 +368,123 @@ mod tests {
         assert_eq!(completed.fills.len(), 1);
         assert_eq!(completed.fills[0].seller, MarketSeller::Person(seller));
         assert_eq!(completed.fills[0].gross, 250);
+    }
+
+    #[test]
+    fn rejected_purchases_preserve_stock_wallet_and_seller_claims() {
+        for (cargo_capacity, physical, budget, own_offer, expected) in [
+            (0, 1, 200, false, "cargo space"),
+            (18, 0, 200, false, "No listed stock"),
+            (18, 1, 50, false, "cannot afford"),
+            (18, 1, 200, true, "own offers"),
+        ] {
+            let hero_id = PersonId(61);
+            let seller_id = if own_offer { hero_id } else { PersonId(62) };
+            let mut hero = GoodsInventory::new(cargo_capacity);
+            let mut wallet = Wallet::new(budget);
+            let mut hall = GoodsInventory::new(100);
+            hall.add(Good::Wheat, physical);
+            let mut market = MootMarket::founding();
+            market.consign(MarketSeller::Person(seller_id), Good::Wheat, 1, 100);
+            let before = (hero.clone(), wallet, hall.clone(), market.clone());
+            let error = execute_hero_market_order(
+                hero_id,
+                Good::Wheat,
+                HeroMarketAction::Buy {
+                    maximum_unit_price: 100,
+                },
+                1,
+                &mut hero,
+                &mut wallet,
+                &mut hall,
+                &mut market,
+            )
+            .err()
+            .expect("purchase must be rejected");
+            assert!(error.contains(expected), "{error}");
+            assert_eq!((hero, wallet, hall, market), before);
+        }
+    }
+
+    #[test]
+    fn repeated_purchases_cannot_spend_the_same_coin_twice() {
+        let mut hero = GoodsInventory::new(18);
+        let mut wallet = Wallet::new(100);
+        let mut hall = GoodsInventory::new(100);
+        hall.add(Good::Wheat, 2);
+        let mut market = MootMarket::founding();
+        market.consign(MarketSeller::Person(PersonId(72)), Good::Wheat, 2, 100);
+        let mut gross = 0;
+        for _ in 0..2 {
+            if let Ok(trade) = execute_hero_market_order(
+                PersonId(71),
+                Good::Wheat,
+                HeroMarketAction::Buy {
+                    maximum_unit_price: 100,
+                },
+                1,
+                &mut hero,
+                &mut wallet,
+                &mut hall,
+                &mut market,
+            ) {
+                gross += trade.fills.iter().map(|fill| fill.gross).sum::<u64>();
+            }
+        }
+        assert_eq!(gross + wallet.balance(), 100);
+        assert_eq!(hero.amount(Good::Wheat), 1);
+        assert_eq!(hall.amount(Good::Wheat), 1);
+        assert_eq!(market.listed_units(Good::Wheat), 1);
+    }
+
+    #[test]
+    fn full_hall_preserves_the_heroes_unlisted_cargo() {
+        let mut hero = GoodsInventory::new(18);
+        hero.add(Good::Wheat, 1);
+        let mut wallet = Wallet::new(2000);
+        let mut hall = GoodsInventory::new(0);
+        let mut market = MootMarket::founding();
+        assert!(execute_hero_market_order(
+            PersonId(81),
+            Good::Wheat,
+            HeroMarketAction::PostSellOrder { unit_price: 72 },
+            1,
+            &mut hero,
+            &mut wallet,
+            &mut hall,
+            &mut market,
+        )
+        .is_err());
+        assert_eq!(hero.amount(Good::Wheat), 1);
+        assert_eq!(wallet.balance(), 2000);
+        assert_eq!(hall.amount(Good::Wheat), 0);
+        assert_eq!(market.listed_units(Good::Wheat), 0);
+    }
+
+    #[test]
+    fn a_price_increase_cannot_spend_more_than_the_clicked_quote() {
+        let mut hero = GoodsInventory::new(18);
+        let mut wallet = Wallet::new(2000);
+        let mut hall = GoodsInventory::new(100);
+        hall.add(Good::Wheat, 1);
+        let mut market = MootMarket::founding();
+        market.consign(MarketSeller::Person(PersonId(92)), Good::Wheat, 1, 200);
+        let before = (hero.clone(), wallet, hall.clone(), market.clone());
+        let error = execute_hero_market_order(
+            PersonId(91),
+            Good::Wheat,
+            HeroMarketAction::Buy {
+                maximum_unit_price: 72,
+            },
+            1,
+            &mut hero,
+            &mut wallet,
+            &mut hall,
+            &mut market,
+        )
+        .err()
+        .expect("stale quote must be refused");
+        assert!(error.contains("price changed"));
+        assert_eq!((hero, wallet, hall, market), before);
     }
 }

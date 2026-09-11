@@ -114,6 +114,22 @@ const INTERSETTLEMENT_FINE_ENDPOINT_RADIUS: f32 = 36.0;
 /// local commute but remains finite; together with the coarse middle lattice
 /// it covers at most a bounded regional corridor rather than the whole map.
 const INTERSETTLEMENT_SURVEY_PADDING: f32 = 192.0;
+/// Kilometre-scale trips need room to round river heads. A wider, coarser
+/// middle keeps the same 24,000-node ceiling; both ends retain fine cells and
+/// every long edge is sampled against terrain and live collision as before.
+fn regional_survey_profile(distance: f32) -> (i32, f32) {
+    if distance > EXTENDED_LOCAL_SURVEY_MAX_DISTANCE {
+        (
+            INTERSETTLEMENT_SURVEY_STRIDE * 2,
+            INTERSETTLEMENT_SURVEY_PADDING * 4.0,
+        )
+    } else {
+        (
+            INTERSETTLEMENT_SURVEY_STRIDE,
+            INTERSETTLEMENT_SURVEY_PADDING,
+        )
+    }
+}
 const SURVEY_PADDING: f32 = 20.0;
 const SURVEY_MAX_NODES: usize = 12_000;
 /// Embodied villagers only travel locally. A failed temporary route must not
@@ -135,8 +151,8 @@ const EXTENDED_LOCAL_SURVEY_MAX_NODES: usize = 2_400;
 /// rather than allowing a route to jump over collision.
 const EXTENDED_LOCAL_SURVEY_STRIDE: i32 = 2;
 const EXTENDED_LOCAL_FINE_ENDPOINT_RADIUS: f32 = 24.0;
-/// A company caravan is the one embodied actor which deliberately crosses
-/// between otherwise disconnected settlement road networks. Its route is
+/// Caravans, certified immigrant approaches and individual hero journeys cross
+/// between otherwise disconnected settlement road networks. Their route is
 /// still collision-certified and solved incrementally under the ordinary
 /// per-tick pathfinding budget, but may inspect a wider bounded corridor than
 /// a local commute. Ordinary villagers retain the 2,400-node cap.
@@ -570,6 +586,32 @@ pub(crate) struct RoutePropChunkCache {
 }
 
 impl RoutePropChunkCache {
+    /// Warm cold chunks under the caller's real-time budget. One chunk is a
+    /// bounded minimum of progress even when earlier preparation used the
+    /// deadline; cancellation needs no job cleanup because this cache is
+    /// immutable terrain data shared by all subsequent route requests.
+    fn prepare_agent_route(
+        &mut self,
+        terrain: &WorldTerrain,
+        start: Vec2,
+        goal: Vec2,
+        connector_reach: f32,
+        deadline: Instant,
+    ) -> bool {
+        let mut generated = false;
+        for chunk in agent_route_prop_chunks(start, goal, connector_reach) {
+            if self.chunks.contains_key(&chunk) {
+                continue;
+            }
+            if generated && Instant::now() >= deadline {
+                return false;
+            }
+            self.chunk(terrain, chunk);
+            generated = true;
+        }
+        true
+    }
+
     fn chunk(&mut self, terrain: &WorldTerrain, chunk: ChunkCoord) -> &[CachedRouteProp] {
         self.chunks
             .entry(chunk)
@@ -987,15 +1029,24 @@ fn resume_survey_a_star(
             .copied()
             .unwrap_or(f32::INFINITY);
         let stride = survey.stride_at(current_point);
+        // Fine endpoint cells must converge on one coarse grid. Retaining
+        // their offsets creates stride² interleaved grids and exhausts the
+        // regional node budget exploring the same corridor repeatedly.
+        let anchor = SurveyCell {
+            x: (current.x as f32 / stride as f32).round() as i32 * stride,
+            z: (current.z as f32 / stride as f32).round() as i32 * stride,
+        };
         for dx in -1..=1 {
             for dz in -1..=1 {
-                if dx == 0 && dz == 0 {
+                let next = SurveyCell {
+                    x: anchor.x + dx * stride,
+                    z: anchor.z + dz * stride,
+                };
+                // The nearest coarse cell is itself a useful transition edge
+                // from an unaligned fine cell. Skip only a true self-edge.
+                if next == current {
                     continue;
                 }
-                let next = SurveyCell {
-                    x: current.x + dx * stride,
-                    z: current.z + dz * stride,
-                };
                 let next_point = survey_point(next, survey.cell_size);
                 // Endpoints alone are insufficient for rotated blockers: two
                 // adjacent clear grid points can have an edge that clips a
@@ -1007,7 +1058,7 @@ fn resume_survey_a_star(
                 if dx != 0 && dz != 0 {
                     let side_x = survey_point(
                         SurveyCell {
-                            x: current.x + dx * stride,
+                            x: next.x,
                             z: current.z,
                         },
                         survey.cell_size,
@@ -1015,7 +1066,7 @@ fn resume_survey_a_star(
                     let side_z = survey_point(
                         SurveyCell {
                             x: current.x,
-                            z: current.z + dz * stride,
+                            z: next.z,
                         },
                         survey.cell_size,
                     );
@@ -1028,18 +1079,13 @@ fn resume_survey_a_star(
                 if rise > 1.15 {
                     continue;
                 }
-                let diagonal = dx != 0 && dz != 0;
-                let distance = if diagonal {
-                    std::f32::consts::SQRT_2
-                } else {
-                    1.0
-                };
+                let distance = current_point.distance(next_point) / survey.cell_size;
                 // A tiny deterministic unevenness stops equal-cost open ground
                 // from producing ruler-perfect spokes while remaining stable.
                 let hash = (next.x as u32).wrapping_mul(73_856_093)
                     ^ (next.z as u32).wrapping_mul(19_349_663);
                 let texture = (hash & 255) as f32 / 255.0 * 0.06;
-                let step_cost = distance * stride as f32 * (1.0 + rise * 0.7 + texture);
+                let step_cost = distance * (1.0 + rise * 0.7 + texture);
                 let tentative = current_score + step_cost;
                 if tentative >= scratch.score.get(&next).copied().unwrap_or(f32::INFINITY) {
                     continue;
@@ -1193,12 +1239,27 @@ fn simplify_visible(
             return Vec::new();
         }
         let mut farthest = current + 1;
-        for candidate in (current + 2)..points.len() {
+        // Grow the visible reach geometrically, then refine the failed span.
+        // Testing every progressively longer ray made a long clear stretch
+        // sample the same country quadratically in one completion tick.
+        let mut reach = 2usize;
+        while farthest + 1 < points.len() {
+            let candidate = (current + reach).min(points.len() - 1);
             if survey.line_clear(points[current], points[candidate], scratch) {
                 farthest = candidate;
-            } else {
-                break;
+                reach *= 2;
+                continue;
             }
+            let mut blocked = candidate;
+            while blocked > farthest + 1 {
+                let middle = farthest + (blocked - farthest) / 2;
+                if survey.line_clear(points[current], points[middle], scratch) {
+                    farthest = middle;
+                } else {
+                    blocked = middle;
+                }
+            }
+            break;
         }
         result.push(points[farthest]);
         current = farthest;
@@ -1906,16 +1967,11 @@ fn clearable_trees_intersecting_road(
     trees.into_iter().map(|(_, tree)| tree).collect()
 }
 
-fn blockers_for_agent_route(
-    terrain: &WorldTerrain,
+fn agent_route_prop_chunks(
     start: Vec2,
     goal: Vec2,
-    buildings: &SpatialObstacleGrid,
-    derived: Option<&DerivedColliderLibrary>,
-    colliders: Option<&StaticColliders>,
     connector_reach: f32,
-    cache: &mut RoutePropChunkCache,
-) -> PropBlockers {
+) -> impl Iterator<Item = ChunkCoord> {
     let padding = SURVEY_PADDING + connector_reach;
     let min = start.min(goal) - Vec2::splat(padding);
     let max = start.max(goal) + Vec2::splat(padding);
@@ -1927,21 +1983,33 @@ fn blockers_for_agent_route(
         (max.x / CHUNK_SIZE).floor() as i32,
         (max.y / CHUNK_SIZE).floor() as i32,
     );
+    (min_chunk.x..=max_chunk.x)
+        .flat_map(move |x| (min_chunk.z..=max_chunk.z).map(move |z| ChunkCoord::new(x, z)))
+}
+
+fn blockers_for_agent_route(
+    terrain: &WorldTerrain,
+    start: Vec2,
+    goal: Vec2,
+    buildings: &SpatialObstacleGrid,
+    derived: Option<&DerivedColliderLibrary>,
+    colliders: Option<&StaticColliders>,
+    connector_reach: f32,
+    cache: &mut RoutePropChunkCache,
+) -> PropBlockers {
     let mut blockers = PropBlockers::default();
-    for x in min_chunk.x..=max_chunk.x {
-        for z in min_chunk.z..=max_chunk.z {
-            for prop in cache.chunk(terrain, ChunkCoord::new(x, z)) {
-                // These deterministic props are cleared from completed plots.
-                // Do not resurrect an invisible trunk inside a building.
-                if buildings.point_blocked(prop.point) {
-                    continue;
-                }
-                let authored_radius = derived
-                    .and_then(|library| library.by_kind.get(&prop.kind))
-                    .map_or(0.75, |shape| shape.horizontal_radius)
-                    * prop.scale;
-                blockers.insert_radius(prop.point, authored_radius + VILLAGER_PROP_RADIUS);
+    for chunk in agent_route_prop_chunks(start, goal, connector_reach) {
+        for prop in cache.chunk(terrain, chunk) {
+            // These deterministic props are cleared from completed plots.
+            // Do not resurrect an invisible trunk inside a building.
+            if buildings.point_blocked(prop.point) {
+                continue;
             }
+            let authored_radius = derived
+                .and_then(|library| library.by_kind.get(&prop.kind))
+                .map_or(0.75, |shape| shape.horizontal_radius)
+                * prop.scale;
+            blockers.insert_radius(prop.point, authored_radius + VILLAGER_PROP_RADIUS);
         }
     }
     add_static_collider_blockers(
@@ -1950,7 +2018,7 @@ fn blockers_for_agent_route(
         derived,
         start,
         goal,
-        padding,
+        SURVEY_PADDING + connector_reach,
         VILLAGER_PROP_RADIUS,
     );
     blockers

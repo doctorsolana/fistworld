@@ -1,4 +1,5 @@
-//! HUD layout: two plates, and nothing else.
+//! Clock/developer and selection plates. The ordinary journey plate is owned
+//! separately by `journey.rs` in the upper-left corner.
 //!
 //! Composition:
 //!
