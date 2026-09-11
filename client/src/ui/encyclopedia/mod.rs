@@ -24,7 +24,7 @@ pub mod state_sync;
 use bevy::prelude::*;
 
 use crate::states::GameState;
-use crate::ui::styles::{LIMEWASH, LIMEWASH_DETAIL, LIMEWASH_HEADER, PLATE_RULE_SOFT, STATUS_GOOD};
+use crate::ui::styles::{LIMEWASH, PLATE_RULE_SOFT};
 
 pub struct EncyclopediaPlugin;
 
@@ -56,6 +56,10 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::learn_visible_characters,
                 state_sync::track_affiliation_changes,
                 state_sync::track_retinue_changes,
+                state_sync::enforce_possessions_privacy
+                    .after(state_sync::track_retinue_changes)
+                    .after(state_sync::receive_character_roster)
+                    .after(state_sync::learn_visible_characters),
                 (
                     places::learn_settlement_summaries,
                     places::learn_settlements,
@@ -70,6 +74,7 @@ impl Plugin for EncyclopediaPlugin {
             // while this window is visible. Keeping them behind this condition
             // avoids a per-frame inspection cost during ordinary world play.
             state_sync::refresh_visible_person_facts
+                .after(state_sync::enforce_possessions_privacy)
                 .before(state_sync::rebuild_people_list)
                 .run_if(encyclopedia_open)
                 .run_if(in_state(GameState::Playing)),
@@ -96,7 +101,12 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::rebuild_people_list,
                 (state_sync::sync_tab_visuals, sync_page_host).chain(),
                 state_sync::sync_filter_visuals,
-                state_sync::sync_detail_panel,
+                (
+                    state_sync::sync_detail_panel,
+                    state_sync::sync_detail_art,
+                    state_sync::sync_detail_inventory,
+                )
+                    .chain(),
                 state_sync::sync_banner_controls,
                 // Click FIRST, then rebuild, then draw: handling the click
                 // last meant a selection did not reach the detail pane until
@@ -105,6 +115,7 @@ impl Plugin for EncyclopediaPlugin {
                 places::rebuild_place_list,
                 (
                     places::sync_place_detail,
+                    places::sync_place_illustration,
                     places::sync_back_to_company,
                     places::handle_worksite_assign_button,
                 )
@@ -148,7 +159,7 @@ impl Plugin for EncyclopediaPlugin {
             (
                 retinue::handle_locate_buttons,
                 retinue::rebuild_retinue_list,
-                retinue::bind_retinue_status,
+                retinue::bind_retinue_presence,
             )
                 .chain()
                 .after(shell::spawn_encyclopedia)

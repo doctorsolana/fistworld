@@ -40,6 +40,7 @@ impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         journey::install(app);
         chrome::install(app);
+        crate::ui::ledger::install(app);
         portrait::install(app);
         selection_card::install(app);
         shell::install(app);

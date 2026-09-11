@@ -355,3 +355,193 @@ fn route_editor_exposes_ordered_three_town_timetable_controls() {
     assert!(actions.contains(&TradeRouteEditorAction::PreviousStopSettlement(2)));
     assert!(actions.contains(&TradeRouteEditorAction::NextStopAction(2)));
 }
+
+fn retained_company_app() -> (App, Entity, Entity) {
+    use super::controls::{
+        CompanyDetailContent, CompanyDetailViewport, CompanyListContent, CompanyPortfolioContent,
+    };
+    use super::model::{CompanyPolicyFeedback, SelectedCompany};
+    let mut app = App::new();
+    let owner = PersonId(10);
+    app.insert_resource(CompanyDirectory {
+        records: vec![company(1, owner, 100, 0, 0), company(2, owner, 200, 0, 0)],
+        local_person: Some(owner),
+        local_wallet: Some(1_000),
+        ..default()
+    });
+    app.init_resource::<CompanyFilter>()
+        .insert_resource(SelectedCompany(Some(CompanyId(1))))
+        .init_resource::<CompanyPolicyFeedback>()
+        .init_resource::<TradeRouteEditorState>()
+        .init_resource::<crate::ui::perf::UiPerf>()
+        .add_systems(Update, super::view::rebuild_company_view);
+    app.world_mut()
+        .spawn((CompanyPortfolioContent, Node::default()));
+    app.world_mut().spawn((CompanyListContent, Node::default()));
+    let viewport = app
+        .world_mut()
+        .spawn((
+            CompanyDetailViewport,
+            Node::default(),
+            ScrollPosition::default(),
+        ))
+        .id();
+    let detail = app
+        .world_mut()
+        .spawn((CompanyDetailContent, Node::default(), ChildOf(viewport)))
+        .id();
+    app.update();
+    app.update();
+    (app, viewport, detail)
+}
+
+#[test]
+fn live_company_cash_retains_hovered_and_pressed_controls_then_flushes_without_another_snapshot() {
+    use crate::ui::history::CompanyHistoryButton;
+    let (mut app, viewport, detail) = retained_company_app();
+    app.world_mut()
+        .get_mut::<ScrollPosition>(viewport)
+        .unwrap()
+        .0
+        .y = 420.0;
+    let children = app.world().get::<Children>(detail).unwrap().to_vec();
+    let button = app
+        .world_mut()
+        .query_filtered::<Entity, With<CompanyHistoryButton>>()
+        .single(app.world())
+        .unwrap();
+    for state in [Interaction::Hovered, Interaction::Pressed] {
+        *app.world_mut().get_mut::<Interaction>(button).unwrap() = state;
+        let mut directory = app.world_mut().resource_mut::<CompanyDirectory>();
+        directory.records[0].account.cash += 10;
+        directory.local_wallet = Some(directory.local_wallet.unwrap() + 10);
+        drop(directory);
+        app.update();
+        assert_eq!(
+            app.world().get::<Children>(detail).unwrap().to_vec(),
+            children
+        );
+        assert!(
+            app.world().get_entity(button).is_ok(),
+            "the user's target must survive live books"
+        );
+    }
+    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None;
+    app.update();
+    assert!(
+        app.world().get_entity(button).is_err(),
+        "the deferred snapshot must flush on pointer leave"
+    );
+    assert_ne!(
+        app.world().get::<Children>(detail).unwrap().to_vec(),
+        children
+    );
+    assert_eq!(
+        app.world().get::<ScrollPosition>(viewport).unwrap().0.y,
+        420.0
+    );
+}
+
+#[test]
+fn changing_company_resets_deep_scroll_even_when_previous_detail_is_hovered() {
+    use super::model::SelectedCompany;
+    use crate::ui::history::CompanyHistoryButton;
+    let (mut app, viewport, _) = retained_company_app();
+    let button = app
+        .world_mut()
+        .query_filtered::<Entity, With<CompanyHistoryButton>>()
+        .single(app.world())
+        .unwrap();
+    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Hovered;
+    app.world_mut()
+        .get_mut::<ScrollPosition>(viewport)
+        .unwrap()
+        .0
+        .y = 850.0;
+    app.world_mut().resource_mut::<SelectedCompany>().0 = Some(CompanyId(2));
+    app.update();
+    assert_eq!(
+        app.world().get::<ScrollPosition>(viewport).unwrap().0,
+        Vec2::ZERO
+    );
+    assert!(app.world().get_entity(button).is_err());
+    let history = app
+        .world_mut()
+        .query::<&CompanyHistoryButton>()
+        .single(app.world())
+        .unwrap();
+    assert_eq!(history.company, CompanyId(2));
+}
+
+#[test]
+fn route_draft_survives_live_snapshot_and_explicit_draft_actions_update_while_hovered() {
+    let (mut app, _, detail) = retained_company_app();
+    let route = merchant_route();
+    let draft = TradeRouteDraft {
+        company: CompanyId(1),
+        route: Some(route.id),
+        warehouse: route.warehouse,
+        good: route.good,
+        cargo_target: 37,
+        maximum_purchase_price: route.maximum_purchase_price,
+        minimum_destination_price: route.minimum_destination_price,
+        automatic: route.automatic,
+        stops: route
+            .stops
+            .iter()
+            .map(|stop| TradeRouteStop {
+                settlement: stop.settlement,
+                action: stop.action,
+            })
+            .collect(),
+        pending: false,
+    };
+    app.world_mut()
+        .resource_mut::<TradeRouteEditorState>()
+        .draft = Some(draft.clone());
+    app.update();
+    let button = app
+        .world_mut()
+        .query::<(Entity, &TradeRouteEditorButton)>()
+        .iter(app.world())
+        .find(|(_, button)| button.0 == TradeRouteEditorAction::CargoUp(1))
+        .unwrap()
+        .0;
+    *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Hovered;
+    let children = app.world().get::<Children>(detail).unwrap().to_vec();
+    app.world_mut().resource_mut::<CompanyDirectory>().records[0]
+        .account
+        .cash += 5;
+    app.update();
+    assert_eq!(
+        app.world().get::<Children>(detail).unwrap().to_vec(),
+        children
+    );
+    assert_eq!(
+        app.world()
+            .resource::<TradeRouteEditorState>()
+            .draft
+            .as_ref(),
+        Some(&draft)
+    );
+    app.world_mut()
+        .resource_mut::<TradeRouteEditorState>()
+        .draft
+        .as_mut()
+        .unwrap()
+        .cargo_target += 1;
+    app.update();
+    assert!(
+        app.world().get_entity(button).is_err(),
+        "an explicit draft action must refresh immediately"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<TradeRouteEditorState>()
+            .draft
+            .as_ref()
+            .unwrap()
+            .cargo_target,
+        38
+    );
+}

@@ -95,6 +95,7 @@ fn emit_ui_perf(
     time: Res<Time>,
     config: Option<Res<crate::perf_overlay::ClientPerfConfig>>,
     perf: Res<UiPerf>,
+    portraits: Option<Res<super::portraits::PortraitMetrics>>,
 ) {
     let Some(config) = config.filter(|config| config.enabled) else {
         return;
@@ -122,6 +123,22 @@ fn emit_ui_perf(
             )
         })
         .collect();
-    info!("ClientPerfUi window_s={window:.1} {}", parts.join(" "));
+    let portrait_work = portraits.map_or_else(String::new, |p| {
+        format!(
+            " portraits={}/{}ready/{}queued/{}pending/{:.2}MiB/{}done/{}stale/{}source",
+            p.ready,
+            p.visible,
+            p.queued,
+            usize::from(p.pending),
+            p.bytes as f64 / (1024.0 * 1024.0),
+            p.completed,
+            p.discarded,
+            p.source_preparations,
+        )
+    });
+    info!(
+        "ClientPerfUi window_s={window:.1} {}{portrait_work}",
+        parts.join(" ")
+    );
     counters.entries.clear();
 }

@@ -13,6 +13,7 @@ fn fixture() -> (ArmyRoster, ArmyManagement) {
             SoldierFacts {
                 entity: e(n),
                 identity: n as u64,
+                person_id: Some(PersonId(n as u64)),
                 name: format!("Soldier {n}"),
                 battalion: match n {
                     1 | 2 => Some(BattalionId(1)),
@@ -135,6 +136,15 @@ fn retained_controls_survive_health_policy_and_checkbox_changes() {
         ids
     };
     let before = controls(app.world_mut());
+    let portrait = |w: &mut World| {
+        let (shown, children) = w
+            .query::<(&view::BattalionPortrait, &Children)>()
+            .single(w)
+            .unwrap();
+        (shown.0, children.to_vec())
+    };
+    let original_portrait = portrait(app.world_mut());
+    assert_eq!(original_portrait.0, Some(PersonId(1)));
     app.world_mut()
         .resource_mut::<ArmyRoster>()
         .soldiers
@@ -148,6 +158,11 @@ fn retained_controls_survive_health_policy_and_checkbox_changes() {
         .insert(e(1));
     app.update();
     assert_eq!(before, controls(app.world_mut()));
+    assert_eq!(
+        original_portrait,
+        portrait(app.world_mut()),
+        "Vitals must not replace the portrait request or its frame"
+    );
     assert!(app
         .world_mut()
         .query::<&Text>()
@@ -195,6 +210,8 @@ fn retained_controls_survive_health_policy_and_checkbox_changes() {
         .query::<&Text>()
         .iter(app.world())
         .any(|t| t.0 == "Battalion 2"));
+    assert_eq!(portrait(app.world_mut()).0, Some(PersonId(3)));
+    assert_ne!(original_portrait.1, portrait(app.world_mut()).1);
 }
 #[test]
 fn archery_controls_send_owned_battalion_commands_and_show_ammunition() {
@@ -260,5 +277,98 @@ fn cavalry_keeps_its_mounts_when_managed_without_a_stable() {
         model
             .button(ArmyAction::SelectMap, &state, &roster, false)
             .1
+    );
+}
+
+#[test]
+fn missing_and_delayed_person_ids_keep_army_portraits_truthful_without_rebuilding_rows() {
+    let (mut roster, state) = fixture();
+    let unknown = roster.soldiers.get_mut(&e(1)).unwrap();
+    unknown.identity = 2; // Collides with another actual person's durable id.
+    unknown.person_id = None;
+    let mut app = App::new();
+    app.insert_resource(roster)
+        .insert_resource(state)
+        .init_resource::<Time>()
+        .init_resource::<crate::ui::perf::UiPerf>();
+    let root = app.world_mut().spawn(Node::default()).id();
+    app.world_mut()
+        .commands()
+        .entity(root)
+        .with_children(spawn_army_tab);
+    app.world_mut().flush();
+    app.add_systems(Update, sync_army_panel);
+    app.update();
+    app.update();
+    let requested = |world: &mut World| {
+        world
+            .query::<(
+                Entity,
+                &view::TroopPortrait,
+                &crate::ui::portraits::PersonPortrait,
+            )>()
+            .iter(world)
+            .find(|(_, subject, _)| subject.0 == e(1))
+            .map(|(entity, _, request)| (entity, request.0))
+            .unwrap()
+    };
+    let (entity, initial) = requested(app.world_mut());
+    assert_eq!(initial, PersonId::UNASSIGNED);
+    app.world_mut()
+        .resource_mut::<ArmyRoster>()
+        .soldiers
+        .get_mut(&e(1))
+        .unwrap()
+        .person_id = Some(PersonId(99));
+    app.update();
+    assert_eq!(requested(app.world_mut()), (entity, PersonId(99)));
+    assert_eq!(
+        app.world_mut()
+            .query::<&view::BattalionPortrait>()
+            .single(app.world())
+            .unwrap()
+            .0,
+        Some(PersonId(99))
+    );
+}
+
+#[test]
+fn settled_army_panel_does_not_reinvalidate_itself_or_rewrite_retained_widgets() {
+    let (roster, state) = fixture();
+    let mut app = App::new();
+    app.insert_resource(roster)
+        .insert_resource(state)
+        .init_resource::<Time>()
+        .init_resource::<crate::ui::perf::UiPerf>();
+    let root = app.world_mut().spawn(Node::default()).id();
+    app.world_mut()
+        .commands()
+        .entity(root)
+        .with_children(spawn_army_tab);
+    app.world_mut().flush();
+    app.add_systems(Update, sync_army_panel);
+    for _ in 0..4 {
+        app.update();
+    }
+    app.world_mut().clear_trackers();
+    app.update();
+    assert!(!app
+        .world()
+        .get_resource_ref::<ArmyManagement>()
+        .unwrap()
+        .is_changed());
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<Entity, Changed<Text>>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<Entity, Changed<view::BattalionPortrait>>()
+            .iter(app.world())
+            .count(),
+        0
     );
 }

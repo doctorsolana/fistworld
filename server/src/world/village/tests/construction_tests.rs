@@ -857,7 +857,7 @@ fn the_first_worksite_chops_its_own_wood_when_no_lumber_hut_exists() {
             .is_some_and(|activity| *activity == CharacterActivity::Chopping);
         saw_carried_wood |= builder_ref
             .get::<CarriedLoad>()
-            .is_some_and(|load| load.good == Some(Good::Wood) && load.amount > 0);
+            .is_some_and(|load| load.good == Some(Good::Wood) && !load.is_empty());
         if app
             .world()
             .entity(site)

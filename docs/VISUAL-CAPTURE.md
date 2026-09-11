@@ -1,5 +1,8 @@
 # Visual capture and regression testing
 
+The medieval encyclopedia's [verification record](ENCYCLOPEDIA-VERIFICATION.md)
+links its maintained scenarios and documents the 2026-09-11 inspected results.
+
 > **Required agent workflow:** repository coding agents discover this contract through
 > `AGENTS.md` and `CONTRIBUTING.md`. A visual change is not finished after `cargo check`:
 > run the smallest representative scenario, inspect its PNG and `.capture.json`, and report
@@ -1079,3 +1082,12 @@ proof; it does not simulate horse movement or damage on the client.
 `ui-army-cavalry.ron` uses a role-only roster fixture at 1280×720 to check cavalry
 labels, equipment controls and compatible reinforcements in the actual Army page.
 See [CAVALRY.md](CAVALRY.md) for gameplay scope and limitations.
+
+## Nested encyclopedia pages
+
+The maintained [nested ledger scenarios](../capture/scenarios/ledger-nested/README.md)
+cover business management, company history, founding, markets and the route editor at
+both ends of their scrollable content. They open pages through production button
+handlers, inspect local draft edits across a changed company snapshot, and return
+through real Back/Cancel controls. Inspect each PNG, `.capture.json` and `.nested.json`;
+these offline fixtures do not validate successful server transactions.

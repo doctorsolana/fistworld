@@ -9,7 +9,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoldierFacts {
     pub entity: Entity,
+    /// Stable ordering key; a missing PersonId falls back to entity bits.
     pub identity: u64,
+    /// Only an observed durable id can select a person's remembered likeness.
+    pub person_id: Option<PersonId>,
     pub name: String,
     pub battalion: Option<BattalionId>,
     pub strength: u8,
@@ -130,6 +133,7 @@ pub struct RosterChanges<'w, 's> {
     battalions: RemovedComponents<'w, 's, Battalion>,
     aboard: RemovedComponents<'w, 's, AboardBoat>,
     health: RemovedComponents<'w, 's, Health>,
+    people: RemovedComponents<'w, 's, PersonId>,
 }
 
 #[allow(clippy::type_complexity)]
@@ -166,7 +170,8 @@ pub fn refresh_army_roster(
         + changes.owners.read().count()
         + changes.battalions.read().count()
         + changes.aboard.read().count()
-        + changes.health.read().count();
+        + changes.health.read().count()
+        + changes.people.read().count();
     if !name.is_changed() && changes.changed.is_empty() && removed == 0 {
         return;
     }
@@ -187,6 +192,7 @@ pub fn refresh_army_roster(
             SoldierFacts {
                 entity,
                 identity: identity.map_or(entity.to_bits(), |id| id.0),
+                person_id: identity.copied().filter(|id| id.is_assigned()),
                 name: name.map_or_else(|| "Soldier".into(), |n| n.0.clone()),
                 battalion: member.map(|m| m.0),
                 strength: attributes.map_or(0, |a| a.physique()),
@@ -315,5 +321,33 @@ mod tests {
         assert_eq!(roster.resolve(&whole).len(), 2);
         assert!(roster.resolve(&whole).contains(&c));
         assert_eq!(roster.resolve(&partial), roster.resolve(&whole));
+    }
+    #[test]
+    fn missing_person_id_never_turns_a_sort_key_into_an_unrelated_likeness() {
+        let mut app = app();
+        let unknown = soldier(&mut app);
+        let observed = soldier(&mut app);
+        let colliding_id = PersonId(unknown.to_bits());
+        app.world_mut().entity_mut(observed).insert(colliding_id);
+        app.update();
+        let roster = app.world().resource::<ArmyRoster>();
+        assert_eq!(
+            roster.soldiers[&unknown].identity,
+            roster.soldiers[&observed].identity
+        );
+        assert_eq!(roster.soldiers[&unknown].person_id, None);
+        assert_eq!(roster.soldiers[&observed].person_id, Some(colliding_id));
+        app.world_mut().entity_mut(unknown).insert(PersonId(99));
+        app.update();
+        assert_eq!(
+            app.world().resource::<ArmyRoster>().soldiers[&unknown].person_id,
+            Some(PersonId(99))
+        );
+        app.world_mut().entity_mut(unknown).remove::<PersonId>();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ArmyRoster>().soldiers[&unknown].person_id,
+            None
+        );
     }
 }

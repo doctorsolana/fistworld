@@ -29,7 +29,7 @@ use crate::ui::foundation::{
     UiRefreshExempt, UiRefreshStamp,
 };
 use crate::ui::player_permits::ActiveCompany;
-use crate::ui::styles::{INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE_SOFT, RADIUS};
+use crate::ui::styles::{INK, INK_MUTED, PLATE_RULE_SOFT, RADIUS};
 
 /// Must match the server's permit-desk range: founding happens at a Hall.
 const HALL_RANGE: f32 = 12.0;
@@ -188,14 +188,14 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 } else {
                     "ANOTHER COMPANY"
                 }),
-                crate::ui::typography::text(T_TITLE),
+                crate::ui::typography::heading(T_TITLE),
                 TextColor(INK),
             ));
 
             // NAME
             form.spawn((
                 Text::new("NAME"),
-                crate::ui::typography::text(T_LABEL),
+                crate::ui::ledger::reading(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             form.spawn((
@@ -211,7 +211,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                     border_radius: BorderRadius::all(Val::Px(RADIUS)),
                     ..default()
                 },
-                BackgroundColor(LIMEWASH),
+                BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
                 BorderColor::all(if draft.editing_name {
                     INK
                 } else {
@@ -223,7 +223,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 FoundingNameText,
                 Text::new(name_text(draft)),
                 UiButtonLabel,
-                crate::ui::typography::body(T_VALUE),
+                crate::ui::ledger::reading(T_VALUE),
                 TextColor(INK),
                 Pickable::IGNORE,
             ));
@@ -231,7 +231,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
             // CAPITAL
             form.spawn((
                 Text::new("FOUNDING CAPITAL  /  becomes the company treasury"),
-                crate::ui::typography::text(T_LABEL),
+                crate::ui::ledger::reading(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             form.spawn(Node {
@@ -246,7 +246,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 row.spawn((
                     FoundingCapitalText,
                     Text::new(capital_text(draft)),
-                    crate::ui::typography::text(T_VALUE),
+                    crate::ui::ledger::reading(T_VALUE),
                     TextColor(INK),
                     TextLayout::justify(Justify::Center),
                     Node {
@@ -258,7 +258,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 step_button(row, AdjustFoundingCapital(500), "+5");
                 row.spawn((
                     Text::new(format!("Wallet {} coin", format_money(view.wallet))),
-                    crate::ui::typography::text(T_BODY),
+                    crate::ui::ledger::reading(T_BODY),
                     TextColor(INK_MUTED),
                     Node {
                         margin: UiRect::left(Val::Px(12.0)),
@@ -314,7 +314,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                 button.with_child((
                     Text::new(label),
                     UiButtonLabel,
-                    crate::ui::typography::text(T_BUTTON),
+                    crate::ui::ledger::reading(T_BUTTON),
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
@@ -323,7 +323,7 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
             if !view.feedback.message.is_empty() {
                 form.spawn((
                     Text::new(view.feedback.message.clone()),
-                    crate::ui::typography::text(T_BODY),
+                    crate::ui::ledger::reading(T_BODY),
                     TextColor(if view.feedback.success {
                         Color::srgb(0.20, 0.48, 0.27)
                     } else {
@@ -357,7 +357,7 @@ fn step_button(parent: &mut ChildSpawnerCommands<'_>, marker: impl Component, la
         .with_child((
             Text::new(label.to_string()),
             UiButtonLabel,
-            crate::ui::typography::text(T_BUTTON),
+            crate::ui::ledger::reading(T_BUTTON),
             TextColor(INK),
             Pickable::IGNORE,
         ));
@@ -720,18 +720,24 @@ fn ensure_founding_page(
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::FlexStart,
                 padding: UiRect::all(Val::Px(28.0)),
-                overflow: Overflow::clip(),
+                overflow: Overflow::scroll_y(),
+                scrollbar_width: 8.0,
+                row_gap: Val::Px(14.0),
                 ..default()
             },
-            BackgroundColor(LIMEWASH_LIT),
+            crate::ui::ledger::paper(),
         ))
         .id();
     commands.entity(host).add_child(panel);
     commands.entity(panel).with_children(|panel| {
+        panel.spawn(crate::ui::ledger::illustration(
+            crate::ui::ledger::LedgerIllustration::Company,
+            Vec2::splat(92.0),
+        ));
         if hero.is_none() {
             panel.spawn((
                 Text::new("Create a Hero first; a company needs a founder."),
-                crate::ui::typography::text(T_VALUE),
+                crate::ui::ledger::reading(T_VALUE),
                 TextColor(INK_MUTED),
             ));
             return;

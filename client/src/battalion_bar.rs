@@ -13,7 +13,7 @@ use crate::army_roster::ArmyRoster;
 use crate::combat_mode::CombatMode;
 use crate::states::GameState;
 use crate::ui::{
-    foundation::{UiButtonLabel, UiButtonStyle, UiButtonVariant, button_chrome},
+    foundation::{button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant},
     motion::Spring,
     styles::PARCHMENT,
 };
@@ -91,7 +91,7 @@ struct MusterCard;
 struct MusterCardLabel;
 
 /// 1 -> "I", 4 -> "IV" ... the card face is a war banner, not a spreadsheet.
-fn roman_numeral(mut value: u64) -> String {
+pub(crate) fn roman_numeral(mut value: u64) -> String {
     if value == 0 {
         return "0".to_string();
     }

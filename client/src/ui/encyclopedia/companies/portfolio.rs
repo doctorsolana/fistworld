@@ -3,7 +3,8 @@
 use super::controls::CompanyRow;
 use super::model::{CompanyDirectory, CompanyRecord};
 use crate::ui::foundation::{button_chrome, UiButtonVariant};
-use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT, RADIUS};
+use crate::ui::ledger::{self, LedgerIllustration};
+use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT};
 use bevy::prelude::*;
 use shared::components::{CompanyId, PersonId};
 use shared::economy::format_money;
@@ -14,7 +15,7 @@ pub(super) fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: 
             Text::new(
                 "PORTFOLIO UNAVAILABLE  /  Spawn or select your Hero to identify personal holdings. The company directory remains usable.",
             ),
-            crate::ui::typography::text(13.5),
+            crate::ui::ledger::reading(13.5),
             TextColor(INK_MUTED),
         ));
         return;
@@ -37,7 +38,7 @@ pub(super) fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: 
         .count();
     portfolio_card(
         parent,
-        "HERO WALLET",
+        "Hero wallet",
         directory.local_wallet.map_or_else(
             || "Not in range".to_string(),
             |wallet| format!("{} coin", format_money(wallet)),
@@ -46,7 +47,7 @@ pub(super) fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: 
     );
     portfolio_card(
         parent,
-        "COMPANY HOLDINGS",
+        "Holdings",
         format!(
             "{} firm{}",
             holdings.len(),
@@ -56,13 +57,13 @@ pub(super) fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: 
     );
     portfolio_card(
         parent,
-        "BOOK INTEREST",
+        "Book interest",
         format!("{} coin", format_money(estimated_interest)),
         "Accounting estimate, not cash",
     );
     portfolio_card(
         parent,
-        "COMPANY MASTER",
+        "Company Master",
         format!("{} firm{}", mastered, if mastered == 1 { "" } else { "s" }),
         "Executive authority",
     );
@@ -78,31 +79,30 @@ pub(super) fn portfolio_card(
         .spawn((
             Node {
                 flex_grow: 1.0,
+                flex_basis: Val::Px(0.0),
                 min_width: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(2.0),
                 padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                border: UiRect::right(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.9, 0.88, 0.84, 0.58)),
             BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|card| {
             card.spawn((
                 Text::new(label),
-                crate::ui::typography::text(12.0),
+                crate::ui::ledger::reading(12.0),
                 TextColor(INK_MUTED),
             ));
             card.spawn((
                 Text::new(value),
-                crate::ui::typography::text(17.0),
+                ledger::reading_strong(17.0),
                 TextColor(INK),
             ));
             card.spawn((
                 Text::new(note),
-                crate::ui::typography::text(11.0),
+                crate::ui::ledger::reading(11.0),
                 TextColor(INK_MUTED),
             ));
         });
@@ -143,58 +143,53 @@ pub(super) fn spawn_company_row(
             CompanyRow(company.id),
             Node {
                 flex_shrink: 0.0,
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Stretch,
-                row_gap: Val::Px(4.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(12.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
             button_chrome(UiButtonVariant::Row),
         ))
         .with_children(|row| {
+            row.spawn(ledger::illustration_medallion(
+                LedgerIllustration::Company,
+                68.0,
+            ));
             row.spawn(Node {
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
+                flex_grow: 1.0,
+                flex_basis: Val::Px(0.0),
+                min_width: Val::Px(0.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(5.0),
                 ..default()
             })
-            .with_children(|line| {
-                line.spawn((
-                    Text::new(company.name.clone()),
-                    crate::ui::typography::text(15.5),
-                    TextColor(INK),
+            .with_children(|copy| {
+                copy.spawn(ledger::heading(company.name.clone(), 17.0));
+                copy.spawn((
+                    CompanyRowLedger(company.id),
+                    Text::new(company_ledger_line(company)),
+                    ledger::reading(12.0),
+                    TextColor(INK_MUTED),
                 ));
-                line.spawn((
-                    Text::new(company.status()),
-                    crate::ui::typography::text(11.5),
-                    TextColor(if company.status() == "AT RISK" {
-                        EMBER
+                copy.spawn((
+                    Text::new(if shares > 0 {
+                        format!(
+                            "{:.1}% yours · {}{}",
+                            f32::from(shares) / 10.0,
+                            company.status(),
+                            if local_person == Some(company.master) {
+                                " · Master"
+                            } else {
+                                ""
+                            }
+                        )
                     } else {
-                        INK_MUTED
+                        company.status().into()
                     }),
-                ));
-            });
-            row.spawn((
-                CompanyRowLedger(company.id),
-                Text::new(company_ledger_line(company)),
-                crate::ui::typography::text(12.0),
-                TextColor(INK_MUTED),
-            ));
-            if shares > 0 {
-                row.spawn((
-                    Text::new(format!(
-                        "YOUR HOLDING  {} / 1,000 ({:.1}%){}",
-                        shares,
-                        f32::from(shares) / 10.0,
-                        if local_person == Some(company.master) {
-                            "  /  COMPANY MASTER"
-                        } else {
-                            ""
-                        }
-                    )),
-                    crate::ui::typography::text(12.0),
+                    ledger::reading_strong(12.0),
                     TextColor(EMBER),
                 ));
-            }
+            });
         });
 }

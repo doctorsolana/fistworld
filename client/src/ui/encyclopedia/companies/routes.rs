@@ -49,7 +49,7 @@ pub(super) fn spawn_route_card(
                                 route.id.0,
                                 route.good.label().to_uppercase()
                             )),
-                            crate::ui::typography::text(15.0),
+                            crate::ui::ledger::reading(15.0),
                             TextColor(INK),
                         ));
                         copy.spawn((
@@ -58,13 +58,13 @@ pub(super) fn spawn_route_card(
                                 route.mode.label().to_uppercase(),
                                 route.warehouse_name.to_uppercase()
                             )),
-                            crate::ui::typography::text(11.5),
+                            crate::ui::ledger::reading(11.5),
                             TextColor(INK_MUTED),
                         ));
                     });
                 header.spawn((
                     Text::new(route.status.label().to_uppercase()),
-                    crate::ui::typography::text(12.0),
+                    crate::ui::ledger::reading(12.0),
                     TextColor(if route.status == TradeRouteStatus::Mothballed {
                         EMBER
                     } else {
@@ -86,7 +86,7 @@ pub(super) fn spawn_route_card(
                     if index > 0 {
                         timeline.spawn((
                             Text::new(">"),
-                            crate::ui::typography::text(17.0),
+                            crate::ui::ledger::reading(17.0),
                             TextColor(INK_MUTED),
                         ));
                     }
@@ -123,12 +123,12 @@ pub(super) fn spawn_route_card(
                                     index + 1,
                                     stop.settlement_name.to_uppercase()
                                 )),
-                                crate::ui::typography::text(11.5),
+                                crate::ui::ledger::reading(11.5),
                                 TextColor(INK),
                             ));
                             stop_card.spawn((
                                 Text::new(stop.action.label().to_uppercase()),
-                                crate::ui::typography::text(11.0),
+                                crate::ui::ledger::reading(11.0),
                                 TextColor(EMBER),
                             ));
                         });
@@ -164,7 +164,7 @@ pub(super) fn spawn_route_card(
                 ] {
                     facts.spawn((
                         Text::new(text),
-                        crate::ui::typography::text(11.5),
+                        crate::ui::ledger::reading(11.5),
                         TextColor(INK_MUTED),
                     ));
                 }
@@ -177,7 +177,7 @@ pub(super) fn spawn_route_card(
                         format_money(route.lifetime_delivery_revenue),
                         format_money(route.maximum_purchase_price),
                     )),
-                    crate::ui::typography::text(12.0),
+                    crate::ui::ledger::reading(12.0),
                     TextColor(INK_MUTED),
                 )),
                 TradeRouteMode::Merchant => card.spawn((
@@ -201,7 +201,7 @@ pub(super) fn spawn_route_card(
                             String::new()
                         },
                     )),
-                    crate::ui::typography::text(12.0),
+                    crate::ui::ledger::reading(12.0),
                     TextColor(INK_MUTED),
                 )),
             };
@@ -209,7 +209,7 @@ pub(super) fn spawn_route_card(
             if route.trips.is_empty() {
                 card.spawn((
                     Text::new("No completed circuit yet."),
-                    crate::ui::typography::text(11.5),
+                    crate::ui::ledger::reading(11.5),
                     TextColor(INK_MUTED),
                 ));
             } else {
@@ -225,7 +225,7 @@ pub(super) fn spawn_route_card(
                             format_money(trip.consigned_value),
                             trip.travel_world_seconds as f32 / 60.0,
                         )),
-                        crate::ui::typography::text(11.0),
+                        crate::ui::ledger::reading(11.0),
                         TextColor(INK_MUTED),
                     ));
                 }

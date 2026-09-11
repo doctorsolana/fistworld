@@ -72,13 +72,13 @@ impl CarriedAppearance {
 ///
 /// The authoritative quantities remain in [`GoodsInventory`]. This component
 /// exists so a client can select a carry animation and prop without receiving
-/// every private inventory slot whenever one amount changes.
+/// every private inventory slot whenever one amount changes. Exact quantities
+/// never cross this public visual contract; owners receive their GoodsInventory.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct CarriedLoad {
     pub good: Option<Good>,
-    pub amount: u32,
-    /// Visual presentation is not the accounting category. `None` remains
-    /// valid for old saves/packets and falls back through `default_for`.
+    /// Visual presentation is not the accounting category. `None` uses the
+    /// canonical appearance of the visible good through `default_for`.
     #[serde(default)]
     pub appearance: Option<CarriedAppearance>,
 }
@@ -90,13 +90,12 @@ impl CarriedLoad {
             .find(|good| inventory.amount(*good) > 0);
         Self {
             good,
-            amount: good.map(|good| inventory.amount(good)).unwrap_or(0),
             appearance: good.map(CarriedAppearance::default_for),
         }
     }
 
     pub const fn is_empty(self) -> bool {
-        self.amount == 0 || self.good.is_none()
+        self.good.is_none()
     }
 
     pub const fn visible_appearance(self) -> Option<CarriedAppearance> {

@@ -28,10 +28,7 @@ use crate::ui::encyclopedia::{
 };
 use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant};
 use crate::ui::good_icon_path;
-use crate::ui::styles::{
-    INK, INK_MUTED, LIMEWASH, LIMEWASH_DETAIL, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE_SOFT,
-    RADIUS, STATUS_GOOD,
-};
+use crate::ui::styles::{INK, INK_MUTED, LIMEWASH_WELL, PLATE_RULE_SOFT, RADIUS, STATUS_GOOD};
 
 const T_TITLE: f32 = 22.0;
 const T_HEADING: f32 = 17.0;
@@ -567,7 +564,7 @@ fn spawn_market_page(
                 overflow: Overflow::clip(),
                 ..default()
             },
-            BackgroundColor(LIMEWASH_LIT),
+            crate::ui::ledger::paper(),
         ))
         .id();
     commands.entity(host).add_child(root);
@@ -593,13 +590,13 @@ fn spawn_market_page(
                     copy.spawn((
                         MarketBoundText::Title,
                         Text::new(model.title.clone()),
-                        crate::ui::typography::text(T_TITLE),
+                        crate::ui::typography::heading(T_TITLE),
                         TextColor(INK),
                     ));
                     copy.spawn((
                         MarketBoundText::Subtitle,
                         Text::new(model.subtitle.clone()),
-                        crate::ui::typography::text(T_LABEL),
+                        crate::ui::ledger::reading(T_LABEL),
                         TextColor(INK_MUTED),
                     ));
                 });
@@ -607,7 +604,7 @@ fn spawn_market_page(
                 MarketAccessText,
                 MarketBoundText::Access,
                 Text::new(model.access.clone()),
-                crate::ui::typography::text(T_BODY),
+                crate::ui::ledger::reading(T_BODY),
                 TextColor(if model.access_enabled { STATUS_GOOD } else { INK_MUTED }),
             ));
         });
@@ -668,14 +665,14 @@ fn spawn_market_page(
                 .with_children(|intro| {
                     intro.spawn((
                         Text::new("HOW THIS EXCHANGE WORKS"),
-                        crate::ui::typography::text(T_LABEL),
+                        crate::ui::ledger::reading(T_LABEL),
                         TextColor(INK),
                     ));
                     intro.spawn((
                         Text::new(
                             "Goods remain the seller's property until a real buyer clears the offer. Posting cargo is not an immediate sale.",
                         ),
-                        crate::ui::typography::text(T_BODY),
+                        crate::ui::ledger::reading(T_BODY),
                         TextColor(INK_MUTED),
                         TextLayout::justify(Justify::Right),
                         Node {
@@ -686,7 +683,7 @@ fn spawn_market_page(
                 });
             content.spawn((
                 Text::new("GOODS LEDGER"),
-                crate::ui::typography::text(T_HEADING),
+                crate::ui::typography::heading(T_HEADING),
                 TextColor(INK),
                 Node {
                     margin: UiRect::top(Val::Px(5.0)),
@@ -701,7 +698,7 @@ fn spawn_market_page(
         page.spawn((
             MarketFeedbackText,
             Text::new(model.feedback.clone()),
-            crate::ui::typography::text(T_BODY),
+            crate::ui::ledger::reading(T_BODY),
             TextColor(match model.feedback_success {
                 Some(true) => STATUS_GOOD,
                 Some(false) => Color::srgb(0.62, 0.18, 0.14),
@@ -713,7 +710,7 @@ fn spawn_market_page(
                 border: UiRect::top(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(LIMEWASH),
+            BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
             BorderColor::all(PLATE_RULE_SOFT),
         ));
     });
@@ -737,19 +734,19 @@ fn spawn_summary_tile(
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(LIMEWASH),
+            BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|tile| {
             tile.spawn((
                 Text::new(label),
-                crate::ui::typography::text(T_LABEL),
+                crate::ui::ledger::reading(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             tile.spawn((
                 MarketBoundText::Summary(field),
                 Text::new(value),
-                crate::ui::typography::text(T_VALUE),
+                crate::ui::ledger::reading(T_VALUE),
                 TextColor(INK),
             ));
         });
@@ -775,7 +772,7 @@ fn spawn_market_row(
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(LIMEWASH_DETAIL),
+            BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.04)),
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|record| {
@@ -807,13 +804,13 @@ fn spawn_market_row(
                         .with_children(|copy| {
                             copy.spawn((
                                 Text::new(row.good.label()),
-                                crate::ui::typography::text(T_HEADING),
+                                crate::ui::typography::heading(T_HEADING),
                                 TextColor(INK),
                             ));
                             copy.spawn((
                                 MarketBoundText::Row(row.good, MarketRowField::Condition),
                                 Text::new(row.condition.clone()),
-                                crate::ui::typography::text(T_LABEL),
+                                crate::ui::ledger::reading(T_LABEL),
                                 TextColor(INK_MUTED),
                                 Node {
                                     max_width: Val::Px(142.0),
@@ -906,7 +903,7 @@ fn spawn_market_row(
                         .with_child((
                             Text::new("HISTORY"),
                             UiButtonLabel,
-                            crate::ui::typography::text(T_BUTTON),
+                            crate::ui::ledger::reading(T_BUTTON),
                             TextColor(INK),
                             Pickable::IGNORE,
                         ));
@@ -932,13 +929,13 @@ fn spawn_market_fact(
         .with_children(|fact| {
             fact.spawn((
                 Text::new(label),
-                crate::ui::typography::text(T_LABEL),
+                crate::ui::ledger::reading(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             fact.spawn((
                 marker,
                 Text::new(value),
-                crate::ui::typography::text(T_VALUE),
+                crate::ui::ledger::reading(T_VALUE),
                 TextColor(INK),
             ));
         });
@@ -1002,7 +999,7 @@ fn spawn_trade_button(
         },
         Text::new(label),
         UiButtonLabel,
-        crate::ui::typography::text(T_BUTTON),
+        crate::ui::ledger::reading(T_BUTTON),
         TextColor(INK),
         Pickable::IGNORE,
     ));

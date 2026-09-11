@@ -36,9 +36,7 @@ use crate::ui::foundation::{
     UiButtonVariant,
 };
 use crate::ui::modal::update_modal_click_guard;
-use crate::ui::styles::{
-    INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE_SOFT, RADIUS,
-};
+use crate::ui::styles::{INK, INK_MUTED, LIMEWASH_WELL, PLATE_RULE_SOFT, RADIUS};
 
 pub struct BusinessManagementPlugin;
 
@@ -1362,7 +1360,7 @@ fn spawn_panel(
                 overflow: Overflow::clip(),
                 ..default()
             },
-            BackgroundColor(LIMEWASH_LIT),
+            crate::ui::ledger::paper(),
         ))
         .id();
     commands.entity(host).add_child(panel_entity);
@@ -1377,20 +1375,20 @@ fn spawn_panel(
                     border: UiRect::bottom(Val::Px(1.0)),
                     ..default()
                 },
-                BackgroundColor(LIMEWASH),
+                BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
                 BorderColor::all(PLATE_RULE_SOFT),
             ))
             .with_children(|header| {
                 header.spawn((
                     BoundText("title".into()),
                     Text::new(model.title.clone()),
-                    crate::ui::typography::text(T_TITLE),
+                    crate::ui::typography::heading(T_TITLE),
                     TextColor(INK),
                 ));
                 header.spawn((
                     BoundText("subtitle".into()),
                     Text::new(model.subtitle.clone()),
-                    crate::ui::typography::text(T_LABEL),
+                    crate::ui::ledger::reading(T_LABEL),
                     TextColor(INK_MUTED),
                 ));
             });
@@ -1425,7 +1423,7 @@ fn spawn_panel(
                 body.spawn((
                     BoundText("feedback".into()),
                     Text::new(message.clone()),
-                    crate::ui::typography::text(T_BODY),
+                    crate::ui::ledger::reading(T_BODY),
                     TextColor(if ok { FEEDBACK_OK } else { FEEDBACK_FAIL }),
                     Node {
                         display: if message.is_empty() {
@@ -1443,7 +1441,7 @@ fn spawn_panel(
 fn spawn_section(parent: &mut ChildSpawnerCommands<'_>, label: &str) {
     parent.spawn((
         Text::new(label),
-        crate::ui::typography::text(T_SECTION),
+        crate::ui::typography::heading(T_SECTION),
         TextColor(INK_MUTED),
         Node {
             margin: UiRect::top(Val::Px(6.0)),
@@ -1464,19 +1462,19 @@ fn spawn_row(parent: &mut ChildSpawnerCommands<'_>, row: &RowModel) {
                 row_gap: Val::Px(8.0),
                 ..default()
             },
-            BackgroundColor(LIMEWASH),
+            BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|card| {
             card.spawn((
                 Text::new(row.label.clone()),
-                crate::ui::typography::text(T_LABEL),
+                crate::ui::ledger::reading(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             card.spawn((
                 BoundText(row.id.clone()),
                 Text::new(row.value.clone()),
-                crate::ui::typography::text(T_VALUE),
+                crate::ui::ledger::reading(T_VALUE),
                 TextColor(INK),
             ));
             if row.controls.is_empty() {
@@ -1526,7 +1524,7 @@ fn spawn_control(parent: &mut ChildSpawnerCommands<'_>, control: &ControlModel) 
         BoundText(control.id.clone()),
         Text::new(control.label.clone()),
         UiButtonLabel,
-        crate::ui::typography::text(T_BUTTON),
+        crate::ui::ledger::reading(T_BUTTON),
         TextColor(INK),
         Pickable::IGNORE,
     ));
@@ -1544,19 +1542,19 @@ fn spawn_meter(parent: &mut ChildSpawnerCommands<'_>, meter: &MeterModel) {
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(LIMEWASH),
+            BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|card| {
             card.spawn((
                 Text::new(meter.title.clone()),
-                crate::ui::typography::text(T_LABEL),
+                crate::ui::ledger::reading(T_LABEL),
                 TextColor(INK_MUTED),
             ));
             card.spawn((
                 BoundText(meter.id.clone()),
                 Text::new(meter.summary.clone()),
-                crate::ui::typography::text(T_BODY),
+                crate::ui::ledger::reading(T_BODY),
                 TextColor(INK),
             ));
             card.spawn((

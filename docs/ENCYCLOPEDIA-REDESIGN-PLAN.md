@@ -1,8 +1,11 @@
 # Encyclopedia visual implementation plan
 
-Status: proposed, 2026-09-11. This document plans the implementation; it does not
-describe a completed UI change. The five approved generated images are the visual
-specification. Illustrative names, quantities and portraits become actual game data.
+Status: implemented and visually verified, integrated into `main` on
+2026-09-11. [Verification results and limitations](ENCYCLOPEDIA-VERIFICATION.md)
+record the actual captures, connected tests and delivery budget.
+The requirements below retain the approved design
+brief. The five generated images are visual references; names, quantities,
+portraits, buildings and available controls come from actual game data.
 
 ## 1. Visual target and reference package
 

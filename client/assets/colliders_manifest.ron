@@ -261,7 +261,7 @@
       kind: "building_lumberjack_hut",
       gltf_path: "game_assets/buildings/village/LumberjackHut.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.477 ),
+      vertex_filter: LowerYPercent ( percent: 0.611 ),
       collidable: true,
     ),
     // NOTE the WHEAT FIELD is deliberately absent from this file. It is PropKind::WheatField, a

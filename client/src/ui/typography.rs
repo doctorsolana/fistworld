@@ -3,6 +3,8 @@ use bevy::{asset::uuid_handle, prelude::*};
 
 pub const DISPLAY: Handle<Font> = uuid_handle!("91abc482-7afc-4679-befa-829ade16fb14");
 pub const BODY: Handle<Font> = uuid_handle!("b65eb4c7-6970-409b-8d88-b9df72a6fa29");
+/// A quiet book face for long records; the HUD keeps its existing medieval face.
+pub const READING: Handle<Font> = uuid_handle!("8daa159b-92f9-4eb1-a5b4-1eb9f2ad8799");
 
 pub(super) fn install(app: &mut App) {
     bevy::asset::load_internal_binary_asset!(
@@ -17,6 +19,22 @@ pub(super) fn install(app: &mut App) {
         "../../assets/fonts/MedievalSharp-Regular.ttf",
         |bytes: &[u8], _: String| Font::from_bytes(bytes.to_vec())
     );
+    bevy::asset::load_internal_binary_asset!(
+        app,
+        READING,
+        "../../assets/fonts/LibreBaskerville-wght.ttf",
+        |bytes: &[u8], _: String| Font::from_bytes(bytes.to_vec())
+    );
+}
+
+pub fn reading(size: f32) -> TextFont {
+    TextFont::from_font_size(size.max(12.0))
+        .with_font(READING)
+        .with_font_weight(FontWeight(450))
+}
+
+pub fn reading_strong(size: f32) -> TextFont {
+    reading(size).with_font_weight(FontWeight::BOLD)
 }
 
 pub fn body(size: f32) -> TextFont {
@@ -47,7 +65,7 @@ mod tests {
         app.init_resource::<Assets<Font>>();
         install(&mut app);
         let mut font_cx = bevy::text::FontCx::default();
-        for handle in [DISPLAY, BODY] {
+        for handle in [DISPLAY, BODY, READING] {
             let font = app.world().resource::<Assets<Font>>().get(&handle).unwrap();
             assert!(!font_cx
                 .collection

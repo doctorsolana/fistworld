@@ -708,3 +708,23 @@ fn capital_spending_changes_book_value_without_reducing_operating_profit() {
     assert_eq!(account.current_day.capital_expenditures, 300);
     assert_eq!(account.current_day.profit(), 140);
 }
+
+#[test]
+fn carried_visual_summary_never_contains_or_updates_for_private_quantity() {
+    let mut one = GoodsInventory::new(100);
+    one.add(Good::Wheat, 1);
+    let mut many = GoodsInventory::new(100);
+    many.add(Good::Wheat, 24);
+    let small = CarriedLoad::from_inventory(&one);
+    let large = CarriedLoad::from_inventory(&many);
+    assert_eq!(small, large);
+    assert_eq!(
+        bincode::serialize(&small).unwrap(),
+        bincode::serialize(&large).unwrap()
+    );
+    assert_eq!(
+        small.visible_appearance(),
+        Some(CarriedAppearance::WheatSheaf)
+    );
+    assert!(CarriedLoad::from_inventory(&GoodsInventory::new(100)).is_empty());
+}

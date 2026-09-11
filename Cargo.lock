@@ -7360,6 +7360,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_replicon",
  "lightyear",
  "parry3d",
  "rand 0.8.5",
