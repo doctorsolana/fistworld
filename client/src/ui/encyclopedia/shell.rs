@@ -1,8 +1,8 @@
 //! The bound-book window and navigation; page layouts live beside it.
 use super::*;
 use crate::ui::{
-    foundation::{button_chrome, UiButtonLabel, UiButtonVariant},
-    modal::{spawn_modal, ModalLayout},
+    foundation::{UiButtonLabel, UiButtonVariant, button_chrome},
+    modal::{ModalLayout, spawn_modal},
     styles::{BRASS, BRASS_DARK, PARCHMENT, RADIUS, SIGN_WOOD},
 };
 use bevy::prelude::*;
@@ -20,7 +20,9 @@ pub(super) fn spawn_encyclopedia(
     // explicitly opens this window to verify it.
     let capture_opts_in = std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA")
         .is_ok_and(|value| !value.trim().is_empty())
-        || std::env::var("FISTFORCE_CAPTURE_TRADE").is_ok_and(|value| value == "1");
+        || std::env::var("FISTFORCE_CAPTURE_TRADE").is_ok_and(|value| value == "1")
+        || std::env::var("FISTFORCE_CAPTURE_MEDIEVAL_HUD")
+            .is_ok_and(|value| matches!(value.as_str(), "exploration" | "combat"));
     if capture.is_some() && !capture_opts_in {
         return;
     }

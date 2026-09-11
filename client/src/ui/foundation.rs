@@ -157,8 +157,14 @@ pub(super) fn button_colors(
     style: UiButtonStyle,
     disabled: bool,
 ) -> (Color, Color) {
-    use super::styles::{BRASS, SIGN_WOOD, WOOD_LIT};
+    use super::styles::{BRASS, BRASS_DARK, SIGN_WOOD, WOOD_LIT};
     if disabled {
+        if matches!(
+            style.variant,
+            UiButtonVariant::Inverse | UiButtonVariant::Ribbon
+        ) {
+            return (SIGN_WOOD, BRASS_DARK);
+        }
         return (BUTTON_DISABLED, PLATE_RULE);
     }
     if style.selected {
@@ -222,7 +228,13 @@ fn style_ui_button_labels(
     mut pending: Local<Vec<Entity>>,
 ) {
     for (style, disabled, button_children, motion) in buttons.iter() {
-        let desired = if disabled {
+        let desired = if disabled
+            && matches!(
+                style.variant,
+                UiButtonVariant::Inverse | UiButtonVariant::Ribbon
+            ) {
+            super::styles::INK_INVERSE_MUTED
+        } else if disabled {
             INK_MUTED
         } else if style.variant == UiButtonVariant::Inverse
             || style.variant == UiButtonVariant::Primary
@@ -407,6 +419,44 @@ mod tests {
             world.get::<BackgroundColor>(entity).unwrap().0,
             BUTTON_DISABLED
         );
+    }
+
+    #[test]
+    fn disabled_inverse_controls_keep_readable_dark_chrome() {
+        use super::super::styles::{BRASS_DARK, INK_INVERSE_MUTED, SIGN_WOOD};
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        for variant in [UiButtonVariant::Inverse, UiButtonVariant::Ribbon] {
+            let label = world.spawn((UiButtonLabel, TextColor(INK))).id();
+            let button = world
+                .spawn((Button, InteractionDisabled, button_chrome(variant)))
+                .add_child(label)
+                .id();
+            world
+                .run_system_once(super::super::button_motion::animate_buttons)
+                .unwrap();
+            world.run_system_once(style_ui_button_labels).unwrap();
+            assert_eq!(world.get::<BackgroundColor>(button).unwrap().0, SIGN_WOOD);
+            assert_eq!(
+                *world.get::<BorderColor>(button).unwrap(),
+                BorderColor::all(BRASS_DARK)
+            );
+            assert_eq!(world.get::<TextColor>(label).unwrap().0, INK_INVERSE_MUTED);
+        }
+        for variant in [
+            UiButtonVariant::Secondary,
+            UiButtonVariant::Primary,
+            UiButtonVariant::Ghost,
+            UiButtonVariant::Row,
+            UiButtonVariant::Tab,
+            UiButtonVariant::Developer,
+            UiButtonVariant::Danger,
+        ] {
+            assert_eq!(
+                button_colors(Interaction::Hovered, UiButtonStyle::new(variant), true),
+                (BUTTON_DISABLED, PLATE_RULE)
+            );
+        }
     }
 
     #[test]

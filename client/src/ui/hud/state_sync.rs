@@ -72,6 +72,7 @@ fn warp_label(factor: f32) -> String {
 
 pub(super) fn sync_clock_chip(
     world_time: Query<&WorldTime>,
+    mut icons: Query<&mut super::chrome::HudIcon, With<ClockIcon>>,
     warp: Query<&TimeWarp>,
     mut period: Query<
         (&mut Text, &mut TextColor),
@@ -112,16 +113,21 @@ pub(super) fn sync_clock_chip(
         }
     }
 
+    for mut icon in &mut icons {
+        let next = if wt.is_day() {
+            super::chrome::HudIcon::Sun
+        } else {
+            super::chrome::HudIcon::Moon
+        };
+        if *icon != next {
+            *icon = next;
+        }
+    }
     // The calendar starts at day 0 and rides the replicated WorldTime, so every client
     // shows the same date even under warp.
-    // Day/night differ by WORD and by value, never by the accent: EMBER is
-    // reserved for selection, and a permanently-lit accent in the corner would
-    // compete with the one thing that must catch the eye.
-    let (label, color) = if wt.is_day() {
-        (format!("DAY {}", wt.day), INK)
-    } else {
-        (format!("NIGHT {}", wt.day), INK_MUTED)
-    };
+    // The sun/moon icon carries the day/night state; the label is just the date.
+    let label = format!("DAY {}", wt.day);
+    let color = crate::ui::styles::INK_INVERSE;
     for (mut text, mut text_color) in period.iter_mut() {
         if text.0 != label {
             text.0 = label.clone();
@@ -163,7 +169,7 @@ pub(super) fn sync_mode_chip(
     // PLAY is just a word in the clock row.
     let (label, variant) = match *mode {
         HudMode::God => ("GOD", UiButtonVariant::Developer),
-        HudMode::Play => ("PLAY", UiButtonVariant::Ghost),
+        HudMode::Play => ("PLAY", UiButtonVariant::Ribbon),
     };
     for (mut node, mut style) in chips.iter_mut() {
         if node.display != display {
@@ -260,12 +266,15 @@ pub(super) fn sync_spawn_hero_button(
 /// world now has a name, so a selected villager is named as themselves instead
 /// of showing an empty plate.
 ///
-/// A single selected person exposes the three real shared attributes immediately;
-/// EXPAND opens the complete live record (job, wage, home, food and inventory).
+/// A selected person shows health and purpose; EXPAND opens the complete live
+/// record (attributes, job, wage, home, food and inventory).
 #[allow(clippy::type_complexity)] // Disjoint Bevy UI mutations require one ParamSet.
 pub(super) fn sync_selection_plate(
     selection: Res<crate::selection::Selection>,
+    time: Res<Time<Real>>,
+    mut refreshed: Local<f64>,
     account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
+    commanders: Query<&shared::components::CommandedBy>,
     characters: Query<(
         &shared::components::CharacterName,
         &shared::components::CharacterKind,
@@ -276,7 +285,6 @@ pub(super) fn sync_selection_plate(
         Option<&shared::components::CharacterNavigationStatus>,
         Option<&shared::components::Health>,
     )>,
-    mut glyphs: Query<&mut BorderColor, With<SelectionRingGlyph>>,
     mut names: Query<&mut Text, (With<SelectionNameText>, Without<SelectionStatusText>)>,
     mut statuses: Query<&mut Text, (With<SelectionStatusText>, Without<SelectionNameText>)>,
     mut nodes: ParamSet<(
@@ -320,6 +328,13 @@ pub(super) fn sync_selection_plate(
             node.display = display;
         }
     }
+    let now = time.elapsed_secs_f64();
+    if !selection.is_changed()
+        && now - *refreshed < crate::ui::foundation::LIVE_PANEL_REFRESH_SECONDS
+    {
+        return;
+    }
+    *refreshed = now;
     let Some(primary) = selection.primary().and_then(|e| characters.get(e).ok()) else {
         return;
     };
@@ -327,15 +342,18 @@ pub(super) fn sync_selection_plate(
     // visual, not from diffing the replicated position frame to frame. The
     // compact plate leads with the person's purpose; attributes remain in the
     // expanded encyclopedia record.
-    let (name, kind, _position, commanded, attributes, objective, navigation, health) = primary;
+    let (name, kind, _position, commanded, _attributes, objective, navigation, health) = primary;
 
     let health_percentage = health.map(shared::components::Health::percentage);
     for mut node in nodes.p1().iter_mut() {
-        node.display = if count == 1 && health_percentage.is_some() {
+        let display = if count == 1 && health_percentage.is_some() {
             Display::Flex
         } else {
             Display::None
         };
+        if node.display != display {
+            node.display = display;
+        }
     }
     if let Some(percentage) = health_percentage {
         let color = if percentage > 0.6 {
@@ -346,8 +364,13 @@ pub(super) fn sync_selection_plate(
             Color::srgb(0.72, 0.20, 0.16)
         };
         for (mut node, mut background) in nodes.p2().iter_mut() {
-            node.width = Val::Percent(percentage * 100.0);
-            background.0 = color;
+            let width = Val::Percent(percentage * 100.0);
+            if node.width != width {
+                node.width = width;
+            }
+            if background.0 != color {
+                background.0 = color;
+            }
         }
     }
 
@@ -359,31 +382,13 @@ pub(super) fn sync_selection_plate(
     };
     let is_mine = owns(commanded);
 
-    // How many of the selection actually take orders. A box-drag over a village
-    // grabs a mixed crowd, and the plate has to say what will move.
+    // Count all commanded actors, including siege engines without character
+    // names. The plate must agree with what the next order will actually move.
     let commandable = selection
         .entities
         .iter()
-        .filter(|entity| {
-            characters
-                .get(**entity)
-                .is_ok_and(|(_, _, _, c, _, _, _, _)| owns(c))
-        })
+        .filter(|entity| owns(commanders.get(**entity).ok()))
         .count();
-
-    // The one saturated colour means "you command this". Grey means you are
-    // merely looking at someone.
-    let glyph_color = if commandable > 0 {
-        EMBER_RULE
-    } else {
-        INK_MUTED
-    };
-    for mut border in glyphs.iter_mut() {
-        let next = BorderColor::from(glyph_color);
-        if *border != next {
-            *border = next;
-        }
-    }
 
     // A group is named by its SIZE, not by whoever happens to be front-most:
     // one name over a squad of six is a lie about what the next order moves.
@@ -433,13 +438,6 @@ pub(super) fn sync_selection_plate(
         navigation.and_then(|state| state.label()).map_or_else(
             || objective.label().to_uppercase(),
             |state| format!("{} · {}", objective.label(), state).to_uppercase(),
-        )
-    } else if let Some(attributes) = attributes {
-        format!(
-            "P{} I{} C{}",
-            attributes.physique(),
-            attributes.intelligence(),
-            attributes.charm(),
         )
     } else if is_mine {
         if moved {

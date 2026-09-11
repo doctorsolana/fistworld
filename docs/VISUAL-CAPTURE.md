@@ -70,6 +70,44 @@ its configured tolerances.
 Run `cargo run -p client --bin capture -- --help` for all one-off flags. Existing presets and
 fixture environment variables remain supported.
 
+## Medieval HUD
+
+`capture/scenarios/ui-medieval-hud.ron` rehearses the live portrait, single character
+expansion, map, encyclopedia and bell/clear controls. Capture waits for canonical portrait
+and HUD artwork readiness, then the actual action's resulting UI state. Encyclopedia checks
+require a visible modal root and panel with nonzero layout, including the selected person's
+record header; an open-state flag alone is insufficient. Modal pages must hide the persistent
+HUD and Escape must restore it. The final night view checks
+the clock's sun/moon change. The fixture stages offline names, health and purse values;
+it does not claim a connected session or successful transaction. Each image has a
+`.hud.json` companion with action, selection and physical UI bounds. Visibility evidence
+accounts for inherited visibility, layout and intersection with the output viewport. Inspect
+this companion together with the PNG and `.capture.json`.
+
+`capture/scenarios/ui-medieval-combat.ron` stages sixteen battalion records with canonical
+dressed soldiers and one rendered catapult at 1280×720. Its six shots cover:
+
+| Shot | Required result |
+|---|---|
+| `01-combat` | Initial selection and an overflowing, clipped battalion dock |
+| `02-combat-next` | The production Next button advances the viewport |
+| `03-combat-select-last` | The production card selects all eight members of battalion XVI |
+| `04-combat-orders` | The production Orders button opens the help panel |
+| `05-mixed-siege` | Eight soldiers plus one catapult; nine commandable units, help closed, siege controls above the visible dock with a measured gap |
+| `06-siege-only` | Only the catapult selected; siege controls at the bottom and the battalion dock hidden |
+
+The last two shots explicitly stage fixture selection and wait for the real catapult scene.
+Settled views require dressed actors within the actual camera viewport, not just entity
+counts. Paging, card selection and help use production button handlers; the fixture does
+not simulate authoritative fighting. Run the exploration tour at both output sizes and
+the combat tour at its narrow target:
+
+```bash
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/scenarios/ui-medieval-hud.ron --out logs/captures/medieval-hud-normal
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/scenarios/ui-medieval-hud.ron --resolution 1280x720 --out logs/captures/medieval-hud-small
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/scenarios/ui-medieval-combat.ron --out logs/captures/medieval-combat-small
+```
+
 ## Exploration notices
 
 `capture/scenarios/ui-notices.ron` captures the compact default, an unread action result,

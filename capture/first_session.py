@@ -226,7 +226,7 @@ def run(args):
         report["arrival_town"] = town["name"]
         session.command("key", key="Home")
         session.command("button", name="journey-NOTICES")
-        session.command("button", name="journey-VIEW TOWN")
+        session.command("button", name="hud-VIEW TOWN")
         session.command("button", name="journey-NOTICES")
         focused = session.wait(lambda state: any(market["id"] == town["id"] for market in state["markets"]), "town replication")
         market = next(market for market in focused["markets"] if market["id"] == town["id"])

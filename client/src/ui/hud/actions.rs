@@ -7,12 +7,23 @@ use super::*;
 /// the scrollable People page.
 pub(super) fn handle_selection_expand_button(
     selection: Res<crate::selection::Selection>,
+    input: Res<InputState>,
     characters: Query<&shared::components::PersonId>,
     mut open: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
     mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
     mut selected: ResMut<crate::ui::encyclopedia::SelectedPerson>,
-    buttons: Query<&Interaction, (With<SelectionExpandButton>, Changed<Interaction>)>,
+    buttons: Query<
+        &Interaction,
+        (
+            With<SelectionExpandButton>,
+            Changed<Interaction>,
+            Without<bevy::ui::InteractionDisabled>,
+        ),
+    >,
 ) {
+    if input.ui_blocking() {
+        return;
+    }
     for interaction in buttons.iter() {
         if *interaction != Interaction::Pressed || selection.len() != 1 {
             continue;

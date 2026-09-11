@@ -1,0 +1,36 @@
+// Real combat controls in the shared walnut/brass HUD at the narrow target.
+// The world records are synthetic; paging, selection and help use normal buttons.
+(
+    version: 1,
+    name: "medieval-combat-hud",
+    map: "battle_lab",
+    output_dir: "logs/captures/ui-medieval-combat",
+    resolution: (1280, 720),
+    fixed_delta_seconds: 0.016666667,
+    target: window,
+    show_window: false,
+    warmup_frames: 180,
+    readiness: (
+        minimum_frames: 60,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 64,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_HUD": "play",
+        "FISTFORCE_COMBAT_MODE": "1",
+        "FISTFORCE_CAPTURE_WARBAR": "1",
+        "FISTFORCE_CAPTURE_WARBAR_COUNT": "16",
+        "FISTFORCE_CAPTURE_NOTICES": "1",
+        "FISTFORCE_CAPTURE_MEDIEVAL_HUD": "combat",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "01-combat", focus: (-20.0, 0.0, -30.0), yaw: -0.45, zoom: 120.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64), villagers_at_least(count: 121)]),
+        (name: "02-combat-next", focus: (-20.0, 0.0, -30.0), yaw: -0.45, zoom: 120.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64), villagers_at_least(count: 121)]),
+        (name: "03-combat-select-last", focus: (-20.0, 0.0, -30.0), yaw: -0.45, zoom: 120.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64), villagers_at_least(count: 121)]),
+        (name: "04-combat-orders", focus: (-20.0, 0.0, -30.0), yaw: -0.45, zoom: 120.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64), villagers_at_least(count: 121)]),
+        (name: "05-mixed-siege", focus: (-20.0, 0.0, -30.0), yaw: -0.45, zoom: 120.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64), villagers_at_least(count: 121)]),
+        (name: "06-siege-only", focus: (-20.0, 0.0, -30.0), yaw: -0.45, zoom: 120.0, time_of_day: 0.5, assertions: [loaded_chunks_at_least(count: 64), villagers_at_least(count: 121)]),
+    ],
+)

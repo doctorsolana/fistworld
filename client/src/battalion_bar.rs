@@ -1,7 +1,6 @@
 //! The battalion bar: Rome-style unit cards along the bottom of the screen.
 //!
-//! Springs up when combat mode arms (the same movement as the COMBAT MODE
-//! sign dropping from the top - the war UI arrives as one gesture), and
+//! Springs up when combat mode arms and
 //! shows one card per battalion: its Roman numeral in the display face, its
 //! strength in men, and a thin health bar that thins as the unit bleeds.
 //! Clicking a card selects the whole battalion; cards of battalions with
@@ -14,16 +13,22 @@ use crate::army_roster::ArmyRoster;
 use crate::combat_mode::CombatMode;
 use crate::states::GameState;
 use crate::ui::{
+    foundation::{UiButtonLabel, UiButtonStyle, UiButtonVariant, button_chrome},
     motion::Spring,
-    styles::{CRIMSON, PARCHMENT, SIGN_WOOD},
+    styles::PARCHMENT,
 };
 
-/// Clears the selection plate that hugs the bottom edge; the cards hover
-/// just above it rather than fighting it for the same pixels.
-const BAR_SHOWN_BOTTOM: f32 = 58.0;
+mod navigation;
+
+// Match the corner HUD's independent selection and map controls. These are
+// design pixels; the shared resolution-aware UiScale preserves the clearance.
+const BAR_LEFT: f32 = 438.0;
+const BAR_RIGHT: f32 = 180.0;
+const BAR_SHOWN_BOTTOM: f32 = 18.0;
 const BAR_HIDDEN_BOTTOM: f32 = -160.0;
 const CARD_WIDTH: f32 = 84.0;
 const CARD_HEIGHT: f32 = 96.0;
+const CARD_GAP: f32 = 8.0;
 /// Health bar colors: full reads as parchment-gold, the loss as dried blood.
 const HEALTH_FILL: Color = Color::srgb(0.82, 0.68, 0.42);
 const HEALTH_LOSS: Color = Color::srgb(0.30, 0.10, 0.08);
@@ -40,6 +45,7 @@ impl Plugin for BattalionBarPlugin {
                 rebuild_battalion_cards,
                 handle_card_clicks,
                 handle_muster_card_clicks,
+                navigation::handle_navigation,
             )
                 .chain()
                 .after(crate::army_roster::ArmyRosterSet)
@@ -52,6 +58,7 @@ impl Plugin for BattalionBarPlugin {
                 bind_battalion_cards,
                 bind_muster_card,
                 animate_battalion_bar,
+                navigation::bind_navigation,
             )
                 .after(crate::selection::SelectionGestureSet)
                 .run_if(in_state(GameState::Playing)),
@@ -122,70 +129,92 @@ fn spawn_battalion_bar(
     if capture.is_some() && !hud_requested {
         return;
     }
-    commands.spawn((
-        BattalionBarRoot {
-            spring: Spring::new(BAR_HIDDEN_BOTTOM),
-        },
-        Pickable::IGNORE,
-        GlobalZIndex(56),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            bottom: Val::Px(BAR_HIDDEN_BOTTOM),
-            width: Val::Percent(100.0),
-            justify_content: JustifyContent::Center,
-            column_gap: Val::Px(10.0),
-            align_items: AlignItems::FlexEnd,
-            ..default()
-        },
-        children![
-            (
-                BattalionCardRow,
-                Pickable::IGNORE,
+    commands
+        .spawn((
+            Name::new("Combat battalion dock"),
+            BattalionBarRoot {
+                spring: Spring::new(BAR_HIDDEN_BOTTOM),
+            },
+            Pickable::IGNORE,
+            GlobalZIndex(crate::ui::foundation::layer::HUD + 56),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(BAR_LEFT),
+                right: Val::Px(BAR_RIGHT),
+                bottom: Val::Px(BAR_HIDDEN_BOTTOM),
+                justify_content: JustifyContent::Center,
+                column_gap: Val::Px(CARD_GAP),
+                align_items: AlignItems::FlexEnd,
+                ..default()
+            },
+        ))
+        .with_children(|dock| {
+            navigation::spawn_button(dock, -1);
+            dock.spawn((
+                Name::new("Battalion card viewport"),
+                navigation::CardViewport,
+                crate::ui::foundation::surface_block(),
+                ScrollPosition::default(),
                 Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(10.0),
-                    align_items: AlignItems::FlexEnd,
+                    min_width: Val::Px(0.0),
+                    height: Val::Px(CARD_HEIGHT),
+                    flex_shrink: 1.0,
+                    overflow: Overflow::scroll_x(),
                     ..default()
                 },
-            ),
-            // The muster card: raising a NEW battalion lives right here on
-            // the war bar, not three menus deep. Select troops, click, done.
-            (
+                children![(
+                    BattalionCardRow,
+                    Pickable::IGNORE,
+                    Node {
+                        flex_shrink: 0.0,
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(CARD_GAP),
+                        align_items: AlignItems::FlexEnd,
+                        ..default()
+                    },
+                )],
+            ));
+            navigation::spawn_button(dock, 1);
+            // Raising a battalion remains available even when all other cards
+            // are scrolled away. Its message and recruitment rules are unchanged.
+            dock.spawn((
+                Name::new("Muster battalion"),
                 MusterCard,
                 Button,
-                crate::ui::foundation::UiButtonStyleExempt,
+                button_chrome(UiButtonVariant::Inverse),
                 Node {
-                    width: Val::Px(CARD_WIDTH),
+                    width: Val::Px(76.0),
                     height: Val::Px(CARD_HEIGHT),
+                    flex_shrink: 0.0,
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
-                    row_gap: Val::Px(2.0),
-                    border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(7.0)),
+                    padding: UiRect::all(Val::Px(6.0)),
+                    row_gap: Val::Px(4.0),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
                     ..default()
                 },
-                BackgroundColor(SIGN_WOOD.with_alpha(0.72)),
-                BorderColor::all(PARCHMENT.with_alpha(0.25)),
+                crate::ui::styles::plate_shadow(),
                 children![
                     (
                         Text::new("+"),
-                        crate::ui::typography::heading(30.0),
-                        TextColor(PARCHMENT.with_alpha(0.55)),
+                        UiButtonLabel,
+                        crate::ui::typography::heading(27.0),
+                        TextColor(PARCHMENT),
                         Pickable::IGNORE,
                     ),
                     (
                         MusterCardLabel,
                         Text::new("MUSTER"),
                         crate::ui::typography::heading(11.0),
-                        TextColor(PARCHMENT.with_alpha(0.55)),
+                        TextColor(PARCHMENT),
+                        TextLayout::justify(Justify::Center),
                         Pickable::IGNORE,
                     ),
                 ],
-            ),
-        ],
-    ));
+            ));
+        });
 }
 
 /// Cards are rebuilt only when the set of battalions changes (mustered,
@@ -232,27 +261,26 @@ fn rebuild_battalion_cards(
             row.spawn((
                 BattalionCard(*battalion),
                 Button,
-                // The card paints its own selected/rest states (war palette,
-                // not the panel chrome family), so it opts out of the shared
-                // style contract instead of wearing the wrong coat.
-                crate::ui::foundation::UiButtonStyleExempt,
+                Name::new(format!("Select battalion {}", roman_numeral(*ordinal))),
+                button_chrome(UiButtonVariant::Inverse),
                 Node {
                     width: Val::Px(CARD_WIDTH),
                     height: Val::Px(CARD_HEIGHT),
+                    flex_shrink: 0.0,
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::SpaceBetween,
                     padding: UiRect::axes(Val::Px(8.0), Val::Px(8.0)),
                     border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(7.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
                     ..default()
                 },
-                BackgroundColor(SIGN_WOOD),
-                BorderColor::all(CRIMSON.with_alpha(0.55)),
+                crate::ui::styles::plate_shadow(),
             ))
             .with_children(|card| {
                 card.spawn((
                     Text::new(roman_numeral(*ordinal)),
+                    UiButtonLabel,
                     crate::ui::typography::heading(27.0),
                     TextColor(PARCHMENT),
                     TextShadow {
@@ -301,7 +329,7 @@ fn bind_battalion_cards(
     mode: Res<CombatMode>,
     roster: Res<ArmyRoster>,
     selection: Res<crate::selection::Selection>,
-    mut cards: Query<(&BattalionCard, &mut BorderColor, &mut BackgroundColor)>,
+    mut cards: Query<(&BattalionCard, &mut UiButtonStyle)>,
     mut counts: Query<(&CardCountText, &mut Text)>,
     mut fills: Query<(&CardHealthFill, &mut Node)>,
 ) {
@@ -324,24 +352,11 @@ fn bind_battalion_cards(
             )
         })
         .collect();
-    for (card, mut border, mut background) in &mut cards {
-        let Some(battalion) = roster.battalions.iter().find(|b| b.entity == card.0) else {
-            continue;
-        };
-        let count = selected[&card.0];
-        let full = count > 0 && count == battalion.count;
-        border.set_if_neq(BorderColor::all(if full {
-            Color::srgb(0.95, 0.72, 0.35)
-        } else if count > 0 {
-            Color::srgb(0.90, 0.42, 0.20)
-        } else {
-            CRIMSON.with_alpha(0.55)
-        }));
-        background.set_if_neq(BackgroundColor(if count > 0 {
-            Color::srgba(0.20, 0.13, 0.08, 0.96)
-        } else {
-            SIGN_WOOD
-        }));
+    for (card, mut style) in &mut cards {
+        let next = selected.get(&card.0).is_some_and(|count| *count > 0);
+        if style.selected != next {
+            style.selected = next;
+        }
     }
     for (marker, mut text) in &mut counts {
         let Some(b) = roster.battalions.iter().find(|b| b.entity == marker.0) else {
@@ -378,12 +393,14 @@ fn bind_battalion_cards(
 
 fn handle_card_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
+    mode: Res<CombatMode>,
+    input: Res<crate::input::InputState>,
     keys: Res<ButtonInput<KeyCode>>,
     cards: Query<(&Interaction, &BattalionCard)>,
     roster: Res<ArmyRoster>,
     mut selection: ResMut<crate::selection::Selection>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !mode.0 || input.ui_blocking() || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
     for (interaction, card) in &cards {
@@ -409,7 +426,7 @@ fn handle_card_clicks(
 fn bind_muster_card(
     selection: Res<crate::selection::Selection>,
     roster: Res<ArmyRoster>,
-    mut cards: Query<&mut BorderColor, With<MusterCard>>,
+    mut cards: Query<&mut UiButtonStyle, With<MusterCard>>,
     mut labels: Query<&mut Text, With<MusterCardLabel>>,
 ) {
     let eligible = roster.muster_candidates(&selection).len();
@@ -424,14 +441,10 @@ fn bind_muster_card(
             label.0 = next_label.clone();
         }
     }
-    let next_border = if eligible == 0 {
-        BorderColor::all(PARCHMENT.with_alpha(0.25))
-    } else {
-        BorderColor::all(Color::srgb(0.95, 0.72, 0.35))
-    };
-    for mut border in cards.iter_mut() {
-        if *border != next_border {
-            *border = next_border;
+    for mut style in &mut cards {
+        let selected = eligible > 0;
+        if style.selected != selected {
+            style.selected = selected;
         }
     }
 }
@@ -439,6 +452,8 @@ fn bind_muster_card(
 #[allow(clippy::type_complexity)]
 fn handle_muster_card_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
+    mode: Res<CombatMode>,
+    input: Res<crate::input::InputState>,
     time: Res<Time>,
     mut last_muster: Local<Option<f32>>,
     cards: Query<&Interaction, With<MusterCard>>,
@@ -449,7 +464,7 @@ fn handle_muster_card_clicks(
         (With<crate::GameClient>, With<lightyear::prelude::Connected>),
     >,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !mode.0 || input.ui_blocking() || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
     let pressed = cards
@@ -481,7 +496,8 @@ fn animate_battalion_bar(
     machines: Query<(), With<shared::components::Catapult>>,
     time: Res<Time>,
     mode: Res<CombatMode>,
-    mut roots: Query<(&mut BattalionBarRoot, &mut Node)>,
+    input: Res<crate::input::InputState>,
+    mut roots: Query<(&mut BattalionBarRoot, &mut Node, &mut Visibility)>,
 ) {
     let dt = time.delta_secs();
     let target = if mode.0
@@ -491,7 +507,12 @@ fn animate_battalion_bar(
     } else {
         BAR_HIDDEN_BOTTOM
     };
-    for (mut root, mut node) in roots.iter_mut() {
+    for (mut root, mut node, mut visibility) in roots.iter_mut() {
+        visibility.set_if_neq(if input.ui_blocking() {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
         if !root.spring.step(target, dt, 220.0, 16.0) {
             continue;
         }

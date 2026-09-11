@@ -41,9 +41,6 @@ impl Notices {
 
     pub fn toggle(&mut self) {
         self.expanded = !self.expanded;
-        if self.expanded {
-            self.mark_read();
-        }
     }
 
     pub fn mark_read(&mut self) {
@@ -83,6 +80,12 @@ mod tests {
         assert_eq!(notices.entry(0), Some("Moving"));
         assert_eq!(notices.entry(3), None);
         notices.toggle();
+        assert_eq!(
+            notices.unread(),
+            3,
+            "expansion waits for visible drawer layout"
+        );
+        notices.mark_read();
         assert_eq!(notices.unread(), 0);
         notices.observe(5, "New order");
         assert_eq!(

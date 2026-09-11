@@ -1,23 +1,21 @@
-//! Optional notice tray and local view controls for ordinary exploration.
+//! Bounded recent action notices shared by exploration and combat.
 //!
-//! These change the local view/selection only. The existing right-click and
-//! market systems remain the sole senders of movement and trading intent.
+//! The clock owns the bell's position; this module owns expansion, unread state
+//! and the retained drawer. Character facts and navigation belong to the HUD shell.
 
 mod notices;
 mod view;
 
-use super::*;
-use crate::camera_rts::{CommanderCamera, LocalPeerId};
+use super::GodNotice;
+use crate::ui::foundation::UiButtonStyle;
+use crate::{input::InputState, states::GameState};
+use bevy::prelude::*;
 use notices::Notices;
-use shared::components::{
-    AboardBoat, BuildingOf, CharacterName, Hero, PlayerPosition, PlayerRotation,
-    SettlementBuilding, SettlementBuildingKind, SettlementId, SettlementSummary,
-};
-use shared::economy::{format_money, GoodsInventory, MootMarket, Wallet};
-pub(super) use view::view;
+
+pub(super) use view::{notice_button, view};
 
 #[derive(Component)]
-struct JourneyPlate;
+struct NoticeButton;
 
 #[derive(Component)]
 struct JourneyDetails;
@@ -25,20 +23,13 @@ struct JourneyDetails;
 #[derive(Component)]
 enum JourneyText {
     Unread,
-    Toggle,
     Message(usize),
-    Hero,
-    Town,
-    Hint,
 }
 
 #[derive(Component, Clone, Copy)]
 enum JourneyAction {
     Toggle,
     Clear,
-    Hero,
-    Town(Option<Vec3>),
-    Map,
 }
 
 pub(super) fn install(app: &mut App) {
@@ -47,10 +38,8 @@ pub(super) fn install(app: &mut App) {
     app.add_systems(Update, collect_notices.run_if(in_state(GameState::Playing)));
     app.add_systems(
         Update,
-        (
-            handle_actions.after(crate::selection::SelectionGestureSet),
-            bind.after(handle_actions).after(collect_notices),
-        )
+        (handle_actions, bind.after(collect_notices))
+            .chain()
             .run_if(in_state(GameState::Playing)),
     );
 }
@@ -67,276 +56,115 @@ fn collect_notices(notice: Res<GodNotice>, mut notices: ResMut<Notices>) {
     }
 }
 
+fn available(input: &InputState, opening: Option<&crate::boat::OpeningCinematic>) -> bool {
+    !input.ui_blocking() && !opening.is_some_and(|opening| opening.is_active())
+}
+
 fn handle_actions(
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
     input: Res<InputState>,
     opening: Option<Res<crate::boat::OpeningCinematic>>,
-    local: Option<Res<LocalPeerId>>,
-    heroes: Query<(Entity, &Hero, &PlayerPosition)>,
     buttons: Query<
         (&Interaction, &JourneyAction),
         (Changed<Interaction>, Without<bevy::ui::InteractionDisabled>),
     >,
     mut notices: ResMut<Notices>,
-    mut selection: ResMut<crate::selection::Selection>,
-    mut cameras: Query<&mut CommanderCamera>,
-    mut map: ResMut<crate::ui::world_map::MapOpen>,
 ) {
-    if input.ui_blocking()
-        || opening
-            .as_deref()
-            .is_some_and(|opening| opening.is_active())
-    {
+    if !available(&input, opening.as_deref()) {
         return;
     }
-    let Some(local) = local else {
-        return;
-    };
-    let Some((entity, _, position)) = heroes
-        .iter()
-        .find(|(_, hero, _)| shared::player::peer_id_to_u64(hero.owner) == local.0)
-    else {
-        return;
-    };
-    let clicked = mouse
-        .just_pressed(MouseButton::Left)
-        .then(|| {
-            buttons
-                .iter()
-                .find(|(interaction, _)| **interaction == Interaction::Pressed)
-                .map(|(_, action)| *action)
-        })
-        .flatten();
-    let action = if keys.just_pressed(KeyCode::Home) {
-        Some(JourneyAction::Hero)
-    } else {
-        clicked
-    };
-    match action {
-        Some(JourneyAction::Toggle) => notices.toggle(),
-        Some(JourneyAction::Clear) => notices.clear(),
-        Some(JourneyAction::Hero) => {
-            // Selecting the aboard hero already controls their paired vessel
-            // through the normal order handler; no special sailing command.
-            selection.set(vec![entity]);
-            for mut camera in &mut cameras {
-                camera.focus_target = position.0;
-                camera.zoom_target = 82.0_f32.clamp(camera.zoom_min, camera.zoom_max);
-            }
+    for (interaction, action) in &buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
         }
-        Some(JourneyAction::Town(Some(position))) => {
-            for mut camera in &mut cameras {
-                camera.focus_target = position;
-                camera.zoom_target = 180.0_f32.clamp(camera.zoom_min, camera.zoom_max);
-            }
+        match action {
+            JourneyAction::Toggle => notices.toggle(),
+            JourneyAction::Clear => notices.clear(),
         }
-        Some(JourneyAction::Map) => map.0 = true,
-        _ => {}
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+#[allow(clippy::type_complexity)]
 fn bind(
-    time: Res<Time>,
-    mut elapsed: Local<f32>,
-    local: Option<Res<LocalPeerId>>,
-    (input, opening, combat, mode): (
-        Res<InputState>,
-        Res<crate::boat::OpeningCinematic>,
-        Res<crate::combat_mode::CombatMode>,
-        Res<HudMode>,
-    ),
+    input: Res<InputState>,
+    opening: Option<Res<crate::boat::OpeningCinematic>>,
     mut notices: ResMut<Notices>,
-    heroes: Query<(
-        &Hero,
-        &PlayerPosition,
-        Has<AboardBoat>,
-        Option<&CharacterName>,
-        Option<&Wallet>,
-        Option<&GoodsInventory>,
-    )>,
-    towns: Query<(&SettlementSummary, &PlayerPosition)>,
-    halls: Query<(&SettlementId, &PlayerPosition, Option<&PlayerRotation>), With<MootMarket>>,
-    marketplaces: Query<(
-        &SettlementBuilding,
-        &BuildingOf,
-        &PlayerPosition,
-        &PlayerRotation,
-    )>,
-    mut plates: Query<
-        &mut Node,
+    mut bell: Query<
+        (&mut Node, &mut UiButtonStyle),
         (
-            With<JourneyPlate>,
+            With<NoticeButton>,
             Without<JourneyDetails>,
             Without<JourneyText>,
         ),
     >,
     mut details: Query<
-        &mut Node,
+        (&mut Node, &ComputedNode, &InheritedVisibility),
         (
             With<JourneyDetails>,
-            Without<JourneyPlate>,
+            Without<NoticeButton>,
             Without<JourneyText>,
         ),
     >,
     mut labels: Query<
         (&JourneyText, &mut Text, &mut Node),
-        (Without<JourneyPlate>, Without<JourneyDetails>),
+        (Without<NoticeButton>, Without<JourneyDetails>),
     >,
-    mut buttons: Query<(
-        Entity,
-        &mut JourneyAction,
-        Has<bevy::ui::InteractionDisabled>,
-    )>,
+    clear_buttons: Query<(Entity, &JourneyAction, Has<bevy::ui::InteractionDisabled>)>,
     mut commands: Commands,
 ) {
-    let hero = local.as_ref().and_then(|local| {
-        heroes
-            .iter()
-            .find(|(hero, ..)| shared::player::peer_id_to_u64(hero.owner) == local.0)
-    });
-    let showing = hero.is_some()
-        && !input.ui_blocking()
-        && !opening.is_active()
-        && !combat.0
-        && *mode == HudMode::Play;
-    for mut node in &mut plates {
-        let display = if showing {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        if node.display != display {
-            node.display = display;
+    let showing = available(&input, opening.as_deref());
+    for (mut node, mut style) in &mut bell {
+        set_display(&mut node, showing);
+        if style.selected != notices.expanded {
+            style.selected = notices.expanded;
         }
     }
-    for mut node in &mut details {
-        set_display(&mut node, showing && notices.expanded);
+    let mut drawer_visible = false;
+    for (mut node, computed, inherited) in &mut details {
+        let expanded = showing && notices.expanded;
+        // The prior frame must actually have laid out a visible drawer. A
+        // queued expansion behind a modal cannot silently consume an alert.
+        drawer_visible |= expanded
+            && node.display != Display::None
+            && computed.size().min_element() > 0.0
+            && inherited.get();
+        set_display(&mut node, expanded);
     }
-    if showing && notices.expanded && notices.unread() > 0 {
+    if drawer_visible && notices.unread() > 0 {
         notices.mark_read();
     }
-    // Expansion and unread state respond immediately; world facts only bind
-    // while expanded and at most five times per second.
-    if notices.is_changed() {
-        for (field, mut text, mut node) in &mut labels {
-            match field {
-                JourneyText::Unread => {
-                    let count = notices.unread();
-                    set_display(&mut node, count > 0);
-                    if count > 0 {
-                        set_text(&mut text, &count.to_string());
-                    }
-                }
-                JourneyText::Toggle => {
-                    set_text(&mut text, if notices.expanded { "-" } else { "+" })
-                }
-                JourneyText::Message(index) if notices.expanded => {
-                    let message = notices.entry(*index);
-                    set_display(&mut node, *index == 0 || message.is_some());
-                    set_text(&mut text, message.unwrap_or("No recent messages."));
-                }
-                _ => {}
-            }
-        }
-    }
-    *elapsed += time.delta_secs();
-    if !showing || !notices.expanded || (*elapsed < 0.2 && !notices.is_changed()) {
+    if !notices.is_changed() {
         return;
     }
-    *elapsed = 0.0;
-    let (_, position, aboard, name, wallet, cargo) = hero.unwrap();
-    let nearest = towns
-        .iter()
-        .filter(|(town, _)| town.residents > 0)
-        .min_by(|(a, pa), (b, pb)| {
-            pa.0.xz()
-                .distance_squared(position.0.xz())
-                .total_cmp(&pb.0.xz().distance_squared(position.0.xz()))
-                .then(a.id.cmp(&b.id))
-        });
-    let at_counter = !aboard
-        && halls.iter().any(|(id, hall, rotation)| {
-            let entrance = SettlementBuildingKind::Hall
-                .entrance_position(hall.0, rotation.map_or(0.0, |r| r.0));
-            let counter = crate::ui::market::nearest_public_market_entrance(
-                position.0,
-                entrance,
-                marketplaces
-                    .iter()
-                    .filter(|(building, owner, ..)| {
-                        building.kind == SettlementBuildingKind::Market && owner.0 == *id
-                    })
-                    .map(|(building, _, position, rotation)| {
-                        building.kind.entrance_position(position.0, rotation.0)
-                    }),
-            );
-            position.0.xz().distance(counter.xz())
-                <= crate::ui::market::HERO_MARKET_INTERACTION_RANGE
-        });
-    let hero_text = format!(
-        "{} / {} coin / {} of {} bulk carried",
-        name.map_or("Your hero", |name| name.0.as_str()),
-        wallet.map_or_else(|| "...".into(), |wallet| format_money(wallet.balance())),
-        cargo.map_or(0, GoodsInventory::used_bulk),
-        cargo.map_or(0, GoodsInventory::bulk_capacity)
-    );
-    let town_text = nearest.map_or_else(
-        || "Explore the coast to find an inhabited town.".into(),
-        |(town, town_position)| {
-            format!(
-                "Nearest town: {} / {:.0}m",
-                town.name,
-                position.0.xz().distance(town_position.0.xz())
-            )
-        },
-    );
-    let hint = if aboard {
-        "At sea. Choose a shore to land and continue on foot."
-    } else if at_counter {
-        "Market in reach. Press E to trade."
-    } else {
-        "Trade at the town Hall or market stalls."
-    };
-    for (field, mut text, _) in &mut labels {
-        let value = match field {
-            JourneyText::Hero => &hero_text,
-            JourneyText::Town => &town_text,
-            JourneyText::Hint => hint,
-            _ => continue,
-        };
-        set_text(&mut text, value);
-    }
-    for (entity, mut action, disabled) in &mut buttons {
-        if matches!(*action, JourneyAction::Clear) {
-            let empty = notices.entry(0).is_none();
-            if empty != disabled {
-                if empty {
-                    commands
-                        .entity(entity)
-                        .insert(bevy::ui::InteractionDisabled);
-                } else {
-                    commands
-                        .entity(entity)
-                        .remove::<bevy::ui::InteractionDisabled>();
+    for (field, mut text, mut node) in &mut labels {
+        match field {
+            JourneyText::Unread => {
+                let count = notices.unread();
+                set_display(&mut node, count > 0);
+                if count > 0 {
+                    set_text(&mut text, &count.to_string());
                 }
             }
+            JourneyText::Message(index) => {
+                let message = notices.entry(*index);
+                set_display(&mut node, *index == 0 || message.is_some());
+                set_text(&mut text, message.unwrap_or("No recent messages."));
+            }
         }
-        if let JourneyAction::Town(current) = &mut *action {
-            let destination = nearest.map(|(_, position)| position.0);
-            if *current != destination {
-                *current = destination;
-            }
-            if destination.is_some() && disabled {
-                commands
-                    .entity(entity)
-                    .remove::<bevy::ui::InteractionDisabled>();
-            }
-            if destination.is_none() && !disabled {
+    }
+    for (entity, action, disabled) in &clear_buttons {
+        if !matches!(action, JourneyAction::Clear) {
+            continue;
+        }
+        let empty = notices.entry(0).is_none();
+        if empty != disabled {
+            if empty {
                 commands
                     .entity(entity)
                     .insert(bevy::ui::InteractionDisabled);
+            } else {
+                commands
+                    .entity(entity)
+                    .remove::<bevy::ui::InteractionDisabled>();
             }
         }
     }
@@ -375,71 +203,80 @@ mod tests {
         app.world_mut().clear_trackers();
         app.world_mut().resource_mut::<GodNotice>().seconds_left -= 0.1;
         app.update();
-        assert!(!app
-            .world()
-            .get_resource_ref::<Notices>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            !app.world()
+                .get_resource_ref::<Notices>()
+                .unwrap()
+                .is_changed()
+        );
         assert_eq!(app.world().resource::<Notices>().unread(), 1);
     }
 
     #[test]
-    fn home_finds_only_the_local_hero_and_respects_modal_input() {
+    fn bell_works_in_combat_without_a_hero_and_respects_modal_input() {
         let mut app = App::new();
-        app.init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<InputState>()
+        app.init_resource::<InputState>()
             .init_resource::<Notices>()
-            .init_resource::<crate::selection::Selection>()
-            .init_resource::<crate::ui::world_map::MapOpen>()
-            .insert_resource(LocalPeerId(41))
+            .insert_resource(crate::combat_mode::CombatMode(true))
             .add_systems(Update, handle_actions);
-        let camera = app.world_mut().spawn(CommanderCamera::default()).id();
-        app.world_mut().spawn((
-            Hero {
-                owner: PeerId::Netcode(42),
-            },
-            PlayerPosition(Vec3::ZERO),
-        ));
-        let destination = Vec3::new(3400.0, 4.0, 150.0);
-        let hero = app
+        let button = app
             .world_mut()
-            .spawn((
-                Hero {
-                    owner: PeerId::Netcode(41),
-                },
-                PlayerPosition(destination),
-            ))
+            .spawn((JourneyAction::Toggle, Interaction::Pressed))
             .id();
         app.world_mut()
-            .resource_mut::<InputState>()
-            .hero_creator_open = true;
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Home);
+            .resource_mut::<Notices>()
+            .observe(1, "Hold position");
         app.update();
-        assert!(app
-            .world()
-            .resource::<crate::selection::Selection>()
-            .is_empty());
-        app.world_mut()
-            .resource_mut::<InputState>()
-            .hero_creator_open = false;
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .reset(KeyCode::Home);
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Home);
-        app.update();
+        assert!(app.world().resource::<Notices>().expanded);
         assert_eq!(
-            app.world()
-                .resource::<crate::selection::Selection>()
-                .primary(),
-            Some(hero)
+            app.world().resource::<Notices>().unread(),
+            1,
+            "opening alone does not prove a message was visible"
         );
-        let camera = app.world().get::<CommanderCamera>(camera).unwrap();
-        assert_eq!(camera.focus_target, destination);
-        assert_eq!(camera.zoom_target, 82.0);
+        app.world_mut().resource_mut::<InputState>().modal_open = true;
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert!(app.world().resource::<Notices>().expanded);
+    }
+
+    #[test]
+    fn unread_messages_wait_for_visible_drawer_layout() {
+        let mut app = App::new();
+        app.init_resource::<InputState>()
+            .init_resource::<Notices>()
+            .add_systems(Update, bind);
+        let details = app
+            .world_mut()
+            .spawn((
+                JourneyDetails,
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+                ComputedNode::default(),
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        {
+            let mut notices = app.world_mut().resource_mut::<Notices>();
+            notices.observe(1, "A battalion is under attack");
+            notices.toggle();
+        }
+        app.update();
+        assert_eq!(app.world().resource::<Notices>().unread(), 1);
+        app.world_mut().entity_mut(details).insert(ComputedNode {
+            size: Vec2::new(340.0, 156.0),
+            ..default()
+        });
+        app.world_mut().resource_mut::<InputState>().map_open = true;
+        app.update();
+        assert_eq!(app.world().resource::<Notices>().unread(), 1);
+        app.world_mut().resource_mut::<InputState>().map_open = false;
+        app.update();
+        assert_eq!(app.world().resource::<Notices>().unread(), 1);
+        app.update();
+        assert_eq!(app.world().resource::<Notices>().unread(), 0);
     }
 }

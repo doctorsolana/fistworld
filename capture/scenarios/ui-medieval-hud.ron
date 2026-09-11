@@ -1,0 +1,37 @@
+// Real retained HUD and production actions, with explicitly offline world data.
+// The rehearsal gate waits on the canonical portrait and requested UI outcome.
+(
+    version: 1,
+    name: "medieval-exploration-hud",
+    map: "village_lab",
+    output_dir: "logs/captures/ui-medieval-hud",
+    resolution: (1600, 1000),
+    target: window,
+    show_window: false,
+    warmup_frames: 180,
+    readiness: (minimum_frames: 60, maximum_frames: 1200, minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_HUD": "play",
+        "FISTFORCE_CAPTURE_HERO": "default",
+        "FISTFORCE_CAPTURE_HERO_OFFSET": "20,0",
+        "FISTFORCE_CAPTURE_SELECT": "1",
+        "FISTFORCE_CAPTURE_SETTLEMENT": "village",
+        "FISTFORCE_CAPTURE_NOTICES": "1",
+        "FISTFORCE_CAPTURE_MEDIEVAL_HUD": "exploration",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "01-hud", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "02-character", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "03-return", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "04-map", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "05-map-return", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "06-ledger", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "07-ledger-return", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "08-notice", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "09-notices-open", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "10-notices-clear", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "11-final", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "12-night", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.92),
+    ],
+)

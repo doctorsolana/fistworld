@@ -413,6 +413,7 @@ pub fn run(mut config: CaptureConfig) {
                 .before(crate::camera_rts::update_commander_camera)
                 .run_if(asset_fixtures::ready)
                 .run_if(character_fixtures::ready)
+                .run_if(journey_tour::ready)
                 .run_if(wildlife::ready)
                 .run_if(cavalry_visuals::ready),
             apply_capture_free_look.after(crate::camera_rts::update_commander_camera),

@@ -3,7 +3,7 @@ use crate::{
     combat_mode::CombatMode,
     selection::Selection,
     ui::foundation::{
-        button_chrome, surface_block, type_scale, UiButtonLabel, UiButtonStyle, UiButtonVariant,
+        UiButtonLabel, UiButtonStyle, UiButtonVariant, button_chrome, surface_block, type_scale,
     },
     ui::styles::{PARCHMENT, SIGN_WOOD},
 };
@@ -57,10 +57,7 @@ pub(super) fn aim_keys(
 fn label(text: impl Into<String>, size: f32) -> impl Bundle {
     (
         Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
+        crate::ui::typography::text(size),
         TextColor(PARCHMENT),
         Pickable::IGNORE,
     )
@@ -69,11 +66,12 @@ fn label(text: impl Into<String>, size: f32) -> impl Bundle {
 pub(super) fn spawn_panel(mut commands: Commands) {
     let panel = (
         SiegePanel,
+        Name::new("Siege controls"),
         Node {
             display: Display::None,
             position_type: PositionType::Absolute,
-            right: Val::Px(24.0),
-            bottom: Val::Px(64.0),
+            left: Val::Px(438.0),
+            bottom: Val::Px(18.0),
             width: Val::Px(310.0),
             padding: UiRect::all(Val::Px(16.0)),
             flex_direction: FlexDirection::Column,
@@ -100,6 +98,7 @@ pub(super) fn spawn_panel(mut commands: Commands) {
     });
 }
 pub(super) fn buttons(
+    input: Res<crate::input::InputState>,
     buttons: Query<
         (&Action, &Interaction),
         (Changed<Interaction>, Without<bevy::ui::InteractionDisabled>),
@@ -111,6 +110,9 @@ pub(super) fn buttons(
     mut mode: ResMut<crate::selection::commands::CommandMode>,
     mut sender: Query<&mut MessageSender<UnitOrder>, (With<crate::GameClient>, With<Connected>)>,
 ) {
+    if input.ui_blocking() {
+        return;
+    }
     for (action, interaction) in &buttons {
         if *interaction != Interaction::Pressed {
             continue;
@@ -151,6 +153,7 @@ pub(super) fn panel(
     mut next_refresh: Local<f64>,
     selection: Res<Selection>,
     combat: Res<CombatMode>,
+    input: Res<crate::input::InputState>,
     aim: Res<SiegeAim>,
     account: Res<crate::ui::name_entry::PlayerNameInput>,
     clock: Query<&WorldTime>,
@@ -168,6 +171,7 @@ pub(super) fn panel(
         && !selection.is_changed()
         && !aim.is_changed()
         && !combat.is_changed()
+        && !input.is_changed()
     {
         return;
     }
@@ -179,8 +183,19 @@ pub(super) fn panel(
         .filter_map(|e| machines.get(*e).ok())
         .filter(|(_, _, _, commander)| commander.0 == owner)
         .collect();
+    let catapults_only = !selection.is_empty()
+        && selection
+            .entities
+            .iter()
+            .all(|entity| machines.contains(*entity));
     for mut root in &mut roots {
-        let next = if combat.0 && !selected.is_empty() {
+        // Mixed armies retain the battalion dock. Lift siege controls above
+        // its 96px cards, preserving a clear gap and the corner HUD regions.
+        let bottom = Val::Px(if catapults_only { 18.0 } else { 130.0 });
+        if root.bottom != bottom {
+            root.bottom = bottom;
+        }
+        let next = if combat.0 && !selected.is_empty() && !input.ui_blocking() {
             Display::Flex
         } else {
             Display::None
@@ -317,4 +332,96 @@ pub(super) fn cleanup(
         commands.entity(root).despawn();
     }
     aim.0 = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mixed_siege_panel_clears_dock_and_modal_changes_bypass_refresh_delay() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<Selection>()
+            .insert_resource(CombatMode(true))
+            .init_resource::<SiegeAim>()
+            .init_resource::<crate::input::InputState>()
+            .insert_resource(crate::ui::name_entry::PlayerNameInput {
+                name: "wanderer".into(),
+                submitted: true,
+            })
+            .add_systems(Update, panel);
+        let machine = app
+            .world_mut()
+            .spawn((
+                Catapult { ammunition: 20 },
+                CatapultStatus::default(),
+                Health::new(100.0),
+                CommandedBy("wanderer".into()),
+            ))
+            .id();
+        let infantry = app.world_mut().spawn_empty().id();
+        let root = app.world_mut().spawn((SiegePanel, Node::default())).id();
+        app.world_mut()
+            .resource_mut::<Selection>()
+            .set(vec![machine]);
+        app.update();
+        assert_eq!(app.world().get::<Node>(root).unwrap().bottom, Val::Px(18.0));
+        app.world_mut()
+            .resource_mut::<Selection>()
+            .set(vec![infantry, machine]);
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(root).unwrap().bottom,
+            Val::Px(130.0)
+        );
+        app.world_mut().clear_trackers();
+        app.world_mut()
+            .resource_mut::<crate::input::InputState>()
+            .modal_open = true;
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(root).unwrap().display,
+            Display::None
+        );
+        app.world_mut()
+            .resource_mut::<crate::input::InputState>()
+            .modal_open = false;
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(root).unwrap().display,
+            Display::Flex
+        );
+    }
+
+    #[test]
+    fn modal_blocks_siege_button_actions() {
+        let mut app = App::new();
+        app.init_resource::<crate::input::InputState>()
+            .init_resource::<Selection>()
+            .init_resource::<SiegeAim>()
+            .init_resource::<crate::selection::commands::CommandMode>()
+            .insert_resource(crate::ui::name_entry::PlayerNameInput {
+                name: "wanderer".into(),
+                submitted: true,
+            })
+            .add_systems(Update, buttons);
+        app.world_mut()
+            .resource_mut::<crate::input::InputState>()
+            .modal_open = true;
+        let button = app
+            .world_mut()
+            .spawn((Action::Aim, Interaction::Pressed))
+            .id();
+        app.update();
+        assert!(!app.world().resource::<SiegeAim>().0);
+        app.world_mut()
+            .resource_mut::<crate::input::InputState>()
+            .modal_open = false;
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        assert!(app.world().resource::<SiegeAim>().0);
+    }
 }

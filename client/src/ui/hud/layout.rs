@@ -1,30 +1,4 @@
-//! Clock/developer and selection plates. The optional notice tray is composed
-//! below the clock; its contents and actions are owned by `journey.rs`.
-//!
-//! Composition:
-//!
-//! ```text
-//!                                                  +---------------------+
-//!                                                  | DAY 3  14:22   PLAY |  <- one plate,
-//!                                                  +---------------------+     grows down
-//!                                                                              in god mode
-//!
-//!                              ( the world is the interface )
-//!
-//!                         +----------------------------------+
-//!                         | (o) |  SIGRUN         ON THE MOVE |  <- only when
-//!                         +----------------------------------+     selected
-//! ```
-//!
-//! Two things here are deliberate and easy to undo by accident.
-//!
-//! **The god panel is ONE plate with hairline dividers**, not a stack of nested
-//! bordered boxes. It also has no `SIMULATION SPEED` or `HERO` captions: five
-//! buttons reading `II 1x 10x 25x 100x` do not need a label telling you they are
-//! speeds, and deleting the caption deletes a whole row of chrome.
-//!
-//! **The mode toggle lives INSIDE the clock row.** As its own bordered chip it
-//! was a second surface competing with the clock for the same corner.
+//! Persistent edge HUD. Transparent layout containers never consume world input.
 
 use super::*;
 
@@ -55,7 +29,13 @@ pub(super) fn spawn_hud(
         // inside it carry `Interaction` and swallow clicks; this does not.
         Pickable::IGNORE,
         GlobalZIndex(crate::ui::foundation::layer::HUD),
-        children![top_right_column(), selection_plate(), selection_box()],
+        children![
+            top_right_column(),
+            super::shell::location(),
+            super::shell::navigation(),
+            super::selection_card::view(),
+            selection_box()
+        ],
     ));
 }
 
@@ -64,8 +44,8 @@ fn top_right_column() -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
-            right: Val::Px(12.0),
-            top: Val::Px(12.0),
+            right: Val::Px(18.0),
+            top: Val::Px(18.0),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::FlexEnd,
             row_gap: Val::Px(8.0),
@@ -89,40 +69,55 @@ fn plate(fill: Color) -> impl Bundle {
 
 fn clock_plate() -> impl Bundle {
     (
+        Name::new("World clock"),
         Node {
-            flex_direction: FlexDirection::Row,
+            height: Val::Px(46.0),
             align_items: AlignItems::Center,
-            column_gap: Val::Px(9.0),
-            padding: UiRect::axes(Val::Px(11.0), Val::Px(7.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+            column_gap: Val::Px(10.0),
+            padding: UiRect::axes(Val::Px(18.0), Val::Px(4.0)),
             ..default()
         },
-        plate(LIMEWASH),
+        super::chrome::pill_panel(),
+        crate::ui::foundation::surface_block(),
+        Interaction::default(),
         children![
+            (
+                ClockIcon,
+                super::chrome::icon(super::chrome::HudIcon::Sun, 24.0)
+            ),
             (
                 ClockPeriodText,
                 Text::new("DAY 0"),
-                crate::ui::typography::text(11.0),
-                TextColor(INK_MUTED),
+                crate::ui::typography::heading(14.0),
+                TextColor(crate::ui::styles::INK_INVERSE),
+                Pickable::IGNORE
+            ),
+            (
+                Text::new("|"),
+                crate::ui::typography::body(14.0),
+                TextColor(crate::ui::styles::BRASS),
+                Pickable::IGNORE
             ),
             (
                 ClockTimeText,
                 Text::new("--:--"),
-                crate::ui::typography::text(15.0),
-                TextColor(INK),
+                crate::ui::typography::heading(13.0),
+                TextColor(crate::ui::styles::INK_INVERSE),
+                Pickable::IGNORE
             ),
             (
                 ClockWarpText,
                 Text::new(""),
-                crate::ui::typography::text(13.0),
-                TextColor(EMBER),
+                crate::ui::typography::body(13.0),
+                TextColor(crate::ui::styles::BRASS),
                 Node {
                     display: Display::None,
                     ..default()
                 },
+                Pickable::IGNORE
             ),
             mode_toggle(),
+            super::journey::notice_button(),
         ],
     )
 }
@@ -142,7 +137,7 @@ fn mode_toggle() -> impl Bundle {
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
         },
-        button_chrome(UiButtonVariant::Ghost),
+        button_chrome(UiButtonVariant::Ribbon),
         children![(
             ModeChipText,
             UiButtonLabel,
@@ -382,116 +377,6 @@ fn spawn_immigrant_boat_button() -> impl Bundle {
     )
 }
 
-/// The selected-unit plate.
-///
-/// The leading mark is a hollow ring: the SAME form as the mark on the ground,
-/// in the same ink. That rhyme is the whole "unmistakable" mechanism -- the
-/// player never has to be told the plate refers to the ringed unit, because the
-/// shapes match. No icon, no arrow, no label saying SELECTED.
-///
-/// It carries `Interaction` because it sits in the bottom-centre cursor zone:
-/// without it, clicking your own readout would fall through to the world and
-/// deselect the very thing the readout describes.
-fn selection_plate() -> impl Bundle {
-    (
-        SelectionPlate,
-        Node {
-            display: Display::None,
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(26.0),
-            left: Val::Percent(50.0),
-            margin: UiRect::left(Val::Px(-178.0)),
-            width: Val::Px(356.0),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(10.0),
-            padding: UiRect::axes(Val::Px(11.0), Val::Px(8.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
-            ..default()
-        },
-        plate(LIMEWASH_LIT),
-        children![
-            (
-                SelectionRingGlyph,
-                Node {
-                    width: Val::Px(12.0),
-                    height: Val::Px(12.0),
-                    border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::MAX,
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-                BorderColor::from(EMBER_RULE),
-                Pickable::IGNORE,
-            ),
-            // Fixed width, so a longer name can never reflow the status word
-            // sideways. Things that move under a settled cursor are the bug
-            // players actually feel.
-            (
-                SelectionNameText,
-                Text::new(""),
-                crate::ui::typography::text(14.0),
-                TextColor(INK),
-                Node {
-                    flex_grow: 1.0,
-                    ..default()
-                },
-            ),
-            (
-                SelectionStatusText,
-                Text::new(""),
-                crate::ui::typography::text(10.0),
-                TextColor(INK_MUTED),
-            ),
-            (
-                SelectionHealthTrack,
-                Node {
-                    display: Display::None,
-                    width: Val::Px(58.0),
-                    height: Val::Px(7.0),
-                    padding: UiRect::all(Val::Px(1.0)),
-                    ..default()
-                },
-                BackgroundColor(PLATE_RULE_SOFT),
-                Pickable::IGNORE,
-                children![(
-                    SelectionHealthFill,
-                    Node {
-                        width: Val::Percent(100.0),
-                        height: Val::Percent(100.0),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.29, 0.58, 0.29)),
-                    Pickable::IGNORE,
-                )],
-            ),
-            (
-                SelectionExpandButton,
-                Button,
-                Node {
-                    display: Display::None,
-                    height: Val::Px(27.0),
-                    padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                    ..default()
-                },
-                button_chrome(UiButtonVariant::Secondary),
-                children![(
-                    Text::new("EXPAND"),
-                    UiButtonLabel,
-                    crate::ui::typography::text(9.0),
-                    TextColor(INK),
-                    Pickable::IGNORE,
-                )],
-            ),
-        ],
-    )
-}
-
 pub(super) fn despawn_hud(mut commands: Commands, roots: Query<Entity, With<HudRoot>>) {
     for entity in roots.iter() {
         commands.entity(entity).despawn();
@@ -520,4 +405,22 @@ fn spawn_catapult_button() -> impl Bundle {
             TextColor(INK),
         )],
     )
+}
+
+/// A hidden modal HUD must not leave invisible click-catching rectangles.
+pub(super) fn sync_visibility(
+    input: Res<InputState>,
+    opening: Option<Res<crate::boat::OpeningCinematic>>,
+    mut roots: Query<&mut Node, With<HudRoot>>,
+) {
+    let hidden = input.ui_blocking()
+        || opening
+            .as_deref()
+            .is_some_and(|opening| opening.is_active());
+    let display = if hidden { Display::None } else { Display::Flex };
+    for mut node in &mut roots {
+        if node.display != display {
+            node.display = display;
+        }
+    }
 }

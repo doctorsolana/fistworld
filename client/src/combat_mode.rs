@@ -2,7 +2,7 @@
 //! attack order instead of a walk.
 //!
 //! Toggled with C. While armed the screen wears a thin crimson edge and a
-//! Cinzel banner hangs from the top of the screen on a spring, so there is
+//! compact Cinzel status plate enters on a spring, so there is
 //! never any doubt which kind of click you are about to make - moving things
 //! around town must never knife a bystander. All of this is presentation:
 //! the server validates every order on its own authority either way.
@@ -11,8 +11,10 @@ use bevy::prelude::*;
 
 use crate::states::GameState;
 use crate::ui::{
-    motion::Spring,
-    styles::{CRIMSON, PARCHMENT, SIGN_WOOD},
+    foundation::{UiButtonLabel, UiButtonStyle, UiButtonVariant, button_chrome},
+    hud::chrome::{pill_panel, wood_panel},
+    motion::{Spring, UiReveal},
+    styles::{BRASS, CRIMSON, PARCHMENT},
 };
 
 /// Whether right-clicks currently mean violence.
@@ -27,21 +29,22 @@ pub struct CombatTargets {
     pub hovered: Option<Entity>,
 }
 
-const BANNER_SHOWN_TOP: f32 = 14.0;
+const BANNER_SHOWN_TOP: f32 = 18.0;
 const BANNER_HIDDEN_TOP: f32 = -92.0;
-const BORDER_THICKNESS: f32 = 5.0;
-const BORDER_ALPHA: f32 = 0.5;
+const BORDER_THICKNESS: f32 = 2.0;
+const BORDER_ALPHA: f32 = 0.32;
 pub struct CombatModePlugin;
 
 impl Plugin for CombatModePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CombatMode>();
         app.init_resource::<CombatTargets>();
+        app.init_resource::<CombatHelpState>();
         app.add_systems(OnEnter(GameState::Playing), spawn_combat_ui);
         app.add_systems(OnExit(GameState::Playing), despawn_combat_ui);
         app.add_systems(
             Update,
-            (toggle_combat_mode, animate_combat_ui)
+            (toggle_combat_mode, handle_combat_help, animate_combat_ui)
                 .chain()
                 .before(crate::camera_rts::update_commander_camera)
                 .run_if(in_state(GameState::Playing)),
@@ -57,6 +60,14 @@ struct CombatBorderStrip;
 
 #[derive(Component)]
 struct CombatHelp;
+
+#[derive(Component)]
+struct CombatHelpButton;
+
+#[derive(Resource, Default)]
+struct CombatHelpState {
+    expanded: bool,
+}
 
 /// The hanging sign plus its spring state.
 #[derive(Component)]
@@ -112,23 +123,69 @@ fn spawn_combat_ui(
             },
         ))
         .with_children(|root| {
-            root.spawn((CombatHelp, Pickable::IGNORE, Visibility::Hidden,
+            root.spawn((
+                Name::new("Combat orders help"),
+                CombatHelp,
+                UiReveal::panel(),
+                crate::ui::foundation::surface_block(),
+                wood_panel(),
                 Node {
+                    display: Display::None,
                     position_type: PositionType::Absolute,
-                    bottom: Val::Px(176.0), left: Val::Percent(50.0),
-                    width: Val::Px(800.0), margin: UiRect::left(Val::Px(-400.0)),
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(crate::ui::styles::RADIUS)),
+                    top: Val::Px(70.0),
+                    left: Val::Percent(50.0),
+                    width: Val::Px(440.0),
+                    margin: UiRect::left(Val::Px(-220.0)),
+                    padding: UiRect::all(Val::Px(18.0)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
                     ..default()
                 },
-                BackgroundColor(SIGN_WOOD),
-                BorderColor::all(crate::ui::styles::BRASS.with_alpha(0.45)),
-                Text::new("RMB drag: width/facing   |   RMB: move/attack   |   Ctrl/Cmd + RMB: focus attack   |   Alt + RMB: orbit\n[ / ]: width   |   , / .: turn   |   Shift: add/toggle   |   H: hold   |   X: attack-move   |   R: retreat   |   V: fire/hold fire"),
-                crate::ui::typography::body(13.0), TextColor(PARCHMENT),
-                TextLayout::justify(Justify::Center),
-                TextShadow { offset: Vec2::new(0.0, 1.0), color: Color::BLACK },
-            ));
+                crate::ui::styles::plate_shadow(),
+            ))
+            .with_children(|help| {
+                help.spawn((
+                    Text::new("BATTLE ORDERS"),
+                    crate::ui::typography::heading(16.0),
+                    TextColor(PARCHMENT),
+                    Pickable::IGNORE,
+                ));
+                for (action, keys) in [
+                    ("Move or engage", "Right-click"),
+                    ("Set frontage & facing", "Right-drag"),
+                    ("Focus an enemy", "Ctrl/Cmd + right-click"),
+                    ("Add to selection", "Shift + click"),
+                    ("Hold / Attack-move / Retreat", "H / X / R"),
+                    ("Archers: fire / hold fire", "V"),
+                    ("Catapult: aim at ground", "F"),
+                    ("Narrow / Widen ranks", "[ / ]"),
+                    ("Turn / Orbit camera", ", or . / Alt + right-drag"),
+                ] {
+                    help.spawn((
+                        Pickable::IGNORE,
+                        Node {
+                            width: Val::Percent(100.0),
+                            justify_content: JustifyContent::SpaceBetween,
+                            column_gap: Val::Px(16.0),
+                            ..default()
+                        },
+                        children![
+                            (
+                                Text::new(action),
+                                crate::ui::typography::body(13.0),
+                                TextColor(PARCHMENT),
+                                Pickable::IGNORE
+                            ),
+                            (
+                                Text::new(keys),
+                                crate::ui::typography::body(13.0),
+                                TextColor(BRASS),
+                                Pickable::IGNORE
+                            ),
+                        ],
+                    ));
+                }
+            });
             // Four crimson edge strips; alpha animated with the mode.
             let strips = [
                 // (left, top, width, height)
@@ -180,69 +237,115 @@ fn spawn_combat_ui(
                     BackgroundColor(CRIMSON.with_alpha(0.0)),
                 ));
             }
-            // The hanging sign.
+            // A small mode indicator remains legible without a permanent
+            // help paragraph over the battlefield. Details expand on demand.
             root.spawn((
+                Name::new("Combat mode indicator"),
                 CombatBanner {
                     spring: Spring::new(BANNER_HIDDEN_TOP),
                 },
-                Pickable::IGNORE,
+                crate::ui::foundation::surface_block(),
+                pill_panel(),
                 Node {
                     position_type: PositionType::Absolute,
                     top: Val::Px(BANNER_HIDDEN_TOP),
                     left: Val::Percent(50.0),
-                    margin: UiRect::left(Val::Px(-140.0)),
-                    width: Val::Px(280.0),
-                    padding: UiRect::axes(Val::Px(18.0), Val::Px(10.0)),
-                    justify_content: JustifyContent::Center,
+                    margin: UiRect::left(Val::Px(-143.0)),
+                    width: Val::Px(286.0),
+                    height: Val::Px(42.0),
+                    padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
+                    column_gap: Val::Px(14.0),
+                    justify_content: JustifyContent::SpaceBetween,
                     align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius {
-                        bottom_left: Val::Px(10.0),
-                        bottom_right: Val::Px(10.0),
-                        top_left: Val::Px(0.0),
-                        top_right: Val::Px(0.0),
-                    },
                     ..default()
                 },
-                BackgroundColor(SIGN_WOOD),
-                BorderColor::all(CRIMSON.with_alpha(0.8)),
-                children![(
-                    Text::new("COMBAT MODE"),
-                    crate::ui::typography::heading(21.0),
+                crate::ui::styles::plate_shadow(),
+            ))
+            .with_children(|banner| {
+                banner.spawn((
+                    Text::new("COMBAT  ·  C"),
+                    crate::ui::typography::heading(16.0),
                     TextColor(PARCHMENT),
-                    TextShadow {
-                        offset: Vec2::new(0.0, 1.5),
-                        color: Color::srgba(0.0, 0.0, 0.0, 0.6),
-                    },
                     Pickable::IGNORE,
-                )],
-            ));
+                ));
+                banner.spawn((
+                    Name::new("Toggle combat orders help"),
+                    CombatHelpButton,
+                    Button,
+                    button_chrome(UiButtonVariant::Ribbon),
+                    Node {
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        border: UiRect::left(Val::Px(1.0)),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    children![(
+                        Text::new("ORDERS"),
+                        UiButtonLabel,
+                        crate::ui::typography::heading(11.0),
+                        TextColor(PARCHMENT),
+                        Pickable::IGNORE,
+                    )],
+                ));
+            });
         });
 }
 
-/// Spring the banner in and out and fade the border with the mode. The spring
-/// is deliberately underdamped: the sign drops, overshoots a touch, and
-/// settles - and on toggle-off it snaps back up the same way.
+fn handle_combat_help(
+    mode: Res<CombatMode>,
+    input: Res<crate::input::InputState>,
+    buttons: Query<&Interaction, (With<CombatHelpButton>, Changed<Interaction>)>,
+    mut state: ResMut<CombatHelpState>,
+) {
+    if !mode.0 || input.ui_blocking() {
+        if state.expanded {
+            state.expanded = false;
+        }
+        return;
+    }
+    if buttons
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        state.expanded = !state.expanded;
+    }
+}
+
+/// The mode plate and dock share the same analytic spring. Modal interfaces
+/// hide this layer immediately, so a combat overlay never contests their UI.
 fn animate_combat_ui(
-    selection: Res<crate::selection::Selection>,
-    catapults: Query<(), With<shared::components::Catapult>>,
     time: Res<Time>,
     mode: Res<CombatMode>,
-    mut banners: Query<(&mut CombatBanner, &mut Node)>,
-    mut help: Query<&mut Visibility, With<CombatHelp>>,
-    mut strips: Query<&mut BackgroundColor, (With<CombatBorderStrip>, Without<CombatBanner>)>,
+    input: Res<crate::input::InputState>,
+    state: Res<CombatHelpState>,
+    mut roots: Query<&mut Visibility, With<CombatUiRoot>>,
+    mut banners: Query<(&mut CombatBanner, &mut Node), Without<CombatHelp>>,
+    mut help: Query<&mut Node, (With<CombatHelp>, Without<CombatBanner>)>,
+    mut buttons: Query<&mut UiButtonStyle, With<CombatHelpButton>>,
+    mut strips: Query<&mut BackgroundColor, With<CombatBorderStrip>>,
 ) {
-    for mut visibility in &mut help {
-        visibility.set_if_neq(
-            if mode.0
-                && !(selection.len() > 0
-                    && selection.entities.iter().all(|e| catapults.contains(*e)))
-            {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            },
-        );
+    for mut visibility in &mut roots {
+        visibility.set_if_neq(if input.ui_blocking() {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
+    for mut node in &mut help {
+        let display = if mode.0 && state.expanded && !input.ui_blocking() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    for mut button in &mut buttons {
+        if button.selected != state.expanded {
+            button.selected = state.expanded;
+        }
     }
     let dt = time.delta_secs();
     let target = if mode.0 {
@@ -250,7 +353,7 @@ fn animate_combat_ui(
     } else {
         BANNER_HIDDEN_TOP
     };
-    for (mut banner, mut node) in banners.iter_mut() {
+    for (mut banner, mut node) in &mut banners {
         if !banner.spring.step(target, dt, 220.0, 16.0) {
             continue;
         }
@@ -261,7 +364,7 @@ fn animate_combat_ui(
     }
     let alpha_target = if mode.0 { BORDER_ALPHA } else { 0.0 };
     let ease = 1.0 - (-dt * 9.0).exp();
-    for mut background in strips.iter_mut() {
+    for mut background in &mut strips {
         let current = background.0.alpha();
         let next = current + (alpha_target - current) * ease;
         if (next - current).abs() > 0.001 {
@@ -275,7 +378,9 @@ fn despawn_combat_ui(
     roots: Query<Entity, With<CombatUiRoot>>,
     mut mode: ResMut<CombatMode>,
     mut targets: ResMut<CombatTargets>,
+    mut help: ResMut<CombatHelpState>,
 ) {
+    help.expanded = false;
     for root in roots.iter() {
         commands.entity(root).despawn();
     }

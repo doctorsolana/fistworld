@@ -1,11 +1,15 @@
-//! Persistent gameplay HUD (journey guidance, world clock and developer controls).
+//! Persistent medieval HUD: selection, world state, navigation and optional notices.
 //!
 //! Unlike the modal panels this never sets an `InputState` flag — the camera must keep
 //! panning underneath it.
 
 pub mod actions;
+pub(crate) mod chrome;
 mod journey;
 pub mod layout;
+pub(crate) mod portrait;
+mod selection_card;
+mod shell;
 pub mod state_sync;
 
 use actions::{
@@ -27,8 +31,7 @@ use crate::input::InputState;
 use crate::states::GameState;
 use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant};
 use crate::ui::styles::{
-    plate_shadow, EMBER, EMBER_RULE, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE,
-    PLATE_RULE_SOFT, RADIUS,
+    plate_shadow, INK, INK_MUTED, LIMEWASH, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct HudPlugin;
@@ -36,6 +39,10 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         journey::install(app);
+        chrome::install(app);
+        portrait::install(app);
+        selection_card::install(app);
+        shell::install(app);
         app.init_resource::<GodCapability>();
         app.init_resource::<HudMode>();
         app.init_resource::<GodNotice>();
@@ -71,7 +78,7 @@ impl Plugin for HudPlugin {
                 state_sync::sync_immigrant_boat_button,
                 state_sync::sync_found_village_button,
                 actions::watch_immigrant_boat.after(crate::camera_rts::update_commander_camera),
-                tick_god_notice,
+                (tick_god_notice, layout::sync_visibility),
                 // AFTER the gesture pipeline, or these draw last frame's
                 // box/selection on whatever frames the scheduler reorders -
                 // which the hand feels as intermittent lag.
@@ -190,6 +197,9 @@ struct ClockTimeText;
 struct ClockWarpText;
 
 #[derive(Component)]
+struct ClockIcon;
+
+#[derive(Component)]
 struct ModeChipButton;
 
 #[derive(Component)]
@@ -227,7 +237,7 @@ struct FoundVillageLabel;
 
 // --- the selected-unit plate ------------------------------------------------
 
-/// Root of the bottom-centre plate. Present always, shown only when something
+/// Root of the bottom-left card. Present always, shown only when something
 /// is selected, so appearing costs no spawn.
 #[derive(Component)]
 struct SelectionPlate;
@@ -235,10 +245,6 @@ struct SelectionPlate;
 /// The drag-select marquee.
 #[derive(Component)]
 struct SelectionBox;
-
-/// The hollow ring mark that rhymes with the ring on the ground.
-#[derive(Component)]
-struct SelectionRingGlyph;
 
 #[derive(Component)]
 struct SelectionNameText;

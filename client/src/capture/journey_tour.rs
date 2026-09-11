@@ -6,8 +6,15 @@ use shared::components::{
     CharacterName, Hero, PlayerPosition, Settlement, SettlementId, SettlementSummary,
 };
 
+mod medieval;
+pub(super) use medieval::ready;
+
 pub(super) fn install(app: &mut App) {
     if std::env::var("FISTFORCE_CAPTURE_NOTICES").as_deref() != Ok("1") {
+        return;
+    }
+    if std::env::var("FISTFORCE_CAPTURE_MEDIEVAL_HUD").is_ok() {
+        medieval::install(app);
         return;
     }
     app.add_systems(Update, stage);

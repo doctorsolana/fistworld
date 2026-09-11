@@ -1,6 +1,6 @@
 # Client UI architecture
 
-Last reconciled with Bevy 0.19 on 2026-09-06. This is the contract for new UI and for
+Last reconciled with Bevy 0.19 on 2026-09-11. This is the contract for new UI and for
 touching an existing screen. The goal is a coherent medieval ledger interface without
 screen-specific hover logic, accidental world input, or full-tree churn at simulation speed.
 
@@ -20,23 +20,55 @@ screen-specific hover logic, accidental world input, or full-tree churn at simul
 | Screen modules | Data model, layout and actions specific to that screen |
 | `client/src/app_wiring/window.rs` | Resolution-aware UI scale; 3D render scale never makes UI blurry |
 | `client/src/ui/pause_menu/display.rs` | Explicit display-mode choices, supported output sizes, actual scene-pixel labels and retained confirmation/resize state |
-| `client/src/ui/hud/journey.rs` | Optional exploration notice tray, owned-hero selection and camera/map actions |
+| `client/src/ui/hud/shell.rs` | Place/purse, owned-hero/Home selection, map/encyclopedia navigation and compass |
+| `client/src/ui/hud/selection_card.rs` | Selected-person card and full-record expansion |
+| `client/src/ui/hud/portrait.rs` | On-demand thumbnails of canonical dressed character geometry; bounded cache |
+| `client/src/ui/hud/chrome.rs` | Small authored wood/brass frames and icon handles, with native text and input |
+| `client/src/ui/hud/journey.rs` | Shared exploration/combat bell and bounded recent notice drawer |
+| `client/src/battalion_bar.rs` and `battalion_bar/navigation.rs` | Retained battalion cards, bounded paging and selection reveal |
+| `client/src/combat_mode.rs` | Compact combat status and optional Orders help |
+| `client/src/siege/controls.rs` | Selected siege controls and placement above mixed-army cards |
 | `client/src/ui/market/model.rs` | Pure market presentation: eligible purchase quote, cargo/listed ownership and disabled reasons |
 
 Do not put a new palette alias, hover state machine, modal scrim or scroll algorithm in a
 screen module. Screen-specific data colours (for example chart series or a health grade) are
 allowed; reusable chrome colours belong in `styles.rs`.
 
-The exploration HUD starts with a compact Notices button below the clock. Its retained
-tray opens only on request: recent action results, nearby information, then character
-facts and shortcuts. `journey/view.rs` owns layout; `journey/notices.rs` owns a bounded
-three-message history, repeat coalescing and unread state. A sequence on `GodNotice`
-distinguishes a new result from its countdown; quiet frames do not dirty the history.
-World facts bind at most five times per second, only while expanded. Messages are read
-only when visible, and new messages never force expansion. Modal screens, combat, God
-mode and the opening cinematic hide the tray. Its buttons move the local view or selection;
-normal order handlers still own movement and trading intent. This is a self-contained
-exploration component, not a committed overall HUD layout.
+The persistent HUD leaves the centre of the world clear. Its top-left crest returns to the
+owned hero (also Home); the place label follows the viewed area and centres the nearest
+town when clicked, preserving the selected hero or army for the next order. The purse always belongs to the local hero, even when another person
+is selected. Top-right contains the replicated clock and notice bell. Bottom-left shows
+the selected person or group; bottom-right opens the map and encyclopedia. Modal screens
+and the opening cinematic hide the HUD and its input rectangles.
+
+`selection_card.rs` displays actual health and one expansion control for the selected
+person's durable encyclopedia record. Detailed character and inventory information stays
+inside that record; the persistent card has no trade or inventory action row. Group selection uses a crest and selection count, never an arbitrary person's
+portrait. `portrait.rs` rasterizes the canonical GLB geometry, outfit, skin and textures in
+one background task. It renders only on an appearance change, caches at most sixteen small
+images, rejects stale worker results, and releases its images on disconnect. It adds no
+second PBR camera. `PortraitReadiness` supplies the capture fixture's semantic gate.
+
+`journey/view.rs` owns the optional drawer; `journey/notices.rs` owns three-message history,
+repeat coalescing and unread state. A sequence on `GodNotice` distinguishes a new result
+from its countdown. New messages never force expansion and become read only after the
+expanded drawer has visible layout. The same bell remains available in combat without a
+local hero. The combat dock reserves 438 design pixels on the left and 180 on the right;
+its clipped card viewport and previous/next controls accommodate large armies. Its cards
+are 96 design pixels tall, 18 pixels above the bottom edge. Selection changes reveal an
+offscreen selected card without undoing deliberate paging. A compact combat badge expands
+Orders help only on request.
+
+Siege controls share the dock's left edge. Catapult-only selection hides the battalion dock
+and places siege controls 18 design pixels above the bottom edge. Mixed soldiers and siege
+retain the dock and raise the controls to 130 pixels, leaving a gap above the cards. Modal
+input blocking immediately hides the siege panel and rejects its actions, independent of
+the panel's slower data-refresh interval. Group command counts include owned siege units.
+
+The frame artwork is generated by `asset_creation/ui/build_hud.py`. Keep the small PNGs
+and generator in Git, never bake labels, values or whole-screen mockups into a HUD asset.
+Panels use nine-slicing; native text uses the bundled medieval fonts. Artwork uses shared
+button state and motion rather than introducing another hover animation system.
 
 The market layout and actions remain in `market.rs`; its read-only model lives in
 `market/model.rs`. Quote another seller's eligible offer, not the exchange's headline ask
@@ -58,7 +90,7 @@ market so changing pages cannot show another town's feedback.
 - Book frames use a 3 px brass-brown edge and small native brass corner ornaments.
   Compact plates use a one-pixel rule, 2–3 px radius and `plate_shadow()`. Nested content uses
   soft dividers more often than boxes inside boxes.
-- Future authored frames should be nine-sliced `ImageNode`s. They must replace chrome,
+- Authored HUD frames use nine-sliced `ImageNode`s. They replace chrome,
   never become baked text or screen-sized bitmaps.
 
 ## Buttons and accessibility

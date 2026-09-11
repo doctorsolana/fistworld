@@ -54,6 +54,7 @@ pub(super) fn exercise_capture_door(
 pub(super) fn enter_world_offline(
     mut commands: Commands,
     mut next_state: ResMut<NextState<GameState>>,
+    manifest: Res<crate::hero::HeroManifest>,
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
 ) {
     // No connection, no name entry — the map comes off disk.
@@ -798,10 +799,10 @@ pub(super) fn enter_world_offline(
         }
     }
 
-    // FISTFORCE_CAPTURE_WARBAR=1 stages three battalions with bearers and a
-    // selection, so the battalion bar and standard flags can be photographed
-    // without a server. Pair with FISTFORCE_COMBAT_MODE=1 and
-    // FISTFORCE_CAPTURE_HUD=play so the war UI is armed and drawn.
+    // FISTFORCE_CAPTURE_WARBAR=1 stages battalions with bearers and a selection
+    // for the real combat HUD. WARBAR_COUNT defaults to three; a bounded larger
+    // roster exercises paging without starting a server. Pair with
+    // FISTFORCE_COMBAT_MODE=1 and FISTFORCE_CAPTURE_HUD=play.
     if std::env::var("FISTFORCE_CAPTURE_WARBAR").is_ok_and(|v| v == "1") {
         commands.insert_resource(crate::ui::name_entry::PlayerNameInput {
             name: "Wanderer".to_string(),
@@ -815,8 +816,21 @@ pub(super) fn enter_world_offline(
                 .unwrap_or(0.0)
         };
         let focus = Vec3::new(-20.0, ground(-20.0, -40.0), -40.0);
+        let battalion_count = std::env::var("FISTFORCE_CAPTURE_WARBAR_COUNT")
+            .map(|count| {
+                count
+                    .parse::<u64>()
+                    .expect("capture warbar count must be a positive integer")
+                    .clamp(1, 32)
+            })
+            .unwrap_or(3);
         let mut selected = Vec::new();
-        for (ordinal, count, wounded) in [(1u64, 8usize, 0.0f32), (2, 6, 22.0), (3, 3, 55.0)] {
+        for ordinal in 1..=battalion_count {
+            let (count, wounded) = match ordinal {
+                2 => (6usize, 22.0f32),
+                3 => (3, 55.0),
+                _ => (8, 0.0),
+            };
             let id = shared::components::BattalionId(ordinal);
             commands.spawn((
                 shared::components::Battalion {
@@ -828,12 +842,24 @@ pub(super) fn enter_world_offline(
                 shared::components::PlayerPosition(focus),
             ));
             for soldier in 0..count {
-                let x = focus.x + (ordinal as f32 - 2.0) * 12.0 + (soldier % 4) as f32 * 1.5;
-                let z = focus.z + (soldier / 4) as f32 * 1.7 - 6.0;
+                // Preserve the original three groups' positions; additional
+                // groups form a compact parade behind them, inside the view.
+                let x = focus.x
+                    + (((ordinal - 1) % 4) as f32 - 1.0) * 12.0
+                    + (soldier % 4) as f32 * 1.5;
+                let z =
+                    focus.z + ((ordinal - 1) / 4) as f32 * 12.0 + (soldier / 4) as f32 * 1.7 - 6.0;
                 let position = Vec3::new(x, ground(x, z), z);
+                let mut outfit =
+                    shared::components::HeroOutfit::varied(ordinal * 31 + soldier as u64);
+                manifest
+                    .apply_outfit("soldier_mail", &mut outfit)
+                    .expect("warbar capture uses the canonical infantry outfit");
                 let mut body = commands.spawn((
                     shared::components::CharacterName(format!("Soldier {ordinal}-{soldier}")),
                     shared::components::CharacterKind::Villager,
+                    outfit,
+                    shared::components::PlayerRotation(std::f32::consts::PI),
                     shared::components::PlayerPosition(position),
                     shared::components::CharacterAttributes::from_seed(
                         ordinal * 31 + soldier as u64,
@@ -852,7 +878,7 @@ pub(super) fn enter_world_offline(
                 if soldier == 0 {
                     body.insert(shared::components::StandardBearer);
                 }
-                if ordinal == 2 {
+                if ordinal == battalion_count.min(2) {
                     selected.push(body.id());
                 }
             }
