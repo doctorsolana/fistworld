@@ -27,6 +27,7 @@ pub(super) struct TownSceneReadiness<'w, 's> {
     spawner: Res<'w, WorldInstanceSpawner>,
     terrain: Res<'w, WorldTerrain>,
     roadside: Option<Res<'w, crate::settlement::roadside::RoadsideReadiness>>,
+    ground_paint: Option<Res<'w, crate::settlement::GroundPaintReadiness>>,
     fields: Query<
         'w,
         's,
@@ -118,13 +119,19 @@ impl TownSceneReadiness<'_, '_> {
             )
         });
         let roadside_ready = self.roadside.as_ref().is_none_or(|state| state.ready);
-        if ready == expected.0.len() && walls_ready && fields_ready && yards_ready && roadside_ready
+        let ground_ready = self.ground_paint.as_ref().is_none_or(|state| state.ready);
+        if ready == expected.0.len()
+            && walls_ready
+            && fields_ready
+            && yards_ready
+            && roadside_ready
+            && ground_ready
         {
             return Ok(true);
         }
         if frames >= maximum_frames {
             return Err(format!(
-                "town scene readiness timed out: {ready}/{} imported scenes instantiated with loaded dependencies; defense meshes ready={walls_ready}, fields ready={fields_ready}, yards ready={yards_ready}, roadside ready={roadside_ready}",
+                "town scene readiness timed out: {ready}/{} imported scenes instantiated with loaded dependencies; defense meshes ready={walls_ready}, fields ready={fields_ready}, yards ready={yards_ready}, roadside ready={roadside_ready}, ground paint ready={ground_ready}",
                 expected.0.len()
             ));
         }

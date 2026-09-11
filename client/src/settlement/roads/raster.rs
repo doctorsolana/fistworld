@@ -60,10 +60,11 @@ pub(super) fn paint_square(op: &TerrainPaintOp, chunk_min: Vec2, map: &mut Weigh
     }
 }
 
-pub(super) fn paint_road_segments(
+pub(super) fn paint_road_and_yard_segments(
     chunk_min: Vec2,
     map: &mut WeightMapData,
     segments: &[RoadSegmentRef],
+    yard_paths: &[&YardPathPaintSnapshot],
 ) {
     let mut dirt = vec![0.0_f32; map.weights.len()];
     let mut stone = vec![0.0_f32; map.weights.len()];
@@ -147,10 +148,18 @@ pub(super) fn paint_road_segments(
             }
         }
     }
+    for path in yard_paths {
+        path.rasterize(chunk_min, map, &mut dirt);
+    }
     for ((weights, dirt), stone) in map.weights.iter_mut().zip(dirt).zip(stone) {
         blend(weights, 1, dirt);
         blend(weights, 3, stone);
     }
+}
+
+#[cfg(test)]
+fn paint_road_segments(chunk_min: Vec2, map: &mut WeightMapData, segments: &[RoadSegmentRef]) {
+    paint_road_and_yard_segments(chunk_min, map, segments, &[]);
 }
 
 #[cfg(test)]
@@ -169,7 +178,7 @@ fn paint_road_network(
     paint_road_segments(chunk_min, map, &segments);
 }
 
-fn smooth(low: f32, high: f32, value: f32) -> f32 {
+pub(super) fn smooth(low: f32, high: f32, value: f32) -> f32 {
     let t = ((value - low) / (high - low)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }

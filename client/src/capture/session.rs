@@ -118,6 +118,28 @@ fn snapshot(world: &mut World) -> Value {
         })).collect();
     let towns: Vec<_> = world.query::<(&SettlementSummary, &PlayerPosition)>().iter(world)
         .map(|(town, position)| json!({"id":town.id.0,"name":town.name,"residents":town.residents,"position":position.0.to_array()})).collect();
+    // Read-only replicated garden routes for the opt-in connected movement lab.
+    let yards: Vec<_> = world
+        .query::<(
+            &BuildingId,
+            &HouseholdYard,
+            &PlayerPosition,
+            &PlayerRotation,
+        )>()
+        .iter(world)
+        .filter_map(|(id, yard, at, yaw)| {
+            let (Some(entry), Some(approach)) = (yard.entry, yard.approach) else {
+                return None;
+            };
+            let world_point = |p| {
+                let xz = at.0.xz() + shared::rotation::local_to_world_xz(p, yaw.0);
+                [xz.x, at.0.y, xz.y]
+            };
+            Some(json!({"id":id.0,"house":at.0.to_array(),"recipe":yard,
+                "center":world_point(yard.center()),"entry":world_point(entry),
+                "approach":world_point(approach)}))
+        })
+        .collect();
     let clock = world
         .query::<&WorldTime>()
         .iter(world)
@@ -143,7 +165,7 @@ fn snapshot(world: &mut World) -> Value {
     let notice = world
         .get_resource::<crate::ui::hud::GodNotice>()
         .map(|notice| json!({"text":notice.text,"remaining":notice.seconds_left}));
-    json!({"account":account,"hero":own.map(|(_,_,hero)|hero),"markets":markets,"towns":towns,"clock":clock,"camera":camera,"buttons":buttons,"selection":selected,"notice":notice,
+    json!({"account":account,"hero":own.map(|(_,_,hero)|hero),"markets":markets,"towns":towns,"yards":yards,"clock":clock,"camera":camera,"buttons":buttons,"selection":selected,"notice":notice,
         "ui_blocking":world.get_resource::<crate::input::InputState>().is_some_and(|s|s.ui_blocking()),
         "playing":world.get_resource::<State<GameState>>().is_some_and(|s|*s.get()==GameState::Playing),
         "creator":world.get_resource::<crate::ui::hero_creator::HeroCreatorOpen>().is_some_and(|s|s.0),
@@ -337,7 +359,11 @@ fn advance(
                 camera.focus.xz().distance(camera.focus_target.xz()) < 0.3
                     && (camera.zoom - camera.zoom_target).abs() < 0.3
             });
-            if chunks < 64 || chunks != state.last_chunks || !stable_camera {
+            if chunks < 64
+                || chunks != state.last_chunks
+                || !stable_camera
+                || !inspection.yard_presentation_ready()
+            {
                 state.stable = 0;
             } else {
                 state.stable += 1;

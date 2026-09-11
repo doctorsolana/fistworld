@@ -397,6 +397,10 @@ pub struct CaptureWorldSnapshot {
     pub settlements: usize,
     pub settlement_buildings: usize,
     pub household_yards: usize,
+    /// Loaded yard triangles [near, far], before visibility culling.
+    pub household_yard_triangles: [usize; 2],
+    #[serde(default)]
+    pub ground_paint_pending_chunks: Option<usize>,
     pub farm_fields: usize,
     /// Loaded mesh triangles [soil, near crop, far crop], before visibility culling.
     pub farm_field_triangles: [usize; 3],

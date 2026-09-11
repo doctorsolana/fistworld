@@ -74,6 +74,13 @@ Every shot writes two files:
 - `shot.capture.json`: map, Git revision, deterministic timestep, camera, dimensions, world
   counters, readiness duration, assertion results and visual-comparison metrics.
 
+Town and connected garden captures also wait for accepted yard meshes and the
+loaded terrain ground-paint queue. `world.household_yard_triangles` records the
+loaded near/far yard mesh totals; `world.ground_paint_pending_chunks` is zero once
+the current road, square and garden-path uploads have drained. Missing values in
+older artifacts are not evidence of readiness. Garden interior views are maintained
+in `capture/scenarios/household-yard-study.ron`.
+
 On a failed visual comparison it also writes `shot.diff.png`. The process exits non-zero when a
 readiness gate times out, a semantic assertion fails, image writing fails, or a baseline exceeds
 its configured tolerances.
@@ -197,6 +204,19 @@ or modify villagers, fields or stock. Review `farming.json`, all three PNGs and
 their `.capture.json` companions. Repeat this connected proof after changing
 field boundaries, work positions or fence navigation; an offline picture cannot
 show whether farmers can still reach and leave their crops.
+
+### Connected household garden access
+
+`python3 capture/household_yards.py --out logs/yard-walk --seed 7` starts matching
+client/server binaries in a fresh ordinary world. The creator and voyage run
+through production input; the hero must land before walking accepted yard routes.
+The observer reports replicated building IDs and yard waypoints, and the runner
+orders road → gate → centre → gate → road for two nearby gardens. Review
+`report.json`, every PNG and `.capture.json`; arrival within 0.85 m is required.
+The driver changes neither actor positions nor yard grants. Use a fresh output
+directory; it stops only its own processes and refuses an occupied server port.
+The ordinary world continues simulating while the observer captures it, so this
+is connected behavior evidence, not a deterministic image baseline.
 
 ## Scenario format
 

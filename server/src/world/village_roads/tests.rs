@@ -3804,6 +3804,9 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
 fn household_yard_changes_invalidate_routes_without_inventing_a_doorway() {
     use shared::components::{HouseholdYard, PlayerPosition, PlayerRotation, YardSide, YardUse};
     let yard = HouseholdYard {
+        entry: None,
+        approach: None,
+        house: None,
         boundary: Vec::new(),
         minimum: Vec2::new(5., -2.),
         maximum: Vec2::new(7., 3.),
@@ -3962,36 +3965,49 @@ fn residents_can_route_out_of_yards_beside_rotated_upgraded_houses() {
 
 #[test]
 fn residents_can_route_through_road_shaped_yards_at_rotated_homes() {
-    use shared::components::{HouseAppearance, HouseholdYardLand, YardSide};
+    use shared::components::{HouseAppearance, HouseLevel, HouseLine, HouseholdYardLand, YardSide};
     let base = Vec3::new(1700., 80., 0.);
     let mut terrain = WorldTerrain::default();
     terrain.apply_flatten_rect(base, Vec2::splat(55.), 0., 4.);
-    let definition = SettlementBuildingKind::House.placement_definition();
-    let lo = definition.footprint_center - definition.footprint * 0.5;
-    let hi = definition.footprint_center + definition.footprint * 0.5;
     let props = PropBlockers::default();
     let mut scratch = SurveyScratch::default();
-    for art in [BuildingType::CabinL2, BuildingType::LongCabinL2] {
+    for line in [HouseLine::Cabin, HouseLine::LongCabin] {
+        let appearance = HouseAppearance {
+            line,
+            level: HouseLevel::UpperStorey,
+        };
+        let art = appearance.building_type();
+        let definition = art.definition();
+        let lo = definition.footprint_center - definition.footprint * 0.5;
+        let hi = definition.footprint_center + definition.footprint * 0.5;
         for side in [YardSide::Left, YardSide::Right, YardSide::Rear] {
             for step in 0..16 {
                 let yaw = step as f32 * std::f32::consts::TAU / 16.;
                 for offset in [Vec2::ZERO, Vec2::new(0.37, 0.61), Vec2::new(0.96, 1.21)] {
                     let at = base + Vec3::new(offset.x, 0., offset.y);
                     let mut land = HouseholdYardLand::default();
-                    land.reserve_building(SettlementBuildingKind::House, at, yaw);
+                    land.reserve_house(appearance, at, yaw);
                     let (a, b) = match side {
                         YardSide::Right => (Vec2::new(hi.x + 2.9, -9.), Vec2::new(hi.x + 5.2, 10.)),
                         YardSide::Left => (Vec2::new(lo.x - 2.9, -9.), Vec2::new(lo.x - 5.2, 10.)),
                         YardSide::Rear => (Vec2::new(-9., hi.y + 2.9), Vec2::new(10., hi.y + 5.2)),
                     };
-                    land.reserve_segment(
-                        at.xz() + shared::rotation::local_to_world_xz(a, yaw),
-                        at.xz() + shared::rotation::local_to_world_xz(b, yaw),
-                        0.55,
-                    );
+                    land.reserve_road(&VillageRoad {
+                        settlement: "Route fixture".into(),
+                        builder: String::new(),
+                        points: [a, b]
+                            .map(|p| at.xz() + shared::rotation::local_to_world_xz(p, yaw))
+                            .to_vec(),
+                        built_through: 2,
+                        width: 1.1,
+                        reserved_width: 1.1,
+                        surface: RoadSurface::Dirt,
+                        class: RoadClass::Lane,
+                        stone_committed: 0,
+                    });
                     let yard = land
                         .fit_yard(
-                            HouseAppearance::default(),
+                            appearance,
                             at,
                             yaw,
                             0,
@@ -4005,7 +4021,7 @@ fn residents_can_route_through_road_shaped_yards_at_rotated_homes() {
                             },
                             |_| Some(at.y),
                         )
-                        .unwrap();
+                        .unwrap_or_else(|| panic!("no clipped {appearance:?}/{side:?} plot, yaw={yaw}, offset={offset:?}"));
                     assert_eq!(yard.side, side);
                     let span = yard.maximum - yard.minimum;
                     assert!(
@@ -4151,3 +4167,5 @@ fn certified_building_diagonals_do_not_relax_water_corner_checks() {
     assert!(survey.diagonal_side_blocked(point, &mut scratch));
     assert!(!survey.line_clear(survey.start, survey.goal, &mut scratch));
 }
+
+mod yard_frontage;

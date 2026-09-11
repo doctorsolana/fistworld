@@ -8,16 +8,20 @@ use super::{HouseAppearance, SettlementBuildingKind};
 use crate::rotation::{local_to_world_xz, world_to_local_xz};
 use crate::spatial::ObstacleEntry;
 
+mod frontage;
 mod geometry;
 mod land;
+mod layout;
 use geometry::{area, bounds, centroid, contains};
 pub use land::HouseholdYardLand;
 
 pub const YARD_FENCE_HEIGHT: f32 = 0.92;
 pub const YARD_FENCE_THICKNESS: f32 = 0.13;
 pub const YARD_OBSTACLE_TYPE: u32 = u32::MAX - 1;
-// This is a planting setback, not a navigation corridor. Access uses the
-// entire unfenced streetward end; do not close that end with a return fence.
+/// Half-width of the accepted walking route between a yard gate and its street.
+pub const YARD_APPROACH_HALF_WIDTH: f32 = 0.75;
+// A planting setback, not a navigation corridor. Street access is a separate
+// accepted gate; the boundary beside the actual house also remains open.
 const YARD_HOUSE_GAP: f32 = 0.55;
 
 pub fn household_yard_seed(origin: Vec3) -> u64 {
@@ -41,8 +45,8 @@ pub enum YardUse {
     Firewood,
 }
 
-/// Local X/Z bounds in the owning house's frame. The house-facing side remains
-/// entirely open: this is a working yard, not a decorative cage around a door.
+/// Local X/Z parcel in the owning house's frame. Its boundary stays open beside
+/// the actual house, with optional fence returns past the house corners.
 /// No ownership or food production is implied by ornamental household plants.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct HouseholdYard {
@@ -56,6 +60,18 @@ pub struct HouseholdYard {
     /// against surrounding land. The owning house remains the stable owner.
     #[serde(default)]
     pub boundary: Vec<Vec2>,
+    /// Accepted street entrance on the parcel boundary; the shared fence leaves
+    /// a wide opening here. Legacy snapshots retain their open-corner layout.
+    #[serde(default)]
+    pub entry: Option<Vec2>,
+    /// Accepted built-street endpoint in the same house-local X/Z frame.
+    /// The route from `entry` is reserved as shared walking space, including
+    /// while a replacement parcel waits to be published.
+    #[serde(default)]
+    pub approach: Option<Vec2>,
+    /// Actual house used to fit this revocable plot, reconsidered on upgrades.
+    #[serde(default)]
+    pub house: Option<HouseAppearance>,
 }
 
 impl HouseholdYard {
@@ -106,6 +122,22 @@ impl HouseholdYard {
         (bounds.min, bounds.max)
     }
 
+    /// Validation also covers the external access route. Keep this separate
+    /// from rendering/vegetation bounds: that route is not extra planted land.
+    fn validation_bounds(&self, origin: Vec3, yaw: f32, margin: f32) -> (Vec2, Vec2) {
+        let (mut minimum, mut maximum) = self.world_bounds(origin, yaw, margin);
+        if let Some((entry, approach)) = self.approach_path() {
+            let a = origin.xz() + local_to_world_xz(entry, yaw);
+            let b = origin.xz() + local_to_world_xz(approach, yaw);
+            let along = (b - a).normalize() * YARD_APPROACH_HALF_WIDTH;
+            let side = Vec2::new(-along.y, along.x);
+            let padding = along.abs() + side.abs() + Vec2::splat(margin);
+            minimum = minimum.min(a.min(b) - padding);
+            maximum = maximum.max(a.max(b) + padding);
+        }
+        (minimum, maximum)
+    }
+
     /// Terrain edits in another town must not rebuild this garden. Chunk
     /// revisions include boundary-sampling neighbours; replacement invalidates all.
     pub fn terrain_signature(
@@ -114,7 +146,7 @@ impl HouseholdYard {
         yaw: f32,
         terrain: &crate::terrain::WorldTerrain,
     ) -> u64 {
-        let (min, max) = self.world_bounds(origin, yaw, 0.50);
+        let (min, max) = self.validation_bounds(origin, yaw, 0.50);
         let lo = crate::terrain::ChunkCoord::from_world_pos(Vec3::new(min.x, 0., min.y));
         let hi = crate::terrain::ChunkCoord::from_world_pos(Vec3::new(max.x, 0., max.y));
         let mut signature = u64::from(terrain.full_rebuild_version());
@@ -140,10 +172,13 @@ impl HouseholdYard {
         mut ground: impl FnMut(Vec2) -> Option<f32>,
     ) -> bool {
         let size = self.maximum - self.minimum;
-        if !size.is_finite() || size.min_element() < 1.0 || size.max_element() > 9.0 {
+        if !size.is_finite() || size.min_element() < 1.0 || size.max_element() > 14.5 {
             return false;
         }
-        let house = SettlementBuildingKind::House.placement_definition();
+        let house = self.house.map_or_else(
+            || SettlementBuildingKind::House.placement_definition(),
+            |a| a.building_type().definition(),
+        );
         let lo = house.footprint_center - house.footprint * 0.5;
         let hi = house.footprint_center + house.footprint * 0.5;
         let entrance_gap = match self.side {
@@ -151,7 +186,7 @@ impl HouseholdYard {
             YardSide::Right => self.minimum.x - hi.x,
             YardSide::Rear => self.minimum.y - hi.y,
         };
-        // Reject externally supplied bounds that encroach on the future home.
+        // Reject bounds that encroach on the house used to author this plot.
         if !entrance_gap.is_finite() || entrance_gap < YARD_HOUSE_GAP - 0.001 {
             return false;
         }
@@ -165,6 +200,17 @@ impl HouseholdYard {
             {
                 return false;
             }
+        }
+        if let Some(entry) = self.entry {
+            if !entry.is_finite()
+                || !geometry::edges(&self.boundary_points())
+                    .any(|(a, b)| entry.distance(project_segment(entry, a, b)) < 0.02)
+            {
+                return false;
+            }
+        }
+        if self.approach.is_some() && self.approach_path().is_none() {
+            return false;
         }
         let steps = (size / 0.45).ceil().as_uvec2();
         let mut min_height = f32::INFINITY;
@@ -206,7 +252,7 @@ impl HouseholdYard {
                 max_height = max_height.max(height);
             }
         }
-        max_height - min_height <= 0.85
+        max_height - min_height <= (size.length() * 0.13).clamp(0.85, 2.0)
     }
 
     pub fn contains_world_point(&self, point: Vec2, origin: Vec3, yaw: f32, margin: f32) -> bool {
@@ -214,31 +260,132 @@ impl HouseholdYard {
         self.contains_local_point(p, margin)
     }
 
-    /// Two joined boundaries leave a broad open corner toward the street.
-    /// Closing the third side would turn the narrow planting setback beside
-    /// an upgraded house into the only escape: visually open, but too tight
-    /// for embodied agents and the local A* lattice. Both client LODs and
-    /// navigation derive these same spans, including existing saved yards.
+    /// Shared access spine. Planting stays out of this wide entrance and its
+    /// route into the yard, independently of which decorative use was chosen.
+    pub fn entry_path(&self) -> Option<(Vec2, Vec2)> {
+        self.entry
+            .filter(|p| p.is_finite())
+            .map(|entry| (entry, self.center()))
+    }
+
+    /// The exact authoritatively accepted external walking segment.
+    pub fn approach_path(&self) -> Option<(Vec2, Vec2)> {
+        let (entry, approach) = self.entry.zip(self.approach)?;
+        let distance = entry.distance_squared(approach);
+        (entry.is_finite() && approach.is_finite() && distance > 0.0001 && distance <= 100.0001)
+            .then_some((entry, approach))
+    }
+
+    pub fn planting_clear(&self, point: Vec2, radius: f32) -> bool {
+        if !self.contains_local_point(point, -radius - 0.04) {
+            return false;
+        }
+        let home_clear = match self.side {
+            YardSide::Left => point.x + radius <= self.maximum.x - 1.0,
+            YardSide::Right => point.x - radius >= self.minimum.x + 1.0,
+            YardSide::Rear => point.y - radius >= self.minimum.y + 1.0,
+        };
+        home_clear
+            && self
+                .entry_path()
+                .is_none_or(|(a, b)| point.distance(project_segment(point, a, b)) >= 0.75 + radius)
+    }
+
+    /// New street-shaped parcels fence the useful perimeter with at least a
+    /// 2.6m entrance. The span beside the house remains open. Old snapshots preserve
+    /// their two-sided open corner until the authority accepts a new parcel.
     pub fn fence_segments(&self) -> Vec<(Vec2, Vec2)> {
         let boundary = self.boundary_points();
-        boundary
-            .iter()
-            .copied()
-            .zip(boundary.iter().copied().cycle().skip(1))
-            .take(boundary.len())
-            .filter(|(a, b)| {
-                let edge = *b - *a;
-                let outward = Vec2::new(edge.y, -edge.x).normalize_or_zero();
-                // Open the homeward edge AND a full streetward corner. A
-                // clipped road-facing side still gets a fence when its normal
-                // points away from the home, so it follows the real parcel.
+        let mut result = Vec::new();
+        let size = self.maximum - self.minimum;
+        let border_only = self.entry.is_some() && (size.min_element() < 2.4 || self.area() < 14.0);
+        // A shallow strip is a planted border, not a separate enclosure.
+        // One disconnected fence panel exaggerates its tiny footprint and
+        // reads as abandoned construction beside an otherwise open lawn.
+        if border_only {
+            return result;
+        }
+        for (a, b) in geometry::edges(&boundary) {
+            let delta = b - a;
+            let length = delta.length();
+            if length < 0.05 {
+                continue;
+            }
+            let outward = Vec2::new(delta.y, -delta.x) / length;
+            let is_gate = self
+                .entry
+                .is_some_and(|p| p.distance(project_segment(p, a, b)) < 0.02);
+            let closed = if self.entry.is_some() {
+                match self.side {
+                    YardSide::Right => outward.x > -0.80,
+                    YardSide::Left => outward.x < 0.80,
+                    YardSide::Rear => outward.y > -0.80,
+                }
+            } else {
                 match self.side {
                     YardSide::Right => outward.x > 0.35 || outward.y > 0.80,
                     YardSide::Left => outward.x < -0.35 || outward.y > 0.80,
                     YardSide::Rear => outward.y > 0.35 || outward.x < -0.80,
                 }
-            })
-            .collect()
+            };
+            if !closed {
+                // Close only the extensions beyond the actual house corners.
+                // A long street-led plot can wrap the front/rear corner rather
+                // than looking like a separate open rectangle beside its home.
+                if let Some(appearance) = self.house.filter(|_| self.entry.is_some()) {
+                    let house = appearance.building_type().definition();
+                    let (from, to, low, high) = match self.side {
+                        YardSide::Left | YardSide::Right => (
+                            a.y,
+                            b.y,
+                            house.footprint_center.y - house.footprint.y * 0.5 - 0.3,
+                            house.footprint_center.y + house.footprint.y * 0.5 + 0.3,
+                        ),
+                        YardSide::Rear => (
+                            a.x,
+                            b.x,
+                            house.footprint_center.x - house.footprint.x * 0.5 - 0.3,
+                            house.footprint_center.x + house.footprint.x * 0.5 + 0.3,
+                        ),
+                    };
+                    let p = (low - from) / (to - from);
+                    let q = (high - from) / (to - from);
+                    let low = p.min(q).clamp(0., 1.);
+                    let high = p.max(q).clamp(0., 1.);
+                    if low * length > 1.0 {
+                        result.push((a, a.lerp(b, low)));
+                    }
+                    if (1. - high) * length > 1.0 {
+                        result.push((a.lerp(b, high), b));
+                    }
+                }
+                continue;
+            }
+            // A log-working yard needs broad loading access, while a kitchen
+            // garden benefits from enclosure. Do not give every use the same
+            // three-sided fence and the same narrow gate.
+            if self.use_kind == YardUse::Firewood && is_gate {
+                continue;
+            }
+            if let Some(entry) = self
+                .entry
+                .filter(|p| p.distance(project_segment(*p, a, b)) < 0.02)
+            {
+                let along = delta / length;
+                let t = (entry - a).dot(along).clamp(0., length);
+                let low = (t - 1.3).max(0.);
+                let high = (t + 1.3).min(length);
+                if low > 1.0 {
+                    result.push((a, a + along * low));
+                }
+                if length - high > 1.0 {
+                    result.push((a + along * high, b));
+                }
+            } else {
+                result.push((a, b));
+            }
+        }
+        result
     }
 
     /// Longest boundary facing away from the home. Laundry supports and the
@@ -249,7 +396,11 @@ impl HouseholdYard {
             YardSide::Right => Vec2::X,
             YardSide::Rear => Vec2::Y,
         };
-        self.fence_segments()
+        let mut edges = self.fence_segments();
+        if edges.is_empty() {
+            edges.extend(geometry::edges(&self.boundary_points()));
+        }
+        edges
             .into_iter()
             .max_by(|(a, b), (c, d)| {
                 let score = |a: Vec2, b: Vec2| {
@@ -259,7 +410,7 @@ impl HouseholdYard {
                 };
                 score(*a, *b).total_cmp(&score(*c, *d))
             })
-            .unwrap_or((self.minimum, self.maximum))
+            .unwrap_or((self.minimum, self.minimum))
     }
 
     pub fn ground_obstacles(&self, origin: Vec3, yaw: f32) -> Vec<ObstacleEntry> {
@@ -304,6 +455,20 @@ impl HouseholdYard {
         let tangent = (b - a).normalize();
         let inward = Vec2::new(-tangent.y, tangent.x);
         let center = (a + b) * 0.5 + inward * 0.52;
+        if let Some((start, end)) = self.entry_path() {
+            let local = |p: Vec2| {
+                let delta = p - center;
+                Vec2::new(delta.dot(tangent), delta.dot(inward))
+            };
+            // Keep the same walking spine used by the planting and ground path.
+            if crate::spatial::segment_intersects_box_after_start(
+                local(start),
+                local(end),
+                Vec2::new(1.05, 0.42) + Vec2::splat(0.75),
+            ) {
+                return None;
+            }
+        }
         // The 0.55 m gap outside this parcel is only a planting setback.
         // Reserve the apron inside our accepted land instead of relying on
         // unclaimed space behind the house or across an angled road boundary.
@@ -319,10 +484,14 @@ impl HouseholdYard {
     }
 }
 
-/// Site-fit a modest side/rear yard beyond the *future* house envelope. The
-/// caller supplies exact land/road/field clearance and terrain/water sampling.
-/// Work is bounded (three sides, three sizes, a sub-metre sample grid). The
-/// same function stages old offline snapshots; live clients never grant land.
+pub(super) fn project_segment(p: Vec2, a: Vec2, b: Vec2) -> Vec2 {
+    let d = b - a;
+    a + d * ((p - a).dot(d) / d.length_squared().max(0.00001)).clamp(0., 1.)
+}
+
+/// Legacy rectangular recipe retained for snapshot/geometry regression fixtures.
+/// Production authoring and offline town captures use `HouseholdYardLand::fit_yard_for`,
+/// which fits the actual house against built streets and current land claims.
 pub fn fit_household_yard(
     _appearance: HouseAppearance,
     origin: Vec3,
@@ -363,6 +532,9 @@ pub fn fit_household_yard(
                 side,
                 seed,
                 boundary: Vec::new(),
+                entry: None,
+                approach: None,
+                house: None,
                 use_kind: match (seed >> 8) % 5 {
                     0 | 1 => YardUse::Vegetables,
                     2 => YardUse::Laundry,
@@ -381,6 +553,58 @@ pub fn fit_household_yard(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn working_yards_and_narrow_borders_do_not_clone_an_enclosed_kitchen_garden() {
+        let mut yard = HouseholdYard {
+            minimum: Vec2::new(3.55, -8.),
+            maximum: Vec2::new(9., 6.),
+            side: YardSide::Right,
+            use_kind: YardUse::Vegetables,
+            seed: 8,
+            boundary: Vec::new(),
+            entry: Some(Vec2::new(6., -8.)),
+            approach: Some(Vec2::new(6., -11.)),
+            house: Some(HouseAppearance::default()),
+        };
+        let blocks_loading = |yard: &HouseholdYard| {
+            let mut grid = crate::spatial::SpatialObstacleGrid::default();
+            for obstacle in yard.ground_obstacles(Vec3::ZERO, 0.) {
+                grid.insert(obstacle);
+            }
+            grid.segment_blocked(Vec2::new(4., -9.), Vec2::new(4., -7.))
+        };
+        assert!(
+            blocks_loading(&yard),
+            "enclosed growing ground keeps its street fence"
+        );
+        assert!(
+            yard.fence_segments()
+                .iter()
+                .all(|(a, b)| a.distance(*b) > 1.0),
+            "gate cuts must not leave isolated short remnants"
+        );
+        assert!(
+            yard.fence_segments()
+                .iter()
+                .any(|(a, b)| a.x == yard.minimum.x && b.x == yard.minimum.x),
+            "front and rear extensions return toward the actual house corners"
+        );
+        yard.use_kind = YardUse::Firewood;
+        assert!(
+            !blocks_loading(&yard),
+            "working yard has broad access for carrying loads"
+        );
+        yard.maximum.x = yard.minimum.x + 1.8;
+        yard.maximum.y = 2.;
+        yard.minimum.y = -4.;
+        yard.entry = Some(Vec2::new(4.45, -4.));
+        assert_eq!(
+            yard.fence_segments().len(),
+            0,
+            "a narrow planted border should not leave an isolated fence panel"
+        );
+    }
 
     #[test]
     fn firewood_needs_a_full_working_apron_within_its_accepted_land() {
@@ -427,6 +651,9 @@ mod tests {
             side: YardSide::Right,
             use_kind: YardUse::Vegetables,
             seed: 0,
+            entry: None,
+            approach: None,
+            house: None,
             boundary: vec![
                 Vec2::new(5., 0.),
                 Vec2::new(9., 0.),

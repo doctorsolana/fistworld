@@ -1,10 +1,9 @@
-//! Revocable household landscaping fitted to authoritative village land.
+//! Revocable household land that develops with real nearby street frontage.
 //!
-//! Permits and roads take priority. A new reservation removes an incompatible
-//! yard before the navigation grid updates; remaining homes are fitted under a
-//! small work budget. There is no independent yard economy or per-prop simulation.
+//! Planned roads and buildings retain priority. Built-road progress only wakes
+//! nearby homes; fitting and body-safe publication are separately budgeted.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -14,11 +13,10 @@ use shared::terrain::{ChunkCoord, WorldTerrain};
 use crate::collision::building_index::BuildingSpatialIndex;
 use crate::collision::library::DerivedColliderLibrary;
 
-#[derive(Clone, PartialEq)]
-struct RoadLand {
-    points: Vec<Vec2>,
-    width: f32,
-}
+mod state;
+use state::{HouseLocations, HouseSource, RoadLand, SiteContext, SITE_RADIUS};
+#[cfg(test)]
+mod tests;
 
 #[derive(Default)]
 pub struct HouseholdYardState {
@@ -27,8 +25,12 @@ pub struct HouseholdYardState {
     roads: HashMap<Entity, RoadLand>,
     fields: HashMap<Entity, (Vec3, f32, Option<FarmFieldShape>)>,
     sites: HashMap<Entity, (SettlementBuildingKind, Vec3, f32)>,
+    houses: HouseLocations,
     land: HouseholdYardLand,
     pending: VecDeque<Entity>,
+    queued: HashSet<Entity>,
+    released: HashSet<Entity>,
+    evaluated: HashMap<Entity, SiteContext>,
     step: u64,
     props: HashMap<ChunkCoord, Vec<shared::props::BlockingPropSpawn>>,
     props_world_version: Option<u32>,
@@ -38,6 +40,7 @@ pub struct HouseholdYardState {
 
 struct YardGrant {
     entity: Entity,
+    context: SiteContext,
     validation: YardValidation,
     retry_step: u64,
 }
@@ -49,24 +52,145 @@ struct YardValidation {
     yaw: f32,
     land: u64,
     terrain: u64,
+    frontage: u64,
+    appearance: HouseAppearance,
 }
 
 impl YardValidation {
     fn new(
+        entity: Entity,
         yard: &HouseholdYard,
         origin: Vec3,
         yaw: f32,
+        appearance: HouseAppearance,
         land: &HouseholdYardLand,
         terrain: &WorldTerrain,
     ) -> Self {
+        let context = SiteContext::new(
+            entity,
+            &HouseSource {
+                origin,
+                yaw,
+                appearance,
+            },
+            land,
+            terrain,
+        );
         Self {
             yard: yard.clone(),
             origin,
             yaw,
-            land: land.signature_for_yard(yard, origin, yaw),
-            terrain: yard.terrain_signature(origin, yaw, terrain),
+            land: context.land,
+            terrain: context.terrain,
+            frontage: context.frontage,
+            appearance,
         }
     }
+}
+
+impl HouseholdYardState {
+    fn reconsider(&mut self, entity: Entity, terrain: &WorldTerrain, force: bool) {
+        let Some(source) = self.houses.sources.get(&entity) else {
+            return;
+        };
+        let context = SiteContext::new(entity, source, &self.land, terrain);
+        if !force && self.evaluated.get(&entity) == Some(&context) {
+            return;
+        }
+        self.cancel_staged(entity);
+        // Roadless homes stay dormant until their local road context changes.
+        // Existing valid yards survive a road removal; only new fencing waits.
+        if context.frontage == 0 {
+            self.evaluated.insert(entity, context);
+            return;
+        }
+        if self.queued.insert(entity) {
+            self.pending.push_back(entity);
+        }
+    }
+
+    fn release_land(
+        &mut self,
+        entity: Entity,
+        old: &HouseholdYard,
+        origin: Vec3,
+        yaw: f32,
+        replacement: Option<&HouseholdYard>,
+    ) {
+        if replacement.is_some_and(|next| claim_contains(next, old)) {
+            return;
+        }
+        let (mut min, mut max) = old.world_bounds(origin, yaw, 0.3);
+        if let Some((entry, approach)) = old.approach_path() {
+            for point in [entry, approach] {
+                let world = origin.xz() + shared::rotation::local_to_world_xz(point, yaw);
+                // The approach reservation extends by its half-width along
+                // and across the segment, including its end caps.
+                let pad = Vec2::splat(YARD_APPROACH_HALF_WIDTH * std::f32::consts::SQRT_2);
+                min = min.min(world - pad);
+                max = max.max(world + pad);
+            }
+        }
+        self.houses.around_bounds(min, max, &mut self.released);
+        self.released.remove(&entity);
+    }
+
+    fn cancel_staged(&mut self, entity: Entity) {
+        if let Some(index) = self.staged.iter().position(|grant| grant.entity == entity) {
+            let grant = self.staged.remove(index);
+            let retained = self
+                .validated
+                .get(&entity)
+                .filter(|old| {
+                    old.origin == grant.validation.origin && old.yaw == grant.validation.yaw
+                })
+                .map(|old| &old.yard);
+            if !retained.is_some_and(|old| claim_contains(old, &grant.validation.yard)) {
+                self.release_land(
+                    entity,
+                    &grant.validation.yard,
+                    grant.validation.origin,
+                    grant.validation.yaw,
+                    None,
+                );
+            }
+        }
+        self.land.set_staged_yard(entity.to_bits(), None);
+    }
+
+    fn take_released_neighbours(&mut self) -> HashSet<Entity> {
+        let mut released = std::mem::take(&mut self.released);
+        // Released space cannot invalidate already-fitted work. Preserve it
+        // rather than making neighbouring proposals cancel one another.
+        released.retain(|entity| {
+            !self.queued.contains(entity)
+                && !self.staged.iter().any(|grant| grant.entity == *entity)
+        });
+        released
+    }
+
+    fn forget(&mut self, entity: Entity) {
+        self.cancel_staged(entity);
+        if let Some(old) = self.validated.remove(&entity) {
+            self.release_land(entity, &old.yard, old.origin, old.yaw, None);
+        }
+        self.houses.remove(entity);
+        self.evaluated.remove(&entity);
+        self.queued.remove(&entity);
+        self.released.remove(&entity);
+        self.land.set_yard(entity.to_bits(), None);
+        self.land.set_staged_yard(entity.to_bits(), None);
+    }
+}
+
+/// A sufficient containment proof for releasing no land. Both parcels are
+/// convex, so contained old corners imply contained old edges and interior.
+/// Different approach endpoints conservatively trigger a local wake-up.
+fn claim_contains(next: &HouseholdYard, old: &HouseholdYard) -> bool {
+    old.boundary_points()
+        .into_iter()
+        .all(|p| next.contains_local_point(p, 0.0001))
+        && (old.approach_path().is_none() || old.approach_path() == next.approach_path())
 }
 
 fn dry_height(terrain: &WorldTerrain, p: Vec2) -> Option<f32> {
@@ -75,6 +199,81 @@ fn dry_height(terrain: &WorldTerrain, p: Vec2) -> Option<f32> {
         .water_surface_height(p.x, p.y)
         .is_some_and(|water| h < water + 0.35))
     .then_some(h)
+}
+
+fn prop_radius(
+    derived: Option<&DerivedColliderLibrary>,
+    prop: &shared::props::BlockingPropSpawn,
+) -> f32 {
+    derived
+        .and_then(|d| d.by_kind.get(&prop.kind))
+        .map_or(1.5, |d| d.horizontal_radius)
+        * prop.scale
+}
+
+fn nearby_props(
+    terrain: &WorldTerrain,
+    derived: Option<&DerivedColliderLibrary>,
+    cache: &mut HashMap<ChunkCoord, Vec<shared::props::BlockingPropSpawn>>,
+    at: Vec3,
+) -> Vec<shared::props::BlockingPropSpawn> {
+    let chunk = ChunkCoord::from_world_pos(at);
+    let mut result = Vec::new();
+    for x in chunk.x - 1..=chunk.x + 1 {
+        for z in chunk.z - 1..=chunk.z + 1 {
+            let props = cache.entry(ChunkCoord::new(x, z)).or_insert_with(|| {
+                shared::props::generate_chunk_blocking_props(
+                    &terrain.generator,
+                    ChunkCoord::new(x, z),
+                )
+            });
+            result.extend(
+                props
+                    .iter()
+                    .filter(|prop| {
+                        prop.position.distance_squared(at.xz())
+                            < (SITE_RADIUS + prop_radius(derived, prop) + 0.3).powi(2)
+                    })
+                    .copied(),
+            );
+        }
+    }
+    result
+}
+
+fn props_clear(
+    derived: Option<&DerivedColliderLibrary>,
+    props: &[shared::props::BlockingPropSpawn],
+    point: Vec2,
+    radius: f32,
+) -> bool {
+    !props.iter().any(|prop| {
+        prop.position.distance_squared(point) < (prop_radius(derived, prop) + radius + 0.3).powi(2)
+    })
+}
+
+fn accepted_yard_is_valid(
+    entity: Entity,
+    yard: &HouseholdYard,
+    source: &HouseSource,
+    land: &HouseholdYardLand,
+    terrain: &WorldTerrain,
+    derived: Option<&DerivedColliderLibrary>,
+    props: &[shared::props::BlockingPropSpawn],
+) -> bool {
+    yard.fits_site(
+        source.origin,
+        source.yaw,
+        |p, r| land.is_clear_for(entity.to_bits(), p, r) && props_clear(derived, props, p, r),
+        |p| dry_height(terrain, p),
+    ) && land.yard_access_is_clear_for(
+        entity.to_bits(),
+        yard,
+        source.origin,
+        source.yaw,
+        |p, r| props_clear(derived, props, p, r),
+        |p| dry_height(terrain, p),
+    )
 }
 
 fn overlaps_body(obstacles: &[shared::spatial::ObstacleEntry], point: Vec2, horse: bool) -> bool {
@@ -92,12 +291,29 @@ fn overlaps_body(obstacles: &[shared::spatial::ObstacleEntry], point: Vec2, hors
     })
 }
 
+/// Stable frontage may offer a slightly different clipping solution after a
+/// neighbour changes. Keep the lived-in layout unless useful area, the actual
+/// house recipe or its access opening improves materially.
+fn worthwhile_replacement(old: &HouseholdYard, next: &HouseholdYard) -> bool {
+    if old == next {
+        return false;
+    }
+    old.house != next.house
+        || next.area() >= old.area() + (old.area() * 0.08).max(1.0)
+        || match (old.entry, next.entry) {
+            (None, Some(_)) => true,
+            (Some(a), Some(b)) => a.distance_squared(b) > 0.75 * 0.75,
+            _ => false,
+        }
+}
+
 #[derive(SystemParam)]
 pub struct YardEnvironment<'w, 's> {
     walls: Query<'w, 's, &'static FortificationSegment>,
     changed_walls: Query<'w, 's, (), Changed<FortificationSegment>>,
     removed_walls: RemovedComponents<'w, 's, FortificationSegment>,
     changed_squares: Query<'w, 's, (), Changed<SettlementCivicSquare>>,
+    removed_squares: RemovedComponents<'w, 's, SettlementCivicSquare>,
     fields: Query<
         'w,
         's,
@@ -125,10 +341,29 @@ pub struct YardEnvironment<'w, 's> {
     >,
     removed_fields: RemovedComponents<'w, 's, FarmField>,
     building_ids: Query<'w, 's, &'static BuildingId>,
+    changed_houses: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static SettlementBuilding,
+            &'static PlayerPosition,
+            &'static PlayerRotation,
+            Option<&'static HouseAppearance>,
+        ),
+        Or<(
+            Changed<SettlementBuilding>,
+            Changed<PlayerPosition>,
+            Changed<PlayerRotation>,
+            Changed<HouseAppearance>,
+        )>,
+    >,
+    removed_buildings: RemovedComponents<'w, 's, SettlementBuilding>,
+    removed_positions: RemovedComponents<'w, 's, PlayerPosition>,
+    removed_rotations: RemovedComponents<'w, 's, PlayerRotation>,
+    removed_appearances: RemovedComponents<'w, 's, HouseAppearance>,
 }
 
-/// Geometry-bearing source changes are the only trigger. Worker, inventory and
-/// household-account churn does not rebuild the garden catalogue.
 #[allow(clippy::too_many_arguments)]
 pub fn refresh_household_yards(
     mut commands: Commands,
@@ -174,6 +409,55 @@ pub fn refresh_household_yards(
         || !environment.changed_walls.is_empty()
         || !environment.changed_squares.is_empty();
     dirty |= environment.removed_walls.read().count() > 0;
+    dirty |= environment.removed_squares.read().count() > 0;
+
+    for entity in environment
+        .removed_buildings
+        .read()
+        .chain(environment.removed_positions.read())
+        .chain(environment.removed_rotations.read())
+        .chain(environment.removed_appearances.read())
+    {
+        if let Ok((_, building, at, yaw, appearance, _)) = buildings.get(entity) {
+            if building.kind == SettlementBuildingKind::House {
+                dirty |= state.houses.update(
+                    entity,
+                    HouseSource {
+                        origin: at.0,
+                        yaw: yaw.0,
+                        appearance: appearance.copied().unwrap_or_default(),
+                    },
+                );
+                continue;
+            }
+        }
+        dirty |= state.houses.sources.contains_key(&entity);
+        state.forget(entity);
+    }
+    for (entity, building, at, yaw, appearance) in &environment.changed_houses {
+        if building.kind == SettlementBuildingKind::House {
+            dirty |= state.houses.update(
+                entity,
+                HouseSource {
+                    origin: at.0,
+                    yaw: yaw.0,
+                    appearance: appearance.copied().unwrap_or_default(),
+                },
+            );
+        } else {
+            if state.houses.sources.contains_key(&entity) {
+                state.forget(entity);
+                dirty = true;
+            }
+            if buildings
+                .get(entity)
+                .is_ok_and(|(_, _, _, _, _, yard)| yard.is_some())
+            {
+                commands.entity(entity).remove::<HouseholdYard>();
+                dirty = true;
+            }
+        }
+    }
     for entity in environment.removed_fields.read() {
         dirty |= state.fields.remove(&entity).is_some();
     }
@@ -189,26 +473,28 @@ pub fn refresh_household_yards(
     }
     for entity in removed_roads.read() {
         dirty |= state.roads.remove(&entity).is_some();
+        state.land.remove_frontage(entity.to_bits());
     }
+    let mut nearby_houses = state.take_released_neighbours();
     for (entity, road) in &changed_roads {
-        let width = road.width.max(road.reserved_width);
-        if !state
-            .roads
-            .get(&entity)
-            .is_some_and(|r| r.width == width && r.points == road.points)
-        {
-            state.roads.insert(
-                entity,
-                RoadLand {
-                    points: road.points.clone(),
-                    width,
-                },
-            );
-            dirty = true;
+        if let Some(old) = state.roads.get(&entity) {
+            if old.same_claim(road) {
+                if !old.same_frontage(road) {
+                    state.houses.changed_frontage(old, road, &mut nearby_houses);
+                    state.land.replace_frontage(entity.to_bits(), road);
+                    // Keep the unchanged full planned polyline allocation.
+                    let cached = state.roads.get_mut(&entity).unwrap();
+                    cached.width = road.width;
+                    cached.built = road.built_points().len();
+                    cached.surface = road.surface;
+                    cached.class = road.class;
+                }
+                continue;
+            }
         }
+        state.roads.insert(entity, RoadLand::from_road(road));
+        dirty = true;
     }
-    // Only pending worksites are surveyed here, never every actor in the world.
-    // Their progress changes often but their land signature normally does not.
     let sites_changed = state.sites.len() != sites.iter().len()
         || sites
             .iter()
@@ -220,20 +506,15 @@ pub fn refresh_household_yards(
             .extend(sites.iter().map(|(e, s, p)| (e, (s.kind, p.0, s.rotation))));
         dirty = true;
     }
+
     if dirty {
-        // Unpublished fits have no navigation/visual lifetime yet. Refit them
-        // against the new priority source rather than publishing stale land.
-        state.staged.clear();
         state.building_version = Some(index.version);
+        state.terrain_version = Some(terrain.modification_version());
         if state.props_world_version != Some(terrain.full_rebuild_version()) {
             state.props.clear();
             state.props_world_version = Some(terrain.full_rebuild_version());
         }
-        state.terrain_version = Some(terrain.modification_version());
         let mut land = HouseholdYardLand::default();
-        // Authored city plots and other plain PlacedBuilding entities also
-        // own ground, even without settlement/household metadata. The same
-        // index is authoritative for navigation; never fit a fence inside it.
         for building in index.snapshot() {
             let definition = building.building_type.definition();
             land.reserve_rect(
@@ -242,24 +523,30 @@ pub fn refresh_household_yards(
                 building.rotation,
             );
         }
-        let field_owners: std::collections::HashSet<_> = environment
+        let field_owners: HashSet<_> = environment
             .fields
             .iter()
             .filter_map(|(_, _, _, owner)| owner.map(|owner| owner.0))
             .collect();
-        let legacy_field_origins: std::collections::HashSet<_> = environment
+        let legacy_field_origins: HashSet<_> = environment
             .fields
             .iter()
             .filter(|(_, _, _, owner)| owner.is_none())
             .map(|(field, ..)| field.farmstead.to_array().map(f32::to_bits))
             .collect();
-        for (entity, building, position, rotation, _, _) in &buildings {
+        for (entity, building, position, rotation, appearance, _) in &buildings {
             let explicit_fields = environment
                 .building_ids
                 .get(entity)
                 .is_ok_and(|id| field_owners.contains(id))
                 || legacy_field_origins.contains(&position.0.to_array().map(f32::to_bits));
-            if building.kind == SettlementBuildingKind::Farmstead && explicit_fields {
+            if building.kind == SettlementBuildingKind::House {
+                land.reserve_house(
+                    appearance.copied().unwrap_or_default(),
+                    position.0,
+                    rotation.0,
+                );
+            } else if building.kind == SettlementBuildingKind::Farmstead && explicit_fields {
                 land.reserve_building_without_inferred_fields(
                     building.kind,
                     position.0,
@@ -282,131 +569,199 @@ pub fn refresh_household_yards(
         for (_, site, position) in &sites {
             land.reserve_new_building(site.kind, position.0, site.rotation);
         }
-        for (_, road) in &roads {
-            land.reserve_road(road);
+        for (entity, road) in &roads {
+            land.reserve_road_for(entity.to_bits(), road);
         }
         for (field, position, rotation, _) in &environment.fields {
             land.reserve_field(field, position.0, rotation.0);
         }
         for wall in &environment.walls {
-            // Planned walls already reserve this passage; do not make the
-            // builders work around a newly granted garden in their corridor.
             land.reserve_segment(wall.start.xz(), wall.end.xz(), DEFENSE_CORRIDOR_HALF_WIDTH);
         }
-        let mut houses: Vec<_> = buildings
+        // Protect every existing owner before assessing any replacement. An
+        // early house in sorted order may not grow through a later one's yard.
+        for (entity, building, position, rotation, _, yard) in &buildings {
+            if let Some(yard) = yard.filter(|_| building.kind == SettlementBuildingKind::House) {
+                land.set_yard(entity.to_bits(), Some((yard, position.0, rotation.0)));
+            }
+        }
+        for grant in &state.staged {
+            land.set_staged_yard(
+                grant.entity.to_bits(),
+                Some((
+                    &grant.validation.yard,
+                    grant.validation.origin,
+                    grant.validation.yaw,
+                )),
+            );
+        }
+        let houses = state.houses.ordered(state.houses.sources.keys().copied());
+        let mut revoked = HashSet::new();
+        for &entity in &houses {
+            let Ok((_, _, position, rotation, _, Some(yard))) = buildings.get(entity) else {
+                continue;
+            };
+            let validation = YardValidation::new(
+                entity,
+                yard,
+                position.0,
+                rotation.0,
+                state.houses.sources[&entity].appearance,
+                &land,
+                &terrain,
+            );
+            let valid = if state.validated.get(&entity) == Some(&validation) {
+                true
+            } else {
+                let props =
+                    nearby_props(&terrain, derived.as_deref(), &mut state.props, position.0);
+                let source = state.houses.sources.get(&entity).unwrap();
+                accepted_yard_is_valid(
+                    entity,
+                    yard,
+                    source,
+                    &land,
+                    &terrain,
+                    derived.as_deref(),
+                    &props,
+                )
+            };
+            if valid {
+                state.validated.insert(entity, validation);
+            } else {
+                commands.entity(entity).remove::<HouseholdYard>();
+                state.validated.remove(&entity);
+                land.set_yard(entity.to_bits(), None);
+                revoked.insert(entity);
+            }
+        }
+        state.land = land;
+        // A remote edit preserves a staged candidate and its occupied-body
+        // retry. Only changed local source stamps cancel unpublished work.
+        let stale: Vec<_> = state
+            .staged
             .iter()
-            .filter(|(_, b, ..)| b.kind == SettlementBuildingKind::House)
+            .filter(|grant| {
+                state
+                    .houses
+                    .sources
+                    .get(&grant.entity)
+                    .is_none_or(|source| {
+                        grant.context
+                            != SiteContext::new(grant.entity, source, &state.land, &terrain)
+                    })
+            })
+            .map(|grant| grant.entity)
             .collect();
-        houses.sort_by(|a, b| {
-            a.2 .0
-                .x
-                .total_cmp(&b.2 .0.x)
-                .then(a.2 .0.z.total_cmp(&b.2 .0.z))
-        });
-        state.pending.clear();
-        for (entity, _, position, rotation, _, yard) in houses {
-            // Retain valid existing land before considering new grants. This
-            // avoids gardens oscillating when unrelated houses are completed.
-            let valid = yard.is_some_and(|yard| {
-                let validation = YardValidation::new(yard, position.0, rotation.0, &land, &terrain);
-                if state.validated.get(&entity) == Some(&validation) {
-                    return true;
-                }
-                let valid = yard.fits_site(
+        for entity in stale {
+            state.cancel_staged(entity);
+            state.evaluated.remove(&entity);
+        }
+        for entity in houses {
+            state.reconsider(entity, &terrain, revoked.contains(&entity));
+        }
+    } else {
+        for entity in state.houses.ordered(nearby_houses) {
+            let mut revoked = false;
+            if let Ok((_, _, position, rotation, _, Some(yard))) = buildings.get(entity) {
+                let validation = YardValidation::new(
+                    entity,
+                    yard,
                     position.0,
                     rotation.0,
-                    |p, r| land.is_clear(p, r),
-                    |p| dry_height(&terrain, p),
+                    state.houses.sources[&entity].appearance,
+                    &state.land,
+                    &terrain,
                 );
-                if valid {
-                    state.validated.insert(entity, validation);
+                if state.validated.get(&entity) != Some(&validation) {
+                    let props =
+                        nearby_props(&terrain, derived.as_deref(), &mut state.props, position.0);
+                    let source = state.houses.sources.get(&entity).unwrap();
+                    if accepted_yard_is_valid(
+                        entity,
+                        yard,
+                        source,
+                        &state.land,
+                        &terrain,
+                        derived.as_deref(),
+                        &props,
+                    ) {
+                        state.validated.insert(entity, validation);
+                    } else {
+                        commands.entity(entity).remove::<HouseholdYard>();
+                        state.validated.remove(&entity);
+                        state.land.set_yard(entity.to_bits(), None);
+                        revoked = true;
+                    }
                 }
-                valid
-            });
-            if let Some(yard) = yard.filter(|_| valid) {
-                land.reserve_yard(yard, position.0, rotation.0);
-            } else {
-                state.validated.remove(&entity);
-                if yard.is_some() {
-                    commands.entity(entity).remove::<HouseholdYard>();
-                }
-                state.pending.push_back(entity);
             }
+            state.reconsider(entity, &terrain, revoked);
         }
-        for (entity, building, _, _, _, yard) in &buildings {
-            if building.kind != SettlementBuildingKind::House && yard.is_some() {
-                commands.entity(entity).remove::<HouseholdYard>();
-            }
-        }
-        state.validated.retain(|entity, _| {
-            buildings
-                .get(*entity)
-                .is_ok_and(|(_, building, ..)| building.kind == SettlementBuildingKind::House)
-        });
-        state.land = land;
     }
+
     for _ in 0..2 {
         let Some(entity) = state.pending.pop_front() else {
             break;
         };
-        let Ok((_, building, position, rotation, appearance, _)) = buildings.get(entity) else {
+        if !state.queued.remove(&entity) {
+            continue;
+        }
+        let Some(source) = state.houses.sources.get(&entity).cloned() else {
             continue;
         };
-        if building.kind != SettlementBuildingKind::House {
+        let context = SiteContext::new(entity, &source, &state.land, &terrain);
+        state.evaluated.insert(entity, context.clone());
+        if context.frontage == 0 {
             continue;
         }
-        let at = position.0;
-        let chunk = ChunkCoord::from_world_pos(at);
-        // The immutable world recipe, not observed collider streaming, decides
-        // whether a tree or rock occupies the new yard. Cache surrounding chunks.
-        let mut nearby = Vec::new();
-        for x in chunk.x - 1..=chunk.x + 1 {
-            for z in chunk.z - 1..=chunk.z + 1 {
-                let props = state.props.entry(ChunkCoord::new(x, z)).or_insert_with(|| {
-                    shared::props::generate_chunk_blocking_props(
-                        &terrain.generator,
-                        ChunkCoord::new(x, z),
-                    )
-                });
-                nearby.extend(
-                    props
-                        .iter()
-                        .filter(|p| p.position.distance_squared(at.xz()) < 18.0 * 18.0)
-                        .copied(),
-                );
-            }
-        }
-        let seed = household_yard_seed(at);
-        let yard = state.land.fit_yard(
-            appearance.copied().unwrap_or_default(),
-            at,
-            rotation.0,
-            seed,
-            |point, radius| {
-                !nearby.iter().any(|prop| {
-                    let size = derived
-                        .as_ref()
-                        .and_then(|d| d.by_kind.get(&prop.kind))
-                        .map_or(1.5, |d| d.horizontal_radius)
-                        * prop.scale;
-                    prop.position.distance_squared(point) < (size + radius + 0.3).powi(2)
-                })
-            },
+        let nearby = nearby_props(
+            &terrain,
+            derived.as_deref(),
+            &mut state.props,
+            source.origin,
+        );
+        let yard = state.land.fit_yard_for(
+            entity.to_bits(),
+            source.appearance,
+            source.origin,
+            source.yaw,
+            household_yard_seed(source.origin),
+            |point, radius| props_clear(derived.as_deref(), &nearby, point, radius),
             |point| dry_height(&terrain, point),
         );
         if let Some(yard) = yard {
-            let validation = YardValidation::new(&yard, at, rotation.0, &state.land, &terrain);
-            state.land.reserve_yard(&yard, at, rotation.0);
+            let old = buildings
+                .get(entity)
+                .ok()
+                .and_then(|(_, _, _, _, _, yard)| yard);
+            // A revoked component may still be visible through this system's
+            // query until deferred commands apply. Its old geometry is no
+            // longer an accepted incumbent and must not veto the replacement.
+            if state.validated.contains_key(&entity)
+                && old.is_some_and(|old| !worthwhile_replacement(old, &yard))
+            {
+                continue;
+            }
+            let validation = YardValidation::new(
+                entity,
+                &yard,
+                source.origin,
+                source.yaw,
+                source.appearance,
+                &state.land,
+                &terrain,
+            );
+            state
+                .land
+                .set_staged_yard(entity.to_bits(), Some((&yard, source.origin, source.yaw)));
             state.staged.push(YardGrant {
                 entity,
+                context,
                 validation,
                 retry_step: 0,
             });
         }
     }
-    // Fitting stays at two homes/update, but initial town dressing publishes
-    // up to sixteen together: one shared navigation/cache revision per group,
-    // instead of invalidating the road graph for every pair of homes.
     let ready = state
         .staged
         .iter()
@@ -422,311 +777,73 @@ pub fn refresh_household_yards(
             state.staged.push(grant);
             continue;
         }
-        let at = grant.validation.origin;
-        let yaw = grant.validation.yaw;
-        let Ok((_, building, position, rotation, _, _)) = buildings.get(grant.entity) else {
+        let Ok((_, building, position, rotation, appearance, incumbent)) =
+            buildings.get(grant.entity)
+        else {
+            state.release_land(
+                grant.entity,
+                &grant.validation.yard,
+                grant.validation.origin,
+                grant.validation.yaw,
+                None,
+            );
+            state.land.set_staged_yard(grant.entity.to_bits(), None);
             continue;
         };
-        if building.kind != SettlementBuildingKind::House || position.0 != at || rotation.0 != yaw {
+        let source = &grant.context.source;
+        if building.kind != SettlementBuildingKind::House
+            || position.0 != source.origin
+            || rotation.0 != source.yaw
+            || appearance.copied().unwrap_or_default() != source.appearance
+        {
+            state.release_land(
+                grant.entity,
+                &grant.validation.yard,
+                grant.validation.origin,
+                grant.validation.yaw,
+                None,
+            );
+            state.land.set_staged_yard(grant.entity.to_bits(), None);
             continue;
         }
-        // Check at publication, because a person may have entered while the
-        // other homes in this batch were being fitted. A deferred grant keeps
-        // its already reserved land and retries without repeating the survey.
-        let obstacles = grant.validation.yard.ground_obstacles(at, yaw);
+        let obstacles = grant
+            .validation
+            .yard
+            .ground_obstacles(source.origin, source.yaw);
+        let (min, max) =
+            grant
+                .validation
+                .yard
+                .world_bounds(source.origin, source.yaw, HORSE_BODY_RADIUS + 0.5);
         if bodies.iter().any(|(p, horse, mounted)| {
-            p.0.xz().distance_squared(at.xz()) < 18.0 * 18.0
+            p.0.xz().cmpge(min).all()
+                && p.0.xz().cmple(max).all()
                 && overlaps_body(&obstacles, p.0.xz(), horse || mounted)
         }) {
             grant.retry_step = state.step.saturating_add(60);
             state.staged.push(grant);
             continue;
         }
+        // Keep the incumbent until this single authoritative component swap;
+        // renderer, navigation and collision all observe the accepted result.
         commands
             .entity(grant.entity)
             .insert(grant.validation.yard.clone());
+        if let Some(old) = incumbent {
+            state.release_land(
+                grant.entity,
+                old,
+                source.origin,
+                source.yaw,
+                Some(&grant.validation.yard),
+            );
+        }
+        state.land.set_yard(
+            grant.entity.to_bits(),
+            Some((&grant.validation.yard, source.origin, source.yaw)),
+        );
+        state.land.set_staged_yard(grant.entity.to_bits(), None);
         state.validated.insert(grant.entity, grant.validation);
         published += 1;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::collision::building_index::sync_building_spatial_index;
-    use crate::world::navgrid::{sync_obstacle_grid, ObstacleGridState};
-    use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
-    use shared::spatial::SpatialObstacleGrid;
-
-    fn yard_app() -> (App, Entity, HouseholdYard, Vec3) {
-        let at = Vec3::new(1700., 80., 0.);
-        let source = WorldTerrain::default();
-        let mut map = source.generator.loaded_map().clone();
-        map.objects_by_chunk.clear();
-        if let Some(recipe) = &mut map.definition.generated {
-            recipe.scatter_vegetation = false;
-        }
-        let mut terrain = WorldTerrain::from_loaded_map(map);
-        terrain.apply_flatten_rect(at, Vec2::splat(30.), 0., 4.);
-        let mut land = HouseholdYardLand::default();
-        land.reserve_building(SettlementBuildingKind::House, at, 0.);
-        let yard = fit_household_yard(
-            HouseAppearance::default(),
-            at,
-            0.,
-            0,
-            |p, r| land.is_clear(p, r),
-            |_| Some(at.y),
-        )
-        .unwrap();
-        let mut app = App::new();
-        app.insert_resource(terrain);
-        app.init_resource::<BuildingSpatialIndex>();
-        app.init_resource::<SpatialObstacleGrid>();
-        app.init_resource::<ObstacleGridState>();
-        app.add_systems(
-            Update,
-            (
-                sync_building_spatial_index,
-                refresh_household_yards,
-                sync_obstacle_grid,
-            )
-                .chain(),
-        );
-        let entity = app
-            .world_mut()
-            .spawn((
-                SettlementBuilding {
-                    kind: SettlementBuildingKind::House,
-                    settlement: "Yard test".into(),
-                    owner: None,
-                    quality: 1.,
-                    workers: vec![],
-                },
-                HouseAppearance::default(),
-                PlayerPosition(at),
-                PlayerRotation(0.),
-                PlacedBuilding {
-                    building_type: BuildingType::LogCabin,
-                    rotation: 0.,
-                },
-                BuildingPosition(at),
-                yard.clone(),
-            ))
-            .id();
-        (app, entity, yard, at)
-    }
-
-    #[test]
-    fn later_reserved_road_releases_the_old_yard_and_its_navigation() {
-        let (mut app, house, yard, at) = yard_app();
-        app.update();
-        assert_eq!(app.world().get::<HouseholdYard>(house), Some(&yard));
-        let outer = (yard.outer_edge().0 + yard.outer_edge().1) * 0.5 + at.xz();
-        assert!(app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .point_blocked(outer));
-        let center = yard.center() + at.xz();
-        let road = app
-            .world_mut()
-            .spawn(VillageRoad {
-                settlement: "Yard test".into(),
-                builder: "Builder".into(),
-                points: vec![center - Vec2::Y * 9., center + Vec2::Y * 9.],
-                built_through: 0,
-                width: 1.,
-                reserved_width: 3.,
-                surface: RoadSurface::Dirt,
-                class: RoadClass::Lane,
-                stone_committed: 0,
-            })
-            .id();
-        app.update();
-        assert_ne!(
-            app.world().get::<HouseholdYard>(house),
-            Some(&yard),
-            "the unbuilt road reservation takes priority"
-        );
-        assert!(
-            !app.world()
-                .resource::<SpatialObstacleGrid>()
-                .point_blocked(outer),
-            "revocation and navigation update occur in the same schedule"
-        );
-        let accepted = app.world().get::<HouseholdYard>(house).cloned();
-        let version = app.world().resource::<SpatialObstacleGrid>().version;
-        app.world_mut()
-            .get_mut::<VillageRoad>(road)
-            .unwrap()
-            .built_through = 2;
-        app.update();
-        assert_eq!(app.world().get::<HouseholdYard>(house), accepted.as_ref());
-        assert_eq!(
-            app.world().resource::<SpatialObstacleGrid>().version,
-            version,
-            "ordinary road progress must not rebuild yard navigation"
-        );
-    }
-
-    #[test]
-    fn house_upgrade_preserves_future_clearance_and_demolition_removes_fences() {
-        let (mut app, house, yard, at) = yard_app();
-        app.update();
-        app.world_mut().entity_mut(house).insert(PlacedBuilding {
-            building_type: BuildingType::LongCabinL2,
-            rotation: 0.,
-        });
-        app.update();
-        assert_eq!(app.world().get::<HouseholdYard>(house), Some(&yard));
-        let outer = (yard.outer_edge().0 + yard.outer_edge().1) * 0.5 + at.xz();
-        assert!(app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .point_blocked(outer));
-        app.world_mut().despawn(house);
-        app.update();
-        assert!(app.world().resource::<SpatialObstacleGrid>().is_empty());
-    }
-
-    #[test]
-    fn a_plain_placed_building_revokes_conflicting_yard_land() {
-        let (mut app, house, yard, at) = yard_app();
-        app.update();
-        let point = at + Vec3::new(yard.center().x, 0.0, yard.center().y);
-        let building = BuildingType::LogCabin;
-        app.world_mut().spawn((
-            PlacedBuilding {
-                building_type: building,
-                rotation: 0.0,
-            },
-            BuildingPosition(point),
-        ));
-        app.update();
-        assert_ne!(app.world().get::<HouseholdYard>(house), Some(&yard));
-        if let Some(next) = app.world().get::<HouseholdYard>(house) {
-            let mut land = HouseholdYardLand::default();
-            let definition = building.definition();
-            land.reserve_rect(
-                definition.world_footprint_center(point, 0.0),
-                definition.footprint * 0.5,
-                0.0,
-            );
-            assert!(next.fits_site(at, 0.0, |p, r| land.is_clear(p, r), |_| Some(at.y)));
-        }
-    }
-
-    #[test]
-    fn live_grants_never_embed_a_person_or_horse_in_a_new_fence() {
-        let yard = fit_household_yard(
-            HouseAppearance::default(),
-            Vec3::ZERO,
-            0.7,
-            0,
-            |_, _| true,
-            |_| Some(0.),
-        )
-        .unwrap();
-        let obstacles = yard.ground_obstacles(Vec3::ZERO, 0.7);
-        let fence = &obstacles[1];
-        assert!(overlaps_body(&obstacles, fence.center, false));
-        let beside =
-            fence.center + shared::rotation::local_to_world_xz(Vec2::new(0., 0.8), fence.rotation);
-        assert!(!overlaps_body(&obstacles, beside, false));
-        assert!(overlaps_body(&obstacles, beside, true));
-        assert!(!overlaps_body(&obstacles, Vec2::splat(100.), true));
-    }
-
-    #[test]
-    fn fitting_a_town_publishes_navigation_in_groups_not_every_pair_of_houses() {
-        let (mut app, first, _, at) = yard_app();
-        app.world_mut().entity_mut(first).remove::<HouseholdYard>();
-        let building = app
-            .world()
-            .get::<SettlementBuilding>(first)
-            .unwrap()
-            .clone();
-        app.world_mut()
-            .resource_mut::<WorldTerrain>()
-            .apply_flatten_rect(at + Vec3::new(48., 0., 36.), Vec2::splat(120.), 0., 4.);
-        for i in 1..18 {
-            let point = at + Vec3::new((i % 5) as f32 * 24., 0., (i / 5) as f32 * 24.);
-            app.world_mut().spawn((
-                building.clone(),
-                HouseAppearance::default(),
-                PlayerPosition(point),
-                PlayerRotation(0.),
-                PlacedBuilding {
-                    building_type: BuildingType::LogCabin,
-                    rotation: 0.,
-                },
-                BuildingPosition(point),
-            ));
-        }
-        app.update();
-        let count = |world: &mut World| world.query::<&HouseholdYard>().iter(world).count();
-        assert_eq!(count(app.world_mut()), 0);
-        let initial_version = app.world().resource::<SpatialObstacleGrid>().version;
-        for _ in 1..7 {
-            app.update();
-            assert_eq!(count(app.world_mut()), 0);
-            assert_eq!(
-                app.world().resource::<SpatialObstacleGrid>().version,
-                initial_version
-            );
-        }
-        app.update();
-        assert_eq!(count(app.world_mut()), 16);
-        let batch_version = app.world().resource::<SpatialObstacleGrid>().version;
-        assert_ne!(batch_version, initial_version);
-        app.update();
-        assert_eq!(count(app.world_mut()), 18);
-        assert_ne!(
-            app.world().resource::<SpatialObstacleGrid>().version,
-            batch_version
-        );
-    }
-
-    #[test]
-    fn a_staged_fence_waits_for_a_standing_body_then_publishes_without_a_refit() {
-        let (mut app, house, _, at) = yard_app();
-        app.world_mut().entity_mut(house).remove::<HouseholdYard>();
-        let mut land = HouseholdYardLand::default();
-        land.reserve_building(SettlementBuildingKind::House, at, 0.);
-        let yard = land
-            .fit_yard(
-                HouseAppearance::default(),
-                at,
-                0.,
-                household_yard_seed(at),
-                |_, _| true,
-                |_| Some(at.y),
-            )
-            .unwrap();
-        let point = yard.ground_obstacles(at, 0.)[1].center;
-        let person = app
-            .world_mut()
-            .spawn((
-                CharacterKind::Villager,
-                PlayerPosition(Vec3::new(point.x, at.y, point.y)),
-            ))
-            .id();
-        app.update();
-        assert!(app.world().get::<HouseholdYard>(house).is_none());
-        assert!(!app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .point_blocked(point));
-        app.world_mut().get_mut::<PlayerPosition>(person).unwrap().0 += Vec3::splat(100.);
-        for _ in 0..59 {
-            app.update();
-        }
-        assert!(app.world().get::<HouseholdYard>(house).is_none());
-        app.update();
-        assert_eq!(app.world().get::<HouseholdYard>(house), Some(&yard));
-        assert!(app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .point_blocked(point));
     }
 }

@@ -16,7 +16,13 @@ pub(super) fn fit_yards(snapshot: &mut TownSnapshot, terrain: &WorldTerrain) -> 
         shared::colliders::load_baked_collider_db_from_file(asset_root.join("colliders.bin"))?;
     let mut land = HouseholdYardLand::default();
     for building in &snapshot.buildings {
-        if building.kind == SettlementBuildingKind::Farmstead
+        if building.kind == SettlementBuildingKind::House && building.construction.is_none() {
+            land.reserve_house(
+                building.house.unwrap_or_default(),
+                building.position,
+                building.rotation,
+            );
+        } else if building.kind == SettlementBuildingKind::Farmstead
             && snapshot
                 .fields
                 .iter()

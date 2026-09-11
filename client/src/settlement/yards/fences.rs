@@ -1,8 +1,5 @@
 //! Uneven, joined timber construction along the authoritative parcel spans.
-use super::{
-    dressing::{Ground, WOOD},
-    mesh::YardMesh,
-};
+use super::{dressing::WOOD, ground::Ground, mesh::YardMesh};
 use bevy::prelude::*;
 use shared::components::{HouseholdYard, YARD_FENCE_HEIGHT};
 

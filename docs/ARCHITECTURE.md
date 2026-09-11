@@ -35,6 +35,11 @@ give its Hermite curves stable construction progress and exact surveyed door/jun
 anchors. Smooth bounded bends and endpoint wear use spare width inside the accepted
 right-of-way; raster coverage clips to each original segment's surveyed capsule.
 Simulation paths and land permissions remain the shared surveyed polyline.
+Accepted household garden paths join this same terrain compositor through a
+separate owner-indexed paint source, clipped to the parcel and its reserved street
+approach. They share dirt coverage and the existing upload budget; stone streets
+and civic paving retain priority. They do not create additional road simulation
+entities or path meshes.
 Geometry changes update an index of dense ribbon segments by 64 m terrain chunk;
 a repaint reads only that chunk's segments and unions dirt/paving coverage
 independently of entity order.

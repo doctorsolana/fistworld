@@ -257,7 +257,8 @@ results establish their original fixtures, not every later balance revision.
       larger accepted parcels retain the existing two-worker production cap.
       See [FARM-FIELDS.md](FARM-FIELDS.md).
 - [x] Household yards fit between neighbouring plots and road reservations,
-      reserve access and upgrade space, and supply shared fence/collision geometry.
+      develop from built street frontage, protect gate access and refit to house
+      upgrades, and supply shared fence/collision geometry.
       Bounded client meshes add gardens, laundry, firewood, flowers and occupied
       chimney smoke. See [HOUSEHOLD-YARDS.md](HOUSEHOLD-YARDS.md) and
       [TOWN-DRESSING.md](TOWN-DRESSING.md). Seasonal crop states and cloth motion

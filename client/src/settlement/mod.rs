@@ -54,6 +54,7 @@ pub use grounds::{FarmFieldVisual, FishingPierVisual};
 pub use livestock::LivestockPastureVisual;
 
 pub struct SettlementPlugin;
+pub(crate) use roads::GroundPaintReadiness;
 
 impl Plugin for SettlementPlugin {
     fn build(&self, app: &mut App) {
@@ -65,6 +66,8 @@ impl Plugin for SettlementPlugin {
         app.add_plugins(fortifications::FortificationPlugin);
         app.init_resource::<BuildingDoorAssets>();
         app.init_resource::<roads::VillageRoadPaintState>();
+        app.init_resource::<roads::GroundPaintReadiness>();
+        app.add_systems(OnExit(GameState::Playing), roads::clear_ground_paint);
         app.add_systems(
             Update,
             (
@@ -76,7 +79,12 @@ impl Plugin for SettlementPlugin {
                 animate_pasture_animals,
                 tag_pasture_sheep_parts,
                 animate_pasture_sheep_parts,
-                roads::paint_village_roads_into_terrain.after(TerrainUpdateSet),
+                (
+                    roads::sync_yard_paths,
+                    roads::paint_village_roads_into_terrain,
+                )
+                    .chain()
+                    .after(TerrainUpdateSet),
                 attach_construction_supply_visuals,
                 sync_construction_supply_visuals,
                 claim_building_ground,

@@ -47,8 +47,19 @@ pub(crate) struct CaptureInspection<'w, 's> {
     >,
     grass_batches: Query<'w, 's, (), With<ChunkedGroundCover>>,
     buildings: Query<'w, 's, (), With<shared::components::SettlementBuilding>>,
-    yards: Query<'w, 's, (), With<shared::components::HouseholdYard>>,
+    yards: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::HouseholdYard,
+            &'static shared::components::PlayerPosition,
+            &'static shared::components::PlayerRotation,
+            Option<&'static crate::settlement::yards::YardVisual>,
+        ),
+    >,
+    ground_paint: Option<Res<'w, crate::settlement::GroundPaintReadiness>>,
     fields: Query<'w, 's, (), With<shared::components::FarmField>>,
+    yard_visuals: Query<'w, 's, &'static crate::settlement::yards::YardVisual>,
     field_visuals: Query<'w, 's, &'static crate::settlement::FarmFieldVisual>,
     sun_cascades: Query<
         'w,
@@ -77,6 +88,19 @@ pub(crate) struct CaptureInspection<'w, 's> {
 }
 
 impl CaptureInspection<'_, '_> {
+    /// Connected captures must wait for the accepted garden meshes and terrain
+    /// compositor as well as the camera and loaded terrain chunk count.
+    pub(super) fn yard_presentation_ready(&self) -> bool {
+        self.ground_paint.as_ref().is_none_or(|paint| paint.ready)
+            && self.yards.iter().all(|(yard, position, rotation, visual)| {
+                self.terrain.as_ref().is_some_and(|terrain| {
+                    crate::settlement::yards::visual_matches(
+                        yard, position.0, rotation.0, terrain, visual,
+                    )
+                })
+            })
+    }
+
     pub(crate) fn loaded_chunk_count(&self) -> usize {
         self.loaded_chunks
             .as_ref()
@@ -162,6 +186,16 @@ impl CaptureInspection<'_, '_> {
             settlements: self.settlements.iter().count(),
             settlement_buildings: self.buildings.iter().count(),
             household_yards: self.yards.iter().count(),
+            ground_paint_pending_chunks: self
+                .ground_paint
+                .as_ref()
+                .map(|paint| paint.pending_chunks),
+            household_yard_triangles: self.yard_visuals.iter().fold([0; 2], |mut sum, visual| {
+                for (sum, count) in sum.iter_mut().zip(visual.triangle_counts) {
+                    *sum += count;
+                }
+                sum
+            }),
             farm_fields: self.fields.iter().count(),
             farm_field_triangles: self.field_visuals.iter().fold([0; 3], |mut sum, visual| {
                 for (sum, count) in sum.iter_mut().zip(visual.triangle_counts) {

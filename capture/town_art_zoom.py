@@ -119,7 +119,7 @@ def verify(directory):
         initial, final = probes[60], probes[1020]
         if initial["camera"] != final["camera"]:
             failures.append("final camera differs from initial yard camera")
-        for key in ("settlement_buildings", "household_yards", "farm_fields",
+        for key in ("settlement_buildings", "household_yards", "household_yard_triangles", "farm_fields",
                     "farm_field_triangles", "roadside_batches", "roadside_clusters", "roadside_triangles"):
             before, after = initial["world"].get(key), final["world"].get(key)
             if before is None or before != after or not before:

@@ -1,0 +1,38 @@
+// Ordinary shared yard fitting in the maintained art town. These cameras expose
+// the accepted gardens rather than hiding their interiors behind house roofs.
+(
+    version: 1,
+    name: "household-yard-study",
+    map: "town_art_study",
+    output_dir: "logs/captures/household-yard-study",
+    resolution: (1920, 1200),
+    target: scene,
+    show_window: false,
+    fixed_delta_seconds: 0.016666667,
+    warmup_frames: 240,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1800,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_TOWN_SNAPSHOT": "capture/fixtures/town-art-direction.json",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+        "FISTFORCE_CAPTURE_FIT_TOWN_DRESSING": "1",
+    },
+    shots: [
+        (name: "01-flower-courts", focus: (-58.0, 12.5, 135.0), yaw: 0.35,
+         zoom: 38.0, time_of_day: 0.45,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+        (name: "02-kitchen-garden", focus: (-44.3, 12.9, 103.0), yaw: 1.99,
+         zoom: 30.0, time_of_day: 0.45,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+        (name: "03-laundry-court", focus: (-142.0, 18.8, 46.0), yaw: 2.7,
+         zoom: 32.0, time_of_day: 0.45,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+        (name: "04-working-yard", focus: (-109.0, 15.3, 57.0), yaw: 2.7,
+         zoom: 32.0, time_of_day: 0.45,
+         assertions: [settlement_buildings_at_least(count: 65)]),
+    ],
+)

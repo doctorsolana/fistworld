@@ -234,6 +234,9 @@ mod tests {
             .world_mut()
             .spawn((
                 HouseholdYard {
+                    entry: None,
+                    approach: None,
+                    house: None,
                     boundary: Vec::new(),
                     minimum: Vec2::new(5., -2.),
                     maximum: Vec2::new(7., 3.),

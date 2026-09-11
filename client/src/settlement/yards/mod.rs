@@ -6,6 +6,7 @@
 
 mod dressing;
 mod fences;
+mod ground;
 mod mesh;
 mod planting;
 
@@ -35,6 +36,8 @@ impl Plugin for HouseholdYardsPlugin {
 pub(crate) struct YardVisual {
     placement: YardPlacement,
     terrain_signature: u64,
+    /// Cached at mesh creation; captures never read back uploaded vertices.
+    pub triangle_counts: [usize; 2],
 }
 
 pub(crate) fn visual_matches(
@@ -78,7 +81,7 @@ impl YardGroundCover {
             entries.iter().any(|e| {
                 self.placements
                     .get(e)
-                    .is_some_and(|p| p.yard.contains_world_point(point, p.origin, p.yaw, 0.10))
+                    .is_some_and(|p| ground_cover_contains(&p.yard, point, p.origin, p.yaw, 0.10))
             })
         })
     }
@@ -86,15 +89,7 @@ impl YardGroundCover {
     fn rebuild(&mut self) {
         self.cells.clear();
         for (&entity, p) in &self.placements {
-            let min = p.yard.minimum - Vec2::splat(0.10);
-            let max = p.yard.maximum + Vec2::splat(0.10);
-            let mut lo = Vec2::splat(f32::INFINITY);
-            let mut hi = Vec2::splat(f32::NEG_INFINITY);
-            for corner in [min, max, Vec2::new(min.x, max.y), Vec2::new(max.x, min.y)] {
-                let world = p.origin.xz() + shared::rotation::local_to_world_xz(corner, p.yaw);
-                lo = lo.min(world);
-                hi = hi.max(world);
-            }
+            let (lo, hi) = ground_cover_bounds(&p.yard, p.origin, p.yaw, 0.10);
             let a = cell(lo);
             let b = cell(hi);
             for x in a.0..=b.0 {
@@ -105,6 +100,45 @@ impl YardGroundCover {
         }
         self.version = self.version.wrapping_add(1);
     }
+}
+
+/// Presentation footprint includes the accepted external gate approach. This
+/// shared client helper keeps grass, roadside scatter and ground caches aligned
+/// without expanding the actual planted parcel or adding simulation obstacles.
+pub(crate) fn ground_cover_bounds(
+    yard: &HouseholdYard,
+    origin: Vec3,
+    yaw: f32,
+    margin: f32,
+) -> (Vec2, Vec2) {
+    let (mut lo, mut hi) = yard.world_bounds(origin, yaw, margin);
+    if let Some((a, b)) = yard.approach_path() {
+        let a = origin.xz() + shared::rotation::local_to_world_xz(a, yaw);
+        let b = origin.xz() + shared::rotation::local_to_world_xz(b, yaw);
+        let radius = shared::components::YARD_APPROACH_HALF_WIDTH + margin;
+        lo = lo.min(a.min(b) - Vec2::splat(radius));
+        hi = hi.max(a.max(b) + Vec2::splat(radius));
+    }
+    (lo, hi)
+}
+
+pub(crate) fn ground_cover_contains(
+    yard: &HouseholdYard,
+    point: Vec2,
+    origin: Vec3,
+    yaw: f32,
+    margin: f32,
+) -> bool {
+    if yard.contains_world_point(point, origin, yaw, margin) {
+        return true;
+    }
+    yard.approach_path().is_some_and(|(a, b)| {
+        let p = shared::rotation::world_to_local_xz(point - origin.xz(), yaw);
+        let d = b - a;
+        let nearest = a + d * ((p - a).dot(d) / d.length_squared()).clamp(0., 1.);
+        p.distance_squared(nearest)
+            <= (shared::components::YARD_APPROACH_HALF_WIDTH + margin).powi(2)
+    })
 }
 
 fn cell(p: Vec2) -> (i32, i32) {
@@ -218,9 +252,13 @@ fn sync_yards(
             })
             .clone();
         let mut next = Vec::with_capacity(2);
-        for lod in 0..2 {
-            let geometry = dressing::build(yard, position.0, rotation.0, &terrain, lod == 0);
+        let mut triangle_counts = [0; 2];
+        for (lod, geometry) in dressing::build_lods(yard, position.0, rotation.0, &terrain)
+            .into_iter()
+            .enumerate()
+        {
             debug_assert!(!geometry.is_empty());
+            triangle_counts[lod] = geometry.triangle_count();
             let root = commands
                 .spawn((
                     Name::new(if lod == 0 {
@@ -260,6 +298,7 @@ fn sync_yards(
                 yaw: rotation.0,
             },
             terrain_signature,
+            triangle_counts,
         });
     }
 }
@@ -304,6 +343,9 @@ mod tests {
                 side: YardSide::Right,
                 use_kind,
                 seed: 291,
+                entry: None,
+                approach: None,
+                house: None,
             };
             for detail in [true, false] {
                 let mesh = dressing::build(&yard, Vec3::ZERO, 0., &terrain, detail).finish();
@@ -344,6 +386,9 @@ mod tests {
                             side: YardSide::Right,
                             use_kind: YardUse::Vegetables,
                             seed: i,
+                            entry: None,
+                            approach: None,
+                            house: None,
                         },
                         PlayerPosition(Vec3::X * i as f32 * 20.),
                         PlayerRotation(0.),
@@ -402,6 +447,9 @@ mod tests {
             side: YardSide::Right,
             use_kind: YardUse::Vegetables,
             seed: 7,
+            entry: None,
+            approach: None,
+            house: None,
         };
         let origin = Vec3::new(30., 0., -15.);
         let mut terrain = WorldTerrain::default();
@@ -412,6 +460,7 @@ mod tests {
                 yaw: 0.5,
             },
             terrain_signature: yard.terrain_signature(origin, 0.5, &terrain),
+            triangle_counts: [0; 2],
         };
         assert!(visual_matches(&yard, origin, 0.5, &terrain, Some(&visual)));
         assert!(!visual_matches(
@@ -433,6 +482,47 @@ mod tests {
     }
 
     #[test]
+    fn gate_approach_exclusion_crosses_cells_and_releases_with_its_yard() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let origin = Vec3::new(15.8, 0., 31.5);
+        let yaw = 0.71;
+        let yard = HouseholdYard {
+            minimum: Vec2::new(5., 0.),
+            maximum: Vec2::new(11., 8.),
+            boundary: Vec::new(),
+            side: YardSide::Right,
+            use_kind: YardUse::Flowers,
+            seed: 19,
+            entry: Some(Vec2::new(7., 0.)),
+            approach: Some(Vec2::new(4., -8.)),
+            house: None,
+        };
+        let mut cover = YardGroundCover::default();
+        cover.placements.insert(
+            entity,
+            YardPlacement {
+                yard: yard.clone(),
+                origin,
+                yaw,
+            },
+        );
+        cover.rebuild();
+        let world = |p| origin.xz() + shared::rotation::local_to_world_xz(p, yaw);
+        let (a, b) = yard.approach_path().unwrap();
+        let side = (b - a).perp().normalize();
+        for i in 0..=20 {
+            let p = a.lerp(b, i as f32 / 20.);
+            assert!(cover.contains_world_point(world(p)));
+            assert!(cover.contains_world_point(world(p + side * 0.60)));
+        }
+        assert!(!cover.contains_world_point(world(a.lerp(b, 0.8) + side * 1.0)));
+        cover.placements.remove(&entity);
+        cover.rebuild();
+        assert!(!cover.contains_world_point(world(a.lerp(b, 0.5))));
+    }
+
+    #[test]
     fn yard_grass_exclusion_rotates_and_releases_removed_land() {
         let mut world = World::new();
         let entity = world.spawn_empty().id();
@@ -444,6 +534,9 @@ mod tests {
             side: YardSide::Right,
             use_kind: YardUse::Vegetables,
             seed: 7,
+            entry: None,
+            approach: None,
+            house: None,
         };
         cover.placements.insert(
             entity,

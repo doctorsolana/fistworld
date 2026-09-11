@@ -1,354 +1,442 @@
-//! Workable planted rows and flowering edge groups inside accepted household land.
+//! Deliberately composed household planting fitted to the accepted street parcel.
+//!
+//! A single deterministic plan drives both LODs: mixed planted drifts soften
+//! several boundary runs, vegetable beds occupy selected remaining pockets,
+//! and the actual entrance/house working strip stays empty. No plant entities.
+mod geometry;
 use super::{
-    dressing::{Ground, LEAF, WOOD},
+    dressing::{LEAF, WOOD},
+    ground::Ground,
     mesh::YardMesh,
 };
 use bevy::prelude::*;
-use shared::components::{HouseholdYard, YardSide, YardUse};
+use shared::components::{HouseholdYard, YardUse};
 
-fn unit(seed: u64) -> f32 {
+pub(super) fn unit(seed: u64) -> f32 {
     (shared::worldgen::splitmix64(seed) % 1000) as f32 / 999.0
 }
 
-/// Reserve a continuous one-metre working strip on the homeward side even
-/// when the accepted outer boundary is diagonal. Each crown/petal fits too.
+fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let d = b - a;
+    p.distance(a + d * ((p - a).dot(d) / d.length_squared().max(0.00001)).clamp(0., 1.))
+}
+
 fn plant_fits(yard: &HouseholdYard, p: Vec2, radius: f32) -> bool {
-    if !yard.contains_local_point(p, -radius - 0.04) {
+    if !yard.planting_clear(p, radius) {
         return false;
     }
-    match yard.side {
-        YardSide::Left => p.x + radius <= yard.maximum.x - 1.0,
-        YardSide::Right => p.x - radius >= yard.minimum.x + 1.0,
-        YardSide::Rear => p.y - radius >= yard.minimum.y + 1.0,
-    }
-}
-
-fn soil_strip(
-    mesh: &mut YardMesh,
-    ground: &Ground,
-    yard: &HouseholdYard,
-    a: Vec2,
-    b: Vec2,
-    side: Vec2,
-    seed: u64,
-) {
-    let count = (a.distance(b) / 0.40).ceil().max(1.0) as usize;
-    for i in 0..count {
-        let p = a.lerp(b, i as f32 / count as f32);
-        let q = a.lerp(b, (i + 1) as f32 / count as f32);
-        let w = 0.27 * (0.95 + unit(seed + i as u64) * 0.08);
-        let corners = [p + side * w, q + side * w, q - side * w, p - side * w];
-        if !corners.iter().all(|p| plant_fits(yard, *p, 0.0)) {
-            continue;
-        }
-        let color = Vec3::new(0.34, 0.235, 0.115) * (0.94 + unit(seed + i as u64 + 53) * 0.12);
-        mesh.quad(corners.map(|p| ground.at(p, 0.045)), color);
-    }
-}
-
-fn cabbage(mesh: &mut YardMesh, ground: &Ground, p: Vec2, seed: u64, color: Vec3, detail: bool) {
-    // The distant crown keeps the entire plant's width instead of dropping
-    // alternate cabbages and leaving bare holes along an otherwise full bed.
-    mesh.crown(
-        ground.at(p, 0.23),
-        Vec3::new(
-            if detail { 0.21 } else { 0.31 },
-            0.20,
-            if detail { 0.21 } else { 0.31 },
-        ),
-        color * 1.08,
-        unit(seed) * std::f32::consts::TAU,
-    );
-    if detail {
-        for i in 0..5 {
-            let angle = unit(seed) * std::f32::consts::TAU + i as f32 * 2.4;
-            let d = Vec2::from_angle(angle);
-            mesh.leaf(
-                ground.at(p + d * 0.02, 0.07),
-                ground.at(p, 0.0) + Vec3::new(d.x * 0.29, 0.20 + unit(seed + i) * 0.06, d.y * 0.29),
-                0.13,
-                color * (0.91 + unit(seed + i + 7) * 0.16),
-            );
-        }
-    }
-}
-
-fn herbs(mesh: &mut YardMesh, ground: &Ground, p: Vec2, seed: u64, color: Vec3, detail: bool) {
-    for i in 0..if detail { 5 } else { 3 } {
-        let d = Vec2::from_angle(i as f32 * 2.4 + unit(seed));
-        mesh.leaf(
-            ground.at(p, -0.01),
-            ground.at(p, 0.0) + Vec3::new(d.x * 0.22, 0.38 + unit(seed + i + 7) * 0.13, d.y * 0.22),
-            if detail { 0.09 } else { 0.13 },
-            color * (0.95 + unit(seed + i) * 0.15),
-        );
-    }
-}
-
-pub(super) fn garden(
-    mesh: &mut YardMesh,
-    ground: &Ground,
-    yard: &HouseholdYard,
-    detail: bool,
-    full: bool,
-) {
-    let (a, b) = yard.outer_edge();
-    let length = a.distance(b);
-    if length < 1.5 {
-        return;
-    }
-    let along = (b - a).normalize();
-    let inward = Vec2::new(-along.y, along.x);
-    let max_depth = yard
-        .boundary_points()
-        .into_iter()
-        .map(|p| (p - a).dot(inward))
-        .fold(0., f32::max);
-    let rows = (((max_depth - 1.0 - 0.34 - 0.64) / 0.68).floor() + 1.0).clamp(0., 4.) as usize;
-    for row in 0..if full { rows } else { rows.min(2) } {
-        let v = 0.64 + row as f32 * 0.68;
-        let mut runs: Vec<Vec<Vec2>> = vec![Vec::new()];
-        let count = ((length - 1.0) / 0.63).floor().max(1.0) as usize;
-        for i in 0..=count {
-            let t = 0.50 + (length - 1.0) * i as f32 / count as f32;
-            // Include crown radii in the cross-path setback; leaves must not
-            // close the apparent route between two otherwise separated beds.
-            let cross_path =
-                full && length > 5.5 && t > length * 0.5 - 0.34 && t < length * 0.5 + 1.04;
-            let permitted_use = full || t < length * (0.43 + unit(yard.seed) * 0.10);
-            let p = a + along * t + inward * v;
-            if cross_path || !permitted_use || !plant_fits(yard, p, 0.34) {
-                if !runs.last().unwrap().is_empty() {
-                    runs.push(Vec::new());
-                }
-                continue;
-            }
-            runs.last_mut().unwrap().push(p);
-        }
-        for (r, run) in runs.into_iter().enumerate() {
-            if run.len() < 2 {
-                continue;
-            }
-            let seed = yard.seed + row as u64 * 37 + r as u64 * 103;
-            soil_strip(
-                mesh,
-                ground,
-                yard,
-                run[0] - along * 0.28,
-                *run.last().unwrap() + along * 0.28,
-                inward,
-                seed,
-            );
-            if detail && seed % 3 == 0 {
-                let p = run[0] - along * 0.22;
-                mesh.beam(
-                    ground.at(p - inward * 0.25, 0.065),
-                    ground.at(p + inward * 0.25, 0.065),
-                    0.08,
-                    0.10,
-                    WOOD * 1.08,
-                );
-            }
-            for (i, p) in run.into_iter().enumerate() {
-                let seed = seed + i as u64 * 19;
-                let color = if row % 3 == 2 && yard.seed % 3 == 0 {
-                    Vec3::new(0.47, 0.34, 0.43)
-                } else {
-                    LEAF * (1.0 + unit(seed + 3) * 0.17)
-                };
-                if yard.use_kind == YardUse::Flowers && row % 2 == 0 {
-                    blossom(mesh, ground, p, seed, false, detail);
-                    herbs(mesh, ground, p, seed, LEAF, detail);
-                } else if row % 3 == 1 && yard.seed % 2 == 0 {
-                    herbs(mesh, ground, p, seed, color, detail);
-                } else {
-                    cabbage(mesh, ground, p, seed, color, detail);
-                }
-            }
-        }
-    }
-}
-
-fn blossom(mesh: &mut YardMesh, ground: &Ground, p: Vec2, seed: u64, golden: bool, detail: bool) {
-    let height = if golden {
-        0.86 + unit(seed) * 0.26
-    } else {
-        0.34 + unit(seed) * 0.18
-    };
-    let top = ground.at(p, height);
-    mesh.leaf(
-        ground.at(p, -0.025),
-        top,
-        if golden { 0.027 } else { 0.018 },
-        LEAF * 0.85,
-    );
-    let golden_petals = golden || seed % 7 < 2;
-    let color = if golden_petals {
-        Vec3::new(1.0, 0.83, 0.18)
-    } else {
-        Vec3::new(1.0, 0.98, 0.87)
-    };
-    let radius = if golden {
-        0.24
-    } else {
-        0.17 + unit(seed + 17) * 0.025
-    };
-    let petals = if detail { 5 } else { 4 };
-    for i in 0..petals {
-        let angle = i as f32 * std::f32::consts::TAU / petals as f32 + unit(seed) * 1.2;
-        let d = Vec3::new(angle.cos(), 0.0, angle.sin());
-        mesh.leaf(
-            top + d * 0.025,
-            top + d * radius + Vec3::Y * 0.018,
-            radius * 0.42,
-            color,
-        );
-    }
-    mesh.crown(
-        top + Vec3::Y * 0.025,
-        Vec3::new(radius * 0.32, 0.035, radius * 0.32),
-        if golden {
-            Vec3::new(0.40, 0.24, 0.08)
-        } else {
-            Vec3::new(0.96, 0.70, 0.13)
-        },
-        0.0,
-    );
-    if detail || golden {
-        for i in 0..2 {
-            let d = Vec2::from_angle(unit(seed + i) * std::f32::consts::TAU);
-            let base = ground.at(p, height * (0.32 + i as f32 * 0.20));
-            mesh.leaf(
-                base,
-                base + Vec3::new(d.x * 0.18, 0.08, d.y * 0.18),
-                0.065,
-                LEAF * 1.04,
-            );
-        }
-    }
-}
-
-pub(super) fn edges(mesh: &mut YardMesh, ground: &Ground, yard: &HouseholdYard, detail: bool) {
-    let mut made = 0;
-    for (edge, (a, b)) in yard.fence_segments().into_iter().enumerate() {
-        let length = a.distance(b);
-        if length < 1.2 {
-            continue;
-        }
-        let tangent = (b - a).normalize();
+    // Firewood is an authoritative solid fixture. Its access apron is useful
+    // outdoor working space, not another planting pocket.
+    if let Some((center, tangent)) = yard.firewood_frame() {
         let inward = Vec2::new(-tangent.y, tangent.x);
-        let clusters = if yard.use_kind == YardUse::Flowers {
-            ((length / 1.8).round() as usize).clamp(1, 3)
-        } else {
-            1 + (yard.seed as usize + edge) % 2
-        };
-        for cluster in 0..clusters {
-            if made == 6 {
-                return;
+        let delta = p - center;
+        if delta.dot(tangent).abs() < 1.05 + radius
+            && delta.dot(inward) > -0.42 - radius
+            && delta.dot(inward) < 2.02 + radius
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Corner checks alone can bridge the rounded access capsule. Soil patches
+/// must keep every edge outside it too, and may not enclose either endpoint.
+fn soil_fits(yard: &HouseholdYard, polygon: &[Vec2]) -> bool {
+    if !polygon.iter().all(|p| plant_fits(yard, *p, 0.)) {
+        return false;
+    }
+    let Some((a, b)) = yard.entry_path() else {
+        return true;
+    };
+    let inside = |p: Vec2| {
+        (0..polygon.len())
+            .all(|i| (polygon[(i + 1) % polygon.len()] - polygon[i]).perp_dot(p - polygon[i]) >= 0.)
+    };
+    if inside(a) || inside(b) {
+        return false;
+    }
+    (0..polygon.len()).all(|i| {
+        let c = polygon[i];
+        let d = polygon[(i + 1) % polygon.len()];
+        let cross = (b - a).perp_dot(d - c);
+        if cross.abs() > 0.00001 {
+            let t = (c - a).perp_dot(d - c) / cross;
+            let u = (c - a).perp_dot(b - a) / cross;
+            if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+                return false;
             }
-            let seed = yard.seed + edge as u64 * 79 + cluster as u64 * 131;
-            let t = if clusters == 1 {
-                0.27 + unit(seed) * 0.45
-            } else {
-                0.19 + cluster as f32 / (clusters - 1) as f32 * 0.62
+        }
+        segment_distance(a, c, d)
+            .min(segment_distance(b, c, d))
+            .min(segment_distance(c, a, b))
+            .min(segment_distance(d, a, b))
+            >= 0.75
+    })
+}
+
+#[derive(Clone, Copy)]
+struct Lobe {
+    position: Vec2,
+    radius: f32,
+    height: f32,
+    seed: u64,
+}
+struct Flower {
+    position: Vec2,
+    height: f32,
+    golden: bool,
+    seed: u64,
+}
+struct Drift {
+    tangent: Vec2,
+    lobes: Vec<Lobe>,
+    flowers: Vec<Flower>,
+}
+enum BedCrop {
+    Cabbage,
+    Herbs,
+}
+
+struct Bed {
+    points: Vec<Vec2>,
+    tangent: Vec2,
+    seed: u64,
+    crop: BedCrop,
+}
+
+pub(super) struct PlantingPlan {
+    drifts: Vec<Drift>,
+    beds: Vec<Bed>,
+}
+impl PlantingPlan {
+    pub(super) fn new(yard: &HouseholdYard) -> Self {
+        let mut plan = Self {
+            drifts: Vec::new(),
+            beds: Vec::new(),
+        };
+        let boundary = yard.boundary_points();
+        // Planting is land use, not a consequence of how many individual
+        // fence pieces survive the gate/house cuts. A border can continue
+        // along accepted unfenced land while access remains authoritatively clear.
+        let mut edges: Vec<_> = boundary
+            .iter()
+            .copied()
+            .zip(boundary.iter().copied().cycle().skip(1))
+            .take(boundary.len())
+            .collect();
+        if let Some(entry) = yard.entry {
+            edges.sort_by(|(a, b), (c, d)| {
+                segment_distance(entry, *a, *b).total_cmp(&segment_distance(entry, *c, *d))
+            });
+        } else {
+            let start = yard.seed as usize % edges.len().max(1);
+            edges.rotate_left(start);
+        }
+        let max_lobes = match yard.use_kind {
+            YardUse::Flowers => 30,
+            YardUse::Vegetables => 18,
+            YardUse::Laundry => 12,
+            YardUse::Firewood => 10,
+        };
+        let mut lobes = 0;
+        let mut dressed_edges = 0;
+        for (edge, &(a, b)) in edges.iter().enumerate() {
+            if lobes >= max_lobes {
+                break;
+            }
+            let length = a.distance(b);
+            if length < 0.65 {
+                continue;
+            }
+            let tangent = (b - a) / length;
+            let inward = Vec2::new(-tangent.y, tangent.x);
+            let count = (length / 0.58).ceil().max(1.) as usize;
+            let mut drift = Drift {
+                tangent,
+                lobes: Vec::new(),
+                flowers: Vec::new(),
             };
-            let full_center = a.lerp(b, t) + inward * 0.47;
-            let (center, compact) = if plant_fits(yard, full_center, 0.30) {
-                (full_center, false)
-            } else {
-                // A 1.6 m fallback plot still has a useful narrow flower bed
-                // beside its fence. Fit smaller crowns rather than consuming
-                // the working strip or leaving only an empty fence outline.
-                let p = a.lerp(b, t) + inward * 0.29;
-                if !plant_fits(yard, p, 0.22) {
+            let before = lobes;
+            for i in 0..count {
+                if lobes >= max_lobes {
+                    break;
+                }
+                let t = (i as f32 + 0.5) / count as f32;
+                let along = length * t;
+                let seed = yard.seed.wrapping_add(edge as u64 * 197 + i as u64 * 71);
+                // Coherent lengths of border, with the remaining lawn left
+                // useful. Kitchen plots keep a quiet bed area; work yards
+                // receive a pair of corner borders instead of a floral ring.
+                let length_limit = match yard.use_kind {
+                    YardUse::Flowers => length,
+                    YardUse::Vegetables => {
+                        if dressed_edges == 0 {
+                            3.5
+                        } else {
+                            2.8
+                        }
+                    }
+                    YardUse::Laundry => {
+                        if dressed_edges == 0 {
+                            3.0
+                        } else {
+                            2.0
+                        }
+                    }
+                    YardUse::Firewood => 2.6,
+                };
+                let far_end = yard.seed % 2 == 1 && dressed_edges > 0;
+                let permitted = if far_end {
+                    length - along <= length_limit
+                } else {
+                    along <= length_limit
+                };
+                if !permitted {
                     continue;
                 }
-                (p, true)
-            };
-            made += 1;
-            // Broad, overlapping leaf groups give flowers a visible base at
-            // town distance; each one beds into its own terrain sample.
-            for i in 0..3 {
-                let p = center + tangent * (i as f32 - 1.0) * 0.28;
-                if !plant_fits(yard, p, if compact { 0.22 } else { 0.33 }) {
+                let edge_point = a.lerp(b, t);
+                let mut fitted = None;
+                // Fit each visible lobe once, adapting to a wedge's actual
+                // depth. Rendering no longer rejects most of a nominal group.
+                for radius in [0.52, 0.44, 0.36, 0.28, 0.20] {
+                    let p = edge_point + inward * (radius + 0.10 + unit(seed) * 0.09);
+                    if plant_fits(yard, p, radius + 0.012) {
+                        fitted = Some((p, radius));
+                        break;
+                    }
+                }
+                let Some((p, radius)) = fitted else {
+                    if !drift.lobes.is_empty() {
+                        plan.drifts.push(drift);
+                        drift = Drift {
+                            tangent,
+                            lobes: Vec::new(),
+                            flowers: Vec::new(),
+                        };
+                    }
+                    continue;
+                };
+                if plan
+                    .drifts
+                    .iter()
+                    .flat_map(|d| &d.lobes)
+                    .any(|l| p.distance(l.position) < (radius + l.radius) * 0.62)
+                {
                     continue;
                 }
-                mesh.crown(
-                    ground.at(p, 0.20),
-                    if compact {
-                        Vec3::new(0.21, 0.23, 0.20)
+                let height = if radius > 0.35 {
+                    0.43 + unit(seed + 3) * 0.40
+                } else {
+                    0.23 + unit(seed + 3) * 0.20
+                };
+                drift.lobes.push(Lobe {
+                    position: p,
+                    radius,
+                    height,
+                    seed,
+                });
+                lobes += 1;
+                let flowers = match yard.use_kind {
+                    YardUse::Flowers => 3,
+                    YardUse::Vegetables | YardUse::Laundry => 2,
+                    YardUse::Firewood => usize::from(seed % 3 == 0),
+                };
+                for j in 0..flowers {
+                    let flower_seed = seed + j as u64 * 23;
+                    let golden = radius > 0.35 && j == 0 && seed % 7 == 0;
+                    let flower_radius = if golden { 0.27 } else { 0.20 };
+                    // Search a small band at the front of the leaf mass.
+                    // Every accepted flower has its complete footprint clear.
+                    let sideways = (j as f32 - (flowers - 1) as f32 * 0.5) * 0.25;
+                    for depth in [radius * 0.63, radius * 0.30, 0.] {
+                        let flower = p + tangent * sideways + inward * depth;
+                        if plant_fits(yard, flower, flower_radius) {
+                            drift.flowers.push(Flower {
+                                position: flower,
+                                height: height * 0.80 + 0.18,
+                                golden,
+                                seed: flower_seed,
+                            });
+                            break;
+                        }
+                    }
+                }
+                // Several complete medium-sized groups keep budget omissions
+                // local and prevent a distant LOD dropping an entire long edge.
+                if drift.lobes.len() >= 6 {
+                    plan.drifts.push(drift);
+                    drift = Drift {
+                        tangent,
+                        lobes: Vec::new(),
+                        flowers: Vec::new(),
+                    };
+                }
+            }
+            if !drift.lobes.is_empty() {
+                plan.drifts.push(drift);
+            }
+            if lobes > before {
+                dressed_edges += 1;
+            }
+            if dressed_edges >= 2 && matches!(yard.use_kind, YardUse::Laundry | YardUse::Firewood) {
+                break;
+            }
+        }
+        // Beds derive axes from several actual parcel edges, rather than
+        // extending one fixed house-aligned rectangle into clipped corners.
+        let dimensions = yard.maximum - yard.minimum;
+        let max_beds = if dimensions.min_element() < 2.6 {
+            0 // narrow accepted strips are planted borders, not squeezed rows
+        } else {
+            match yard.use_kind {
+                YardUse::Vegetables => {
+                    if yard.area() > 38. {
+                        8
                     } else {
-                        Vec3::new(0.32, 0.23, 0.30)
-                    },
-                    LEAF * (0.99 + unit(seed + i) * 0.18),
-                    unit(seed + i) * std::f32::consts::TAU,
-                );
-                if detail {
-                    let d = inward * if compact { 0.12 } else { 0.20 };
-                    mesh.leaf(
-                        ground.at(p, -0.01),
-                        ground.at(p, 0.40) + Vec3::new(d.x, 0.0, d.y),
-                        if compact { 0.07 } else { 0.10 },
-                        LEAF * 1.15,
+                        5
+                    }
+                }
+                YardUse::Flowers | YardUse::Firewood => 0,
+                YardUse::Laundry => usize::from(yard.seed % 3 == 0),
+            }
+        };
+        let mut plants = 0;
+        let max_plants = if yard.use_kind == YardUse::Vegetables {
+            58
+        } else {
+            32
+        };
+        for (edge, &(a, b)) in edges.iter().enumerate() {
+            if plan.beds.len() >= max_beds || plants >= max_plants {
+                break;
+            }
+            let length = a.distance(b);
+            if length < 2.0 {
+                continue;
+            }
+            let tangent = (b - a).normalize();
+            let inward = Vec2::new(-tangent.y, tangent.x);
+            let seed = yard.seed.wrapping_add(edge as u64 * 197 + 501);
+            let row_count = if yard.use_kind == YardUse::Vegetables {
+                if dimensions.min_element() > 5.0 {
+                    4
+                } else {
+                    3
+                }
+            } else {
+                1
+            };
+            for row in 0..row_count {
+                let depth = 1.42 + row as f32 * 0.76;
+                let count = ((length - 1.0) / 0.63).floor() as usize;
+                let mut run = Vec::new();
+                for i in 0..=count {
+                    let t = 0.50 + i as f32 * 0.63;
+                    let p = a + tangent * t + inward * depth;
+                    // Every household leaves some open lawn/work space. Bed
+                    // lengths differ, including the end nearest the street.
+                    let end = length * (0.62 + unit(seed + row as u64) * 0.27);
+                    let available = t < end
+                        && plant_fits(yard, p, 0.34)
+                        && !plan.drifts.iter().any(|d| {
+                            d.lobes
+                                .iter()
+                                .any(|l| p.distance(l.position) < l.radius + 0.40)
+                                || d.flowers.iter().any(|f| p.distance(f.position) < 0.55)
+                        })
+                        && !plan.beds.iter().any(|bed| {
+                            bed.points
+                                .iter()
+                                .any(|q| p.distance_squared(*q) < 0.70 * 0.70)
+                        });
+                    if available && plants + run.len() < max_plants && run.len() < 7 {
+                        run.push(p);
+                    } else if !run.is_empty() {
+                        Self::keep_bed(
+                            &mut plan.beds,
+                            &mut plants,
+                            std::mem::take(&mut run),
+                            tangent,
+                            seed + row as u64 * 37,
+                            yard.use_kind,
+                        );
+                    }
+                    if plan.beds.len() >= max_beds || plants >= max_plants {
+                        break;
+                    }
+                }
+                if plan.beds.len() < max_beds {
+                    Self::keep_bed(
+                        &mut plan.beds,
+                        &mut plants,
+                        run,
+                        tangent,
+                        seed + row as u64 * 37,
+                        yard.use_kind,
                     );
                 }
-            }
-            let count = if detail { 9 } else { 6 };
-            for i in 0..count {
-                let s = seed + i * 23;
-                let p = center
-                    + tangent * ((unit(s) - 0.5) * 1.20)
-                    + inward * ((unit(s + 7) - 0.5) * if compact { 0.06 } else { 0.38 });
-                let golden = !compact && seed % 5 == 0 && i < 2;
-                if plant_fits(yard, p, if golden { 0.27 } else { 0.22 }) {
-                    blossom(mesh, ground, p, s, golden, detail);
+                if plan.beds.len() >= max_beds || plants >= max_plants {
+                    break;
                 }
             }
+        }
+        plan
+    }
+
+    fn keep_bed(
+        beds: &mut Vec<Bed>,
+        plants: &mut usize,
+        points: Vec<Vec2>,
+        tangent: Vec2,
+        seed: u64,
+        use_kind: YardUse,
+    ) {
+        if points.len()
+            < if use_kind == YardUse::Vegetables {
+                3
+            } else {
+                2
+            }
+        {
+            return;
+        }
+        *plants += points.len();
+        let crop = if use_kind == YardUse::Laundry || seed % 2 != 0 {
+            BedCrop::Herbs
+        } else {
+            BedCrop::Cabbage
+        };
+        beds.push(Bed {
+            points,
+            tangent,
+            seed,
+            crop,
+        });
+    }
+
+    pub(super) fn draw(
+        &self,
+        mesh: &mut YardMesh,
+        ground: &Ground,
+        yard: &HouseholdYard,
+        detail: bool,
+        budget: usize,
+    ) {
+        // Border masses are the main street silhouette and get budget before
+        // secondary vegetable rows. Complete groups are omitted when capped.
+        for drift in &self.drifts {
+            let mut group = YardMesh::default();
+            drift.draw(&mut group, ground, yard, detail);
+            mesh.append_with_budget(group, budget);
+        }
+        for bed in &self.beds {
+            let mut group = YardMesh::default();
+            bed.draw(&mut group, ground, yard, detail);
+            mesh.append_with_budget(group, budget);
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn planted_crowns_leave_a_continuous_work_strip_in_clipped_yards() {
-        let yard = HouseholdYard {
-            minimum: Vec2::new(4.5, -2.0),
-            maximum: Vec2::new(8.5, 4.0),
-            boundary: vec![
-                Vec2::new(4.5, -2.0),
-                Vec2::new(7.0, -2.0),
-                Vec2::new(8.5, 4.0),
-                Vec2::new(4.5, 4.0),
-            ],
-            side: YardSide::Right,
-            use_kind: YardUse::Vegetables,
-            seed: 291,
-        };
-        assert!(plant_fits(&yard, Vec2::new(7.2, 1.5), 0.34));
-        assert!(
-            !plant_fits(&yard, Vec2::new(5.7, 1.5), 0.34),
-            "a plant radius must not intrude into the working strip"
-        );
-        assert!(
-            !plant_fits(&yard, Vec2::new(7.5, -1.7), 0.34),
-            "bounding rectangle alone cannot authorize planting beyond a clipped corner"
-        );
-        for side in [YardSide::Left, YardSide::Right, YardSide::Rear] {
-            let simple = HouseholdYard {
-                minimum: Vec2::ZERO,
-                maximum: Vec2::new(4.0, 6.0),
-                boundary: Vec::new(),
-                side,
-                ..yard.clone()
-            };
-            let p = match side {
-                YardSide::Left => Vec2::new(2.9, 3.0),
-                YardSide::Right => Vec2::new(1.1, 3.0),
-                YardSide::Rear => Vec2::new(2.0, 1.1),
-            };
-            assert!(!plant_fits(&simple, p, 0.25));
-        }
-    }
-}
+mod tests;

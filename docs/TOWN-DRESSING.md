@@ -162,6 +162,17 @@ without claiming that the reference's density, composition or richness is matche
 
 ## Household yard art
 
+The following iteration07/08 measurements document the first town-art pass. The
+subsequent street-led yard revision replaces its layout and planting recipe; see
+[HOUSEHOLD-YARDS.md](HOUSEHOLD-YARDS.md) for the current land/access contract. New
+yards use multi-edge shrub/flower drifts, fitted bed groups, a clear gate path and
+shorter household laundry. A shared rendered-terrain cache clips soil to actual
+triangles. Complete-group limits are 6,500 near / 4,000 far triangles per yard;
+capture metadata reports loaded totals as `household_yard_triangles`. These are
+geometry limits, not an FPS claim.
+
+### First-pass measurements
+
 `client/src/settlement/yards/` renders the server-accepted `HouseholdYard` polygon
 using `planting.rs`, `dressing.rs` and `mesh.rs`. Each yard keeps two batched LOD
 meshes and one shared opaque material, with no per-flower entities or updates.

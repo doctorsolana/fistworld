@@ -9,10 +9,13 @@
 mod geometry;
 mod index;
 mod raster;
+mod yard_paths;
 
 pub(super) use geometry::road_wear;
 use geometry::{width_variation, worn_road_points};
 use index::{RoadPaintIndex, RoadSegmentRef};
+pub(super) use yard_paths::sync_yard_paths;
+use yard_paths::{YardPathPaintIndex, YardPathPaintSnapshot};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -167,6 +170,23 @@ pub(super) struct VillageRoadPaintState {
     squares: HashMap<Entity, SquarePaintSnapshot>,
     weightmaps: HashMap<ChunkCoord, AssetId<Image>>,
     dirty_chunks: HashSet<ChunkCoord>,
+    yard_paths: YardPathPaintIndex,
+}
+
+/// All currently loaded terrain images include their latest roads and yard
+/// paths. Unloaded chunks receive current sources when their image arrives.
+#[derive(Resource, Default)]
+pub(crate) struct GroundPaintReadiness {
+    pub ready: bool,
+    pub pending_chunks: usize,
+}
+
+pub(super) fn clear_ground_paint(
+    mut state: ResMut<VillageRoadPaintState>,
+    mut readiness: ResMut<GroundPaintReadiness>,
+) {
+    *state = VillageRoadPaintState::default();
+    *readiness = GroundPaintReadiness::default();
 }
 
 /// Convert replicated road changes into localized terrain texture updates.
@@ -195,6 +215,7 @@ pub(super) fn paint_village_roads_into_terrain(
     mut perf: ResMut<PerfHitchStats>,
     terrain_chunks: Query<&crate::terrain::TerrainChunk>,
     mut terrain_materials: Option<ResMut<Assets<shared::terrain::TerrainSplatMaterial>>>,
+    mut readiness: Option<ResMut<GroundPaintReadiness>>,
 ) {
     let started = Instant::now();
 
@@ -292,9 +313,13 @@ pub(super) fn paint_village_roads_into_terrain(
     let mut queued = state.dirty_chunks.iter().copied().collect::<Vec<_>>();
     if queued.is_empty() {
         if let Some(materials) = terrain_materials.as_deref_mut() {
-            sync_sampling_layout(&terrain_paint, &terrain_chunks, materials);
+            sync_sampling_layout(&terrain_paint, &terrain_chunks, materials, &[]);
         }
         perf.terrain_paint_ms += started.elapsed().as_secs_f32() * 1000.0;
+        if let Some(readiness) = readiness.as_deref_mut() {
+            readiness.pending_chunks = 0;
+            readiness.ready = true;
+        }
         return;
     }
     queued.sort_unstable_by_key(|coord| (coord.x, coord.z));
@@ -310,18 +335,24 @@ pub(super) fn paint_village_roads_into_terrain(
             continue;
         };
         let segments = state.index.segments(coord, &state.roads);
-        composite_segments_into_chunk(coord, weightmap, &segments, &squares);
+        let yard_paths = state.yard_paths.paths(coord);
+        composite_ground_into_chunk(coord, weightmap, &segments, &squares, &yard_paths);
         if upload_weightmap(weightmap, &mut images) {
             completed.push(coord);
             perf.paint_chunks_updated += 1;
         }
     }
-    for coord in completed {
-        state.dirty_chunks.remove(&coord);
+    for coord in &completed {
+        state.dirty_chunks.remove(coord);
     }
 
     if let Some(materials) = terrain_materials.as_deref_mut() {
-        sync_sampling_layout(&terrain_paint, &terrain_chunks, materials);
+        sync_sampling_layout(&terrain_paint, &terrain_chunks, materials, &completed);
+    }
+
+    if let Some(readiness) = readiness.as_deref_mut() {
+        readiness.pending_chunks = state.dirty_chunks.len();
+        readiness.ready = state.dirty_chunks.is_empty();
     }
 
     perf.terrain_paint_ms += started.elapsed().as_secs_f32() * 1000.0;
@@ -334,6 +365,7 @@ fn sync_sampling_layout(
     terrain_paint: &TerrainPaintState,
     chunks: &Query<&crate::terrain::TerrainChunk>,
     materials: &mut Assets<shared::terrain::TerrainSplatMaterial>,
+    repainted: &[ChunkCoord],
 ) {
     for chunk in chunks {
         let Some(map) = terrain_paint.weightmaps.get(&chunk.coord) else {
@@ -343,10 +375,10 @@ fn sync_sampling_layout(
             continue;
         }
         let layout = if map.endpoint_samples { 1.0 } else { 0.0 };
-        if materials
-            .get(&chunk.material)
-            .is_some_and(|m| m.extension.params.weightmap_endpoint_samples != layout)
-        {
+        if materials.get(&chunk.material).is_some_and(|m| {
+            m.extension.params.weightmap_endpoint_samples != layout
+                || repainted.contains(&chunk.coord)
+        }) {
             if let Some(mut material) = materials.get_mut(&chunk.material) {
                 material.extension.params.weightmap_endpoint_samples = layout;
             }
@@ -359,18 +391,20 @@ fn mark_square_chunks_dirty(snapshot: &SquarePaintSnapshot, dirty: &mut HashSet<
     dirty.extend(terrain_paint_op_chunk_coords(&snapshot.bed_op()));
 }
 
-fn composite_segments_into_chunk(
+fn composite_ground_into_chunk(
     coord: ChunkCoord,
     weightmap: &mut WeightMapData,
     segments: &[RoadSegmentRef],
     squares: &[SquarePaintSnapshot],
+    yard_paths: &[&YardPathPaintSnapshot],
 ) {
     let chunk_min = Vec2::new(coord.world_pos().x, coord.world_pos().z);
     let chunk_max = chunk_min + Vec2::splat(CHUNK_SIZE);
     let has_surface = squares
         .iter()
         .any(|square| terrain_paint_op_intersects_chunk(&square.bed_op(), chunk_min, chunk_max))
-        || !segments.is_empty();
+        || !segments.is_empty()
+        || !yard_paths.is_empty();
     weightmap.resolution = if has_surface {
         weightmap.base_resolution.max(ROAD_WEIGHTMAP_RESOLUTION)
     } else {
@@ -388,7 +422,7 @@ fn composite_segments_into_chunk(
         }
     }
 
-    raster::paint_road_segments(chunk_min, weightmap, segments);
+    raster::paint_road_and_yard_segments(chunk_min, weightmap, segments, yard_paths);
 
     // Paving last: a stone road's dirt shoulder crosses the square's edge, and the cobbles must
     // win there so the road reads as running INTO the square.
@@ -400,6 +434,16 @@ fn composite_segments_into_chunk(
             raster::paint_square(&top, chunk_min, weightmap);
         }
     }
+}
+
+#[cfg(test)]
+fn composite_segments_into_chunk(
+    coord: ChunkCoord,
+    weightmap: &mut WeightMapData,
+    segments: &[RoadSegmentRef],
+    squares: &[SquarePaintSnapshot],
+) {
+    composite_ground_into_chunk(coord, weightmap, segments, squares, &[]);
 }
 
 /// Brute-force reference selection used only by equivalence tests. Production

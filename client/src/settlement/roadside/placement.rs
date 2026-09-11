@@ -124,15 +124,27 @@ impl PlotFootprint {
                     )
                 })
             }
-            PlotShape::Yard(yard) => {
-                yard.contains_world_point(point, self.origin, self.yaw, radius + 0.45)
-            }
+            PlotShape::Yard(yard) => crate::settlement::yards::ground_cover_contains(
+                yard,
+                point,
+                self.origin,
+                self.yaw,
+                radius + 0.45,
+            ),
         }
     }
 
     pub fn zone(&self) -> Option<BuildZoneEntry> {
         let (minimum, maximum) = match &self.shape {
-            PlotShape::Yard(yard) => (yard.minimum, yard.maximum),
+            PlotShape::Yard(yard) => {
+                let (lo, hi) =
+                    crate::settlement::yards::ground_cover_bounds(yard, self.origin, self.yaw, 3.0);
+                return Some(BuildZoneEntry::from_rotated_rect(
+                    (lo + hi) * 0.5,
+                    (hi - lo) * 0.5,
+                    0.,
+                ));
+            }
             PlotShape::Field(shape) => {
                 if !shape.is_valid() {
                     return None;

@@ -23,7 +23,7 @@ impl YardMesh {
         for point in [a, b, c] {
             self.positions.push(point.to_array());
             self.normals.push(normal.to_array());
-            self.colors.push([color.red, color.green, color.blue, 1.0]);
+            self.colors.push([color.red, color.green, color.blue, 1.]);
         }
         self.indices.extend([first, first + 1, first + 2]);
     }
@@ -131,6 +131,62 @@ impl YardMesh {
             self.quad([a + p, b + p, b + q, a + q], Vec3::new(0.32, 0.20, 0.105));
             self.triangle(a, a + p, a + q, Vec3::new(0.66, 0.48, 0.28));
             self.triangle(b, b + q, b + p, Vec3::new(0.62, 0.43, 0.24));
+        }
+    }
+
+    pub(super) fn triangle_count(&self) -> usize {
+        self.indices.len() / 3
+    }
+
+    /// Keep each complete decorative group or omit it. Never cut a fence, a
+    /// supported rack, or half a plant to satisfy a presentation budget.
+    pub(super) fn append_with_budget(&mut self, mut other: Self, budget: usize) -> bool {
+        if self.triangle_count() + other.triangle_count() > budget {
+            return false;
+        }
+        let first = self.positions.len() as u32;
+        self.positions.append(&mut other.positions);
+        self.normals.append(&mut other.normals);
+        self.colors.append(&mut other.colors);
+        self.indices
+            .extend(other.indices.into_iter().map(|i| i + first));
+        true
+    }
+
+    /// Squat six-sided foliage with a broad top instead of an octahedron's
+    /// diamond point. Beds read as overlapping leafy heads at town distance.
+    pub(super) fn leafy_head(&mut self, center: Vec3, radius: Vec3, color: Vec3, yaw: f32) {
+        let ring = |i: usize, scale: f32, y: f32| {
+            let angle = yaw + i as f32 * std::f32::consts::TAU / 6.;
+            center
+                + Vec3::new(
+                    angle.cos() * radius.x * scale,
+                    y * radius.y,
+                    angle.sin() * radius.z * scale,
+                )
+        };
+        for i in 0..6 {
+            self.quad(
+                [
+                    ring(i, 1., 0.),
+                    ring(i, 0.55, 0.85),
+                    ring(i + 1, 0.55, 0.85),
+                    ring(i + 1, 1., 0.),
+                ],
+                color * (0.96 + i as f32 * 0.012),
+            );
+            self.triangle(
+                center + Vec3::Y * radius.y,
+                ring(i + 1, 0.55, 0.85),
+                ring(i, 0.55, 0.85),
+                color * 1.08,
+            );
+            self.triangle(
+                center - Vec3::Y * radius.y * 0.8,
+                ring(i, 1., 0.),
+                ring(i + 1, 1., 0.),
+                color * 0.85,
+            );
         }
     }
 

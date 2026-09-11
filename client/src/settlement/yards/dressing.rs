@@ -2,38 +2,34 @@
 
 use bevy::prelude::*;
 use shared::components::{HouseholdYard, YardUse};
-use shared::rotation::local_to_world_xz;
 use shared::terrain::WorldTerrain;
 
-use super::mesh::YardMesh;
+use super::{ground::Ground, mesh::YardMesh, planting::PlantingPlan};
 
 pub(super) const WOOD: Vec3 = Vec3::new(0.43, 0.29, 0.145);
 pub(super) const LEAF: Vec3 = Vec3::new(0.38, 0.53, 0.22);
 
-pub(super) struct Ground<'a> {
-    terrain: &'a WorldTerrain,
-    origin: Vec3,
-    yaw: f32,
-}
-impl Ground<'_> {
-    pub(super) fn at(&self, p: Vec2, up: f32) -> Vec3 {
-        let world = self.origin.xz() + local_to_world_xz(p, self.yaw);
-        // Mesh transform owns only yaw and XZ translation, avoiding a second
-        // terrain offset when the house root was graded before replication.
-        Vec3::new(p.x, self.terrain.get_height(world.x, world.y) + up, p.y)
-    }
-}
-
 fn clothesline(mesh: &mut YardMesh, ground: &Ground, yard: &HouseholdYard, detail: bool) {
+    // Tiny plots can be unfenced planted borders. Their outer-edge fallback
+    // is valid planting land, but cannot authorize two new solid line posts.
+    if yard.fence_segments().is_empty() {
+        return;
+    }
     let (a, b) = yard.outer_edge();
     if a.distance(b) < 2.4 {
         return;
     }
-    let a = a.lerp(b, 0.12);
-    let b = a.lerp(b, 0.87);
+    let tangent = (b - a).normalize();
+    // A longer road-shaped boundary does not imply a gigantic bedsheet. Fit
+    // a household-sized line within one intact authoritative fence span.
+    let length = (a.distance(b) * 0.76).min(4.2 + super::planting::unit(yard.seed) * 0.7);
+    let center = a.lerp(b, 0.43 + super::planting::unit(yard.seed + 13) * 0.14);
+    let a = center - tangent * length * 0.5;
+    let b = center + tangent * length * 0.5;
     // Both uprights lie on the solid fence footprint, outside the working
     // strip. Rope, cloth and pegs all use this same supported hanging curve.
-    let top = ground.at(a, 2.35).y.max(ground.at(b, 2.35).y);
+    let post_height = 2.12 + super::planting::unit(yard.seed + 41) * 0.18;
+    let top = ground.at(a, post_height).y.max(ground.at(b, post_height).y);
     for p in [a, b] {
         mesh.beam(
             ground.at(p, -0.12),
@@ -59,10 +55,17 @@ fn clothesline(mesh: &mut YardMesh, ground: &Ground, yard: &HouseholdYard, detai
     }
     let side = (Vec3::new(b.x - a.x, 0., b.y - a.y)).normalize();
     let normal = Vec3::Y.cross(side);
-    for (i, (left, right, length)) in [(0.08, 0.29, 0.67), (0.37, 0.63, 0.84), (0.74, 0.92, 0.58)]
-        .into_iter()
-        .enumerate()
-    {
+    let garments: &[(f32, f32, f32)] = match yard.seed % 3 {
+        0 => &[(0.09, 0.40, 0.85), (0.58, 0.85, 0.63)],
+        1 => &[(0.07, 0.23, 0.57), (0.32, 0.57, 0.79), (0.70, 0.91, 0.63)],
+        _ => &[
+            (0.07, 0.19, 0.55),
+            (0.29, 0.43, 0.70),
+            (0.54, 0.69, 0.52),
+            (0.78, 0.92, 0.62),
+        ],
+    };
+    for (i, &(left, right, length)) in garments.iter().enumerate() {
         let choice = shared::worldgen::splitmix64(yard.seed.wrapping_add(i as u64 * 41));
         let variation = (choice % 100) as f32 / 99.0;
         let color = if i == 2 && choice % 3 == 0 {
@@ -160,6 +163,49 @@ fn firewood(mesh: &mut YardMesh, ground: &Ground, yard: &HouseholdYard, detail: 
     }
 }
 
+pub(super) const NEAR_TRIANGLE_BUDGET: usize = 6500;
+pub(super) const FAR_TRIANGLE_BUDGET: usize = 4000;
+
+fn build_with_plan(
+    yard: &HouseholdYard,
+    ground: &Ground,
+    plan: &PlantingPlan,
+    detail: bool,
+) -> YardMesh {
+    let budget = if detail {
+        NEAR_TRIANGLE_BUDGET
+    } else {
+        FAR_TRIANGLE_BUDGET
+    };
+    let mut mesh = YardMesh::default();
+    // Structural meshes always stay complete and agree with the authoritative
+    // blockers. The bounded decorative groups use the remaining budget.
+    super::fences::build(&mut mesh, ground, yard, detail);
+    match yard.use_kind {
+        YardUse::Laundry => clothesline(&mut mesh, ground, yard, detail),
+        YardUse::Firewood => firewood(&mut mesh, ground, yard, detail),
+        _ => {}
+    }
+    plan.draw(&mut mesh, ground, yard, detail, budget);
+    debug_assert!(mesh.triangle_count() <= budget);
+    mesh
+}
+
+pub(super) fn build_lods(
+    yard: &HouseholdYard,
+    origin: Vec3,
+    yaw: f32,
+    terrain: &WorldTerrain,
+) -> [YardMesh; 2] {
+    let ground = Ground::new(yard, origin, yaw, terrain);
+    let plan = PlantingPlan::new(yard);
+    [
+        build_with_plan(yard, &ground, &plan, true),
+        build_with_plan(yard, &ground, &plan, false),
+    ]
+}
+
+#[cfg(test)]
 pub(super) fn build(
     yard: &HouseholdYard,
     origin: Vec3,
@@ -167,83 +213,59 @@ pub(super) fn build(
     terrain: &WorldTerrain,
     detail: bool,
 ) -> YardMesh {
-    let ground = Ground {
-        terrain,
-        origin,
-        yaw,
-    };
-    let mut mesh = YardMesh::default();
-    super::fences::build(&mut mesh, &ground, yard, detail);
-    match yard.use_kind {
-        YardUse::Vegetables => super::planting::garden(&mut mesh, &ground, yard, detail, true),
-        YardUse::Laundry => {
-            clothesline(&mut mesh, &ground, yard, detail);
-            super::planting::garden(&mut mesh, &ground, yard, detail, false);
-        }
-        YardUse::Firewood => firewood(&mut mesh, &ground, yard, detail),
-        YardUse::Flowers => super::planting::garden(&mut mesh, &ground, yard, detail, true),
-    }
-    super::planting::edges(&mut mesh, &ground, yard, detail);
-    mesh
+    let ground = Ground::new(yard, origin, yaw, terrain);
+    build_with_plan(yard, &ground, &PlantingPlan::new(yard), detail)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::mesh::VertexAttributeValues;
     use shared::components::YardSide;
 
     #[test]
-    fn planted_geometry_keeps_narrow_and_clipped_yards_workable_in_both_lods() {
+    fn full_household_compositions_have_bounded_lod_cost_in_large_and_clipped_plots() {
         let terrain = WorldTerrain::default();
-        let ground = Ground {
-            terrain: &terrain,
-            origin: Vec3::ZERO,
-            yaw: 0.0,
-        };
-        for side in [YardSide::Left, YardSide::Right, YardSide::Rear] {
-            for narrow in [false, true] {
-                let maximum = match side {
-                    YardSide::Rear => Vec2::new(6.0, if narrow { 1.6 } else { 4.0 }),
-                    _ => Vec2::new(if narrow { 1.6 } else { 4.0 }, 6.0),
-                };
-                let yard = HouseholdYard {
-                    minimum: Vec2::ZERO,
-                    maximum,
-                    boundary: if narrow {
-                        Vec::new()
-                    } else {
-                        vec![
-                            Vec2::ZERO,
-                            Vec2::new(maximum.x - 0.7, 0.0),
-                            maximum,
-                            Vec2::new(0.0, maximum.y),
-                        ]
-                    },
-                    side,
-                    use_kind: YardUse::Flowers,
-                    seed: 291,
-                };
-                for detail in [false, true] {
-                    let mut mesh = YardMesh::default();
-                    super::super::planting::garden(&mut mesh, &ground, &yard, detail, true);
-                    super::super::planting::edges(&mut mesh, &ground, &yard, detail);
-                    assert!(!mesh.is_empty(), "narrow yards must retain planted edges");
-                    let mesh = mesh.finish();
-                    let Some(VertexAttributeValues::Float32x3(vertices)) =
-                        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-                    else {
-                        panic!("missing yard positions");
-                    };
-                    for [x, _, z] in vertices {
-                        let p = Vec2::new(*x, *z);
-                        assert!(yard.contains_local_point(p, 0.001));
-                        let clear = match side {
-                            YardSide::Left => p.x <= yard.maximum.x - 0.999,
-                            YardSide::Right => p.x >= yard.minimum.x + 0.999,
-                            YardSide::Rear => p.y >= yard.minimum.y + 0.999,
+        for seed in [0, 19, 291, 711, 805] {
+            for side in [YardSide::Left, YardSide::Right, YardSide::Rear] {
+                for use_kind in [
+                    YardUse::Vegetables,
+                    YardUse::Flowers,
+                    YardUse::Laundry,
+                    YardUse::Firewood,
+                ] {
+                    for clipped in [false, true] {
+                        let yard = HouseholdYard {
+                            minimum: Vec2::ZERO,
+                            maximum: Vec2::new(11.8, 11.8),
+                            side,
+                            use_kind,
+                            seed,
+                            boundary: if clipped {
+                                vec![
+                                    Vec2::ZERO,
+                                    Vec2::new(9.0, 0.),
+                                    Vec2::new(11.8, 7.2),
+                                    Vec2::new(8., 11.8),
+                                    Vec2::new(0., 11.8),
+                                ]
+                            } else {
+                                Vec::new()
+                            },
+                            entry: Some(Vec2::new(0., 5.0)),
+                            approach: None,
+                            house: None,
                         };
-                        assert!(clear, "{side:?} narrow={narrow} detail={detail}: {p:?}");
+                        let [near, far] = build_lods(&yard, Vec3::ZERO, 0.37, &terrain);
+                        assert!(!near.is_empty() && !far.is_empty());
+                        assert!(
+                            near.triangle_count() <= NEAR_TRIANGLE_BUDGET,
+                            "seed={seed} side={side:?} use={use_kind:?}"
+                        );
+                        assert!(
+                            far.triangle_count() <= FAR_TRIANGLE_BUDGET,
+                            "seed={seed} side={side:?} use={use_kind:?}"
+                        );
+                        assert!(near.triangle_count() >= far.triangle_count());
                     }
                 }
             }
