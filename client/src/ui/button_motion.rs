@@ -1,6 +1,6 @@
 //! Shared tactile feedback. Move labels, never the button hit area.
 use super::{
-    foundation::{button_colors, UiButtonStyle, UiButtonVariant},
+    foundation::{button_colors, UiButtonStyle, UiButtonVariant, UiTexturedButton},
     motion::Spring,
 };
 use bevy::{prelude::*, ui::InteractionDisabled};
@@ -31,6 +31,7 @@ pub(super) fn animate_buttons(
         &Interaction,
         &UiButtonStyle,
         Has<InteractionDisabled>,
+        Has<UiTexturedButton>,
         &mut BackgroundColor,
         &mut BorderColor,
         &mut ButtonMotion,
@@ -38,8 +39,14 @@ pub(super) fn animate_buttons(
 ) {
     let dt = time.delta_secs();
     let blend = 1.0 - (-24.0 * dt).exp();
-    for (interaction, style, disabled, mut background, mut border, mut motion) in &mut buttons {
-        let (fill, rule) = button_colors(*interaction, *style, disabled);
+    for (interaction, style, disabled, textured, mut background, mut border, mut motion) in
+        &mut buttons
+    {
+        let (fill, rule) = if textured {
+            (Color::NONE, Color::NONE)
+        } else {
+            button_colors(*interaction, *style, disabled)
+        };
         let next = if motion.style != Some(*style) || disabled || background.0 == fill {
             fill
         } else {
@@ -117,6 +124,51 @@ mod tests {
         assert_eq!(
             app.world_mut()
                 .query_filtered::<Entity, Changed<BackgroundColor>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
+    }
+    #[test]
+    fn textured_faces_keep_transparent_edges_and_settle_without_style_writes() {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs_f32(1.0 / 60.0));
+        app.insert_resource(time)
+            .add_systems(Update, animate_buttons);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Button,
+                UiTexturedButton,
+                Interaction::Hovered,
+                button_chrome(UiButtonVariant::Primary),
+            ))
+            .id();
+        for _ in 0..180 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().get::<BackgroundColor>(entity).unwrap().0,
+            Color::NONE
+        );
+        assert_eq!(
+            *app.world().get::<BorderColor>(entity).unwrap(),
+            BorderColor::all(Color::NONE)
+        );
+        assert!(app.world().get::<ButtonMotion>(entity).unwrap().offset() < -1.0);
+        app.world_mut().clear_trackers();
+        app.update();
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, Changed<BackgroundColor>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, Changed<BorderColor>>()
                 .iter(app.world())
                 .count(),
             0

@@ -68,7 +68,7 @@ pub(super) fn spawn_trade_route_editor(
                         } else {
                             "NEW CARAVAN ROUTE".to_string()
                         }),
-                        crate::ui::typography::text(24.0),
+                        crate::ui::typography::heading(24.0),
                         TextColor(INK),
                     ));
                     copy.spawn((
@@ -76,7 +76,7 @@ pub(super) fn spawn_trade_route_editor(
                             "{}  /  ORDERED MERCHANT TIMETABLE",
                             company.name.to_uppercase()
                         )),
-                        crate::ui::typography::text(12.0),
+                        crate::ui::ledger::reading(12.0),
                         TextColor(EMBER),
                     ));
                 });
@@ -140,7 +140,7 @@ pub(super) fn spawn_trade_route_editor(
                 .with_children(|card| {
                     card.spawn((
                         Text::new("HOME STORAGE HALL"),
-                        crate::ui::typography::text(11.5),
+                        crate::ui::ledger::reading(11.5),
                         TextColor(INK_MUTED),
                     ));
                     card.spawn((
@@ -156,7 +156,7 @@ pub(super) fn spawn_trade_route_editor(
                                 )
                             },
                         )),
-                        crate::ui::typography::text(13.5),
+                        crate::ui::ledger::reading(13.5),
                         TextColor(INK),
                     ));
                     if draft.route.is_none() && warehouses.len() > 1 {
@@ -198,7 +198,7 @@ pub(super) fn spawn_trade_route_editor(
                             draft.cargo_target,
                             if draft.cargo_target == 1 { "" } else { "S" }
                         )),
-                        crate::ui::typography::text(13.5),
+                        crate::ui::ledger::reading(13.5),
                         TextColor(INK),
                     ));
                     card.spawn(Node {
@@ -243,7 +243,7 @@ pub(super) fn spawn_trade_route_editor(
                         "ONE CIRCUIT ON COMMAND"
                     }
                 )),
-                crate::ui::typography::text(13.0),
+                crate::ui::ledger::reading(13.0),
                 TextColor(INK),
             ));
             prices
@@ -301,7 +301,7 @@ pub(super) fn spawn_trade_route_editor(
                 if index > 0 {
                     lane.spawn((
                         Text::new(">"),
-                        crate::ui::typography::text(19.0),
+                        crate::ui::ledger::reading(19.0),
                         TextColor(INK_MUTED),
                     ));
                 }
@@ -325,12 +325,12 @@ pub(super) fn spawn_trade_route_editor(
                             index + 1,
                             if index == 0 { "HOME" } else { "TOWN" }
                         )),
-                        crate::ui::typography::text(11.0),
+                        crate::ui::ledger::reading(11.0),
                         TextColor(EMBER),
                     ));
                     stop_card.spawn((
                         Text::new(settlement_name(stop.settlement).to_uppercase()),
-                        crate::ui::typography::text(13.5),
+                        crate::ui::ledger::reading(13.5),
                         TextColor(INK),
                     ));
                     let has_marketplace = directory.settlements.iter().any(|settlement| {
@@ -339,14 +339,16 @@ pub(super) fn spawn_trade_route_editor(
                     if !has_marketplace {
                         stop_card.spawn((
                             Text::new("LOCAL MOOT — BUILD A MARKETPLACE"),
-                            crate::ui::typography::text(11.0),
+                            crate::ui::ledger::reading(11.0),
                             TextColor(EMBER),
                         ));
                     }
                     if index > 0 {
                         stop_card
                             .spawn(Node {
+                                flex_wrap: FlexWrap::Wrap,
                                 column_gap: Val::Px(4.0),
+                                row_gap: Val::Px(4.0),
                                 ..default()
                             })
                             .with_children(|buttons| {
@@ -364,7 +366,7 @@ pub(super) fn spawn_trade_route_editor(
                     }
                     stop_card.spawn((
                         Text::new(stop.action.label().to_uppercase()),
-                        crate::ui::typography::text(11.5),
+                        crate::ui::ledger::reading(11.5),
                         TextColor(INK_MUTED),
                     ));
                     stop_card

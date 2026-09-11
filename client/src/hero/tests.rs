@@ -424,7 +424,6 @@ fn a_loaded_stationary_villager_freezes_in_the_carry_pose() {
         },
         CarriedLoad {
             good: Some(shared::economy::Good::Wood),
-            amount: 1,
             appearance: Some(CarriedAppearance::WoodBundle),
         },
     ));
@@ -576,7 +575,6 @@ fn an_active_porter_cart_walks_even_before_visual_interpolation_reports_speed() 
         },
         CarriedLoad {
             good: Some(shared::economy::Good::Wood),
-            amount: 24,
             appearance: Some(CarriedAppearance::WoodBundle),
         },
         PorterCartState { load_slots: 2 },

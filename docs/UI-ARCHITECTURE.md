@@ -4,13 +4,16 @@ Last reconciled with Bevy 0.19 on 2026-09-11. This is the contract for new UI an
 touching an existing screen. The goal is a coherent medieval ledger interface without
 screen-specific hover logic, accidental world input, or full-tree churn at simulation speed.
 
+The [encyclopedia verification record](ENCYCLOPEDIA-VERIFICATION.md) documents the
+inspected layouts, connected behavior, compressed art budget and portrait timings.
+
 ## Ownership
 
 | Module | Owns |
 |---|---|
 | `client/src/ui/styles.rs` | Wood/brass/parchment palette, ink, rules and shadows |
 | `client/src/ui/foundation.rs` | Semantic layers, type scale, standard button states, disabled/focus behavior, contract audit and live-panel refresh safety |
-| `client/src/ui/typography.rs` | Bundled Cinzel headings and MedievalSharp body text; shared font handles |
+| `client/src/ui/typography.rs` | Bundled Cinzel headings, MedievalSharp HUD text and Libre Baskerville reading text; shared font handles |
 | `client/src/ui/motion.rs` | Analytic springs and retained panel/page reveals |
 | `client/src/ui/button_motion.rs` | Shared button hover/press motion and paint easing |
 | `client/src/ui/frame.rs` | Non-interactive brass corner ornaments |
@@ -22,7 +25,9 @@ screen-specific hover logic, accidental world input, or full-tree churn at simul
 | `client/src/ui/pause_menu/display.rs` | Explicit display-mode choices, supported output sizes, actual scene-pixel labels and retained confirmation/resize state |
 | `client/src/ui/hud/shell.rs` | Place/purse, owned-hero/Home selection, map/encyclopedia navigation and compass |
 | `client/src/ui/hud/selection_card.rs` | Selected-person card and full-record expansion |
-| `client/src/ui/hud/portrait.rs` | On-demand thumbnails of canonical dressed character geometry; bounded cache |
+| `client/src/ui/hud/portrait.rs` | HUD selection consumer of the shared portrait service |
+| `client/src/ui/portraits/` | Actual observed outfits, shared canonical geometry, one raster worker and a 32 MiB LRU texture cache |
+| `client/src/ui/ledger/` | Shared paper/wood/hardware, framed portraits, building illustrations and textured buttons |
 | `client/src/ui/hud/chrome.rs` | Small authored wood/brass frames and icon handles, with native text and input |
 | `client/src/ui/hud/journey.rs` | Shared exploration/combat bell and bounded recent notice drawer |
 | `client/src/battalion_bar.rs` and `battalion_bar/navigation.rs` | Retained battalion cards, bounded paging and selection reveal |
@@ -44,10 +49,14 @@ and the opening cinematic hide the HUD and its input rectangles.
 `selection_card.rs` displays actual health and one expansion control for the selected
 person's durable encyclopedia record. Detailed character and inventory information stays
 inside that record; the persistent card has no trade or inventory action row. Group selection uses a crest and selection count, never an arbitrary person's
-portrait. `portrait.rs` rasterizes the canonical GLB geometry, outfit, skin and textures in
-one background task. It renders only on an appearance change, caches at most sixteen small
-images, rejects stale worker results, and releases its images on disconnect. It adds no
-second PBR camera. `PortraitReadiness` supplies the capture fixture's semantic gate.
+portrait. `ui/portraits/` rasterizes canonical GLB geometry, outfit, skin and textures with
+one shared background worker. It remembers observed appearances by durable PersonId,
+including outfits arriving after identity; a never-observed person gets a neutral crest.
+The demand set contains only visible, unclipped widgets. Larger selected portraits are
+prioritized, identical outfits share images, and a 32 MiB LRU pins visible outputs while
+evicting offscreen entries. Source mesh/material data is shared across jobs. Disconnect
+clears the memory and rejects an old session's pending output. This adds no PBR camera;
+`PortraitStatus`, `PortraitMetrics` and the HUD's `PortraitReadiness` expose semantic gates.
 
 `journey/view.rs` owns the optional drawer; `journey/notices.rs` owns three-message history,
 repeat coalescing and unread state. A sequence on `GodNotice` distinguishes a new result
@@ -85,13 +94,35 @@ market so changing pages cannot show another town's feedback.
   danger color. Do not create another saturated accent in a screen module.
 - Use `typography::body` / `typography::heading` with `foundation::type_scale`: caption 12,
   body 14, value 15, heading 18, title 26 on the 1600×900 design canvas. `typography::text`
-  applies the existing screens’ 17 px heading boundary. Both fonts are bundled under OFL
+  applies the existing screens’ 17 px heading boundary. `ledger::reading` uses Libre
+  Baskerville for dense book records; headings retain Cinzel. Fonts are bundled under OFL
   and installed once; do not load another font per screen or depend on system fonts.
-- Book frames use a 3 px brass-brown edge and small native brass corner ornaments.
+- Book frames use a 3 px brass-brown edge and separately sized aged corner hardware.
   Compact plates use a one-pixel rule, 2–3 px radius and `plate_shadow()`. Nested content uses
   soft dividers more often than boxes inside boxes.
 - Authored HUD frames use nine-sliced `ImageNode`s. They replace chrome,
   never become baked text or screen-sized bitmaps.
+
+## Encyclopedia materials and portraits
+
+The five spreads and nested pages use the same `ledger` catalogue. `paper()` and
+`wood()` deliberately contain no Node: pages own layout, input and scrolling. Framed
+portraits place a `PersonPortrait` on their inner image, keeping its mutable identity
+separate from the retained frame. Illustration components change image handles in place.
+Use `LedgerIllustration::building` and observed Hall/House appearance for canonical
+thumbnails; do not infer a completed upgrade solely from a town's tier. The shared village
+vignette is illustrative scenery, not a literal world-map view.
+
+`ledger::heading` and `ledger::body` already contain TextColor and Pickable. Override a
+component with a subsequent `.insert(...)`, never a duplicate entry in the same bundle.
+Generated material images are sized and compressed for delivery; maintained generators,
+recipes, budgets and licenses are documented in `asset_creation/ui/LEDGER-ART.md`.
+
+Personal money and inventory are visible only for the own hero and currently commanded
+people. The book clears these cached fields when access is lost. The server applies a
+recipient filter to Wallet/GoodsInventory before sending, denying unclassified actors
+from initial spawn. Visible cargo communicates its good/prop but no exact private amount.
+Public building and market storage retain their existing regional visibility.
 
 ## Buttons and accessibility
 
@@ -115,7 +146,10 @@ The available variants are `Primary`, `Secondary`, `Ghost`, `Row`, `Tab`, `Inver
 `Ribbon` (dark header navigation), `Developer` and `Danger`. A development-time audit fails
 immediately if an ordinary Bevy `Button` lacks `UiButtonStyle`. `UiButtonStyleExempt` is reserved for the full-screen
 outside-click target created by `modal_backdrop_chrome`; it is not an escape hatch for custom
-button styling.
+button styling. Authored book button faces carry `UiTexturedButton`: the foundation
+keeps transparent fill/edges while the shared spring and label contrast still apply.
+The artwork binding supplies a loaded face immediately and tints it from the same
+hover/press/focus state. A textured button is never exempt from input or disabled rules.
 
 Unavailable controls remain visible and add Bevy's `InteractionDisabled`; do not leave an
 active button in the tree and merely ignore its click. The foundation removes disabled

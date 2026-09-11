@@ -140,11 +140,11 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
         saw_wheat_carried |= world
             .query::<&CarriedLoad>()
             .iter(world)
-            .any(|load| load.good == Some(Good::Wheat) && load.amount > 0);
+            .any(|load| load.good == Some(Good::Wheat) && !load.is_empty());
         saw_wood_carried |= world
             .query::<&CarriedLoad>()
             .iter(world)
-            .any(|load| load.good == Some(Good::Wood) && load.amount > 0);
+            .any(|load| load.good == Some(Good::Wood) && !load.is_empty());
         for (site, inventory) in world
             .query::<(&shared::components::ConstructionSite, &GoodsInventory)>()
             .iter(world)

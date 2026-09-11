@@ -8,7 +8,7 @@ top-level modules and calls `app::run()`; runtime rules belong to their domain.
 | Module | Owns |
 |---|---|
 | `app` | Bootstrap, resources and ordered fixed-update wiring |
-| `net` | Connections, peer identity and client-message ingress |
+| `net` | Connections, peer identity, client-message ingress and personal-possession recipient filters |
 | `player` | Commander views, hero/boat lifecycle, rosters, battalions and formation orders, melee, nearby Hall trading, permit/company funding and placement, physical hero construction, Company Master policies, shares and caravan timetable orders |
 | `collision` | Baked/derived building colliders, spatial indexes, raycasts and streamed static collision |
 | `world` | Time, identity, regions, settlements, village simulation, roads, development and lab fixtures |
@@ -21,6 +21,16 @@ The current RTS owns melee in `player/combat.rs`, boats in `player/boat.rs`, arm
 `player/army.rs` and `player/army/`, tactical intent and shared route fields in
 `player/orders.rs` and `player/orders/`, and physical inventories in `shared::economy`. Extend those live domains.
 See [the game code map](../docs/GAME-CODE-MAP.md) for the cross-crate ownership map.
+
+`net/possessions.rs` filters `Wallet` and `GoodsInventory` at the replication
+backend, allowing only the authenticated hero owner or current `CommandedBy`
+account to receive personal values. These economic components require a denied
+filter on initial spawn; changed ownership/account state settles in `PostUpdate`
+before replication sends. Identified buildings, markets and construction storage
+retain their public region-scoped contract. Unclassified storage remains private.
+`CarriedLoad` exposes only the visible good/appearance; exact quantities stay in
+`GoodsInventory`. Packet tests cover first spawn, later joins, authority loss and
+public storage. Changes to company/civic account privacy are a separate policy.
 
 ## World and village ownership
 

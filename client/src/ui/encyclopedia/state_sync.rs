@@ -13,7 +13,15 @@ use super::*;
 use crate::input::InputState;
 use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
 use crate::ui::hud::GodCapability;
-use crate::ui::styles::{INK, INK_MUTED};
+use crate::ui::styles::INK_MUTED;
+
+mod detail;
+mod privacy;
+pub(super) use detail::{
+    sync_banner_controls, sync_detail_art, sync_detail_inventory, sync_detail_panel,
+};
+use privacy::can_read_possessions;
+pub(super) use privacy::enforce_possessions_privacy;
 
 type VisiblePersonFacts<'a> = (
     &'a shared::components::CharacterName,
@@ -44,6 +52,38 @@ type VisiblePersonFacts<'a> = (
 
 /// How often the visible-people fact pass re-reads the world.
 const PERSON_FACTS_INTERVAL_SECS: f32 = 0.25;
+
+/// Missing NPC activity does not imply absence: a player-controlled hero does
+/// not use the villager schedule. Cached actions also cannot describe what an
+/// unobserved person is doing now.
+pub(in crate::ui::encyclopedia) fn activity_description(
+    record: &PersonRecord,
+    present: bool,
+) -> String {
+    if !present {
+        return "Beyond your sight".to_string();
+    }
+    if let Some(objective) = record.objective {
+        return record
+            .navigation
+            .and_then(|navigation| navigation.label())
+            .map_or_else(
+                || objective.label().to_string(),
+                |navigation| format!("{} · {navigation}", objective.label()),
+            );
+    }
+    record
+        .activity
+        .map(|activity| activity.label().to_string())
+        .unwrap_or_else(|| {
+            if record.is_self {
+                "Your hero"
+            } else {
+                "Activity unrecorded"
+            }
+            .to_string()
+        })
+}
 
 /// The camera must not pan and world clicks must not fire underneath.
 pub(super) fn sync_input_state(open: Res<EncyclopediaOpen>, mut input_state: ResMut<InputState>) {
@@ -229,6 +269,7 @@ pub(super) fn learn_visible_characters(
 /// the encyclopedia cannot claim a job or bed that the corresponding building
 /// does not also show.
 pub(super) fn refresh_visible_person_facts(
+    account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
     seen: Query<VisiblePersonFacts<'_>>,
     buildings: Query<(
         &shared::components::SettlementBuilding,
@@ -260,6 +301,10 @@ pub(super) fn refresh_visible_person_facts(
         return;
     }
     *last_run = Some(now);
+    let account = account
+        .as_ref()
+        .map(|input| input.name.trim().to_lowercase())
+        .unwrap_or_default();
 
     // Index once per pass. The per-person linear scans this replaces were
     // O(people x buildings x workers) for employment and O(people^2) for the
@@ -379,7 +424,13 @@ pub(super) fn refresh_visible_person_facts(
         let next_occupation = occupation
             .and_then(|occupation| occupation.0.clone())
             .or_else(|| work_status.map(|status| status.label().to_string()));
-        let next_wallet = wallet.map(|wallet| wallet.balance());
+        let Some(index) = person_id.and_then(|id| person_by_id.get(id).copied()) else {
+            continue;
+        };
+        let private = can_read_possessions(&people.records[index], &account);
+        let next_wallet = private
+            .then(|| wallet.map(|wallet| wallet.balance()))
+            .flatten();
         let next_nutrition = nutrition.copied();
         let next_health = health.cloned();
         let next_alive = !health.is_some_and(|health| health.is_dead());
@@ -389,12 +440,8 @@ pub(super) fn refresh_visible_person_facts(
         let next_navigation = navigation.copied();
         let next_attributes = attributes.copied();
         let next_work_status = work_status.copied();
-        let next_inventory = inventory.cloned();
-        let next_carried = carried.copied();
-
-        let Some(index) = person_id.and_then(|id| person_by_id.get(id).copied()) else {
-            continue;
-        };
+        let next_inventory = private.then(|| inventory.cloned()).flatten();
+        let next_carried = private.then(|| carried.copied()).flatten();
         let current = &people.records[index];
         let changed = current.residence != next_residence
             || current.home != home
@@ -565,6 +612,7 @@ fn people_rows_signature(visible: &[&PersonRecord]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     visible.len().hash(&mut hasher);
     for record in visible {
+        record.id.0.hash(&mut hasher);
         record.name.hash(&mut hasher);
         record.is_self.hash(&mut hasher);
         record.known.hash(&mut hasher);
@@ -577,7 +625,7 @@ fn people_rows_signature(visible: &[&PersonRecord]) -> u64 {
 }
 
 fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) {
-    let name_color = if record.known { INK } else { INK_MUTED };
+    use crate::ui::ledger;
     list.spawn((
         Button,
         PersonRow {
@@ -585,67 +633,52 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
             name: record.name.clone(),
         },
         Node {
-            flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             flex_shrink: 0.0,
-            column_gap: Val::Px(9.0),
-            padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-            border_radius: BorderRadius::all(Val::Px(5.0)),
+            min_height: Val::Px(80.0),
+            column_gap: Val::Px(14.0),
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(7.0)),
+            border: UiRect::bottom(Val::Px(1.0)),
             ..default()
         },
         button_chrome(UiButtonVariant::Row),
     ))
     .with_children(|row| {
-        // Status pip: filled + green online, hollow-dim otherwise.
-        row.spawn((
-            Node {
-                width: Val::Px(7.0),
-                height: Val::Px(7.0),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(if record.online {
-                STATUS_GOOD
-            } else if record.known {
-                INK_MUTED
-            } else {
-                PLATE_RULE_SOFT
-            }),
-        ));
-        row.spawn((
-            Text::new(if record.is_self {
-                format!("{} (you)", record.name)
-            } else {
-                record.name.clone()
-            }),
-            crate::ui::typography::text(16.0),
-            TextColor(name_color),
-            Node {
-                flex_grow: 1.0,
-                ..default()
-            },
-        ));
-        row.spawn((
-            Text::new(if record.known {
-                if record.kind == PersonKind::Villager {
+        row.spawn(ledger::person_portrait(record.id, 64.0));
+        row.spawn(Node {
+            flex_grow: 1.0,
+            min_width: Val::Px(0.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(3.0),
+            ..default()
+        })
+        .with_children(|copy| {
+            copy.spawn(ledger::body(
+                if record.is_self {
+                    format!("{} (you)", record.name)
+                } else {
+                    record.name.clone()
+                },
+                21.0,
+            ));
+            copy.spawn((ledger::body(
+                if !record.known {
+                    "Unknown".to_string()
+                } else if record.kind == PersonKind::Villager {
                     record
                         .occupation
-                        .as_deref()
-                        .unwrap_or("Unemployed")
-                        .to_uppercase()
+                        .clone()
+                        .unwrap_or_else(|| "Unemployed".to_string())
                 } else {
-                    record.affiliation.label().to_string()
-                }
-            } else {
-                "UNKNOWN".to_string()
-            }),
-            crate::ui::typography::text(12.5),
-            TextColor(if record.known {
-                INK_MUTED
-            } else {
-                PLATE_RULE_SOFT
-            }),
-        ));
+                    match record.kind {
+                        PersonKind::Hero => "Hero",
+                        PersonKind::Villager => "Villager",
+                    }
+                    .to_string()
+                },
+                17.0,
+            ),));
+        });
     });
 }
 
@@ -702,313 +735,6 @@ pub(super) fn style_person_rows(
     }
 }
 
-fn format_plan_minute(minute: u16) -> String {
-    format!("{:02}:{:02}", minute / 60, minute % 60)
-}
-
-fn format_day_plan(plan: shared::components::CharacterDayPlan) -> String {
-    let work = plan.work_minutes.map_or_else(
-        || plan.planned_work_status.label().to_string(),
-        |(start, end)| {
-            format!(
-                "work {}–{}",
-                format_plan_minute(start),
-                format_plan_minute(end)
-            )
-        },
-    );
-    format!(
-        "Day {} · wake {} · {} · meal {} · {} {}–{} ({}) · sleep {}",
-        plan.day,
-        format_plan_minute(plan.wake_minute),
-        work,
-        format_plan_minute(plan.meal_minute),
-        plan.leisure.label(),
-        format_plan_minute(plan.leisure_minutes.0),
-        format_plan_minute(plan.leisure_minutes.1),
-        plan.leisure_status.label(),
-        format_plan_minute(plan.sleep_minute),
-    )
-}
-
-pub(super) fn sync_detail_panel(
-    people: Res<KnownPeople>,
-    selected: Res<SelectedPerson>,
-    mut card: Query<&mut Node, (With<DetailCard>, Without<DetailEmptyState>)>,
-    mut empty: Query<&mut Node, (With<DetailEmptyState>, Without<DetailCard>)>,
-    mut name_text: Query<&mut Text, (With<DetailName>, Without<DetailSubtitle>)>,
-    mut subtitle: Query<&mut Text, (With<DetailSubtitle>, Without<DetailName>)>,
-    mut stats: Query<(&DetailStat, &mut Text), (Without<DetailName>, Without<DetailSubtitle>)>,
-    ui_perf: Res<crate::ui::perf::UiPerf>,
-) {
-    let mut _ui_scope = ui_perf.scope("sync_detail_panel");
-    let record = selected.0.and_then(|id| people.find_by_id(id));
-
-    let show_card = record.is_some();
-    for mut node in card.iter_mut() {
-        let display = if show_card {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        if node.display != display {
-            node.display = display;
-        }
-    }
-    for mut node in empty.iter_mut() {
-        let display = if show_card {
-            Display::None
-        } else {
-            Display::Flex
-        };
-        if node.display != display {
-            node.display = display;
-        }
-    }
-
-    let Some(record) = record else {
-        return;
-    };
-
-    for mut text in name_text.iter_mut() {
-        if text.0 != record.name {
-            text.0 = record.name.clone();
-        }
-    }
-    for mut text in subtitle.iter_mut() {
-        let value = if record.is_self {
-            format!("{} (you)", record.kind.label())
-        } else {
-            record.kind.label().to_string()
-        };
-        if text.0 != value {
-            text.0 = value;
-        }
-    }
-    for (DetailStat(field), mut text) in stats.iter_mut() {
-        let value = match field {
-            DetailField::Attributes => record.attributes.map_or_else(
-                || "No recent reading".to_string(),
-                |attributes| {
-                    format!(
-                        "Physique {} / Intelligence {} / Charm {} (max {})",
-                        attributes.physique(),
-                        attributes.intelligence(),
-                        attributes.charm(),
-                        shared::components::CharacterAttributes::MAX,
-                    )
-                },
-            ),
-            DetailField::Health => record.health.as_ref().map_or_else(
-                || "No recent reading".to_string(),
-                |health| {
-                    if record.alive {
-                        format!("{:.0} / {:.0}", health.current, health.max)
-                    } else {
-                        format!(
-                            "DEAD / {} / day {}",
-                            record.death_cause.map_or("Unknown", |cause| cause.label()),
-                            record.death_day.unwrap_or(0),
-                        )
-                    }
-                },
-            ),
-            DetailField::Home => {
-                if !record.known {
-                    "Unrecorded".to_string()
-                } else if let Some(home) = &record.home {
-                    home.clone()
-                } else if let Some(place) = &record.residence {
-                    format!("Unhoused in {place}")
-                } else {
-                    "No settled home".to_string()
-                }
-            }
-            DetailField::Work => {
-                if !record.known {
-                    "Unrecorded".to_string()
-                } else if let Some(workplace) = &record.workplace {
-                    match &record.occupation {
-                        Some(job) => format!("{job} / {workplace}"),
-                        None => workplace.clone(),
-                    }
-                } else {
-                    record
-                        .occupation
-                        .clone()
-                        .unwrap_or_else(|| "Unemployed".to_string())
-                }
-            }
-            DetailField::Employment => {
-                let status = record
-                    .work_status
-                    .map(|status| status.label())
-                    .unwrap_or("Not assessed");
-                let wage = record.daily_wage.map_or_else(
-                    || "no recorded wage".to_string(),
-                    |wage| format!("{} coin/day", shared::economy::format_money(wage)),
-                );
-                let requirements = record.workforce_requirements.map_or_else(
-                    || "open to all skill levels".to_string(),
-                    |requirements| {
-                        format!(
-                            "requires P{} I{} C{}",
-                            requirements.minimum_physique.min(100),
-                            requirements.minimum_intelligence.min(100),
-                            requirements.minimum_charm.min(100),
-                        )
-                    },
-                );
-                format!("{status} / {wage} / {requirements}")
-            }
-            DetailField::Hunger => match record.nutrition {
-                Some(nutrition) if nutrition.is_hungry() => format!(
-                    "{} / missed {} consecutive meal{} / Health ceiling {}%",
-                    nutrition.condition().label(),
-                    nutrition.consecutive_missed_meals,
-                    if nutrition.consecutive_missed_meals == 1 {
-                        ""
-                    } else {
-                        "s"
-                    },
-                    nutrition.health_ceiling_percent(),
-                ),
-                Some(nutrition) if nutrition.last_meal_day.is_some() => {
-                    format!("Fed / last ate day {}", nutrition.last_meal_day.unwrap())
-                }
-                Some(_) => "Not yet assessed".to_string(),
-                None => "No recent reading".to_string(),
-            },
-            DetailField::Wealth => record
-                .wallet
-                .map(|money| format!("{} coin", shared::economy::format_money(money)))
-                .unwrap_or_else(|| "No recent reading".to_string()),
-            DetailField::Inventory => record.inventory.as_ref().map_or_else(
-                || "No recent reading".to_string(),
-                |inventory| {
-                    let mut goods: Vec<_> = shared::economy::Good::ALL
-                        .iter()
-                        .filter_map(|good| {
-                            let amount = inventory.amount(*good);
-                            (amount > 0).then(|| format!("{} {amount}", good.label()))
-                        })
-                        .collect();
-                    if let Some(load) = record.carried.filter(|load| !load.is_empty()) {
-                        if let Some(good) = load.good {
-                            goods.push(format!("carrying {} {}", good.label(), load.amount));
-                        }
-                    }
-                    let contents = if goods.is_empty() {
-                        "empty".to_string()
-                    } else {
-                        goods.join(", ")
-                    };
-                    format!(
-                        "{} / {} bulk / {contents}",
-                        inventory.used_bulk(),
-                        inventory.bulk_capacity(),
-                    )
-                },
-            ),
-            DetailField::Activity => record.objective.map_or_else(
-                || {
-                    record
-                        .activity
-                        .map(|activity| activity.label().to_string())
-                        .unwrap_or_else(|| "Not nearby".to_string())
-                },
-                |objective| {
-                    record
-                        .navigation
-                        .and_then(|navigation| navigation.label())
-                        .map_or_else(
-                            || objective.label().to_string(),
-                            |navigation| format!("{} · {navigation}", objective.label()),
-                        )
-                },
-            ),
-            DetailField::Schedule => record
-                .day_plan
-                .map_or_else(|| "No current calendar".to_string(), format_day_plan),
-            DetailField::Affiliation => {
-                if record.known {
-                    record.affiliation.label().to_string()
-                } else {
-                    "Unrecorded".to_string()
-                }
-            }
-            DetailField::Standing => {
-                if record.known {
-                    format!("Level {}, {} prestige", record.level, record.prestige)
-                } else {
-                    "Unrecorded".to_string()
-                }
-            }
-            // Only ever rendered for a hero -- see DetailField::applies_to. A
-            // villager is not "away" when nobody is driving them; they live
-            // here, which is a different thing entirely.
-            DetailField::Status => if record.online {
-                "Playing now"
-            } else {
-                "Logged off"
-            }
-            .to_string(),
-            DetailField::Knowledge => if record.is_self {
-                "Yourself"
-            } else if record.known {
-                "Known to you"
-            } else {
-                "Unknown to you (god mode)"
-            }
-            .to_string(),
-        };
-        if text.0 != value {
-            text.0 = value;
-        }
-    }
-}
-
-/// Show the banner control only with god capability, and hide detail rows that
-/// say nothing true about the selected person's kind.
-pub(super) fn sync_banner_controls(
-    god: Res<crate::ui::hud::GodCapability>,
-    people: Res<KnownPeople>,
-    selected: Res<SelectedPerson>,
-    mut buttons: Query<&mut Node, With<BannerButton>>,
-    mut rows: Query<(&DetailRow, &mut Node), Without<BannerButton>>,
-) {
-    let kind = selected
-        .0
-        .and_then(|id| people.find_by_id(id))
-        .map(|record| record.kind);
-
-    for mut node in buttons.iter_mut() {
-        // Editable only in god mode, and only when the row it lives on is shown.
-        let visible = god.0 && kind.is_some_and(|k| DetailField::Affiliation.applies_to(k));
-        let display = if visible {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        if node.display != display {
-            node.display = display;
-        }
-    }
-
-    for (DetailRow(field), mut node) in rows.iter_mut() {
-        let display = match kind {
-            Some(kind) if field.applies_to(kind) => Display::Flex,
-            Some(_) => Display::None,
-            // Nothing selected: the whole card is hidden anyway, so leave the
-            // rows alone rather than flickering them.
-            None => continue,
-        };
-        if node.display != display {
-            node.display = display;
-        }
-    }
-}
-
 /// Keep the registry's retinue column current for anyone you can see, so
 /// conscripting shows immediately rather than waiting for a roster request.
 pub(super) fn track_retinue_changes(
@@ -1020,10 +746,25 @@ pub(super) fn track_retinue_changes(
         ),
         Changed<shared::components::CommandedBy>,
     >,
-    removed: RemovedComponents<shared::components::CommandedBy>,
+    mut removed: RemovedComponents<shared::components::CommandedBy>,
+    remaining_people: Query<
+        &shared::components::PersonId,
+        Without<shared::components::CommandedBy>,
+    >,
     mut people: ResMut<KnownPeople>,
 ) {
-    let _ = removed;
+    for entity in removed.read() {
+        // A despawn also reports removals, but leaving interest range does not
+        // dismiss a retainer. Clear only when the live person's command was removed.
+        let Ok(id) = remaining_people.get(entity) else {
+            continue;
+        };
+        if let Some(record) = people.records.iter_mut().find(|record| record.id == *id) {
+            if record.commanded_by.is_some() {
+                record.commanded_by = None;
+            }
+        }
+    }
     for (_, commanded, person_id) in changed.iter() {
         let Some(record) = people
             .records

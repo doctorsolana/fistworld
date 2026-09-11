@@ -1,12 +1,12 @@
 //! The bound-book window and navigation; page layouts live beside it.
 use super::*;
 use crate::ui::{
-    foundation::{UiButtonLabel, UiButtonVariant, button_chrome},
-    modal::{ModalLayout, spawn_modal},
+    foundation::{button_chrome, UiButtonLabel, UiButtonVariant},
+    modal::{spawn_modal, ModalLayout},
     styles::{BRASS, BRASS_DARK, PARCHMENT, RADIUS, SIGN_WOOD},
 };
 use bevy::prelude::*;
-const PANEL_SIZE: Vec2 = Vec2::new(1240.0, 820.0);
+const PANEL_SIZE: Vec2 = Vec2::new(1500.0, 1000.0);
 
 pub(super) fn spawn_encyclopedia(
     mut commands: Commands,
@@ -42,9 +42,9 @@ pub(super) fn spawn_encyclopedia(
     // window wants a flush header / body / footer column.
     commands.entity(nodes.panel).insert((
         Node {
-            width: Val::Vw(94.0),
+            width: Val::Vw(93.0),
             max_width: Val::Px(PANEL_SIZE.x),
-            height: Val::Vh(90.0),
+            height: Val::Vh(88.0),
             max_height: Val::Px(PANEL_SIZE.y),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Stretch,
@@ -53,6 +53,7 @@ pub(super) fn spawn_encyclopedia(
             overflow: Overflow::clip(),
             ..default()
         },
+        crate::ui::ledger::paper(),
         BackgroundColor(LIMEWASH),
         BorderColor::from(BRASS_DARK),
         // Lifts the window off the world instead of sitting flat on it.
@@ -65,10 +66,12 @@ pub(super) fn spawn_encyclopedia(
         ),
     ));
 
+    commands.entity(nodes.panel).despawn_children();
     commands.entity(nodes.panel).with_children(|panel| {
         spawn_header(panel);
         super::layout::spawn_body(panel);
         spawn_footer(panel);
+        crate::ui::ledger::corners(panel);
     });
 }
 
@@ -80,44 +83,68 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::SpaceBetween,
                 flex_shrink: 0.0,
-                padding: UiRect::axes(Val::Px(20.0), Val::Px(14.0)),
+                padding: UiRect::axes(Val::Px(24.0), Val::Px(18.0)),
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
+            crate::ui::ledger::wood(),
             BackgroundColor(SIGN_WOOD),
             BorderColor::from(BRASS),
         ))
         .with_children(|header| {
             header
                 .spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(3.0),
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(13.0),
+                    flex_shrink: 0.0,
                     ..default()
                 })
-                .with_children(|title| {
-                    title.spawn((
-                        Text::new("ENCYCLOPEDIA"),
-                        crate::ui::typography::heading(23.0),
-                        TextColor(PARCHMENT),
-                    ));
-                    title.spawn((
-                        Text::new("People, places & the affairs of your realm"),
-                        crate::ui::typography::body(13.0),
-                        TextColor(BRASS),
-                    ));
+                .with_children(|brand| {
+                    brand
+                        .spawn(crate::ui::ledger::portrait_frame(64.0))
+                        .with_child(crate::ui::hud::chrome::icon(
+                            crate::ui::hud::chrome::HudIcon::Book,
+                            42.0,
+                        ));
+                    brand
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(6.0),
+                            ..default()
+                        })
+                        .with_children(|title| {
+                            title.spawn((
+                                Text::new("ENCYCLOPEDIA"),
+                                crate::ui::typography::heading(32.0),
+                                TextColor(PARCHMENT),
+                            ));
+                            title.spawn((
+                                Node {
+                                    height: Val::Px(1.0),
+                                    width: Val::Percent(100.0),
+                                    ..default()
+                                },
+                                BackgroundColor(BRASS),
+                                Pickable::IGNORE,
+                            ));
+                        });
                 });
             header
                 .spawn(Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(10.0),
+                    flex_grow: 1.0,
+                    min_width: Val::Px(0.0),
+                    margin: UiRect::left(Val::Px(42.0)),
                     ..default()
                 })
                 .with_children(|controls| {
                     controls
                         .spawn(Node {
                             flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(6.0),
+                            column_gap: Val::Px(7.0),
+                            flex_grow: 1.0,
                             ..default()
                         })
                         .with_children(|tabs| {
@@ -157,7 +184,9 @@ fn spawn_tab(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab) {
             Button,
             TabButton(tab),
             Node {
-                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                padding: UiRect::axes(Val::Px(11.0), Val::Px(11.0)),
+                flex_grow: 1.0,
+                column_gap: Val::Px(7.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 border: UiRect::all(Val::Px(1.0)),
@@ -167,10 +196,34 @@ fn spawn_tab(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab) {
             button_chrome(UiButtonVariant::Ribbon),
         ))
         .with_children(|button| {
+            use crate::ui::hud::chrome::{icon, HudIcon};
+            match tab {
+                EncyclopediaTab::People => {
+                    button.spawn(icon(HudIcon::Person, 22.0));
+                }
+                EncyclopediaTab::Places => {
+                    button.spawn(icon(HudIcon::Pin, 22.0));
+                }
+                EncyclopediaTab::Companies => {
+                    button.spawn(icon(HudIcon::Scales, 22.0));
+                }
+                EncyclopediaTab::Retinue => {
+                    button.spawn(crate::ui::ledger::icon(
+                        crate::ui::ledger::LedgerIcon::Retinue,
+                        22.0,
+                    ));
+                }
+                EncyclopediaTab::Army => {
+                    button.spawn(crate::ui::ledger::icon(
+                        crate::ui::ledger::LedgerIcon::Army,
+                        22.0,
+                    ));
+                }
+            }
             button.spawn((
                 Text::new(tab.label()),
                 UiButtonLabel,
-                crate::ui::typography::heading(14.0),
+                crate::ui::typography::heading(13.0),
                 TextColor(PARCHMENT),
             ));
         });
@@ -181,26 +234,22 @@ fn spawn_footer(panel: &mut ChildSpawnerCommands<'_>) {
         .spawn((
             Node {
                 flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
+                justify_content: JustifyContent::FlexEnd,
                 align_items: AlignItems::Center,
                 flex_shrink: 0.0,
-                padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
+                padding: UiRect::axes(Val::Px(26.0), Val::Px(7.0)),
                 border: UiRect::top(Val::Px(1.0)),
                 ..default()
             },
+            crate::ui::ledger::wood(),
             BackgroundColor(SIGN_WOOD),
             BorderColor::from(BRASS),
         ))
         .with_children(|footer| {
             footer.spawn((
-                Text::new("Chronicles of the realm"),
+                Text::new("N / ESC   Close book"),
                 crate::ui::typography::body(13.5),
                 TextColor(BRASS),
-            ));
-            footer.spawn((
-                Text::new("N / ESC   Close book"),
-                crate::ui::typography::text(13.5),
-                TextColor(PARCHMENT),
             ));
         });
 }

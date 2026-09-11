@@ -26,9 +26,7 @@ use crate::ui::foundation::{
 };
 use crate::ui::good_icon_path;
 use crate::ui::modal::update_modal_click_guard;
-use crate::ui::styles::{
-    INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
-};
+use crate::ui::styles::{INK, INK_MUTED, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, RADIUS};
 
 pub struct HistoryPlugin;
 
@@ -548,7 +546,7 @@ fn ensure_history_panel(
                 overflow: Overflow::clip(),
                 ..default()
             },
-            BackgroundColor(LIMEWASH_LIT),
+            crate::ui::ledger::paper(),
         ))
         .id();
     commands.entity(host).add_child(panel_entity);
@@ -715,7 +713,7 @@ fn spawn_header(
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(LIMEWASH),
+            BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|header| {
@@ -728,12 +726,12 @@ fn spawn_header(
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(title),
-                        crate::ui::typography::text(24.0),
+                        crate::ui::typography::heading(24.0),
                         TextColor(INK),
                     ));
                     copy.spawn((
                         Text::new(subtitle),
-                        crate::ui::typography::text(12.5),
+                        crate::ui::ledger::reading(12.5),
                         TextColor(INK_MUTED),
                     ));
                 });
@@ -787,7 +785,7 @@ fn spawn_range_bar(
                         .with_child((
                             Text::new(range.label()),
                             UiButtonLabel,
-                            crate::ui::typography::text(12.5),
+                            crate::ui::ledger::reading(12.5),
                             TextColor(INK),
                             Pickable::IGNORE,
                         ));
@@ -804,7 +802,7 @@ fn spawn_range_bar(
             );
             bar.spawn((
                 Text::new(span),
-                crate::ui::typography::text(12.5),
+                crate::ui::ledger::reading(12.5),
                 TextColor(INK_MUTED),
             ));
         });
@@ -813,7 +811,7 @@ fn spawn_range_bar(
 fn spawn_empty_history(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
     parent.spawn((
         Text::new(text.to_string()),
-        crate::ui::typography::text(16.0),
+        crate::ui::ledger::reading(16.0),
         TextColor(INK_MUTED),
         Node {
             margin: UiRect::top(Val::Px(80.0)),
@@ -1655,12 +1653,12 @@ fn spawn_market_history(
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(format!("{} MARKET", good.label().to_uppercase())),
-                        crate::ui::typography::text(22.0),
+                        crate::ui::typography::heading(22.0),
                         TextColor(INK),
                     ));
                     copy.spawn((
                         Text::new("Executed prices are distinct from public quotes"),
-                        crate::ui::typography::text(12.5),
+                        crate::ui::ledger::reading(12.5),
                         TextColor(INK_MUTED),
                     ));
                 });
@@ -2376,7 +2374,7 @@ fn spawn_stat_strip(parent: &mut ChildSpawnerCommands<'_>, stats: &[(&str, Strin
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(LIMEWASH),
+            BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|strip| {
@@ -2391,12 +2389,12 @@ fn spawn_stat_strip(parent: &mut ChildSpawnerCommands<'_>, stats: &[(&str, Strin
                     .with_children(|stat| {
                         stat.spawn((
                             Text::new((*label).to_string()),
-                            crate::ui::typography::text(11.5),
+                            crate::ui::ledger::reading(11.5),
                             TextColor(INK_MUTED),
                         ));
                         stat.spawn((
                             Text::new(value.clone()),
-                            crate::ui::typography::text(15.0),
+                            crate::ui::ledger::reading(15.0),
                             TextColor(INK),
                         ));
                     });
@@ -2458,7 +2456,7 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
                 row_gap: Val::Px(6.0),
                 ..default()
             },
-            BackgroundColor(LIMEWASH),
+            BackgroundColor(Color::srgba(0.64, 0.45, 0.20, 0.06)),
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|card| {
@@ -2471,12 +2469,12 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
             .with_children(|heading| {
                 heading.spawn((
                     Text::new(title.to_string()),
-                    crate::ui::typography::text(13.5),
+                    crate::ui::ledger::reading(13.5),
                     TextColor(INK),
                 ));
                 heading.spawn((
                     Text::new(format!("{max:.1} {unit}")),
-                    crate::ui::typography::text(11.5),
+                    crate::ui::ledger::reading(11.5),
                     TextColor(INK_MUTED),
                 ));
             });
@@ -2505,7 +2503,7 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
                             ));
                             entry.spawn((
                                 Text::new(item.label),
-                                crate::ui::typography::text(11.0),
+                                crate::ui::ledger::reading(11.0),
                                 TextColor(INK_MUTED),
                             ));
                         });
@@ -2945,12 +2943,12 @@ fn spawn_table_title(parent: &mut ChildSpawnerCommands<'_>, title: &str, note: &
         .with_children(|row| {
             row.spawn((
                 Text::new(title.to_string()),
-                crate::ui::typography::text(14.0),
+                crate::ui::ledger::reading(14.0),
                 TextColor(INK),
             ));
             row.spawn((
                 Text::new(note.to_string()),
-                crate::ui::typography::text(11.5),
+                crate::ui::ledger::reading(11.5),
                 TextColor(INK_MUTED),
             ));
         });
@@ -2989,7 +2987,7 @@ fn spawn_table_cells(parent: &mut ChildSpawnerCommands<'_>, cells: &[String], he
             for (index, cell) in cells.iter().enumerate() {
                 row.spawn((
                     Text::new(cell.clone()),
-                    crate::ui::typography::text(if header { 8.0 } else { 10.0 }),
+                    crate::ui::ledger::reading(if header { 8.0 } else { 10.0 }),
                     TextColor(if header { INK_MUTED } else { INK }),
                     TextLayout::justify(if index == 0 {
                         Justify::Left

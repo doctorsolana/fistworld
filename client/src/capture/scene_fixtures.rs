@@ -363,16 +363,10 @@ pub(super) fn spawn_capture_heroes(
             ))
             .id();
         if let Some((good, appearance)) = carried.get(i % carried.len().max(1)).copied() {
-            let amount = if cart_slots == Some(2) {
-                shared::economy::capacity::PORTER / good.bulk_per_unit()
-            } else {
-                1
-            };
             commands
                 .entity(entity)
                 .insert(shared::economy::CarriedLoad {
                     good: Some(good),
-                    amount,
                     appearance: Some(appearance),
                 });
         }
@@ -409,7 +403,6 @@ pub(super) fn spawn_capture_heroes(
                     .entity(entity)
                     .insert(shared::economy::CarriedLoad {
                         good: Some(good),
-                        amount: 1,
                         appearance: Some(appearance),
                     });
             }

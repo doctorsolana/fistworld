@@ -2,7 +2,9 @@ use std::time::Duration;
 
 pub const SERVER_PORT: u16 = 5000;
 pub const SERVER_ADDR: &str = "127.0.0.1";
-pub const PROTOCOL_ID: u64 = 0x1234567890ABCE02;
+// CarriedLoad carries public appearance only; exact inventory is recipient-filtered.
+// This wire revision requires both client and server to restart together.
+pub const PROTOCOL_ID: u64 = 0x1234567890ABCE03;
 pub const NETCODE_CLIENT_TIMEOUT_SECS: i32 = 10;
 pub const NETCODE_TOKEN_EXPIRE_SECS: i32 = 30;
 

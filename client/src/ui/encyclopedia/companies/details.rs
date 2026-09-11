@@ -5,12 +5,13 @@ use super::controls::{
 };
 use super::model::{CompanyDirectory, CompanyPolicyFeedback, CompanyRecord, TradeRouteEditorState};
 use super::routes::spawn_route_card;
-use super::sites::{spawn_branch_card, spawn_site_card};
+use super::sites::{spawn_branch_card, spawn_site_card, spawn_site_ledger};
 use super::widgets::{
     detail_button, detail_stat, key_value, signed_money, spawn_note, spawn_section_title,
 };
 use crate::ui::foundation::{button_chrome, UiButtonVariant};
-use crate::ui::styles::{EMBER, INK, INK_MUTED};
+use crate::ui::ledger::{self, LedgerIllustration};
+use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT};
 use bevy::prelude::*;
 use shared::components::SettlementBuildingKind;
 use shared::economy::{format_money, CompanyDayLedger};
@@ -31,6 +32,10 @@ pub(super) fn spawn_company_detail(
             ..default()
         })
         .with_children(|header| {
+            header.spawn(ledger::illustration(
+                LedgerIllustration::Company,
+                Vec2::splat(112.0),
+            ));
             header
                 .spawn(Node {
                     min_width: Val::Px(0.0),
@@ -42,17 +47,17 @@ pub(super) fn spawn_company_detail(
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(company.name.clone()),
-                        crate::ui::typography::text(26.0),
+                        crate::ui::typography::heading(30.0),
                         TextColor(INK),
                     ));
                     copy.spawn((
                         Text::new(format!(
-                            "COMPANY #{}  /  FOUNDED DAY {}  /  {}",
+                            "Company #{} · Founded Day {} · {}",
                             company.id.0,
                             company.founded_day,
                             company.status(),
                         )),
-                        crate::ui::typography::text(12.5),
+                        crate::ui::ledger::reading(12.5),
                         TextColor(EMBER),
                     ));
                 });
@@ -163,95 +168,88 @@ pub(super) fn spawn_company_detail(
             );
         });
 
-    spawn_section_title(
-        parent,
-        "YOUR POSITION",
-        "wallet money and company money stay separate",
-    );
-    if let Some(person) = directory.local_person {
-        let shares = company.shares_owned_by(person);
-        if shares == 0 {
-            spawn_note(
-                parent,
-                if company.offers.is_empty() {
-                    "You own no shares. No shareholder is currently offering stock."
-                } else {
-                    "You own no shares. Public offers are listed below; open CONTROLS & SHARES to trade."
-                },
-            );
-        } else {
-            key_value(
-                parent,
-                "OWNERSHIP",
-                format!(
-                    "{} / 1,000 shares ({:.1}%)  /  estimated book interest {} coin",
-                    shares,
-                    f32::from(shares) / 10.0,
-                    format_money(company.holding_book_interest(shares)),
-                ),
-            );
-            key_value(
-                parent,
-                "AUTHORITY",
-                if company.master == person {
-                    "You are Company Master and control ordinary operating decisions".to_string()
-                } else if shares > shared::components::COMPANY_TOTAL_SHARES / 2 {
-                    "Majority holder; may appoint the Company Master".to_string()
-                } else {
-                    "Shareholder; economic ownership without executive authority".to_string()
-                },
-            );
-            if company.master == person && shares == shared::components::COMPANY_TOTAL_SHARES {
-                parent
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        flex_wrap: FlexWrap::Wrap,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(7.0),
-                        row_gap: Val::Px(7.0),
+    parent.spawn(ledger::rule());
+    parent
+        .spawn(Node {
+            column_gap: Val::Px(24.0),
+            align_items: AlignItems::Stretch,
+            ..default()
+        })
+        .with_children(|columns| {
+            columns
+                .spawn(Node {
+                    flex_grow: 1.0,
+                    flex_basis: Val::Px(0.0),
+                    min_width: Val::Px(0.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(7.0),
+                    ..default()
+                })
+                .with_children(|position| spawn_position(position, company, directory));
+            columns
+                .spawn((
+                    Node {
+                        flex_grow: 1.0,
+                        flex_basis: Val::Px(0.0),
+                        min_width: Val::Px(0.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(5.0),
+                        border: UiRect::left(Val::Px(1.0)),
+                        padding: UiRect::left(Val::Px(22.0)),
                         ..default()
-                    })
-                    .with_children(|actions| {
-                        actions.spawn((
-                            Text::new(format!(
-                                "HERO WALLET  {} coin",
-                                format_money(directory.local_wallet.unwrap_or(0))
-                            )),
-                            crate::ui::typography::text(12.5),
-                            TextColor(INK_MUTED),
-                        ));
-                        detail_button(
-                            actions,
-                            CompanyBranchPolicyButton {
-                                company: company.id,
-                                action: HeroCompanyAction::ContributeCapital {
-                                    amount: shared::economy::PENNIES_PER_COIN,
-                                },
-                            },
-                            "ADD 1 COIN",
-                        );
-                        detail_button(
-                            actions,
-                            CompanyBranchPolicyButton {
-                                company: company.id,
-                                action: HeroCompanyAction::ContributeCapital {
-                                    amount: 5 * shared::economy::PENNIES_PER_COIN,
-                                },
-                            },
-                            "ADD 5 COIN",
-                        );
-                    });
-                spawn_note(
-                    parent,
-                    "Capital contributions move personal coin into the company treasury; they are not revenue or profit.",
-                );
-            }
-        }
+                    },
+                    BorderColor::from(PLATE_RULE_SOFT),
+                ))
+                .with_children(|ledger| spawn_today_ledger(ledger, company.account.current_day));
+        });
+
+    spawn_section_title(parent, "Operating Sites", "");
+    if company.sites.is_empty() {
+        spawn_note(parent, "This company has no operating site.");
     } else {
+        for site in &company.sites {
+            spawn_site_card(parent, company.id, site);
+        }
+    }
+
+    spawn_section_title(parent, "Trade Routes", "");
+    let can_manage_routes = directory.local_person == Some(company.master);
+    let ready_warehouse = company
+        .sites
+        .iter()
+        .any(|site| site.kind == SettlementBuildingKind::StorageHall && site.workers > 0);
+    if can_manage_routes {
+        parent
+            .spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|bar| {
+                bar.spawn((
+                    Text::new(if ready_warehouse {
+                        "Choose up to eight towns and tell the caravan what to do at each stop."
+                    } else {
+                        "A staffed Storage Hall is required before this company can open a route."
+                    }),
+                    crate::ui::ledger::reading(12.0),
+                    TextColor(INK_MUTED),
+                ));
+                if ready_warehouse && directory.settlements.len() >= 2 {
+                    detail_button(bar, NewTradeRouteButton(company.id), "NEW CARAVAN ROUTE");
+                }
+            });
+    }
+    if company.routes.is_empty() {
         spawn_note(
             parent,
-            "Spawn or select your Hero to resolve personal holdings.",
+            "This company operates no caravan route. Contract routes appear automatically when the company accepts funded public freight.",
         );
+    } else {
+        for route in &company.routes {
+            spawn_route_card(parent, company.id, route, can_manage_routes);
+        }
     }
 
     spawn_section_title(
@@ -288,60 +286,14 @@ pub(super) fn spawn_company_detail(
         }
     }
 
-    spawn_section_title(
-        parent,
-        "TRADE ROUTES",
-        "mobile company assets with physical cargo and ordered town stops",
-    );
-    let can_manage_routes = directory.local_person == Some(company.master);
-    let ready_warehouse = company
-        .sites
-        .iter()
-        .any(|site| site.kind == SettlementBuildingKind::StorageHall && site.workers > 0);
-    if can_manage_routes {
-        parent
-            .spawn(Node {
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|bar| {
-                bar.spawn((
-                    Text::new(if ready_warehouse {
-                        "Choose up to eight towns and tell the caravan what to do at each stop."
-                    } else {
-                        "A staffed Storage Hall is required before this company can open a route."
-                    }),
-                    crate::ui::typography::text(12.0),
-                    TextColor(INK_MUTED),
-                ));
-                if ready_warehouse && directory.settlements.len() >= 2 {
-                    detail_button(bar, NewTradeRouteButton(company.id), "NEW CARAVAN ROUTE");
-                }
-            });
-    }
-    if company.routes.is_empty() {
-        spawn_note(
+    if !company.sites.is_empty() {
+        spawn_section_title(
             parent,
-            "This company operates no caravan route. Contract routes appear automatically when the company accepts funded public freight.",
+            "Site Ledgers",
+            "Production, supply, staffing and current liabilities",
         );
-    } else {
-        for route in &company.routes {
-            spawn_route_card(parent, company.id, route, can_manage_routes);
-        }
-    }
-
-    spawn_section_title(
-        parent,
-        "OPERATING SITES",
-        "Each site is its own building page in PLACES; VIEW DETAILS opens it",
-    );
-    if company.sites.is_empty() {
-        spawn_note(parent, "This company has no operating site.");
-    } else {
         for site in &company.sites {
-            spawn_site_card(parent, company.id, site);
+            spawn_site_ledger(parent, company.id, site);
         }
     }
 
@@ -367,7 +319,7 @@ pub(super) fn spawn_company_detail(
                     } else {
                         holder.name.clone()
                     }),
-                    crate::ui::typography::text(14.0),
+                    crate::ui::ledger::reading(14.0),
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
@@ -377,7 +329,7 @@ pub(super) fn spawn_company_detail(
                         holder.shares,
                         f32::from(holder.shares) / 10.0
                     )),
-                    crate::ui::typography::text(13.5),
+                    crate::ui::ledger::reading(13.5),
                     TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
@@ -502,4 +454,140 @@ pub(super) fn spawn_day_ledger(
             ),
         );
     }
+}
+
+/// Keep personal ownership distinct from the company treasury and profit.
+fn spawn_position(
+    parent: &mut ChildSpawnerCommands<'_>,
+    company: &CompanyRecord,
+    directory: &CompanyDirectory,
+) {
+    spawn_section_title(parent, "Your Position", "");
+    let Some(person) = directory.local_person else {
+        spawn_note(
+            parent,
+            "Spawn or select your Hero to resolve personal holdings.",
+        );
+        return;
+    };
+    let shares = company.shares_owned_by(person);
+    if shares == 0 {
+        spawn_note(
+            parent,
+            if company.offers.is_empty() {
+                "You own no shares. No shareholder is currently offering stock."
+            } else {
+                "You own no shares. Public offers are listed below; open COMPANY CONTROLS to trade."
+            },
+        );
+        return;
+    }
+    parent.spawn(ledger::body(
+        format!(
+            "{} / 1,000 shares · {:.1}%",
+            shares,
+            f32::from(shares) / 10.0
+        ),
+        21.0,
+    ));
+    spawn_note(
+        parent,
+        &format!(
+            "Estimated book interest: {} coin",
+            format_money(company.holding_book_interest(shares))
+        ),
+    );
+    parent.spawn(ledger::body(
+        if company.master == person {
+            "You are Company Master and control operating decisions."
+        } else if shares > shared::components::COMPANY_TOTAL_SHARES / 2 {
+            "Majority holder; you may appoint the Company Master."
+        } else {
+            "Shareholder; economic ownership without executive authority."
+        },
+        15.0,
+    ));
+    if company.master == person && shares == shared::components::COMPANY_TOTAL_SHARES {
+        parent
+            .spawn(Node {
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: Val::Px(8.0),
+                row_gap: Val::Px(6.0),
+                margin: UiRect::vertical(Val::Px(4.0)),
+                ..default()
+            })
+            .with_children(|actions| {
+                for (amount, label) in [(1, "ADD 1 COIN"), (5, "ADD 5 COIN")] {
+                    detail_button(
+                        actions,
+                        CompanyBranchPolicyButton {
+                            company: company.id,
+                            action: HeroCompanyAction::ContributeCapital {
+                                amount: amount * shared::economy::PENNIES_PER_COIN,
+                            },
+                        },
+                        label,
+                    );
+                }
+            });
+        spawn_note(
+            parent,
+            "Personal coin becomes company capital, not revenue or profit.",
+        );
+    }
+}
+
+fn spawn_today_ledger(parent: &mut ChildSpawnerCommands<'_>, day: CompanyDayLedger) {
+    spawn_section_title(parent, "Today's Ledger", "");
+    if day.day == u32::MAX {
+        spawn_note(parent, "No trading record yet.");
+        return;
+    }
+    for (label, amount, expense) in [
+        ("Revenue", day.external_revenue, false),
+        ("Wages", day.wage_expense, true),
+        ("Outside inputs", day.external_input_expense, true),
+        (
+            "Market & delivery fees",
+            day.market_fees.saturating_add(day.delivery_fees),
+            true,
+        ),
+        ("Profit tax", day.profit_taxes, true),
+    ] {
+        parent
+            .spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(10.0),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn(ledger::body(label, 15.0));
+                row.spawn(ledger::body(
+                    format!(
+                        "{}{} coin",
+                        if expense { "−" } else { "" },
+                        format_money(amount)
+                    ),
+                    15.0,
+                ));
+            });
+    }
+    parent.spawn(ledger::rule());
+    parent
+        .spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn(ledger::body("Profit", 17.0));
+            row.spawn((
+                Text::new(signed_money(day.profit())),
+                ledger::reading(17.0),
+                TextColor(if day.profit() >= 0 {
+                    Color::srgb(0.19, 0.36, 0.16)
+                } else {
+                    EMBER
+                }),
+            ));
+        });
 }

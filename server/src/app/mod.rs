@@ -30,6 +30,7 @@ pub(crate) fn run() {
         crate::net::connection::configured_replication_send_interval(),
     ));
     app.add_plugins(ProtocolPlugin);
+    crate::net::possessions::install(&mut app);
     app.add_systems(Startup, crate::city::log_city_layout_summary);
 
     bootstrap::configure_bootstrap(&mut app);

@@ -116,6 +116,11 @@ pub struct UiButtonStyleExempt;
 #[require(bevy::ui::UiTransform)]
 pub struct UiButtonLabel;
 
+/// Authored ImageNode artwork supplies the full face and border. Keep standard
+/// focus/label/spring behavior while leaving its imperfect transparent edges clear.
+#[derive(Component)]
+pub(crate) struct UiTexturedButton;
+
 impl UiButtonStyle {
     pub const fn new(variant: UiButtonVariant) -> Self {
         Self {

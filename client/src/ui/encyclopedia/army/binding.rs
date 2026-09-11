@@ -1,4 +1,4 @@
-use super::view::spawn_entries;
+use super::view::{spawn_entries, BattalionPortrait, TroopPortrait};
 use super::*;
 use crate::ui::foundation::UiButtonStyle;
 
@@ -9,6 +9,8 @@ pub(crate) fn sync_army_panel(
     mut state: ResMut<ArmyManagement>,
     time: Res<Time>,
     mut hosts: Query<(Entity, &ListKind, &mut ListSignature)>,
+    mut portraits: Query<(Entity, &mut BattalionPortrait)>,
+    mut troop_portraits: Query<(&TroopPortrait, &mut crate::ui::portraits::PersonPortrait)>,
     mut texts: Query<(&BoundText, &mut Text)>,
     added: Query<(), Added<BoundText>>,
     mut buttons: Query<(
@@ -44,14 +46,47 @@ pub(crate) fn sync_army_panel(
         }
     }
     let model = PanelModel::new(&roster, &state);
-    state.members.retain(|e| model.members.contains(e));
-    state.available.retain(|e| model.available.contains(e));
+    if state.members.iter().any(|e| !model.members.contains(e)) {
+        state.members.retain(|e| model.members.contains(e));
+    }
+    if state.available.iter().any(|e| !model.available.contains(e)) {
+        state.available.retain(|e| model.available.contains(e));
+    }
+    let portrait = model
+        .unit
+        .and_then(|b| b.members.first())
+        .and_then(|e| roster.soldiers.get(e))
+        .and_then(|s| s.person_id);
+    for (entity, mut shown) in &mut portraits {
+        if shown.0 != portrait {
+            shown.0 = portrait;
+            commands
+                .entity(entity)
+                .despawn_children()
+                .with_children(|host| {
+                    host.spawn(crate::ui::ledger::person_portrait(
+                        portrait.unwrap_or_default(),
+                        138.0,
+                    ));
+                });
+        }
+    }
+    for (subject, mut shown) in &mut troop_portraits {
+        let wanted = roster
+            .soldiers
+            .get(&subject.0)
+            .and_then(|s| s.person_id)
+            .unwrap_or_default();
+        if shown.0 != wanted {
+            shown.0 = wanted;
+        }
+    }
     let pending = state.pending_until > time.elapsed_secs();
     let mut scope = perf.scope("sync_army_panel");
     for (slot, mut text) in &mut texts {
         let next = match *slot {
             BoundText::Summary => format!(
-                "{} battalions / {} troops / {} unassigned",
+                "{} battalions · {} troops · {} unassigned",
                 roster.battalions.len(),
                 roster.soldiers.len(),
                 roster
@@ -68,7 +103,7 @@ pub(crate) fn sync_army_panel(
                 "Create a battalion, then choose troops to add.".into(),
                 |b| {
                     format!(
-                        "{} / {} troops  /  {} free slots",
+                        "{} / {} troops · {} free slots",
                         b.count, MAX_BATTALION_SIZE, model.room
                     )
                 },
@@ -112,7 +147,7 @@ pub(crate) fn sync_army_panel(
                 .find(|b| b.entity == e)
                 .map_or(String::new(), |b| {
                     format!(
-                        "{} / {} troops / {}\n{}",
+                        "{} / {} · {}\n{}",
                         b.count,
                         MAX_BATTALION_SIZE,
                         b.role.label(),
@@ -172,7 +207,7 @@ pub(crate) fn sync_army_panel(
             commands
                 .entity(entity)
                 .despawn_children()
-                .with_children(|p| spawn_entries(p, *kind, &ids));
+                .with_children(|p| spawn_entries(p, *kind, &ids, &roster));
             scope.rebuilt();
         }
     }

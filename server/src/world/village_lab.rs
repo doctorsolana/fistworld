@@ -1932,7 +1932,7 @@ fn people(world: &mut World) -> Vec<PersonView> {
                         (*status, occupation.as_deref())
                     });
                 let state = format!(
-                    "{} {:?} {:?} pos={:.1},{:.1} target={} pending={} travel={} failed={} road={} farm={} wood={} fish={} process={} market={} home={} door={} off_duty={} strategic={} work={:?}/{:?} bypass=[door:{door_collision_bypass},pier:{pier_collision_bypass},moot:{moot_transit}/{moot_ticket}] supply={} carry={:?}:{}",
+                    "{} {:?} {:?} pos={:.1},{:.1} target={} pending={} travel={} failed={} road={} farm={} wood={} fish={} process={} market={} home={} door={} off_duty={} strategic={} work={:?}/{:?} bypass=[door:{door_collision_bypass},pier:{pier_collision_bypass},moot:{moot_transit}/{moot_ticket}] supply={} carry={:?}",
                     name.0,
                     intent,
                     activity,
@@ -1956,7 +1956,6 @@ fn people(world: &mut World) -> Vec<PersonView> {
                     occupation,
                     construction.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     carried.good,
-                    carried.amount,
                 );
                 let active_progress_expected = target.is_some()
                     || pending.is_some()
@@ -2119,11 +2118,11 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
         .next()
         .is_some();
     for load in world.query::<&CarriedLoad>().iter(world) {
-        evidence.saw_wheat_carried |= load.good == Some(Good::Wheat) && load.amount > 0;
-        evidence.saw_wood_carried |= load.good == Some(Good::Wood) && load.amount > 0;
-        evidence.saw_stone_carried |= load.good == Some(Good::Stone) && load.amount > 0;
-        evidence.saw_food_carried |= load.good == Some(Good::Food) && load.amount > 0;
-        evidence.saw_meat_carried |= load.good == Some(Good::Meat) && load.amount > 0;
+        evidence.saw_wheat_carried |= load.good == Some(Good::Wheat) && !load.is_empty();
+        evidence.saw_wood_carried |= load.good == Some(Good::Wood) && !load.is_empty();
+        evidence.saw_stone_carried |= load.good == Some(Good::Stone) && !load.is_empty();
+        evidence.saw_food_carried |= load.good == Some(Good::Food) && !load.is_empty();
+        evidence.saw_meat_carried |= load.good == Some(Good::Meat) && !load.is_empty();
     }
     for inventory in world.query::<&GoodsInventory>().iter(world) {
         evidence.saw_flour_present |= inventory.amount(Good::Flour) > 0;

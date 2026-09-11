@@ -28,7 +28,8 @@ use shared::economy::{
 use super::*;
 use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
 use crate::ui::hud::GodCapability;
-use crate::ui::styles::{EMBER, INK, INK_MUTED};
+use crate::ui::ledger::{self, LedgerIllustration};
+use crate::ui::styles::{INK, INK_MUTED};
 use lightyear::prelude::{Connected, MessageSender};
 use shared::protocol::{HeroConstructionOrder, ReliableChannel};
 
@@ -41,6 +42,8 @@ pub struct PlaceRecord {
     /// Physical civic building, separate from the unlocked settlement tier so
     /// future paid construction may lag behind promotion.
     pub hall_level: CivicHallLevel,
+    /// Physical appearance last observed in replicated detail; summaries cannot upgrade it.
+    pub hall_appearance: Option<CivicHallLevel>,
     pub position: Vec3,
     /// How many people live there. Zero means a founded site with no life in it
     /// yet, which is a real and distinct state rather than a missing number.
@@ -69,6 +72,7 @@ pub struct PlaceRecord {
 pub struct PlaceBuildingRecord {
     pub id: Option<shared::components::BuildingId>,
     pub kind: SettlementBuildingKind,
+    pub house_appearance: Option<shared::components::HouseAppearance>,
     pub position: Vec3,
     pub owner: Option<String>,
     pub for_sale: Option<BusinessForSale>,
@@ -225,7 +229,10 @@ pub(super) fn learn_settlement_summaries(
         let unchanged = existing.is_some_and(|index| {
             let record = &places.records[index];
             record.tier == summary.tier
-                && record.hall_level == CivicHallLevel::for_tier(summary.tier)
+                && record.hall_level
+                    == record
+                        .hall_appearance
+                        .unwrap_or_else(|| CivicHallLevel::for_tier(summary.tier))
                 && record.position == position.0
                 && record.residents == summary.residents
                 && record.treasury == summary.treasury
@@ -238,7 +245,9 @@ pub(super) fn learn_settlement_summaries(
         if let Some(index) = existing {
             let record = &mut places.records[index];
             record.tier = summary.tier;
-            record.hall_level = CivicHallLevel::for_tier(summary.tier);
+            record.hall_level = record
+                .hall_appearance
+                .unwrap_or_else(|| CivicHallLevel::for_tier(summary.tier));
             record.position = position.0;
             record.residents = summary.residents;
             record.treasury = summary.treasury;
@@ -250,6 +259,7 @@ pub(super) fn learn_settlement_summaries(
                 name: summary.name.clone(),
                 tier: summary.tier,
                 hall_level: CivicHallLevel::for_tier(summary.tier),
+                hall_appearance: None,
                 position: position.0,
                 residents: summary.residents,
                 treasury: summary.treasury,
@@ -385,7 +395,10 @@ pub(super) fn learn_settlements(
         Option<&BusinessProcurementPolicy>,
         Option<&BusinessCondition>,
         Option<&BusinessForSale>,
-        Option<&OperatedBy>,
+        (
+            Option<&OperatedBy>,
+            Option<&shared::components::HouseAppearance>,
+        ),
     )>,
     companies: Query<(&CompanyId, &shared::economy::CompanyAccount)>,
     fields: Query<&FarmField>,
@@ -451,7 +464,7 @@ pub(super) fn learn_settlements(
                     procurement,
                     condition,
                     for_sale,
-                    operated_by,
+                    (operated_by, house_appearance),
                 )| {
                     let inventory = if building.kind == SettlementBuildingKind::Market {
                         public_inventory
@@ -461,6 +474,7 @@ pub(super) fn learn_settlements(
                     PlaceBuildingRecord {
                         id: building_id.copied(),
                         kind: building.kind,
+                        house_appearance: house_appearance.copied(),
                         position: position.0,
                         owner: building.owner.clone(),
                         for_sale: for_sale.copied(),
@@ -565,6 +579,7 @@ pub(super) fn learn_settlements(
                             != hall_level
                                 .copied()
                                 .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier))
+                        || hall_level.is_some_and(|level| record.hall_appearance != Some(*level))
                         || record.position != position.0
                         || record.residents != settlement.residents
                         || record.treasury != settlement.treasury
@@ -604,6 +619,7 @@ pub(super) fn learn_settlements(
         opportunities,
     ) in seen.iter()
     {
+        let observed_hall = hall_level.copied();
         let hall_level = hall_level
             .copied()
             .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
@@ -631,6 +647,7 @@ pub(super) fn learn_settlements(
             Some(record) => {
                 record.tier = settlement.tier;
                 record.hall_level = hall_level;
+                record.hall_appearance = observed_hall.or(record.hall_appearance);
                 record.position = position.0;
                 record.residents = settlement.residents;
                 record.treasury = settlement.treasury;
@@ -654,6 +671,7 @@ pub(super) fn learn_settlements(
                 name: settlement.name.clone(),
                 tier: settlement.tier,
                 hall_level,
+                hall_appearance: observed_hall,
                 position: position.0,
                 residents: settlement.residents,
                 treasury: settlement.treasury,
@@ -856,9 +874,18 @@ pub(super) fn rebuild_place_list(
                 spawn_place_building_row(
                     list,
                     record.id,
+                    SelectedPlaceEntry::Overview,
+                    "Overview",
+                    "",
+                    LedgerIllustration::Village,
+                );
+                spawn_place_building_row(
+                    list,
+                    record.id,
                     SelectedPlaceEntry::Hall,
                     record.hall_level.label(),
-                    "COMMON STORE",
+                    "Common store",
+                    hall_illustration(record.hall_appearance),
                 );
                 for (index, building) in record.buildings.iter().enumerate() {
                     let label = building_label(record, index);
@@ -869,6 +896,7 @@ pub(super) fn rebuild_place_list(
                         SelectedPlaceEntry::Building(index),
                         &label,
                         &summary,
+                        record_illustration(building),
                     );
                 }
             }
@@ -892,7 +920,9 @@ fn place_rows_signature(
         record.buildings.len().hash(&mut hasher);
         if selected == Some(record.id) {
             record.hall_level.label().hash(&mut hasher);
+            record.hall_appearance.hash(&mut hasher);
             for (index, building) in record.buildings.iter().enumerate() {
+                building.house_appearance.hash(&mut hasher);
                 building_label(record, index).hash(&mut hasher);
                 building_tree_summary(building).hash(&mut hasher);
             }
@@ -906,45 +936,40 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
         Button,
         PlaceRow(record.id),
         Node {
-            flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             flex_shrink: 0.0,
-            column_gap: Val::Px(9.0),
-            padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-            border_radius: BorderRadius::all(Val::Px(5.0)),
+            column_gap: Val::Px(12.0),
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(8.0)),
+            border: UiRect::bottom(Val::Px(1.0)),
             ..default()
         },
         button_chrome(UiButtonVariant::Row),
     ))
     .with_children(|row| {
         row.spawn((
-            Text::new(if expanded { "-" } else { "+" }),
-            crate::ui::typography::text(14.0),
-            TextColor(INK_MUTED),
+            ledger::body(if expanded { "−" } else { "+" }, 19.0),
             Node {
-                width: Val::Px(12.0),
+                width: Val::Px(14.0),
                 flex_shrink: 0.0,
                 ..default()
             },
         ));
-        row.spawn((
-            Text::new(record.name.clone()),
-            crate::ui::typography::text(16.0),
-            TextColor(INK),
-            Node {
-                flex_grow: 1.0,
-                ..default()
-            },
+        row.spawn(ledger::illustration(
+            LedgerIllustration::Village,
+            Vec2::splat(64.0),
         ));
-        row.spawn((
-            Text::new(format!(
-                "{} / {}",
-                record.tier.label(),
-                record.buildings.len() + 1
-            )),
-            crate::ui::typography::text(12.5),
-            TextColor(INK_MUTED),
-        ));
+        row.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
+            min_width: Val::Px(0.0),
+            row_gap: Val::Px(4.0),
+            ..default()
+        })
+        .with_children(|copy| {
+            copy.spawn(ledger::body(record.name.clone(), 21.0));
+            copy.spawn(ledger::body(book_label(record.tier.label()), 17.0))
+                .insert(TextColor(INK_MUTED));
+        });
     });
 }
 
@@ -954,39 +979,93 @@ fn spawn_place_building_row(
     entry: SelectedPlaceEntry,
     label: &str,
     summary: &str,
+    illustration: LedgerIllustration,
 ) {
     list.spawn((
         Button,
         PlaceBuildingRow { place, entry },
         Node {
-            flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             flex_shrink: 0.0,
-            column_gap: Val::Px(8.0),
-            margin: UiRect::left(Val::Px(18.0)),
-            padding: UiRect::new(Val::Px(14.0), Val::Px(8.0), Val::Px(6.0), Val::Px(6.0)),
+            column_gap: Val::Px(9.0),
+            margin: UiRect::left(Val::Px(28.0)),
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
             border: UiRect::left(Val::Px(1.0)),
-            border_radius: BorderRadius::right(Val::Px(5.0)),
             ..default()
         },
         button_chrome(UiButtonVariant::Row),
     ))
     .with_children(|row| {
-        row.spawn((
-            Text::new(label.to_string()),
-            crate::ui::typography::text(14.0),
-            TextColor(INK),
-            Node {
-                flex_grow: 1.0,
-                ..default()
-            },
-        ));
-        row.spawn((
-            Text::new(summary.to_string()),
-            crate::ui::typography::text(11.5),
-            TextColor(INK_MUTED),
-        ));
+        row.spawn(ledger::illustration(illustration, Vec2::splat(32.0)));
+        row.spawn(Node {
+            flex_grow: 1.0,
+            min_width: Val::Px(0.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(2.0),
+            ..default()
+        })
+        .with_children(|copy| {
+            copy.spawn(ledger::body(book_label(label), 17.0));
+            if !summary.is_empty() {
+                copy.spawn(ledger::body(summary, 13.0));
+            }
+        });
     });
+}
+
+fn hall_illustration(observed: Option<CivicHallLevel>) -> LedgerIllustration {
+    match observed {
+        Some(CivicHallLevel::Village) => LedgerIllustration::HallVillage,
+        Some(CivicHallLevel::Town) => LedgerIllustration::HallTown,
+        _ => LedgerIllustration::Hall,
+    }
+}
+
+fn record_illustration(building: &PlaceBuildingRecord) -> LedgerIllustration {
+    use shared::components::{HouseLevel, HouseLine};
+    if building.kind == SettlementBuildingKind::House {
+        if let Some(appearance) = building.house_appearance {
+            return match (appearance.line, appearance.level) {
+                (HouseLine::Cabin, HouseLevel::Ground) => LedgerIllustration::House,
+                (HouseLine::Cabin, HouseLevel::UpperStorey) => LedgerIllustration::HouseL2,
+                (HouseLine::LongCabin, HouseLevel::Ground) => LedgerIllustration::HouseLong,
+                (HouseLine::LongCabin, HouseLevel::UpperStorey) => LedgerIllustration::HouseLongL2,
+            };
+        }
+    }
+    LedgerIllustration::building(building.kind)
+}
+
+pub(super) fn sync_place_illustration(
+    places: Res<KnownPlaces>,
+    selected: Res<SelectedPlace>,
+    entry: Res<SelectedPlaceEntry>,
+    worksites: Query<&ConstructionSite>,
+    mut art: Query<&mut LedgerIllustration, With<super::layout::places::PlaceIllustration>>,
+) {
+    let Some(place) = selected.0.and_then(|id| places.find_by_id(id)) else {
+        return;
+    };
+    let next = match *entry {
+        SelectedPlaceEntry::Overview => LedgerIllustration::Village,
+        SelectedPlaceEntry::Hall => hall_illustration(place.hall_appearance),
+        SelectedPlaceEntry::Building(index) => place
+            .buildings
+            .get(index)
+            .map_or(LedgerIllustration::Village, |building| {
+                record_illustration(building)
+            }),
+        SelectedPlaceEntry::Worksite(entity) => worksites
+            .get(entity)
+            .map_or(LedgerIllustration::Village, |site| {
+                LedgerIllustration::building(site.kind)
+            }),
+    };
+    for mut kind in &mut art {
+        if *kind != next {
+            *kind = next;
+        }
+    }
 }
 
 fn building_label(place: &PlaceRecord, index: usize) -> String {
@@ -1125,6 +1204,7 @@ pub(super) fn style_place_rows(
 
 #[allow(clippy::type_complexity)]
 pub(super) fn sync_place_detail(
+    fresh: Query<(), Added<PlaceDetailCard>>,
     places: Res<KnownPlaces>,
     selected: Res<SelectedPlace>,
     selected_entry: Res<SelectedPlaceEntry>,
@@ -1185,11 +1265,18 @@ pub(super) fn sync_place_detail(
             &mut TextColor,
             Option<&PlaceDetailLabel>,
             Option<&PlaceDetailValue>,
+            &mut Node,
         ),
         (
             Or<(With<PlaceDetailLabel>, With<PlaceDetailValue>)>,
             Without<PlaceDetailName>,
             Without<PlaceDetailSubtitle>,
+            Without<PlaceDetailLine>,
+            Without<PlaceDetailCard>,
+            Without<PlaceDetailEmptyState>,
+            Without<PlaceDetailTile>,
+            Without<PlaceActionsRow>,
+            Without<WorksiteAssignButton>,
         ),
     >,
     mut tiles: Query<
@@ -1215,6 +1302,15 @@ pub(super) fn sync_place_detail(
         ),
     >,
 ) {
+    if fresh.is_empty()
+        && !places.is_changed()
+        && !selected.is_changed()
+        && !selected_entry.is_changed()
+        && !god.is_changed()
+        && !matches!(*selected_entry, SelectedPlaceEntry::Worksite(_))
+    {
+        return;
+    }
     let record = selected.0.and_then(|id| places.find_by_id(id));
 
     let show = record.is_some();
@@ -1288,8 +1384,13 @@ pub(super) fn sync_place_detail(
         }
     }
     for mut text in subtitle.iter_mut() {
-        if text.0 != model.subtitle {
-            text.0 = model.subtitle.clone();
+        let next = if *selected_entry == SelectedPlaceEntry::Overview {
+            format!("{} · Settlement overview", book_label(record.tier.label()))
+        } else {
+            model.subtitle.clone()
+        };
+        if text.0 != next {
+            text.0 = next;
         }
     }
     for (PlaceDetailTile(index), mut node) in tiles.iter_mut() {
@@ -1310,15 +1411,26 @@ pub(super) fn sync_place_detail(
             continue;
         };
         let next = if label.is_some() {
-            tile_label
+            book_label(tile_label)
         } else {
-            tile_value
+            tile_value.clone()
         };
-        if text.0 != *next {
-            text.0 = next.clone();
+        if text.0 != next {
+            text.0 = next;
         }
     }
+    let placements = detail_grid_placements(&model.rows);
     for (PlaceDetailLine(index), mut node) in lines.iter_mut() {
+        if let Some((column, row)) = placements.get(*index) {
+            let column = GridPlacement::start(*column);
+            let row = GridPlacement::start(*row);
+            if node.grid_column != column {
+                node.grid_column = column;
+            }
+            if node.grid_row != row {
+                node.grid_row = row;
+            }
+        }
         let row = model.rows.get(*index);
         let display = if row.is_some() {
             Display::Flex
@@ -1331,33 +1443,60 @@ pub(super) fn sync_place_detail(
         // A section heading sits on its own, with air above it and no rule.
         let section = matches!(row, Some(DetailRow::Section(_)));
         let padding = if section {
-            UiRect::new(Val::Px(0.0), Val::Px(0.0), Val::Px(22.0), Val::Px(4.0))
+            UiRect::new(Val::Px(0.0), Val::Px(0.0), Val::Px(18.0), Val::Px(7.0))
         } else {
-            UiRect::vertical(Val::Px(9.0))
+            UiRect::vertical(Val::Px(7.0))
         };
         if node.padding != padding {
             node.padding = padding;
         }
-        let border = UiRect::bottom(Val::Px(if section { 0.0 } else { 1.0 }));
+        let border = UiRect::bottom(Val::Px(1.0));
         if node.border != border {
             node.border = border;
         }
     }
-    for (mut text, mut font, mut color, label, value) in line_text.iter_mut() {
+    for (mut text, mut font, mut color, label, value, mut node) in line_text.iter_mut() {
         let index = label
             .map(|part| part.0)
             .or_else(|| value.map(|part| part.0));
         let Some(row) = index.and_then(|index| model.rows.get(index)) else {
             continue;
         };
+        let section = matches!(row, DetailRow::Section(_));
+        let display = if section && value.is_some() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if node.display != display {
+            node.display = display;
+        }
+        let basis = if section {
+            Val::Percent(100.0)
+        } else if label.is_some() {
+            Val::Percent(34.0)
+        } else {
+            Val::Percent(66.0)
+        };
+        if node.flex_basis != basis {
+            node.flex_basis = basis;
+        }
         let (next, next_size, next_color) = match (row, label.is_some()) {
-            (DetailRow::Section(name), true) => (name.clone(), 13.0, EMBER),
+            (DetailRow::Section(name), true) => (book_label(name), 21.0, INK),
             (DetailRow::Section(_), false) => (String::new(), 16.0, INK),
-            (DetailRow::Line(row_label, _), true) => (row_label.clone(), 13.5, INK_MUTED),
-            (DetailRow::Line(_, row_value), false) => (row_value.clone(), 16.0, INK),
+            (DetailRow::Line(row_label, _), true) => (book_label(row_label), 17.0, INK),
+            (DetailRow::Line(_, row_value), false) => (row_value.clone(), 17.0, INK),
         };
         if text.0 != next {
             text.0 = next;
+        }
+        let next_font = if matches!(row, DetailRow::Section(_)) {
+            crate::ui::typography::DISPLAY
+        } else {
+            crate::ui::typography::READING
+        };
+        if font.font != next_font.clone().into() {
+            font.font = next_font.into();
         }
         if font.font_size != FontSize::Px(next_size) {
             font.font_size = FontSize::Px(next_size);
@@ -1528,6 +1667,40 @@ pub(super) fn handle_worksite_assign_button(
             continue;
         };
         sender.send::<ReliableChannel>(HeroConstructionOrder { site });
+    }
+}
+
+/// Pair complete sections across the spread, preserving every model row.
+/// Rows remain retained; grid coordinates change only when the selected record's
+/// section structure changes, and scalar updates do not move them between parents.
+fn detail_grid_placements(rows: &[DetailRow]) -> Vec<(i16, i16)> {
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        if groups.is_empty() || matches!(row, DetailRow::Section(_)) {
+            groups.push(Vec::new());
+        }
+        groups.last_mut().unwrap().push(index);
+    }
+    let mut result = vec![(1, 1); rows.len()];
+    let mut start = 1_i16;
+    for pair in groups.chunks(2) {
+        for (column, group) in pair.iter().enumerate() {
+            for (offset, index) in group.iter().enumerate() {
+                result[*index] = (column as i16 + 1, start + offset as i16);
+            }
+        }
+        start += pair.iter().map(Vec::len).max().unwrap_or(0) as i16;
+    }
+    result
+}
+
+/// Labels are book copy, while model keys retain their stable uppercase spelling.
+fn book_label(label: &str) -> String {
+    let lower = label.to_lowercase();
+    let mut chars = lower.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }
 
@@ -2668,6 +2841,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn illustration_uses_observed_structure_instead_of_settlement_progress() {
+        let mut place = explorer_place();
+        place.tier = SettlementTier::Town;
+        place.hall_appearance = Some(CivicHallLevel::Moot);
+        assert_eq!(
+            hall_illustration(place.hall_appearance),
+            LedgerIllustration::Hall
+        );
+        assert_eq!(hall_illustration(None), LedgerIllustration::Hall);
+        let building = &mut place.buildings[0];
+        building.kind = SettlementBuildingKind::House;
+        building.house_appearance = Some(shared::components::HouseAppearance {
+            line: shared::components::HouseLine::LongCabin,
+            level: shared::components::HouseLevel::UpperStorey,
+        });
+        assert_eq!(
+            record_illustration(building),
+            LedgerIllustration::HouseLongL2
+        );
+    }
+
+    #[test]
+    fn populated_place_rows_compose_skin_bundles_without_duplicate_components() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world
+            .run_system_once(|mut commands: Commands| {
+                let place = explorer_place();
+                commands.spawn(Node::default()).with_children(|list| {
+                    spawn_place_row(list, &place, true);
+                    spawn_place_building_row(
+                        list,
+                        place.id,
+                        SelectedPlaceEntry::Hall,
+                        "Moot Hall",
+                        "Common store",
+                        LedgerIllustration::Hall,
+                    );
+                });
+            })
+            .unwrap();
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<PlaceRow>>()
+                .iter(&world)
+                .count(),
+            1
+        );
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<PlaceBuildingRow>>()
+                .iter(&world)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn two_column_sections_never_overlap_or_drop_long_records() {
+        let rows = vec![
+            DetailRow::Section("PEOPLE".into()),
+            DetailRow::Line("A".into(), "1".into()),
+            DetailRow::Line("B".into(), "2".into()),
+            DetailRow::Section("STABILITY".into()),
+            DetailRow::Line("C".into(), "3".into()),
+            DetailRow::Section("ECONOMY".into()),
+            DetailRow::Line("D".into(), "4".into()),
+            DetailRow::Section("GROWTH".into()),
+            DetailRow::Line("E".into(), "5".into()),
+            DetailRow::Line("F".into(), "6".into()),
+        ];
+        let positions = detail_grid_placements(&rows);
+        assert_eq!(positions.len(), rows.len());
+        let distinct: std::collections::HashSet<_> = positions.iter().copied().collect();
+        assert_eq!(distinct.len(), rows.len());
+        assert_eq!(positions[0], (1, 1));
+        assert_eq!(positions[3], (2, 1));
+        assert_eq!(positions[5], (1, 4));
+        assert_eq!(positions[7], (2, 4));
+    }
+
+    #[test]
     fn a_worksite_page_reports_materials_and_reads_as_a_site_not_a_place() {
         let site = shared::components::ConstructionSite {
             kind: shared::components::SettlementBuildingKind::House,
@@ -2705,6 +2960,7 @@ mod tests {
                 name: name.to_string(),
                 tier,
                 hall_level: CivicHallLevel::for_tier(tier),
+                hall_appearance: None,
                 position: Vec3::ZERO,
                 residents: 0,
                 treasury: 0,
@@ -2749,6 +3005,7 @@ mod tests {
             name: "Brackwater".into(),
             tier: SettlementTier::Village,
             hall_level: CivicHallLevel::Village,
+            hall_appearance: Some(CivicHallLevel::Village),
             position: Vec3::new(120.0, 0.0, -80.0),
             residents: 7,
             treasury: 0,
@@ -2764,6 +3021,7 @@ mod tests {
             buildings: vec![PlaceBuildingRecord {
                 id: Some(shared::components::BuildingId(10)),
                 kind: SettlementBuildingKind::Farmstead,
+                house_appearance: None,
                 position: Vec3::new(145.0, 0.0, -100.0),
                 owner: Some("Ada".into()),
                 for_sale: None,

@@ -356,7 +356,15 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
         21
     );
     assert_eq!(
-        world.entity(porter).get::<CarriedLoad>().unwrap().amount,
+        world.entity(porter).get::<CarriedLoad>().unwrap().good,
+        Some(Good::Wood)
+    );
+    assert_eq!(
+        world
+            .entity(porter)
+            .get::<GoodsInventory>()
+            .unwrap()
+            .amount(Good::Wood),
         24
     );
     assert!(matches!(

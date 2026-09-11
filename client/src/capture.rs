@@ -44,8 +44,10 @@ mod presentation;
 mod rural_fixtures;
 mod square_fixtures;
 pub(crate) use presentation::{setup_capture_presentation, sync_capture_presentation};
+mod encyclopedia_tour;
 mod fortification_fixtures;
 mod journey_tour;
+mod ledger_nested;
 mod scene_fixtures;
 mod town_fixtures;
 mod tree_fixtures;
@@ -365,6 +367,8 @@ pub fn run(mut config: CaptureConfig) {
     asset_fixtures::install(&mut app);
     ui_tour::install(&mut app);
     journey_tour::install(&mut app);
+    encyclopedia_tour::install(&mut app);
+    ledger_nested::install(&mut app);
 
     app.add_systems(PreStartup, configure_capture_window);
     app.add_systems(Startup, enter_world_offline);
@@ -414,6 +418,8 @@ pub fn run(mut config: CaptureConfig) {
                 .run_if(asset_fixtures::ready)
                 .run_if(character_fixtures::ready)
                 .run_if(journey_tour::ready)
+                .run_if(encyclopedia_tour::ready)
+                .run_if(ledger_nested::ready)
                 .run_if(wildlife::ready)
                 .run_if(cavalry_visuals::ready),
             apply_capture_free_look.after(crate::camera_rts::update_commander_camera),
