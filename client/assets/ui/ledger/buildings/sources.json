@@ -1,0 +1,185 @@
+{
+  "images": {
+    "bakery": {
+      "asset": "client/assets/game_assets/buildings/village/Bakery.glb",
+      "asset_sha256": "234e64ad85139be99168f1184654383f568f0d4259809c1e221974b9f3184367",
+      "bytes": 8184,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/bakery.ron",
+      "width": 384
+    },
+    "church": {
+      "asset": "client/assets/game_assets/buildings/village/Church.glb",
+      "asset_sha256": "2dcc20aacb305b09472603b9145fdb6f65cbab4dc0e421c030be5b1642cb5539",
+      "bytes": 7305,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/church.ron",
+      "width": 384
+    },
+    "farm": {
+      "asset": "client/assets/game_assets/buildings/village/Farmstead.glb",
+      "asset_sha256": "45ddc75909ba5991353d41d1fc39a12fa01acef2910caf9734621a1ff28bd676",
+      "bytes": 7404,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/farm.ron",
+      "width": 384
+    },
+    "fisherman": {
+      "asset": "client/assets/game_assets/buildings/village/FishermansHut.glb",
+      "asset_sha256": "6a4abcceeeea13080439d86bf506205784e4e277239c65f30803d18e618e4a64",
+      "bytes": 8457,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/fisherman.ron",
+      "width": 384
+    },
+    "hall": {
+      "asset": "client/assets/game_assets/buildings/village/MootHall.glb",
+      "asset_sha256": "cf432c6df68605fe5da901f661f05cad32f19a0492c21f1d00210e22be6aff32",
+      "bytes": 8019,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/hall.ron",
+      "width": 384
+    },
+    "hall-town": {
+      "asset": "client/assets/game_assets/buildings/village/TownHall.glb",
+      "asset_sha256": "e8214f303666097fc62217e2aba051417883876a614875f4d477173971608b38",
+      "bytes": 9101,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/hall-town.ron",
+      "width": 384
+    },
+    "hall-village": {
+      "asset": "client/assets/game_assets/buildings/village/VillageHall.glb",
+      "asset_sha256": "cee108c6dcc484670a7ab6c595135ed1fe3b51a4ba65545863542dcbe30ce7f9",
+      "bytes": 8607,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/hall-village.ron",
+      "width": 384
+    },
+    "house": {
+      "asset": "client/assets/game_assets/buildings/village/LogCabin.glb",
+      "asset_sha256": "2d658dcd020453c5aea8937b224b7d3a2099107412da8bdb38c8c22a0a85be23",
+      "bytes": 7913,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/house.ron",
+      "width": 384
+    },
+    "house-l2": {
+      "asset": "client/assets/game_assets/buildings/village/CabinL2.glb",
+      "asset_sha256": "e7174c24269077ad0b0e5661b340bca3fa8a31ecb363020a7a09cab62bc872d4",
+      "bytes": 8754,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/house-l2.ron",
+      "width": 384
+    },
+    "house-long": {
+      "asset": "client/assets/game_assets/buildings/village/LongCabin.glb",
+      "asset_sha256": "0f3f56cc7472b632cb0b307c6dcd08b984c15e633d166313f0629100f6aa596f",
+      "bytes": 7327,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/house-long.ron",
+      "width": 384
+    },
+    "house-long-l2": {
+      "asset": "client/assets/game_assets/buildings/village/LongCabinL2.glb",
+      "asset_sha256": "26e77f46ad28d8df5b5ca8732637354403fd04c03d126a7ef439c23364a0ba9c",
+      "bytes": 8715,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/house-long-l2.ron",
+      "width": 384
+    },
+    "livestock": {
+      "asset": "client/assets/game_assets/buildings/village/LivestockFarm.glb",
+      "asset_sha256": "014a1f589258a100e4fb9f29e52a7284b82e4c6923ed04e3fb35e4ff2f368bd3",
+      "bytes": 7759,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/livestock.ron",
+      "width": 384
+    },
+    "lumberjack": {
+      "asset": "client/assets/game_assets/buildings/village/LumberjackHut.glb",
+      "asset_sha256": "eefaf60def8e48e5bf93cbf6e560d0428d02c6f36883bbf24a9d8f35361d2017",
+      "bytes": 8794,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/lumberjack.ron",
+      "width": 384
+    },
+    "market": {
+      "asset": "client/assets/game_assets/buildings/village/Market.glb",
+      "asset_sha256": "bd196989dfb4670321841a06870c3454105635ddfa82ae0a6e7e15af3302a843",
+      "bytes": 9034,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/market.ron",
+      "width": 384
+    },
+    "quarry": {
+      "asset": "client/assets/game_assets/buildings/village/StoneQuarry.glb",
+      "asset_sha256": "84862fc101a9210a7d9fc670b70046801b8b3bb3881786b4c259ec534d7ae465",
+      "bytes": 7984,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/quarry.ron",
+      "width": 384
+    },
+    "storage": {
+      "asset": "client/assets/game_assets/buildings/village/StorageHall.glb",
+      "asset_sha256": "a76e9994a1ee40f8fc946eafd68c5c7c594561185c90d5b323d49b50317fa90f",
+      "bytes": 8653,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/storage.ron",
+      "width": 384
+    },
+    "tavern": {
+      "asset": "client/assets/game_assets/buildings/village/Tavern.glb",
+      "asset_sha256": "d01dfdcea3c9ec4b2477c1675468ae64bc6ed450f68fa4f9a2e1b579f61a9044",
+      "bytes": 8926,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/tavern.ron",
+      "width": 384
+    },
+    "windmill": {
+      "asset": "client/assets/game_assets/buildings/village/WindMill.glb",
+      "asset_sha256": "37e26a9639bb63d332a92d1352214ebe3401aed95899d6781c377c74d8f30fda",
+      "bytes": 9012,
+      "capture_git_commit": "c58548b4b44a",
+      "encoding": "JPEG quality 80, progressive, 4:4:4",
+      "height": 224,
+      "scenario": "capture/scenarios/ledger-buildings/windmill.ron",
+      "width": 384
+    }
+  },
+  "schema_version": 1
+}
