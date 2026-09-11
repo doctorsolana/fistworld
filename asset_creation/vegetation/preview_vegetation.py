@@ -3,17 +3,13 @@
     blender --background --factory-startup --python asset_creation/vegetation/preview_vegetation.py
     blender --background --factory-startup --python asset_creation/vegetation/preview_vegetation.py -- --match FernPatch
 
-    # live, in the Blender MCP session
-    exec(open('/Users/terminator2/Coding/fistworld/asset_creation/vegetation/preview_vegetation.py').read())
+Writes asset_creation/vegetation/renders/contact.png (ignored review output).
 
-Writes asset_creation/renders/vegetation/contact.png.
-
-Discovery by convention, like the house chain: every .glb in asset_creation/vegetation/ is picked
-up, and every node whose name contains a LOD marker becomes its own tile. Adding a species needs
-no edit here.
+Discovers the runtime vegetation families through asset_paths.py. Every node whose name contains
+a LOD marker becomes its own tile. Adding a species within a family needs no edit here.
 
 One ROW PER SPECIES, its LODs left to right in order, so a species reads as a row and a LOD
-reads as a column. Only the new assets appear — nothing shipped, nothing old.
+reads as a column. The sheet shows exactly the current runtime models.
 
 The camera is the game's: 40.84 deg above horizon at the default 280 m zoom, orthographic (at that
 distance a 7 m tree subtends 1.5 deg, so perspective is already flat). LOD1 tiles matter most —
@@ -25,12 +21,14 @@ import os
 import re
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import asset_paths
+
 import bpy
 from mathutils import Matrix, Vector
 
-REPO = "/Users/terminator2/Coding/fistworld"
-VEG = os.path.join(REPO, "asset_creation", "vegetation")
-OUT = os.path.join(REPO, "asset_creation", "renders", "vegetation")
+OUT = str(asset_paths.RENDERS)
 WIDTH = 2400
 WORK_SCENE = "VegPreview"
 ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -117,18 +115,17 @@ def main():
     sc = scene()
     os.makedirs(OUT, exist_ok=True)
 
-    new_files = sorted(
-        f
-        for f in os.listdir(VEG)
-        if f.endswith(".glb") and (MATCH is None or MATCH.lower() in f.lower())
-    ) if os.path.isdir(VEG) else []
+    new_files = [
+        path for path in asset_paths.runtime_glbs()
+        if MATCH is None or MATCH.lower() in path.name.lower()
+    ]
     # One row per species. Reversed because row 0 renders NEAREST the camera, and reading order
     # should run front-to-back down the sheet the way the filenames sort.
     # Pack several species per row. One row each was fine at four species and unreadable at twelve
     # -- the sheet became a single tall column. Species are kept whole within a row so a tree and
     # its LODs never straddle the break.
     per_row = 3
-    loaded = [t for t in (load_tiles(sc, os.path.join(VEG, f), False) for f in new_files) if t]
+    loaded = [t for t in (load_tiles(sc, str(f), False) for f in new_files) if t]
     rows = []
     for i in range(0, len(loaded), per_row):
         rows.append([tile for group in loaded[i:i + per_row] for tile in group])

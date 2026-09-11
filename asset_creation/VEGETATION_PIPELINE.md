@@ -222,23 +222,36 @@ reads as one mesh.
 
 ## 6. The script chain
 
-Follows the prop chain's structure, and its principle: **downstream scripts discover by convention**,
-so adding a species needs no edit downstream.
+The current builders export their own GLBs directly. `asset_paths.py` resolves the checkout
+from its file location and keeps output in one maintained runtime catalogue under
+`client/assets/game_assets/environment/`. `--out` can redirect an experimental build into an
+ignored review folder before deliberately replacing a runtime asset.
 
-```
-build_<species>.py       # geometry, both LODs, COLOR_0, UV1 wind weights -> <species>.blend
-build_forest_floor.py    # direct, textureless two-LOD fern patch export
-preview_vegetation.py    # studio renders + a contact sheet at RTS-relevant distances
-export_vegetation_glb.py # strip studio, rotate to game space, verify node names -> .glb
-inspect_vegetation_glb.py# the validator (§7) -- exits non-zero on any breach
-```
+| Script | Output / role |
+|---|---|
+| `build_vegetation.py` | Trees into `trees/broadleaf` or `trees/conifer` |
+| `build_scatter.py` | Rocks, bushes and flowers into their matching family |
+| `build_forest_floor.py` | Textureless two-LOD fern patches into `ferns` |
+| `build_grass.py` | Grass GLBs into `grass`, intermediate PNGs into ignored `vegetation/renders` |
+| `build_meadow_trees.py` | Editable meadow `.blend` sources and matching `trees/broadleaf` GLBs |
+| `graft_vegetation.py` | Legacy donor conversion; explicit `--from-dir` input, runtime family output |
+| `preview_vegetation.py`, `compare_vegetation.py` | Read the runtime catalogue; write ignored `vegetation/renders` sheets |
+| `inspect_vegetation_glb.py` | Pure Python validation of exported runtime GLBs |
 
-No `texture_and_light.py` step: vegetation bakes nothing. No `animate_*.py`: vegetation has no node
-animation.
+There is no separate vegetation exporter and no second GLB collection beside these scripts.
+The family builders and catalogue previews add their own script directory before importing
+`asset_paths`; the meadow builder already resolves its checkout locally and imports the
+shared tree-construction module from that same directory.
+Preview discovery includes the known vegetation families and excludes animals/work props.
 
-Most species scripts read the `.blend` the previous one saved, so they run in order.
-`build_forest_floor.py` is deliberately self-contained and writes its tiny GLBs directly; the
-validator and preview remain the same mandatory downstream gates.
+The old palette-textured tree donors are not in this checkout. `graft_vegetation.py` fails
+before changing the scene when its donor is missing; obtain the original separately and pass
+`--from-dir`. `measure_old_trees.py` also requires explicit legacy donor files; it does not
+measure today's vertex-coloured meshes as though they still used that palette. The completed
+pine conversion uses `build_vegetation.py`; the obsolete one-off reduction script was retired.
+
+No texture-baking or animation pass is required. Validation and real in-game captures remain
+mandatory after regenerating a model; moving a path or passing the parser does not verify art.
 
 **Builds run headless**, via `Blender -b … --python`, not by mutating a live GUI scene. Another
 session may have a building open in Blender at any time; headless builds cannot collide with it, and

@@ -181,7 +181,7 @@ milestones and records the documentation corrections behind that recommendation.
 | `shared/` | Replicated contracts, stable identities, economy models, terrain/world generation and asset registries |
 | `tools/collider_baker/` | Offline convex-hull collider baker for GLTF assets |
 | `tools/terrain_ktx_builder/` | Offline terrain texture-array packer |
-| `asset_creation/` | Canonical Blender/export/validation pipelines and art contracts |
+| [`asset_creation/`](asset_creation/README.md) | Current asset sources, rebuild entry points, validation and art contracts |
 
 Runtime assets live in `client/assets/`. The server's domain map is in
 [server/README.md](server/README.md), contributor guardrails in

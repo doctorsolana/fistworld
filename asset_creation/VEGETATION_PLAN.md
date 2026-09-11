@@ -89,21 +89,19 @@ this reason, and vegetation must copy that convention.
 
 ---
 
-## How we work: live in Blender, replayable headless
+## How we work: editable sources, repeatable headless builds
 
-Every build script runs **both** ways, which is the convention the house scripts already use:
+The original plan used a live Blender session for exploration. The maintained scripts now
+resolve paths from their own file locations; run them headlessly so another open scene is
+not disturbed:
 
-```python
-# live, in the Blender MCP session — see it, tweak it, iterate
-exec(open('/Users/terminator2/Coding/fistworld/asset_creation/vegetation/build_vegetation.py').read())
-
-# headless, to reproduce it exactly
+```bash
 blender --background --factory-startup --python asset_creation/vegetation/build_vegetation.py -- --seed 3
 ```
 
-Interactive is where the art happens — shaping a silhouette by eye beats guessing constants. The
-script is what makes it repeatable, so a species can be rebuilt or re-tuned months later without
-rediscovering how. Neither replaces the other.
+Inspect the result visually and preserve the generator parameters or canonical editable
+source that produced it. Current output locations and verification requirements are in
+[VEGETATION_PIPELINE.md](VEGETATION_PIPELINE.md#6-the-script-chain).
 
 ---
 

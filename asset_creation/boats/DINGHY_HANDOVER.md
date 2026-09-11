@@ -12,16 +12,21 @@ asset_creation/boats/preview_dinghy_orbit.py  ten-angle inspection renderer
 asset_creation/boats/preview_dinghy_sail.py   wind-fill/direction state renderer
 asset_creation/boats/preview_dinghy_occupant.py  real Humanoid scale/pose renderer
 asset_creation/boats/inspect_dinghy_glb.py    sail hierarchy and morph verifier
-asset_creation/boats/dinghy_render.png  three-quarter review render
-asset_creation/boats/dinghy_top.png     steep RTS-camera review render
-asset_creation/boats/dinghy_orbit.png   bow/stern/sides/top/waterline contact sheet
-asset_creation/boats/dinghy_sail_states.png  fill 0..1 and left/right yaw sheet
-asset_creation/boats/dinghy_with_npc_seated.png  actual Humanoid at the helm anchor
-asset_creation/boats/dinghy_with_npc_seated_side.png side-on seat/leg/boom clearance
-asset_creation/boats/dinghy_with_npc_seated_top.png overhead occupant clearance
-asset_creation/boats/dinghy_with_npc_standing.png actual Humanoid at the centre anchor
-asset_creation/boats/dinghy_occupied_preview.blend populated review file; never shipped
+asset_creation/boats/renders/dinghy_render.png  three-quarter review render
+asset_creation/boats/renders/dinghy_top.png     steep RTS-camera review render
+asset_creation/boats/renders/dinghy_orbit.png   bow/stern/sides/top/waterline contact sheet
+asset_creation/boats/renders/dinghy_sail_states.png  fill 0..1 and left/right yaw sheet
+asset_creation/boats/renders/dinghy_with_npc_seated.png  actual Humanoid at the helm anchor
+asset_creation/boats/renders/dinghy_with_npc_seated_side.png side-on seat/leg/boom clearance
+asset_creation/boats/renders/dinghy_with_npc_seated_top.png overhead occupant clearance
+asset_creation/boats/renders/dinghy_with_npc_standing.png actual Humanoid at the centre anchor
+asset_creation/boats/renders/dinghy_occupied_preview.blend populated review file; never shipped
 ```
+
+All preview PNGs, frame sequences and the assembled occupied review `.blend` are regenerated
+under ignored `asset_creation/boats/renders/`; only the editable `dinghy.blend`, runtime GLB
+and maintained scripts belong in Git. The orbit and sail renderers pass this output directory
+to their encoders.
 
 Rebuild everything with Blender 5.x:
 

@@ -9,7 +9,7 @@ portraits, buildings and available controls come from actual game data.
 
 ## 1. Visual target and reference package
 
-Keep local review images in the ignored `logs/concepts/encyclopedia-2026-09-11/`
+Keep local review images in the ignored `logs/retained-encyclopedia/concepts/encyclopedia-2026-09-11/`
 directory: `people.png`, `places.png`, `retinue.png`, `army.png`, `companies.png`.
 These are design references, not runtime textures or regression baselines. The
 four-page generation prompts are retained there in `prompts.md`.

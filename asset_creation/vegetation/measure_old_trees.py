@@ -1,8 +1,10 @@
-"""Measure the shipped trees so new ones can be built to the same proportions.
+"""Measure legacy palette-textured donor trees for the recorded species profiles.
 
-    python3 asset_creation/vegetation/measure_old_trees.py [glb ...]
+    python3 asset_creation/vegetation/measure_old_trees.py /path/to/legacy/Tree_09.glb [glb ...]
 
-Pure stdlib; no Blender. Prints a table of the numbers build_vegetation.py's species profiles take.
+Pure stdlib; no Blender. Explicit donor files are required: current runtime trees use vertex
+colours and are not inputs to this palette analyser. Use inspect_vegetation_glb.py for those.
+Prints a table of the numbers build_vegetation.py's species profiles take.
 
 Two things make this exact rather than a guess:
 
@@ -15,11 +17,11 @@ walking the index buffer finds them exactly -- no clustering heuristic, no guess
 the real lobe count, and each one's centre and radius.
 """
 
+import argparse
 import json
 import math
 import os
 import struct
-import sys
 
 CELL = 0.2          # 5x5 palette
 
@@ -137,10 +139,9 @@ def measure(path):
 
 
 def main():
-    paths = sys.argv[1:]
-    if not paths:
-        base = "/Users/terminator2/Coding/fistworld/client/assets/game_assets/environment/trees"
-        paths = [os.path.join(base, f) for f in sorted(os.listdir(base)) if f.endswith(".glb")]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("glb", nargs="+", help="Legacy 5x5 palette-textured donor GLB")
+    paths = parser.parse_args().glb
 
     print(f"{'TREE':14}{'TRIS':>6}{'H':>6}{'W':>6}{'TRUNK':>7}{'TRUNK_R':>8}{'LOBES':>6}"
           f"   lobe radii (m) / height / offset from axis")
@@ -152,4 +153,5 @@ def main():
               f"{m.get('trunk_top', 0):>7.2f}{m.get('trunk_r', 0):>8.2f}{len(lobes):>6}   {detail}")
 
 
-main()
+if __name__ == "__main__":
+    main()

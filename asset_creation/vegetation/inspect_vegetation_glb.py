@@ -1,7 +1,7 @@
 """Validate a vegetation GLB against the contract. No Blender needed — reads the glTF directly.
 
-    python3 asset_creation/vegetation/inspect_vegetation_glb.py <file.glb> [--class large_tree] [--allow-texture] [--json]
-    python3 asset_creation/vegetation/inspect_vegetation_glb.py client/assets/game_assets/environment/trees/*.glb
+    python3 asset_creation/vegetation/inspect_vegetation_glb.py <file.glb> [--class tree] [--allow-texture] [--json]
+    python3 asset_creation/vegetation/inspect_vegetation_glb.py client/assets/game_assets/environment/trees/broadleaf/*.glb
 
 Exits non-zero if any asset fails, so it can gate a build.
 

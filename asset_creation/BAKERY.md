@@ -23,7 +23,7 @@ cargo run --profile playtest -p collider_baker --bin collider_baker_v2
 ```
 
 The builder authors in Blender **+Y forward, metres**, and exports its own GLB.
-Do not subsequently run the old `export_prop_glb.py` or `animate_door.py` pipeline.
+Do not subsequently run the older `export_prop_glb.py` or a separate door-authoring pass.
 Those would reorient or replace the new asset's authored contracts.
 
 Open `asset_creation/houses/renders/bakery-review.blend` to inspect it. The review

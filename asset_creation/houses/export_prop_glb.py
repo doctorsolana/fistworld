@@ -1,7 +1,10 @@
 """<asset>.blend -> client/assets/game_assets/buildings/village/<Name>.glb (Bevy 0.19 conventions).
 
-    blender asset_creation/houses/fishermans_hut.blend --background --python asset_creation/houses/export_prop_glb.py
-    python3 asset_creation/houses/inspect_prop_glb.py client/assets/game_assets/buildings/village/FishermansHut.glb
+    blender asset_creation/houses/market.blend --background --python asset_creation/houses/export_prop_glb.py
+    python3 asset_creation/houses/inspect_prop_glb.py client/assets/game_assets/buildings/village/Market.glb
+
+Only Market, MarketPaved, FishingPier and Sheep use this older -X-facing exporter.
+The other maintained sources export themselves from their documented builders.
 
 Generic where export_cabin_glb.py was written for one asset. The full reasoning lives in
 PROP_PIPELINE.md; the short version of what this does that a plain File > Export would not:
@@ -45,8 +48,6 @@ GLB_PATH = {
     # The market ladder: L1 on beaten earth, L2 once the settlement has paved it.
     "market": "game_assets/buildings/village/Market.glb",
     "market_paved": "game_assets/buildings/village/MarketPaved.glb",
-    "bakery": "game_assets/buildings/village/Bakery.glb",
-    "fishermans_hut": "game_assets/buildings/village/FishermansHut.glb",
     "fishing_pier": "game_assets/environment/shore/FishingPier.glb",
     # Pasture livestock: a creature, not a building. Six named parts the client animates itself
     # (head nod, leg swing), so it ships no clips and lives with the environment art.
@@ -65,6 +66,10 @@ assert STEM != "windmill", "Windmill exports itself; run build_windmill.py with 
 assert STEM != "lumberjack_hut", (
     "The lumberjack workshop is authored in +Y and exports itself; run "
     "build_lumberjack_hut.py with --factory-startup instead of this -X exporter."
+)
+assert STEM not in {"bakery", "fishermans_hut", "storage_hall", "handcart"}, (
+    f"{STEM} exports itself; run build_{STEM}.py with --factory-startup instead "
+    "of this -X exporter."
 )
 assert STEM in GLB_PATH, f"no shipped path registered for '{STEM}'; add it to GLB_PATH"
 OUT = os.path.join(REPO, "client", "assets", *GLB_PATH[STEM].split("/"))
@@ -134,13 +139,11 @@ bpy.context.view_layer.update()
 
 # --- 3b. Pin legacy assets to their existing service approaches -----------------
 # Values are glTF X/Z; Blender +Y maps to glTF -Z. Self-exporting civic halls,
-# houses, the lumberjack hut and windmill enforce their contracts in their builders.
+# houses and workshops enforce their contracts in their own builders.
 CANON_DOOR_BY_STEM = {
-    # The market is 12 x 12 now, so its edge is at -6.0 and -4.00 would put the threshold two
-    # metres INSIDE the square. door_offset(Market) has to move to -6.50 with it.
-    "market": (0.0, -6.50),             # door_offset(Market) -- NEEDS THE RUST CONSTANT MOVED
+    # Both 12 x 12 markets share the existing server approach beyond the front edge.
+    "market": (0.0, -6.50),             # door_offset(Market)
     "market_paved": (0.0, -6.50),       # both levels share a threshold, as the halls do
-    "bakery": (0.0, -4.00),             # door_offset(Bakery)
 }
 if STEM in CANON_DOOR_BY_STEM:
     CANON_DOOR = CANON_DOOR_BY_STEM[STEM]

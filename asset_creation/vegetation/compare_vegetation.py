@@ -2,10 +2,7 @@
 
     blender --background --factory-startup --python asset_creation/vegetation/compare_vegetation.py
 
-    # live, in the Blender MCP session
-    exec(open('/Users/terminator2/Coding/fistworld/asset_creation/vegetation/compare_vegetation.py').read())
-
-Writes asset_creation/renders/vegetation/compare.png.
+Writes asset_creation/vegetation/renders/compare.png (ignored review output).
 
 Each row groups related current silhouettes. Both LODs are shown because LOD1 is the mesh the game
 actually draws at ordinary camera distance.
@@ -14,37 +11,40 @@ actually draws at ordinary camera distance.
 import math
 import os
 import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import asset_paths
 
 import bpy
 from mathutils import Matrix, Vector
 
-REPO = "/Users/terminator2/Coding/fistworld"
-VEG = os.path.join(REPO, "asset_creation/vegetation")
-OUT = os.path.join(REPO, "asset_creation/renders/vegetation")
+OUT = str(asset_paths.RENDERS)
 WIDTH = 2400
 WORK_SCENE = "VegCompare"
 
 # Both LODs of each entry are shown, so three entries make six tiles across.
 ROWS = [
     dict(count=0, entries=[
-        (VEG, "BroadleafSpreadingA.glb", "spreading"),
-        (VEG, "BroadleafLargeA.glb", "large"),
-        (VEG, "OakA.glb", "oak"),
+        ("BroadleafSpreadingA.glb", "spreading"),
+        ("BroadleafLargeA.glb", "large"),
+        ("OakA.glb", "oak"),
     ]),
     dict(count=0, entries=[
-        (VEG, "BroadleafNarrowA.glb", "narrow"),
-        (VEG, "BroadleafTallA.glb", "tall"),
-        (VEG, "BroadleafHighCrownA.glb", "high crown"),
+        ("BroadleafNarrowA.glb", "narrow"),
+        ("BroadleafTallA.glb", "tall"),
+        ("BroadleafHighCrownA.glb", "high crown"),
     ]),
     dict(count=0, entries=[
-        (VEG, "PineA.glb", "pine"),
-        (VEG, "PineTallA.glb", "tall"),
-        (VEG, "PineYoungA.glb", "young"),
+        ("PineA.glb", "pine"),
+        ("PineTallA.glb", "tall"),
+        ("PineYoungA.glb", "young"),
     ]),
     dict(count=0, entries=[
-        (VEG, "BirchA.glb", "birch A"),
-        (VEG, "BirchB.glb", "birch B"),
-        (VEG, "ChestnutA.glb", "chestnut"),
+        ("BirchA.glb", "birch A"),
+        ("BirchB.glb", "birch B"),
+        ("ChestnutA.glb", "chestnut"),
     ]),
 ]
 
@@ -124,10 +124,8 @@ def main():
     rows = []
     for spec in ROWS:
         row = []
-        for folder, name, kind in spec["entries"]:
-            path = os.path.join(folder, name)
-            if not os.path.exists(path):
-                continue
+        for name, kind in spec["entries"]:
+            path = str(asset_paths.runtime_glb(name))
             for tile in load(sc, path):
                 tile.update(label=name[:-4], kind=kind, count=spec["count"])
                 row.append(tile)

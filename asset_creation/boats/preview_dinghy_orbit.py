@@ -16,9 +16,10 @@ from mathutils import Vector
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+RENDERS = os.path.join(HERE, "renders")
 REPO = os.path.dirname(os.path.dirname(HERE))
-FRAMES = os.path.join(HERE, ".orbit")
-SHEETS = HERE
+FRAMES = os.path.join(RENDERS, "orbit")
+SHEETS = RENDERS
 os.makedirs(FRAMES, exist_ok=True)
 
 scene = bpy.context.scene

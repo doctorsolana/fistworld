@@ -3,13 +3,9 @@
     blender --background --factory-startup --python asset_creation/vegetation/build_vegetation.py -- \
         --species oak [--seed 1] [--name OakA]
 
-    # live, in the Blender MCP session -- builds into its own "Vegetation" scene, touches nothing else
-    import sys; sys.argv = ['x', '--', '--species', 'oak', '--seed', '1']
-    exec(open('/Users/terminator2/Coding/fistworld/asset_creation/vegetation/build_vegetation.py').read())
-
 Verify what actually landed on disk -- several traps below are only visible post-export:
 
-    python3 asset_creation/vegetation/inspect_vegetation_glb.py --class small_tree asset_creation/vegetation/OakA.glb
+    python3 asset_creation/vegetation/inspect_vegetation_glb.py --class tree client/assets/game_assets/environment/trees/broadleaf/OakA.glb
 
 THE CROWN IS ONE CONVEX HULL OF A LUMPY POINT CLOUD.
 
@@ -54,6 +50,10 @@ import math
 import os
 import random
 import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import asset_paths
 
 import bpy
 import bmesh
@@ -267,8 +267,8 @@ DEFAULT_PREFIXES = {
     "tree09": "BroadleafSpreading",
 }
 NAME = arg("--name", f"{DEFAULT_PREFIXES.get(SPECIES_NAME, SPECIES_NAME.title())}{LETTER}")
-REPO = "/Users/terminator2/Coding/fistworld"
-OUT = arg("--out", os.path.join(REPO, "asset_creation", "vegetation"))
+FAMILY = "trees/conifer" if SPECIES_NAME.startswith("pine") else "trees/broadleaf"
+OUT = arg("--out", str(asset_paths.runtime_directory(FAMILY)))
 PROFILE = SPECIES[SPECIES_NAME]
 
 BASE_SINK = -0.15          # bed into the ground; PROP_PIPELINE.md §1 wants -0.40..0.02

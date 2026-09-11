@@ -432,27 +432,32 @@ use their documented exporter, but `build_wheat_field.py` exports itself.
 
 ## 12. Script order
 
-For older sources that use the texture-baking chain, the build script owns geometry
-and downstream scripts discover parts by convention. Self-contained builders listed above
-replace this entire chain; use their documented entry points.
+Market, MarketPaved, FishingPier and Sheep retain the older -X-facing export
+workflow. Their builders own geometry; the optional studio/texture pass discovers
+parts by convention. These four assets have no authored door clips. All other
+current village buildings author door animation and export in their own builders;
+use their documented entry points, including `building_mesh.animate_door` for the
+shared door timing. The retired standalone house exporter and door animator are
+not part of the current pipeline.
 
 ```
-build_<asset>.py        # geometry + vertex colour + glass + anchors -> <asset>.blend
-texture_and_light.py    # UV unwrap, bake grain, build the studio scene   (targets = meshes reading "Col")
-animate_door.py         # door_open / door_close                          (target  = the one *Door mesh)
-export_prop_glb.py      # strip studio, rotate to game space, stash NLA   (name via GLB_NAME)
+build_<asset>.py        # geometry + vertex colour + anchors -> <asset>.blend
+texture_and_light.py    # optional bake/studio pass; review PNG under houses/renders/
+export_prop_glb.py      # strip studio and rotate supported -X sources to game space
 inspect_prop_glb.py     # verify the contract
-collider_baker_v2       # rewrite colliders.bin
 ```
 
-Discovery by convention is the point: adding a part to a build script needs no edit downstream, which is
-the failure mode that let the factory-startup Cube ship inside the cabin.
+`export_prop_glb.py` rejects the self-exporting sources before mutating their
+scene. `texture_and_light.py` saves the editable source with its studio setup,
+but writes the review PNG to ignored `houses/renders/`. Combined inspection
+scenes also belong in ignored `renders/` or `logs/`, never beside canonical sources.
 
 `texture_and_light.py` frames the camera on every shippable mesh rather than on the bake targets, so an
 asset that bakes nothing still gets a studio render.
 
-Each script reads the `.blend` the previous one saved, so they must run in order, and the whole chain
-must be re-run when geometry changes — the bake is not incremental.
+Each pass reads the `.blend` the previous one saved, so run the applicable passes
+in order when geometry changes; the bake is not incremental. Follow section 5 for
+assets with baked collision and [BUILDING_LODS.md](BUILDING_LODS.md) for buildings.
 
 ## Current village houses
 

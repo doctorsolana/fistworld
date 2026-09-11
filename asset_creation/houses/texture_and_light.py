@@ -24,7 +24,9 @@ from mathutils import Vector
 
 BLEND = bpy.data.filepath
 STEM = os.path.splitext(os.path.basename(BLEND))[0]
-RENDER = os.path.join(os.path.dirname(BLEND), f"{STEM}_render.png")
+RENDER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "renders")
+os.makedirs(RENDER_DIR, exist_ok=True)
+RENDER = os.path.join(RENDER_DIR, f"{STEM}_render.png")
 CELL = 0.26          # metres; roughly one "log cube"
 STUDIO = {"Ground"}
 

@@ -13,8 +13,9 @@ from mathutils import Vector
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FRAMES = os.path.join(HERE, ".sail_states")
-OUTPUT = os.path.join(HERE, "dinghy_sail_states.png")
+RENDERS = os.path.join(HERE, "renders")
+FRAMES = os.path.join(RENDERS, "sail_states")
+OUTPUT = os.path.join(RENDERS, "dinghy_sail_states.png")
 os.makedirs(FRAMES, exist_ok=True)
 
 scene = bpy.context.scene

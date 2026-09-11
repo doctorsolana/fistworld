@@ -23,6 +23,10 @@ import os
 import random
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import asset_paths
+
 import bpy
 from mathutils import Vector
 
@@ -49,10 +53,7 @@ def srgb_to_linear(hex_colour):
 SEED = int(arg("--seed", "1"))
 LETTER = chr(ord("A") + max(0, SEED - 1))
 NAME = arg("--name", f"FernPatch{LETTER}")
-OUT = arg(
-    "--out",
-    "/Users/terminator2/Coding/fistworld/asset_creation/vegetation",
-)
+OUT = arg("--out", str(asset_paths.runtime_directory("ferns")))
 BASE_SINK = -0.035
 
 # Brighter than the pine crowns on purpose: these live in shade and should make the

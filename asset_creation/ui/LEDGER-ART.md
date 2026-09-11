@@ -63,9 +63,9 @@ bytes** of compressed delivery and **12,107,264 bytes** (11.55 MiB) of decoded R
 equivalent. The four settlement illustrations account for 189,253 compressed
 bytes and 2,434,560 decoded bytes. The Libre Baskerville font plus its licence add
 176,348 bytes, giving **644,805 bytes** of ledger image/reading-font delivery.
-For comparison, all seven files already under `client/assets/fonts/` total
-536,475 bytes; the complete image catalogue plus that entire font directory is
-1,005,650 bytes. Font files have no fixed decoded-RGBA equivalent: native text
+For comparison, all 6 files under `client/assets/fonts/` total
+411,007 bytes; the complete image catalogue plus that entire font directory is
+879,464 bytes. Font files have no fixed decoded-RGBA equivalent: native text
 atlas memory depends on the glyphs rendered, and is separate from this image audit.
 
 The reading font is Libre Baskerville from Google Fonts:

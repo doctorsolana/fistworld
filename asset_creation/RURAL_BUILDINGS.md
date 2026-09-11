@@ -91,7 +91,7 @@ every 30 frames. Inspect PNGs and JSON sidecars alongside the individual day,
 night, rear, entrance, roof and gameplay views. Geometry regressions live in
 `shared/src/building/tests/{rural,roofs}.rs`.
 
-`houses/review_rural.py` assembles `houses/rural_review.blend` from the editable
+`houses/review_rural.py` assembles `houses/renders/rural_review.blend` from the editable
 sources, two wheat fields and shipped character at unscaled metre dimensions.
 Its floor top is Z=0, with foundations buried as in game. Each asset has its own
 collection. Individual source files also open in coloured perspective with

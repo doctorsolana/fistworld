@@ -24,12 +24,14 @@ from mathutils import Vector
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+RENDERS = os.path.join(HERE, "renders")
+os.makedirs(RENDERS, exist_ok=True)
 REPO = os.path.dirname(os.path.dirname(HERE))
 OUT_BLEND = os.path.join(HERE, "dinghy.blend")
 OUT_GLB = os.path.join(
     REPO, "client", "assets", "game_assets", "vehicles", "boats", "Dinghy.glb")
-OUT_RENDER = os.path.join(HERE, "dinghy_render.png")
-OUT_TOP = os.path.join(HERE, "dinghy_top.png")
+OUT_RENDER = os.path.join(RENDERS, "dinghy_render.png")
+OUT_TOP = os.path.join(RENDERS, "dinghy_top.png")
 os.makedirs(os.path.dirname(OUT_GLB), exist_ok=True)
 
 # y, gunwale half-width, gunwale height, chine half-width, chine height, keel height

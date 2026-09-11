@@ -3,10 +3,6 @@
     blender --background --factory-startup --python asset_creation/vegetation/graft_vegetation.py -- \
         --donor Tree_09 --from-dir /path/to/legacy/donors [--name BroadleafSpreadingA]
 
-    # live, in the Blender MCP session
-    import sys; sys.argv = ['x', '--', '--donor', 'Tree_09']
-    exec(open('/Users/terminator2/Coding/fistworld/asset_creation/vegetation/graft_vegetation.py').read())
-
 Why graft rather than generate the whole tree: the gnarled, low-forking trunk is the character of
 Tree_09 and is authored, not derivable from parameters. The foliage is the opposite -- it is 920 of
 its 1,872 triangles and a generated crown does the same job for a third of that.
@@ -45,6 +41,10 @@ import os
 import random
 import sys
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import asset_paths
+
 import bpy
 import bmesh
 from mathutils import Vector
@@ -71,14 +71,12 @@ def srgb_to_linear(hex_colour):
 C_BARK = srgb_to_linear("594429")     # r0c1, the cell Tree_09's trunk samples
 C_LEAF = srgb_to_linear("5E8037")     # r1c1, the cell its canopy samples
 
-REPO = "/Users/terminator2/Coding/fistworld"
-OUT = os.path.join(REPO, "asset_creation/vegetation")
 WORK_SCENE = "Graft"
 
 DONOR = arg("--donor", "Tree_09")
 DONOR_DIR = arg(
     "--from-dir",
-    os.path.join(REPO, "asset_creation", "vegetation", "legacy_donors"),
+    str(asset_paths.SOURCE / "legacy_donors"),
 )
 CANONICAL_NAMES = {
     "Tree_01": "BroadleafNarrowA",
@@ -87,6 +85,8 @@ CANONICAL_NAMES = {
     "Tree_08": "DeadGnarledA",
 }
 NAME = arg("--name", CANONICAL_NAMES.get(DONOR, f"Legacy{DONOR.replace('_', '')}"))
+FAMILY = "trees/dead" if NAME.startswith("Dead") else "trees/broadleaf"
+OUT = arg("--out", str(asset_paths.runtime_directory(FAMILY)))
 SEED = int(arg("--seed", "1"))
 BASE_SINK = -0.15
 
@@ -110,14 +110,20 @@ def work_scene():
     return sc
 
 
-def import_donor(sc, lod):
-    """Import the donor and return the object for the requested LOD node."""
+def resolved_donor_path():
+    """Require the external donor before changing a scene or exporting its replacement."""
     donor_path = os.path.join(DONOR_DIR, f"{DONOR}.glb")
     if not os.path.isfile(donor_path):
         raise FileNotFoundError(
             f"legacy donor not found: {donor_path}; recover the removed donor from git history "
             "and pass its directory with --from-dir"
         )
+    return donor_path
+
+
+def import_donor(sc, lod):
+    """Import the donor and return the object for the requested LOD node."""
+    donor_path = resolved_donor_path()
     before = set(sc.objects)
     bpy.ops.import_scene.gltf(filepath=donor_path)
     fresh = [o for o in sc.objects if o not in before and o.type == "MESH"]
@@ -414,6 +420,7 @@ def bed_to_ground(objs, sink):
 
 
 def main():
+    resolved_donor_path()
     sc = work_scene()
     os.makedirs(OUT, exist_ok=True)
     mat = vegetation_material()

@@ -1,7 +1,7 @@
 """Assemble the editable rural sources at game scale, with the floor at grade.
 
 Run with Blender --background --factory-startup --python review_rural.py.
-This inspection scene is not an export source.
+Writes renders/rural_review.blend; this inspection scene is not an export source.
 """
 
 import math
@@ -11,6 +11,8 @@ import bpy
 from mathutils import Vector
 
 HERE = Path(__file__).resolve().parent
+OUTPUT = HERE / "renders/rural_review.blend"
+OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 bpy.ops.object.select_all(action="SELECT")
 bpy.ops.object.delete(use_global=False)
 scene = bpy.context.scene
@@ -119,4 +121,4 @@ bpy.ops.object.select_all(action="DESELECT")
 bpy.data.objects["Farmstead"].select_set(True)
 bpy.context.view_layer.objects.active = bpy.data.objects["Farmstead"]
 bpy.context.preferences.filepaths.save_version = 0
-bpy.ops.wm.save_as_mainfile(filepath=str(HERE / "rural_review.blend"))
+bpy.ops.wm.save_as_mainfile(filepath=str(OUTPUT))

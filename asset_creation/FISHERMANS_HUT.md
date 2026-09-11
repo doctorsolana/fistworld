@@ -17,7 +17,7 @@ barrels and leaning oars identify its work from the overhead camera.
 
 Authoring is in metres, Blender +Y front, exporting to glTF -Z front. This builder
 exports itself. Do **not** run the historical facing-correction, texture-baking or
-`animate_door.py` passes on this source.
+separate door-authoring passes on this source.
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup --threads 2 --python-exit-code 1 --python asset_creation/houses/build_fishermans_hut.py

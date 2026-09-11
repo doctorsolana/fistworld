@@ -15,13 +15,15 @@ from mathutils import Vector
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+RENDERS = os.path.join(HERE, "renders")
+os.makedirs(RENDERS, exist_ok=True)
 REPO = os.path.dirname(os.path.dirname(HERE))
 HUMANOID = os.path.join(REPO, "client", "assets", "characters", "Humanoid.glb")
-OUT_SEATED = os.path.join(HERE, "dinghy_with_npc_seated.png")
-OUT_SEATED_SIDE = os.path.join(HERE, "dinghy_with_npc_seated_side.png")
-OUT_SEATED_TOP = os.path.join(HERE, "dinghy_with_npc_seated_top.png")
-OUT_STANDING = os.path.join(HERE, "dinghy_with_npc_standing.png")
-OUT_BLEND = os.path.join(HERE, "dinghy_occupied_preview.blend")
+OUT_SEATED = os.path.join(RENDERS, "dinghy_with_npc_seated.png")
+OUT_SEATED_SIDE = os.path.join(RENDERS, "dinghy_with_npc_seated_side.png")
+OUT_SEATED_TOP = os.path.join(RENDERS, "dinghy_with_npc_seated_top.png")
+OUT_STANDING = os.path.join(RENDERS, "dinghy_with_npc_standing.png")
+OUT_BLEND = os.path.join(RENDERS, "dinghy_occupied_preview.blend")
 
 before = set(bpy.data.objects)
 bpy.ops.import_scene.gltf(filepath=HUMANOID)

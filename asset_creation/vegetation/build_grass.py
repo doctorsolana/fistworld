@@ -2,10 +2,6 @@
 
     blender --background --factory-startup --python asset_creation/vegetation/build_grass.py -- [--seed 1]
 
-    # live, in the Blender MCP session
-    import sys; sys.argv = ['x', '--', '--seed', '1']
-    exec(open('/Users/terminator2/Coding/fistworld/asset_creation/vegetation/build_grass.py').read())
-
 ONE ENTITY PER PATCH, NEVER PER BLADE. That is the whole design. `Env_Grass_Tall_04` is in the map
 38,578 times at 738 triangles; if it ever drew, that would be 28.5M triangles, more than every tree
 combined. It does not draw -- the client classes it GroundDetail and the spawn filter skips every
@@ -35,6 +31,10 @@ import random
 import struct
 import sys
 import zlib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import asset_paths
 
 import bpy
 import bmesh
@@ -99,9 +99,8 @@ VARIANT = arg("--variant", "short")
 SEED = int(arg("--seed", "1"))
 NAME = arg("--name", "GrassShortA" if VARIANT == "short" else "GrassTallA")
 V = VARIANTS[VARIANT]
-REPO = "/Users/terminator2/Coding/fistworld/asset_creation"
-OUT = arg("--out", os.path.join(REPO, "vegetation"))
-TEX = os.path.join(OUT, f"Grass_Blades_{arg('--variant', 'short')}.png")
+OUT = arg("--out", str(asset_paths.runtime_directory("grass")))
+TEX = str(asset_paths.RENDERS / f"Grass_Blades_{VARIANT}.png")
 
 TEX_SIZE = V.get("tex", 256)   # 256 -> 256 KB VRAM, 128 -> 64 KB. Smaller also means less aliasing.
 PATCH = 2.0             # metres square
@@ -251,6 +250,7 @@ def main():
     for o in list(sc.objects):
         bpy.data.objects.remove(o, do_unlink=True)
     os.makedirs(OUT, exist_ok=True)
+    os.makedirs(os.path.dirname(TEX), exist_ok=True)
 
     tw, th = make_texture(TEX)
     log(f"texture {tw}x{th} -> {TEX} ({os.path.getsize(TEX) / 1024:.0f} KB on disk, "

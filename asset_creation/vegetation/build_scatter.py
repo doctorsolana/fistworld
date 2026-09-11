@@ -3,10 +3,6 @@
     blender --background --factory-startup --python asset_creation/vegetation/build_scatter.py -- \
         --kind flower --seed 1 --name FlowerA
 
-    # live, in the Blender MCP session
-    import sys; sys.argv = ['x', '--', '--kind', 'rock', '--seed', '1']
-    exec(open('/Users/terminator2/Coding/fistworld/asset_creation/vegetation/build_scatter.py').read())
-
 Measured from what ships today (see the table below), which is what set the budgets:
 
     rocks      34-86 tris,  0.4-0.6 m,  7,857 placed   -- already lean
@@ -28,6 +24,10 @@ import math
 import os
 import random
 import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import asset_paths
 
 import bpy
 import bmesh
@@ -90,7 +90,8 @@ DEFAULT_NAMES = {
     "flower": f"Flower{LETTER}",
 }
 NAME = arg("--name", DEFAULT_NAMES[KIND])
-OUT = arg("--out", "/Users/terminator2/Coding/fistworld/asset_creation/vegetation")
+FAMILY = {"rock": "rocks", "boulder": "rocks", "bush": "bushes", "flower": "flowers"}[KIND]
+OUT = arg("--out", str(asset_paths.runtime_directory(FAMILY)))
 PROFILE = KINDS[KIND]
 WORK_SCENE = "Scatter"
 BASE_SINK = -0.04          # small props bed in only a little; PROP_PIPELINE.md §1 range

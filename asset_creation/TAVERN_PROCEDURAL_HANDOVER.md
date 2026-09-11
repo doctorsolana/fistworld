@@ -24,9 +24,9 @@ The builder uses Blender +Y as the front, exported to game -Z. Run it directly:
 cargo run --profile playtest -p collider_baker --bin collider_baker_v2
 ```
 
-The builder creates both door clips itself. Do not run the old separate door or
--X-front export scripts over this source. The older Tripo inspection files are
-reference material and are not shipping assets.
+The builder creates both door clips itself. Do not run a separate door or
+-X-front export pass over this source. The retired Tripo candidate is preserved
+in Git history; the source and builder listed above own the shipped tavern.
 
 ## Runtime contracts
 

@@ -5,8 +5,11 @@ character timing and building geometry have been superseded by subsequent rebuil
 Use [CHARACTER_HANDOVER.md](CHARACTER_HANDOVER.md) and
 [ARCHERY_HANDOVER.md](ARCHERY_HANDOVER.md) for the current character, and
 [HOUSE_HANDOVER.md](HOUSE_HANDOVER.md), [LUMBERJACK_HUT.md](LUMBERJACK_HUT.md),
-[CIVIC_LEVELS_INTEGRATION.md](CIVIC_LEVELS_INTEGRATION.md) and
-[RURAL_BUILDINGS.md](RURAL_BUILDINGS.md) for current building contracts.
+[CIVIC_LEVELS_INTEGRATION.md](CIVIC_LEVELS_INTEGRATION.md),
+[RURAL_BUILDINGS.md](RURAL_BUILDINGS.md), [STORAGE_HALL.md](STORAGE_HALL.md),
+[FISHERMANS_HUT.md](FISHERMANS_HUT.md), [BAKERY.md](BAKERY.md),
+[WINDMILL.md](WINDMILL.md) and [TAVERN_PROCEDURAL_HANDOVER.md](TAVERN_PROCEDURAL_HANDOVER.md)
+for current building contracts.
 The lessons below remain useful; do not restore their old dimensions or clip lists.
 
 Verifiers, if you want to confirm any claim yourself:

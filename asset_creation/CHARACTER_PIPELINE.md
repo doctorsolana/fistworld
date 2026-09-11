@@ -4,9 +4,9 @@ Everything learned turning a Tripo-generated blob into a rigged, animated, cloth
 character. Written for the next time you do this, and for when you start wiring it into the game.
 
 **Current asset:** `character/humanoid.blend`, shipped as a 1.70 m character in
-`Humanoid.glb`: 21 joints (18 deform/rig bones plus three attachment joints), 27 actions,
-21 selectable wardrobe meshes plus the empty no-headgear choice, and six skin tones. It is built reproducibly by the scripts
-listed in §15. The early 426-vertex/no-wardrobe figures retained later in this document are
+`Humanoid.glb`: 21 joints (18 deform/rig bones plus three attachment joints), 34 clips,
+21 selectable wardrobe meshes plus the empty no-headgear choice, and six skin tones. The maintained source is exported by the scripts
+listed in §15; rebuilding the original body from scratch also requires a fresh raw donor. The early 426-vertex/no-wardrobe figures retained later in this document are
 rebuild history, not the shipping mesh budget.
 
 See [CHARACTER_HANDOVER.md](CHARACTER_HANDOVER.md) for the current animation, equipment,
@@ -1054,22 +1054,19 @@ the face lead**. Geometry first, then taste.
 
 ---
 
-## 14. Current gaps
+## 14. Current maintenance boundaries
 
-1. The live wardrobe has 14 items across bottom/top/hair plus six skin tones, but no hats,
-   shoes or accessories. Slot lists are append-only because replicated outfits store indices.
-2. There are no knees or elbows. Rigid binding is intentional; smoother/livelier movement
-   would require geometry and rig changes, not only another clip.
-3. Runtime body clips are `idle`, `walk`, `sit_idle`, `sit_down`, `build`, `chop`,
-   `harvest`, `carry` and `talk`; the five face clips are consumed by a masked
-   `AnimationGraph`. Missing presentation includes run/jump/stand-up, `carry_idle` and a
-   fishing-specific clip/tool.
-4. The current walk-speed normalisation still divides by the 3.2 m/s hero speed and clamps
-   playback at 1.6. The authored walk is slower, so locomotion can slide; see
-   `ASSET_HANDOVER.md` for the measured correction.
-5. LODs remain parked deliberately. At hundreds of characters draw calls and animation
-   players, not the base triangle count, become the real problem. Revisit instancing/VAT or
-   shared-material LOD only with a measured crowded-client profile.
+[CHARACTER_HANDOVER.md](CHARACTER_HANDOVER.md) owns the current clip/equipment inventory and
+runtime integration. Earlier counts and rig experiments in this document are historical:
+the current rig has articulated elbows, three attachment joints, and 34 exported clips.
+
+Keep `humanoid.blend` as the editable source and `humanoid_legacy_donor.blend` as the active
+arms/hands and walk-animation donor. The original raw Tripo input is absent, so a fresh body
+rebuild needs a new raw export; exporting or extending the maintained source does not.
+
+The abandoned palette-atlas LOD experiment has been retired. It is not part of the export
+chain; any future character LOD work must start from the current wardrobe, animation and
+crowded-client measurements rather than recreate stale meshes in the canonical source.
 
 ---
 
@@ -1084,13 +1081,12 @@ the face lead**. Geometry first, then taste.
 > was deleted during a 2026-08-01 cleanup that mistook it for a stale export. Nothing downstream is
 > affected — `humanoid.blend` is the cleaned result and is intact, as is the shipped
 > `Humanoid.glb`. Re-running step 1 requires a fresh Tripo export; §13 covers which download to
-> take. Steps 2 onward all read `humanoid.blend` and run unchanged.
+> take. Maintain and export the existing `humanoid.blend` using the current sequence in `CHARACTER_HANDOVER.md`.
 | `rig_basemodel_v2.py` | Build the 16-bone deform rig, bind, retarget the donor's walk and re-derive bounce |
 | `add_attach_bones.py` | Add `attach.carry` and `attach.tool.R` without changing skin deformation |
-| `animate_basemodel_v2.py` | Author all nine body clips and five face moods |
+| `animate_basemodel_v2.py` | Assemble current body/face clips using the focused work, combat, locomotion, archery and mounted modules |
 | `wardrobe_items.py` | Wardrobe DATA — one block per item, no Blender imports |
 | `build_wardrobe_v2.py` | Build the wardrobe from that data, bake hair, emit the RON manifest |
-| `build_lods_v2.py` | LOD1 via a shared palette atlas (parked — see below) |
 | `preview_basemodel_v2.py` | One looping webp per clip + mood and turnaround sheets |
 | `preview_wardrobe_v2.py` | Front/back sheet of outfit combinations |
 | `optimize_mesh.py` | Standalone coplanar cleanup; asserts bbox, part count and symmetry unchanged |

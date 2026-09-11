@@ -14,14 +14,11 @@ each under its own cloth canopy, arranged so there is somewhere to walk. The can
 read at RTS distance -- half a dozen bright striped rectangles on dark paving is unmistakable from
 directly overhead, where a shingle roof is just another shingle roof like every other building.
 
-SIZED FROM THE CODE. `BuildingType::PlaceholderMarket` reserves `footprint: Vec2::new(9.0, 7.0)` with
-`footprint_center: ZERO` and `height: 3.2`; `door_offset(Market)` is `Vec2::new(0.0, -4.0)`. The
-paving is exactly 9.0 x 7.0 and centred, and nothing reaches past it. **The height fits now** -- the
-covered hall needed 4.68 m to get a village-pitched roof over head height, but canopies at 2.5 m and
-banner poles at 3.02 m fit inside it, so no Rust constant has to move.
+SIZED FROM THE CODE. `BuildingType::Market` and `MarketPaved` reserve a centred
+12.0 x 12.0 m footprint with height 3.2 m. The shared market approach is glTF
+(0.0, -6.5), outside the square. Canopies and the 3.02 m banner poles fit that height.
 
-In glTF the footprint is (X, Z) = (9.0, 7.0); the exporter turns the model -90 deg about Z, so in
-BLENDER the market is 7.0 deep on X and 9.0 wide on Y, front on -X.
+The exporter turns the model -90 deg about Z; the Blender source faces -X.
 
 LAYOUT: stalls line the back and the two flanks, and the whole front is left open. A visitor arrives
 at Anchor_Door on the -X edge and walks into a plaza rather than into the back of a stall, and the
@@ -61,9 +58,7 @@ STEM = "market" if LEVEL == 1 else "market_paved"
 OUT_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{STEM}.blend")
 
 # --- dimensions (metres) -----------------------------------------------------------------------------
-# SQUARE, AND BIGGER: a 12 x 12 market square instead of a 9 x 7 strip. This does NOT match
-# `BuildingType::PlaceholderMarket` as shipped and needs the Rust side moved to suit -- see the
-# handover. `footprint`, `clearance` and `door_offset(Market)` all follow from this number.
+# The authored square matches both shared market definitions and their service approach.
 DEPTH_X = 12.0
 WIDTH_Y = 12.0
 HX, HY = DEPTH_X / 2, WIDTH_Y / 2

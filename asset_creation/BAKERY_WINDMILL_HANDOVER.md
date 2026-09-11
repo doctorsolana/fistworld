@@ -366,10 +366,18 @@ There is no `door_open`/`door_close` on this asset and there should not be: an o
 
 ## 7. Rebuild
 
+Bakery and windmill now each author their door clips and export their own runtime
+assets. Their current recipes are [BAKERY.md](BAKERY.md) and [WINDMILL.md](WINDMILL.md).
+Do not apply the older facing exporter to either source.
+
+The Market variants still use the shared legacy exporter:
+
 ```
-blender --background --factory-startup --python asset_creation/houses/build_bakery.py
-blender asset_creation/houses/bakery.blend --background --python asset_creation/houses/animate_door.py
-blender asset_creation/houses/bakery.blend --background --python asset_creation/houses/export_prop_glb.py
+blender --background --factory-startup --python asset_creation/houses/build_market.py -- 1
+blender asset_creation/houses/market.blend --background --python asset_creation/houses/export_prop_glb.py
+blender --background --factory-startup --python asset_creation/houses/build_market.py -- 2
+blender asset_creation/houses/market_paved.blend --background --python asset_creation/houses/export_prop_glb.py
 ```
 
-The windmill now has a self-contained builder; see [WINDMILL.md](WINDMILL.md).
+After changing either runtime building, regenerate the derived meshes following
+[BUILDING_LODS.md](BUILDING_LODS.md) and inspect the real Bevy captures.

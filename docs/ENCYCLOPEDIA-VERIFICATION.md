@@ -5,6 +5,12 @@ HUD, then integrated into `main` with the independent building-detail work on
 2026-09-11. The redesign covers People, Places, Retinue, Army, Companies and their
 existing market, history, business, founding and route destinations.
 
+The merged implementation worktree was retired during repository cleanup. Its
+preserved final captures and first-session evidence now live under ignored
+`logs/retained-encyclopedia/` (replace the original `logs/` prefix below). Main
+integration captures remain under `logs/captures/`. Superseded bulk frame sequences
+were trimmed to representative samples; their reports and metadata remain.
+
 ## Presentation and navigation
 
 The approved images guided the paper, wood binding, brass hardware, circular
