@@ -101,9 +101,6 @@ pub fn setup_rendering(
         GlobalTransform::default(),
         Visibility::default(),
         InheritedVisibility::default(),
-        // Audio listener for spatial audio (other players' sounds)
-        // SpatialListener defines where the "ears" are relative to the entity
-        SpatialListener::new(0.1), // ~10cm between ears
     ));
     // Render the 3D scene into the scaled offscreen target; the present camera
     // upscales it to the window at native resolution.

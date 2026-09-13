@@ -8,6 +8,7 @@ mod widgets;
 
 pub(crate) use artwork::{LedgerArtwork, LedgerIcon, LedgerIllustration};
 pub(crate) use illustrations::IllustrationMaterial;
+pub(crate) use skin::LedgerButtonFace;
 pub(crate) use widgets::{
     binding_ornament_rule, body, body_strong, corners, directory_gutter, directory_paper, heading,
     icon, illustration, illustration_medallion, ornament_rule, paper, pennant, person_portrait,
@@ -15,6 +16,11 @@ pub(crate) use widgets::{
 };
 
 use bevy::{prelude::*, ui::UiSystems};
+
+/// Opts a retained panel into the shared worn button faces without coupling
+/// its controls or navigation to the encyclopedia.
+#[derive(Component)]
+pub(crate) struct LedgerButtonScope;
 
 pub(crate) fn install(app: &mut App) {
     app.add_plugins(UiMaterialPlugin::<IllustrationMaterial>::default())

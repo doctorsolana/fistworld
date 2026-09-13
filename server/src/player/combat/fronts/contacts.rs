@@ -68,15 +68,21 @@ impl CombatSpace {
         if d2 > a.melee_reach(b).powi(2) || d2 < 0.01 {
             return false;
         }
-        !self.within((a.point + b.point) * 0.5, delta.length() * 0.5 + HORSE_BODY_RADIUS).any(|other| {
-            if other.entity == a.entity || other.entity == b.entity {
-                return false;
-            }
-            let t = (other.point - a.point).dot(delta) / d2;
-            t > 0.05
-                && t < 0.95
-                && other.point.distance_squared(a.point + delta * t) < (other.radius + 0.07).powi(2)
-        })
+        !self
+            .within(
+                (a.point + b.point) * 0.5,
+                delta.length() * 0.5 + HORSE_BODY_RADIUS,
+            )
+            .any(|other| {
+                if other.entity == a.entity || other.entity == b.entity {
+                    return false;
+                }
+                let t = (other.point - a.point).dot(delta) / d2;
+                t > 0.05
+                    && t < 0.95
+                    && other.point.distance_squared(a.point + delta * t)
+                        < (other.radius + 0.07).powi(2)
+            })
     }
     pub fn movement_clear(&self, entity: Entity, current: Vec2, next: Vec2) -> bool {
         let delta = next - current;
@@ -275,7 +281,10 @@ pub fn assign_formation_contacts(
             continue;
         }
         let target = space
-            .within(body.point, (body.radius + HORSE_BODY_RADIUS + 0.5).max(MELEE_REACH))
+            .within(
+                body.point,
+                (body.radius + HORSE_BODY_RADIUS + 0.5).max(MELEE_REACH),
+            )
             .filter(|other| {
                 other.side != body.side && loads.get(&other.entity).copied().unwrap_or(0) < 2
             })

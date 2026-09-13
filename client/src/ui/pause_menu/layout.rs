@@ -6,6 +6,7 @@ pub(super) fn spawn_pause_menu(
     mut commands: Commands,
     settings: Res<GraphicsSettings>,
     input_settings: Res<InputSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
     open: Res<PauseMenuOpen>,
     existing: Query<Entity, With<PauseMenuRoot>>,
     monitors: Query<&Monitor, With<PrimaryMonitor>>,
@@ -77,6 +78,8 @@ pub(super) fn spawn_pause_menu(
                             // Controls button
                             spawn_button(col, "CONTROLS", PauseButton::Controls);
 
+                            spawn_button(col, "AUDIO", PauseButton::Audio);
+
                             // Disconnect button
                             spawn_button(col, "DISCONNECT", PauseButton::Disconnect);
 
@@ -100,6 +103,7 @@ pub(super) fn spawn_pause_menu(
 
                     // Controls settings panel (hidden by default, appears to the right)
                     spawn_controls_panel(container, &input_settings);
+                    audio::spawn_audio_panel(container, &audio_settings);
                 });
         });
 }

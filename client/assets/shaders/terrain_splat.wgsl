@@ -309,19 +309,44 @@ fn fragment(
         }
 
         let world_uv = pbr_input.world_position.xz;
+        let uv_dirt = tiled_uv(world_uv, terrain_params.layer_tiling.y);
+        // Keep the authored dirt sample separate from the dominant-layer
+        // shortcut: small soil/chip marks must survive on grassy shoulders too.
+        // This is the existing array slot, reused below on pure/mixed earth.
+        var dirt_albedo = vec3<f32>(0.704, 0.390, 0.132);
+        if (weights.y > 0.01) {
+            dirt_albedo = textureSample(albedo_array, albedo_sampler, uv_dirt, 1).rgb;
+        }
         // The weightmap carries the durable road ribbon. Erode only its mixed
         // meadow/earth shoulder by a fraction of a metre in world space, so the
         // lane has a worn edge without a repeating texture or extra geometry.
         // Sand and paving transitions keep their own material boundaries.
         if (weights.y > 0.03 && weights.x > 0.03 && weights.z + weights.w < 0.05) {
-            let shoulder = smoothstep(0.22, 0.78,
-                cloud_vnoise(world_uv * 0.78 + vec2<f32>(2.7, 19.3)));
+            // Reuse the painted soil shapes for small turf fingers rather
+            // than another broad rounded noise contour around the whole road.
+            let shoulder = smoothstep(0.32, 0.55, luminance_safe(dirt_albedo));
             let mixed_edge = 1.0 - smoothstep(0.68, 0.90, weights.y);
             // Distinct interlocking turf/earth patches, softened only enough
             // for their projected size rather than a broad airbrushed halo.
             let edge_aa = clamp(ground_pixel * 0.25, 0.01, 0.10);
-            let earth_share = smoothstep(0.30 - edge_aa, 0.70 + edge_aa,
-                weights.y + (shoulder - 0.5) * 0.60 * mixed_edge);
+            let worn_earth_share = smoothstep(0.39 - edge_aa, 0.61 + edge_aa,
+                weights.y + (shoulder - 0.5) * 0.66 * mixed_edge);
+            // Meadow roads retain some of the underlying grass in their
+            // weightmap (even at the centre). Keep small tongues near mixed
+            // edges and make detached pockets rare in the lane; this also suits
+            // naturally worn meadow ground, without a chunk-wide road flag.
+            let turf_field = cloud_vnoise(world_uv * 1.8 + vec2<f32>(37.2, 11.6))
+                + (0.44 - luminance_safe(dirt_albedo)) * 0.75;
+            let lane_interior = smoothstep(0.44, 0.84, weights.y);
+            let turf_threshold = mix(0.63, 0.93, lane_interior);
+            let turf_aa = clamp(ground_pixel * 0.35, 0.008, 0.20);
+            let gentle_ground = 1.0 - smoothstep(0.12, 0.35,
+                1.0 - normalize(pbr_input.world_normal).y);
+            let turf = smoothstep(turf_threshold - turf_aa,
+                turf_threshold + 0.045 + turf_aa, turf_field)
+                * smoothstep(0.025, 0.055, weights.x) * gentle_ground
+                * (1.0 - smoothstep(0.18, 0.50, ground_pixel));
+            let earth_share = worn_earth_share * (1.0 - turf);
             let other_share = max(1.0 - weights.y, 0.001);
             weights = normalize_weights(vec4<f32>(
                 weights.x * (1.0 - earth_share) / other_share,
@@ -331,7 +356,6 @@ fn fragment(
             ));
         }
         let uv_grass = tiled_uv(world_uv, terrain_params.layer_tiling.x);
-        let uv_dirt = tiled_uv(world_uv, terrain_params.layer_tiling.y);
         let uv_sand = tiled_uv(world_uv, terrain_params.layer_tiling.z);
         let uv_cobble = tiled_uv(world_uv, terrain_params.layer_tiling.w);
 
@@ -350,7 +374,9 @@ fn fragment(
             dominant_layer = 3u;
         }
         // Favor the single-layer path more aggressively to reduce texture fetch cost.
-        let use_single_layer_fast_path = dominant_weight >= 0.70;
+        // Bright painted dirt cannot replace the whole grain input at a 70%
+        // boundary. Preserve continuous grass/earth mixing along its shoulders.
+        let use_single_layer_fast_path = dominant_weight >= select(0.70, 0.995, weights.y > 0.01);
         // Normal maps cannot switch at the albedo fast-path threshold: a 70/30
         // material edge still needs both relief fields or grazing morning light
         // exposes the threshold as a bright/dark outline. Almost-pure pixels
@@ -362,7 +388,7 @@ fn fragment(
             if (dominant_layer == 0u) {
                 albedo = textureSample(albedo_array, albedo_sampler, uv_grass, 0).rgb;
             } else if (dominant_layer == 1u) {
-                albedo = textureSample(albedo_array, albedo_sampler, uv_dirt, 1).rgb;
+                albedo = dirt_albedo;
             } else if (dominant_layer == 2u) {
                 albedo = textureSample(albedo_array, albedo_sampler, uv_sand, 2).rgb;
             } else {
@@ -370,7 +396,6 @@ fn fragment(
             }
         } else {
             let grass_albedo = textureSample(albedo_array, albedo_sampler, uv_grass, 0).rgb;
-            let dirt_albedo = textureSample(albedo_array, albedo_sampler, uv_dirt, 1).rgb;
             let sand_albedo = textureSample(albedo_array, albedo_sampler, uv_sand, 2).rgb;
             let cobble_albedo = textureSample(albedo_array, albedo_sampler, uv_cobble, 3).rgb;
             albedo = grass_albedo * weights.x
@@ -381,15 +406,23 @@ fn fragment(
 
         // --- Stylised palette ---
         //
-        // Photographic splat textures read as "realistic dirt" at any grade, which is what
-        // fights the low-poly look. Blend the sampled albedo toward flat per-layer colours,
-        // then quantise a height tint into discrete bands — the banding is what actually
-        // reads as stylised, more than any model does. A little of the sampled texture is
-        // kept (palette.bands.z) so large flat areas do not look untextured.
+        // Grade around the shared palette. Painted earth keeps its authored
+        // small value/chroma shapes; the other layers retain their restrained
+        // grain and height tint instead of turning into photographic materials.
         let stylize = palette.stylize.x;
         if (stylize > 0.001) {
+            // Measured linear mean of Painted_Road_01, not an sRGB colour.
+            // Normalising around it preserves the established earth warmth.
+            // Pale chips bypass the soil's channel gains to stay ivory: the
+            // blue gain needed by ochre would otherwise turn them blue-white.
+            let soil_detail = vec3<f32>(1.0)
+                + (dirt_albedo / vec3<f32>(0.704, 0.390, 0.132) - vec3<f32>(1.0)) * 1.38;
+            let graded_soil = palette.dirt.rgb * vec3<f32>(1.36, 1.48, 1.30) * soil_detail;
+            let chip_share = 1.0 - smoothstep(0.40, 0.64,
+                (dirt_albedo.r - dirt_albedo.b) / max(dirt_albedo.r, 0.001));
+            let painted_earth = mix(graded_soil, dirt_albedo * 1.4, chip_share);
             var flat_albedo = palette.grass.rgb * weights.x
-                + palette.dirt.rgb * weights.y
+                + painted_earth * weights.y
                 + palette.sand.rgb * weights.z
                 + palette.cobble.rgb * weights.w;
 
@@ -468,7 +501,8 @@ fn fragment(
             }
 
             // Retain a trace of the sampled texture so the surface has grain.
-            let grain = mix(vec3<f32>(1.0), albedo / max(luminance_safe(albedo), 0.001), palette.bands.z);
+            let grain = mix(vec3<f32>(1.0), albedo / max(luminance_safe(albedo), 0.001),
+                palette.bands.z * (1.0 - weights.y));
             flat_albedo *= grain;
 
             // The existing low-contrast meadow facets were lost when grain
@@ -477,72 +511,17 @@ fn fragment(
             let meadow_value = clamp(luminance_safe(albedo) / 0.113, 0.90, 1.10);
             flat_albedo *= mix(1.0, meadow_value, weights.x * 0.70);
 
-            // Packed earth has broad worn pockets and occasional embedded
-            // pale grit. World-space placement never repeats an image tile;
-            // meadow and sand keep their existing texture character.
+            // A broken, darker earth shoulder grades the same painted material.
+            // Its field does not replace the small authored patches with clouds.
             if (weights.y > 0.01) {
-                // Lighter packed earth, confined to the existing dirt layer.
-                flat_albedo *= mix(vec3<f32>(1.0), vec3<f32>(1.36, 1.48, 1.62), weights.y);
-                let earth = cloud_vnoise(world_uv * 0.55 + vec2<f32>(13.7, 4.1));
-                let fine_earth = cloud_vnoise(world_uv * 4.6 + vec2<f32>(5.8, 21.3));
-                // Light worn soil and darker ochre pockets span the lane,
-                // with quiet base soil between them. Reuse the two existing
-                // fields: broad connected patches, not a new scatter layer.
-                let patch_detail = 1.0 - smoothstep(0.12, 0.40, ground_pixel);
-                let patch_field = earth + (fine_earth - 0.5) * 0.14 * patch_detail;
-                let patch_aa = clamp(ground_pixel * 0.26, 0.008, 0.10);
-                let pocket = 1.0 - smoothstep(0.36 - patch_aa, 0.44 + patch_aa, patch_field);
-                let worn = smoothstep(0.56 - patch_aa, 0.64 + patch_aa, patch_field);
-                let packed_tint = mix(vec3<f32>(1.0), vec3<f32>(0.76, 0.75, 0.71), pocket);
-                let worn_tint = mix(packed_tint, vec3<f32>(1.22, 1.20, 1.15), worn);
-                flat_albedo *= mix(vec3<f32>(1.0), worn_tint, weights.y);
-                flat_albedo *= mix(1.0, mix(0.93, 1.07, fine_earth),
-                    weights.y * (1.0 - smoothstep(0.15, 0.50, ground_pixel)));
-                // Broken exposed earth only inside the existing mixed turf
-                // edge. Reuse the packed-earth field so gaps remain between
-                // patches; no continuous dark outline or extra painted land.
                 let shoulder_band = smoothstep(0.12, 0.30, base_weights.y)
                     * (1.0 - smoothstep(0.68, 0.90, base_weights.y))
                     * smoothstep(0.03, 0.15, base_weights.x)
                     * (1.0 - smoothstep(0.02, 0.08, base_weights.z + base_weights.w));
-                let exposed_edge = shoulder_band
-                    * smoothstep(0.38, 0.64, earth + (fine_earth - 0.5) * 0.18) * 0.58;
-                // Keep sampled grain and the same fine earth detail within
-                // the darker patches instead of replacing them with flat ink.
-                let shoulder_earth = palette.dirt.rgb * vec3<f32>(1.02, 1.00, 0.96)
-                    * grain * mix(0.92, 1.08, fine_earth);
-                flat_albedo = mix(flat_albedo,
-                    shoulder_earth, exposed_edge);
-                let cell = floor(world_uv * 1.35);
-                let seed = cloud_hash(cell);
-                let center = vec2<f32>(
-                    cloud_hash(cell + vec2<f32>(19.1, 8.3)),
-                    cloud_hash(cell + vec2<f32>(7.7, 31.4)),
-                ) * 0.55 + 0.225;
-                // Embedded chips, with independent size/aspect/orientation.
-                // Using the occupancy hash for size made every surviving
-                // stone large and turned close lanes into pale polka dots.
-                let size = cloud_hash(cell + vec2<f32>(43.2, 17.9));
-                let aspect = cloud_hash(cell + vec2<f32>(2.6, 61.3));
-                let direction = (center - vec2<f32>(0.5))
-                    + vec2<f32>(0.001, 0.003);
-                let axis = normalize(direction);
-                let offset = fract(world_uv * 1.35) - center;
-                let delta = abs(vec2<f32>(dot(offset, axis),
-                    dot(offset, vec2<f32>(-axis.y, axis.x))))
-                    * vec2<f32>(mix(0.65, 1.0, aspect), mix(1.80, 0.95, aspect));
-                let shape = max(max(delta.x, delta.y), (delta.x + delta.y) * 0.72);
-                let radius = mix(0.045, 0.19, size * size)
-                    + smoothstep(0.90, 1.0, size) * 0.03;
-                let aa = ground_pixel * 0.675;
-                // Fade each chip by its own projected size: larger fragments
-                // survive town zoom while sub-pixel gravel becomes quiet.
-                let resolved = 1.0 - smoothstep(radius * 0.9, radius * 2.2, aa);
-                let speck = (1.0 - smoothstep(radius - aa, radius + aa, shape))
-                    * step(mix(0.84, 0.61, earth), seed)
-                    * resolved * (1.0 - smoothstep(0.20, 0.60, ground_pixel));
-                flat_albedo = mix(flat_albedo, palette.dirt.rgb * vec3<f32>(1.90, 2.20, 2.65),
-                    speck * weights.y * mix(0.50, 0.85, size));
+                let edge_breakup = cloud_vnoise(world_uv * 2.2 + vec2<f32>(13.7, 4.1));
+                let exposed_edge = shoulder_band * smoothstep(0.34, 0.62, edge_breakup);
+                flat_albedo *= mix(vec3<f32>(1.0), vec3<f32>(0.86, 0.83, 0.78),
+                    exposed_edge * weights.y);
             }
             // Preserve the authored mortar/stone value differences. Chroma-only
             // normalization had erased most of the square's cobble pattern.

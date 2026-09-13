@@ -12,6 +12,7 @@ pub(super) fn animate_menu_transition(
             With<MenuContentContainer>,
             Without<GraphicsSettingsPanel>,
             Without<ControlsSettingsPanel>,
+            Without<AudioSettingsPanel>,
         ),
     >,
     mut graphics_panel_query: Query<
@@ -20,6 +21,7 @@ pub(super) fn animate_menu_transition(
             With<GraphicsSettingsPanel>,
             Without<MenuContentContainer>,
             Without<ControlsSettingsPanel>,
+            Without<AudioSettingsPanel>,
         ),
     >,
     mut controls_panel_query: Query<
@@ -28,11 +30,21 @@ pub(super) fn animate_menu_transition(
             With<ControlsSettingsPanel>,
             Without<MenuContentContainer>,
             Without<GraphicsSettingsPanel>,
+            Without<AudioSettingsPanel>,
+        ),
+    >,
+    mut audio_panel_query: Query<
+        &mut Node,
+        (
+            With<AudioSettingsPanel>,
+            Without<MenuContentContainer>,
+            Without<GraphicsSettingsPanel>,
+            Without<ControlsSettingsPanel>,
         ),
     >,
 ) {
     // Determine target based on which panel is open (only one at a time)
-    let target = if state.graphics_open || state.controls_open {
+    let target = if state.graphics_open || state.controls_open || state.audio_open {
         1.0
     } else {
         0.0
@@ -66,6 +78,9 @@ pub(super) fn animate_menu_transition(
     // Show/hide the controls panel
     for mut node in controls_panel_query.iter_mut() {
         sync_panel(&mut node, state.controls_open, state.transition);
+    }
+    for mut node in &mut audio_panel_query {
+        sync_panel(&mut node, state.audio_open, state.transition);
     }
 }
 

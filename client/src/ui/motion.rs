@@ -55,6 +55,10 @@ impl Default for UiReveal {
     }
 }
 impl UiReveal {
+    pub(crate) fn is_settled(&self) -> bool {
+        self.visible && self.spring.value == 0.0
+    }
+
     pub fn panel() -> Self {
         Self {
             spring: Spring::new(1.0),

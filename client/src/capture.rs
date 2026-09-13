@@ -12,6 +12,7 @@
 //! Run it via `cargo run -p client --bin capture -- --help`.
 
 mod management;
+mod music_review;
 pub(crate) use management::{drive_management_capture, drive_management_input, ManagementCapture};
 mod siege;
 pub(crate) use siege::{
@@ -34,6 +35,8 @@ mod asset_fixtures;
 mod building_lods;
 mod character_fixtures;
 mod civic_fixtures;
+mod construction_refresh;
+mod creator_tour;
 mod farming_live;
 mod history_fixtures;
 mod house_fixtures;
@@ -52,6 +55,7 @@ mod fortification_fixtures;
 mod journey_tour;
 mod ledger_nested;
 mod scene_fixtures;
+mod startup_tour;
 mod town_art_fields;
 mod town_art_yards;
 mod town_fixtures;
@@ -397,10 +401,15 @@ pub fn run(mut config: CaptureConfig) {
     app.insert_resource(config);
     asset_fixtures::install(&mut app);
     building_lods::install(&mut app);
+    construction_refresh::install(&mut app);
     ui_tour::install(&mut app);
+    creator_tour::install(&mut app);
+    music_review::install(&mut app);
     journey_tour::install(&mut app);
     encyclopedia_tour::install(&mut app);
     ledger_nested::install(&mut app);
+    crate::ui::name_entry::capture::install(&mut app);
+    startup_tour::install(&mut app);
 
     app.add_systems(PreStartup, configure_capture_window);
     app.add_systems(Startup, enter_world_offline);
@@ -450,9 +459,13 @@ pub fn run(mut config: CaptureConfig) {
                 .run_if(asset_fixtures::ready)
                 .run_if(building_lods::ready)
                 .run_if(character_fixtures::ready)
+                .run_if(construction_refresh::ready)
+                .run_if(creator_tour::ready)
+                .run_if(music_review::ready)
                 .run_if(journey_tour::ready)
                 .run_if(encyclopedia_tour::ready)
                 .run_if(ledger_nested::ready)
+                .run_if(startup_tour::ready)
                 .run_if(wildlife::ready)
                 .run_if(cavalry_visuals::ready),
             apply_capture_free_look.after(crate::camera_rts::update_commander_camera),

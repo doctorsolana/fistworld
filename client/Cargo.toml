@@ -28,11 +28,13 @@ serde = { workspace = true }
 arboard = "3"
 image = { workspace = true }
 bytemuck = { version = "1", features = ["derive"] }
+# Same native decoder Bevy uses; fallible preparation for filtered world effects.
+rodio = { version = "0.22.2", default-features = false }
 serde_json = "1"
 bevy_dev_tools = { version = "0.19.0", optional = true }
 
 [package.metadata.bundle]
-name = "3DGame"
+name = "FistWorld"
 identifier = "com.terninator.3dgame"
 category = "Game"
 short_description = "A 3D multiplayer game"

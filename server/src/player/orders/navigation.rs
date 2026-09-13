@@ -124,8 +124,19 @@ pub fn advance_marches(
             });
         }
     }
-    for (entity, march, position, mut rotation, target, route, pending, fighting, paused, mounted, skirmish) in
-        &mut units
+    for (
+        entity,
+        march,
+        position,
+        mut rotation,
+        target,
+        route,
+        pending,
+        fighting,
+        paused,
+        mounted,
+        skirmish,
+    ) in &mut units
     {
         if (fighting && !(mounted && skirmish)) || paused {
             continue;

@@ -391,6 +391,7 @@ pub struct UiFoundationPlugin;
 impl Plugin for UiFoundationPlugin {
     fn build(&self, app: &mut App) {
         super::typography::install(app);
+        super::sound::install(app);
         app.add_plugins(TabNavigationPlugin);
         app.init_resource::<super::modal::ModalState>();
         // Screen-owned state systems run in `Update`; painting in `PostUpdate`

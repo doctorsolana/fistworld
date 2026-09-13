@@ -23,6 +23,25 @@ pub struct BuildingVisual {
     pub(super) building_type: BuildingType,
 }
 
+/// Retains the requested replacement while the current scene remains visible.
+#[derive(Component)]
+pub(super) struct PendingBuildingScene {
+    building_type: BuildingType,
+    scene: Handle<WorldAsset>,
+}
+
+fn requested_scene(
+    asset_server: &AssetServer,
+    art: BuildingType,
+    path: &'static str,
+    pending: Option<&PendingBuildingScene>,
+) -> Handle<WorldAsset> {
+    pending
+        .filter(|pending| pending.building_type == art)
+        .map(|pending| pending.scene.clone())
+        .unwrap_or_else(|| asset_server.load(path))
+}
+
 pub(super) fn building_visual_art(
     kind: SettlementBuildingKind,
     market_level: Option<&MarketLevel>,
@@ -142,16 +161,40 @@ pub(super) fn attach_building_visuals(
         Option<&MarketLevel>,
         Option<&HouseAppearance>,
         Option<&BuildingVisual>,
+        Option<&PendingBuildingScene>,
     )>,
 ) {
     let Some(terrain) = terrain else {
         return;
     };
-    for (entity, building, position, rotation, market_level, house, visual) in built.iter() {
+    for (entity, building, position, rotation, market_level, house, visual, pending) in built.iter()
+    {
         // The semantic kind chooses its own art, so re-skinning a Farmstead
         // never touches a rule.
         let art = building_visual_art(building.kind, market_level, house);
         if visual.is_some_and(|visual| visual.building_type == art) {
+            if pending.is_some() {
+                commands.entity(entity).remove::<PendingBuildingScene>();
+            }
+            continue;
+        }
+        let scene = art
+            .scene_path()
+            .map(|path| (path, requested_scene(&asset_server, art, path, pending)));
+        // Bevy removes the old instance as soon as its root handle changes.
+        // Keep that scene and its wiring until the replacement can spawn in
+        // the same pass; first appearances still stream in normally.
+        if visual.is_some()
+            && scene
+                .as_ref()
+                .is_some_and(|(_, handle)| !asset_server.is_loaded_with_dependencies(handle.id()))
+        {
+            if pending.is_none_or(|pending| pending.building_type != art) {
+                commands.entity(entity).insert(PendingBuildingScene {
+                    building_type: art,
+                    scene: scene.as_ref().unwrap().1.clone(),
+                });
+            }
             continue;
         }
         let definition = art.definition();
@@ -170,14 +213,15 @@ pub(super) fn attach_building_visuals(
         // the replacement anchors and animation players.
         commands
             .entity(entity)
+            .remove::<PendingBuildingScene>()
             .remove::<BuildingDoorAnimation>()
             .remove::<WindmillMotion>()
             .remove::<BuildingNightLighting>()
             .remove::<BakeryBreadDisplay>()
             .remove::<WindowLighting>()
             .remove::<DoorVisualSource>();
-        if let Some(scene) = art.scene_path() {
-            let gltf_path = scene.split('#').next().unwrap_or(scene).to_string();
+        if let Some((path, scene)) = scene {
+            let gltf_path = path.split('#').next().unwrap_or(path).to_string();
             commands
                 .entity(entity)
                 .remove::<Mesh3d>()
@@ -189,7 +233,7 @@ pub(super) fn attach_building_visuals(
                         building_type: art,
                         gltf: asset_server.load(gltf_path),
                     },
-                    WorldAssetRoot(asset_server.load(scene)),
+                    WorldAssetRoot(scene),
                     Transform::from_xyz(position.0.x, ground, position.0.z)
                         .with_rotation(Quat::from_rotation_y(rotation.0)),
                 ));
@@ -243,29 +287,44 @@ pub(super) fn attach_settlement_visuals(
         &PlayerPosition,
         Option<&CivicHallLevel>,
         Option<&SettlementVisual>,
+        Option<&PendingBuildingScene>,
     )>,
 ) {
     let Some(terrain) = terrain else {
         return;
     };
-    for (entity, settlement, position, level, visual) in founded.iter() {
+    for (entity, settlement, position, level, visual, pending) in founded.iter() {
         let level = level
             .copied()
             .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
         let art = level.building_type();
         if visual.is_some_and(|visual| visual.building_type == art) {
+            if pending.is_some() {
+                commands.entity(entity).remove::<PendingBuildingScene>();
+            }
+            continue;
+        }
+        let Some(scene) = art.scene_path() else {
+            continue;
+        };
+        let gltf_path = scene.split('#').next().unwrap_or(scene).to_string();
+        let scene = requested_scene(&asset_server, art, scene, pending);
+        if visual.is_some() && !asset_server.is_loaded_with_dependencies(scene.id()) {
+            if pending.is_none_or(|pending| pending.building_type != art) {
+                commands.entity(entity).insert(PendingBuildingScene {
+                    building_type: art,
+                    scene,
+                });
+            }
             continue;
         }
         // The hall stands on the ground, not at the replicated Y: the server
         // snapped it once at founding, but terrain deltas can move under it.
         let ground = terrain.get_height(position.0.x, position.0.z);
-        let Some(scene) = art.scene_path() else {
-            continue;
-        };
-        let gltf_path = scene.split('#').next().unwrap_or(scene).to_string();
 
         commands
             .entity(entity)
+            .remove::<PendingBuildingScene>()
             .remove::<(BuildingDoorAnimation, WindowLighting)>()
             .insert((
                 SettlementVisual { building_type: art },
@@ -275,7 +334,7 @@ pub(super) fn attach_settlement_visuals(
                     gltf: asset_server.load(gltf_path),
                 },
                 Name::new(format!("{} ({})", level.label(), settlement.name)),
-                WorldAssetRoot(asset_server.load(scene)),
+                WorldAssetRoot(scene),
                 Transform::from_xyz(position.0.x, ground, position.0.z),
                 Visibility::Inherited,
             ));
@@ -289,3 +348,7 @@ pub(super) fn attach_settlement_visuals(
         );
     }
 }
+
+#[cfg(test)]
+#[path = "buildings_tests.rs"]
+mod tests;

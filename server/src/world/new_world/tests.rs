@@ -74,6 +74,28 @@ fn inhabited_world_has_real_homes_companies_stock_and_access() {
         }
     }
     for (id, hall, residents) in &halls {
+        let workplaces: Vec<_> = world
+            .query::<(
+                &BuildingOf,
+                &SettlementBuilding,
+                &shared::economy::BusinessStaffingPolicy,
+            )>()
+            .iter(&world)
+            .filter(|(of, _, _)| of.0 == *id)
+            .map(|(_, building, staffing)| {
+                assert_eq!(
+                    staffing.target_for(building.kind),
+                    building.kind.positions(),
+                    "opening capacity must use its real funded staffing target"
+                );
+                (building.kind, building.quality)
+            })
+            .collect();
+        let audit = layout::audit_economy(&workplaces);
+        assert!(
+            audit.supports(*residents as usize),
+            "{id:?}: {audit:?} cannot support {residents} residents"
+        );
         let homes = world
             .query::<(&BuildingOf, &SettlementBuilding)>()
             .iter(&world)
@@ -205,6 +227,17 @@ fn inhabited_world_continues_without_opening_subsidies() {
         .query::<(&Settlement, &SettlementEconomy)>()
         .iter(world)
     {
+        assert!(
+            economy.recent_food_production > 0.0,
+            "{} survived on opening stock without recent local food production: {:?}",
+            settlement.name,
+            economy
+        );
+        assert_eq!(
+            economy.unmet_food, 0,
+            "{} ended the unattended opening with unmet food demand: {:?}",
+            settlement.name, economy
+        );
         assert_eq!(
             economy.homeless_residents, 0,
             "{} lost its prepared housing",

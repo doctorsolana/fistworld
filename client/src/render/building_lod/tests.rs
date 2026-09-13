@@ -57,11 +57,21 @@ fn zooming_away_from_the_same_building_reduces_detail_and_resolution_matters() {
 
 #[test]
 fn mesh_swaps_preserve_animated_nodes_materials_and_return_to_the_exact_source() {
+    use bevy::pbr::{check_entities_needing_specialization, EntitiesNeedingSpecialization};
+
+    bevy::tasks::ComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
     let mut app = App::new();
     app.init_resource::<Time>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>()
-        .add_systems(Update, select);
+        .init_resource::<EntitiesNeedingSpecialization<StandardMaterial>>()
+        // Register the real renderer detector first: production ordering must
+        // still put mesh swaps before its retained-bin invalidation snapshot.
+        .add_systems(
+            PostUpdate,
+            check_entities_needing_specialization::<StandardMaterial>,
+        );
+    configure_selection(&mut app);
     let meshes = &mut app.world_mut().resource_mut::<Assets<Mesh>>();
     let handles = [
         meshes.add(Cuboid::new(1.0, 2.0, 0.1)),
@@ -135,6 +145,15 @@ fn mesh_swaps_preserve_animated_nodes_materials_and_return_to_the_exact_source()
         if level != HIDDEN {
             assert_eq!(app.world().get::<Mesh3d>(door).unwrap().0, handles[level]);
         }
+        let changed = &app
+            .world()
+            .resource::<EntitiesNeedingSpecialization<StandardMaterial>>()
+            .changed;
+        assert_eq!(
+            changed.contains(&door),
+            level != HIDDEN,
+            "the renderer must receive mesh swaps in the same frame, never one frame later"
+        );
         assert_eq!(
             *app.world().get::<Visibility>(root).unwrap(),
             if level == HIDDEN {
@@ -158,6 +177,16 @@ fn mesh_swaps_preserve_animated_nodes_materials_and_return_to_the_exact_source()
         assert_eq!(app.world().get::<ChildOf>(door).unwrap().parent(), root);
         assert_eq!(app.world().entities().len(), entities);
     }
+    // Stationary selection must not keep invalidating the retained render bins.
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_secs_f32(0.11));
+    app.update();
+    assert!(app
+        .world()
+        .resource::<EntitiesNeedingSpecialization<StandardMaterial>>()
+        .changed
+        .is_empty());
     // Hiding/revealing must not reveal a root another feature already hid.
     app.world_mut().entity_mut(root).insert(Visibility::Hidden);
     for level in [HIDDEN, 0] {

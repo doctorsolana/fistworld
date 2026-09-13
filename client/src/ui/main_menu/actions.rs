@@ -1,33 +1,58 @@
-//! actions systems.
-
+//! Resolve the editable address before requesting a connection.
 use super::*;
+use bevy::input_focus::InputFocus;
 
 pub(super) fn handle_menu_actions(
-    buttons: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
+    buttons: Query<(Entity, Ref<Interaction>, &MenuButton)>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    focus: Res<InputFocus>,
+    mut editing: ResMut<network_input::ServerAddressEditing>,
+    mut address: ResMut<ServerAddress>,
+    mut feedback: ResMut<crate::render::systems::ConnectionFeedback>,
     mut next_state: ResMut<NextState<GameState>>,
-    mut exit_writer: MessageWriter<AppExit>,
+    mut exit: MessageWriter<AppExit>,
+    mut sounds: crate::ui::sound::UiActionSounds,
 ) {
-    for (interaction, action) in buttons.iter() {
-        if *interaction == Interaction::Pressed {
-            match action {
-                MenuButton::Connect => {
-                    info!("Connect pressed - transitioning to Connecting state");
-                    next_state.set(GameState::Connecting);
-                }
-                MenuButton::Exit => {
-                    info!("Exit pressed - quitting game");
-                    exit_writer.write(AppExit::Success);
-                }
-            }
+    let submit_requested = std::mem::take(&mut editing.submit_requested);
+    let mut action = submit_requested.then_some(MenuButton::Connect);
+    let mut audible = submit_requested;
+    let activate =
+        keyboard.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]);
+    for (entity, interaction, button) in &buttons {
+        if (interaction.is_changed() && *interaction == Interaction::Pressed)
+            || (activate && focus.get() == Some(entity))
+        {
+            action = Some(*button);
+            audible = (activate && focus.get() == Some(entity)) || sounds.pressed(entity);
         }
     }
-}
-
-pub(super) fn animate_logo(time: Res<Time>, mut logos: Query<(&mut LogoImage, &mut Transform)>) {
-    for (mut logo, mut transform) in logos.iter_mut() {
-        logo.time += time.delta_secs();
-        // Subtle breathing animation
-        let scale = logo.base_scale + (logo.time * 0.5).sin() * 0.015;
-        transform.scale = Vec3::splat(scale);
+    if focus.get().is_none() && keyboard.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter]) {
+        action = Some(MenuButton::Connect);
+        audible = true;
+    }
+    match action {
+        Some(MenuButton::Connect) => match editing.resolve(address.port) {
+            Ok(validated) => {
+                *address = validated;
+                feedback.error_message = None;
+                next_state.set(GameState::Connecting);
+                if audible {
+                    sounds.emit(crate::audio::sfx::SfxCue::UiConfirm);
+                }
+            }
+            Err(message) => {
+                feedback.error_message = Some(message.into());
+                if audible {
+                    sounds.emit(crate::audio::sfx::SfxCue::UiReject);
+                }
+            }
+        },
+        Some(MenuButton::Exit) => {
+            if audible {
+                sounds.emit(crate::audio::sfx::SfxCue::UiClick);
+            }
+            exit.write(AppExit::Success);
+        }
+        None => {}
     }
 }

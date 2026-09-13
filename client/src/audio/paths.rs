@@ -1,4 +1,5 @@
 //! Canonical audio path constants.
 //! Filenames preserve existing on-disk assets.
 
-pub const AMBIENT_WALKING_DESERT: &str = "audio/ambient/walking_desert.ogg";
+pub const GAME_INTRO: &str = "audio/music/game_intro.ogg";
+pub const BACKGROUND_MUSIC: &str = "audio/music/chroniclers_quill.ogg";

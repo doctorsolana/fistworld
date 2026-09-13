@@ -1,83 +1,102 @@
-//! Player name entry UI
-//!
-//! Simple name input screen shown when connected to server
+//! Account-name entry and the asynchronous authoritative world join.
 
 pub mod actions;
+pub(crate) mod capture;
 pub mod input;
 pub mod layout;
 pub mod network;
 
-use actions::{handle_enter_key_submit, handle_submit_button};
-use input::handle_text_input;
-use layout::{despawn_name_entry_ui, spawn_name_entry_ui};
-use network::handle_name_submission_result;
-
-use bevy::input::keyboard::KeyboardInput;
-use bevy::prelude::*;
-use lightyear::prelude::*;
-use shared::protocol::{
-    NameRejectionReason, NameSubmissionResult, ReliableChannel, SubmitPlayerName,
-};
-
 use crate::states::GameState;
-use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
-use crate::ui::styles::{ACCENT_RED, INK_INVERSE, SLATE};
+use bevy::prelude::*;
 
-/// Plugin for name entry UI
+/// Busy states are separate from validation errors; the UI never represents
+/// world preparation as a failed submission or a made-up percentage.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum NameEntryPhase {
+    #[default]
+    Editing,
+    Submitting,
+    Preparing,
+}
+
+impl NameEntryPhase {
+    pub fn is_busy(self) -> bool {
+        self != Self::Editing
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Editing => "Join game",
+            Self::Submitting => "Joining game…",
+            Self::Preparing => "Preparing world…",
+        }
+    }
+}
+
 pub struct NameEntryPlugin;
 
 impl Plugin for NameEntryPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PlayerNameInput>();
-        app.init_resource::<NameSubmissionFeedback>();
-        app.init_resource::<network::PendingWorldJoin>();
-        app.add_systems(OnExit(GameState::Connected), network::cancel_world_join);
-
-        app.add_systems(OnEnter(GameState::Connected), spawn_name_entry_ui);
-        app.add_systems(OnExit(GameState::Connected), despawn_name_entry_ui);
-
-        app.add_systems(
-            Update,
-            (
-                handle_text_input,
-                handle_submit_button,
-                handle_enter_key_submit,
-                handle_name_submission_result,
+        app.init_resource::<PlayerNameInput>()
+            .init_resource::<NameEntryPhase>()
+            .init_resource::<NameSubmissionFeedback>()
+            .init_resource::<input::NameInputEditing>()
+            .init_resource::<network::PendingWorldJoin>()
+            .add_systems(
+                OnEnter(GameState::Connected),
+                (actions::reset_name_entry, layout::spawn_name_entry_ui).chain(),
             )
-                .run_if(in_state(GameState::Connected)),
-        );
+            .add_systems(
+                OnExit(GameState::Connected),
+                (network::cancel_world_join, layout::despawn_name_entry_ui),
+            )
+            .add_systems(
+                PostUpdate,
+                input::fit_name_input
+                    .after(bevy::ui::widget::text_system)
+                    .run_if(in_state(GameState::Connected)),
+            )
+            .add_systems(
+                Update,
+                (
+                    input::handle_text_input,
+                    actions::handle_submit_button,
+                    actions::handle_enter_key_submit,
+                    network::handle_name_submission_result,
+                    actions::handle_back,
+                    layout::sync_name_entry_ui,
+                )
+                    .chain()
+                    .run_if(in_state(GameState::Connected)),
+            );
     }
 }
 
-/// Resource holding the player's name input
+/// The submitted name remains the local account identity throughout gameplay.
 #[derive(Resource, Default)]
 pub struct PlayerNameInput {
     pub name: String,
     pub submitted: bool,
 }
 
-/// Resource for feedback messages (errors, etc.)
 #[derive(Resource, Default)]
 pub struct NameSubmissionFeedback {
     pub error_message: Option<String>,
 }
 
-/// Root marker for the name entry UI
 #[derive(Component)]
 struct NameEntryRoot;
-
-/// Marker for the name input text display
 #[derive(Component)]
 struct NameInputDisplay;
-
-/// Marker for the error message text
 #[derive(Component)]
 struct ErrorMessageText;
-
-/// Marker for the submit button
 #[derive(Component)]
 struct SubmitButton;
+#[derive(Component)]
+pub(crate) struct NameInputField;
+#[derive(Component)]
+pub(crate) struct BackButton;
 
-/// Marker component to track that we've submitted a name
+/// Marks a reliable request awaiting its authoritative reply.
 #[derive(Component)]
 pub struct PlayerNameSubmitted;

@@ -11,7 +11,7 @@ use bevy::prelude::*;
 
 use crate::states::GameState;
 use crate::ui::{
-    foundation::{UiButtonLabel, UiButtonStyle, UiButtonVariant, button_chrome},
+    foundation::{button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant},
     hud::chrome::{pill_panel, wood_panel},
     motion::{Spring, UiReveal},
     styles::{BRASS, CRIMSON, PARCHMENT},

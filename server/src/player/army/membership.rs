@@ -80,8 +80,15 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
             } else {
                 SoldierRole::Infantry
             };
-            if role != SoldierRole::Cavalry && soldiers.iter().any(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Cavalry)) {
-                return (0, "Keep cavalry in a cavalry battalion or command it separately".into());
+            if role != SoldierRole::Cavalry
+                && soldiers
+                    .iter()
+                    .any(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Cavalry))
+            {
+                return (
+                    0,
+                    "Keep cavalry in a cavalry battalion or command it separately".into(),
+                );
             }
             let changing: Vec<_> = soldiers
                 .iter()
@@ -186,8 +193,15 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
             {
                 return (0, "Only mounted troops can join a cavalry battalion".into());
             }
-            if role != SoldierRole::Cavalry && soldiers.iter().any(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Cavalry)) {
-                return (0, "Keep cavalry in a cavalry battalion or command it separately".into());
+            if role != SoldierRole::Cavalry
+                && soldiers
+                    .iter()
+                    .any(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Cavalry))
+            {
+                return (
+                    0,
+                    "Keep cavalry in a cavalry battalion or command it separately".into(),
+                );
             }
             let changing: Vec<_> = soldiers
                 .iter()

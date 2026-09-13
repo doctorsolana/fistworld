@@ -1,0 +1,26 @@
+(
+    version: 1,
+    name: "ui-preparing-world",
+    map: "battle_lab",
+    output_dir: "logs/captures/ui-preparing-world",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: window,
+    show_window: false,
+    warmup_frames: 180,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 0,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {"FISTFORCE_CAPTURE_FRONTEND": "preparing"},
+    shots: [(
+        name: "preparing",
+        focus: (0.0, 0.0, 0.0),
+        yaw: -0.45,
+        zoom: 160.0,
+        time_of_day: 0.5,
+        assertions: [loaded_chunks_at_least(count: 0)],
+    )],
+)

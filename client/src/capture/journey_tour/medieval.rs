@@ -235,6 +235,8 @@ pub(crate) struct TourWorld<'w, 's> {
         (&'static Camera, &'static GlobalTransform),
         With<crate::camera_rts::CommanderCamera>,
     >,
+    bearings: Query<'w, 's, &'static crate::camera_rts::CommanderCamera>,
+    images: Query<'w, 's, &'static ImageNode>,
     artwork: Res<'w, HudArtwork>,
     assets: Res<'w, AssetServer>,
     icons: Query<'w, 's, (&'static HudIcon, &'static ImageNode)>,
@@ -345,6 +347,104 @@ impl TourWorld<'_, '_> {
                 self.entity_visible(entity)
             }
         })
+    }
+
+    /// Inspect the actual laid-out production dial, not fixture-assigned state.
+    /// These checks also run after Map and Ledger return in the full HUD tour.
+    fn compass_evidence(&self) -> Result<serde_json::Value, String> {
+        let named = |name: &str| {
+            self.named(name)
+                .ok_or_else(|| format!("compass control {name} is missing"))
+        };
+        let map = named("hud-MAP")?;
+        let book = named("hud-LEDGER")?;
+        let bearing = named("Compass bearing")?;
+        let north = named("Compass north")?;
+        for entity in [map, book, bearing, north] {
+            if !self.entity_onscreen(entity) {
+                return Err("compass controls and north label must be visible".into());
+            }
+        }
+        let map_bounds = self.bounds(map).ok_or("map dial has no physical bounds")?;
+        let book_bounds = self.bounds(book).ok_or("ledger has no physical bounds")?;
+        let viewport = Vec2::new(
+            self.config.resolution[0] as f32,
+            self.config.resolution[1] as f32,
+        );
+        for bounds in [map_bounds, book_bounds] {
+            if !bounds.min.cmpge(Vec2::ZERO).all() || !bounds.max.cmple(viewport).all() {
+                return Err(
+                    "compass and ledger buttons must fit entirely inside the viewport".into(),
+                );
+            }
+        }
+        let gap = book_bounds.min.x - map_bounds.max.x;
+        if gap < 2.0 {
+            return Err("compass and ledger need separate, nonoverlapping hit targets".into());
+        }
+        let (_, bearing_transform, _, _) = self
+            .geometry
+            .get(bearing)
+            .map_err(|_| "compass bearing transform is missing")?;
+        let (_, north_transform, _, _) = self
+            .geometry
+            .get(north)
+            .map_err(|_| "compass north transform is missing")?;
+        let angle = |transform: &UiGlobalTransform| {
+            let direction =
+                transform.transform_point2(Vec2::X) - transform.transform_point2(Vec2::ZERO);
+            direction.y.atan2(direction.x)
+        };
+        let bearing_angle = angle(bearing_transform);
+        let north_angle = angle(north_transform);
+        let camera_yaw = self
+            .bearings
+            .single()
+            .map_err(|_| "compass needs one actual commander camera")?
+            .yaw;
+        let heading_error = (bearing_angle - camera_yaw + std::f32::consts::PI)
+            .rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        if heading_error.abs() > 0.01 || north_angle.abs() > 0.01 {
+            return Err("compass rose must track camera yaw while N stays upright".into());
+        }
+        let north_direction = (north_transform.transform_point2(Vec2::ZERO)
+            - bearing_transform.transform_point2(Vec2::ZERO))
+        .normalize_or_zero();
+        let expected_north = Rot2::radians(camera_yaw) * Vec2::NEG_Y;
+        if north_direction.dot(expected_north) < 0.99 {
+            return Err("north label must follow the rotating world-north end of the dial".into());
+        }
+        let dial = self
+            .images
+            .get(map)
+            .map_err(|_| "dial artwork is missing")?;
+        let dial_path = dial.image.path().map(|path| path.path());
+        if dial_path != Some(std::path::Path::new("ui/hud/compass-dial.png")) {
+            return Err("compass must bind the authored recessed dial artwork".into());
+        }
+        let rose_ready = self.icons.iter().any(|(_, image)| {
+            image.image.path().is_some_and(|path| {
+                path.path() == std::path::Path::new("ui/hud/compass-rose.png")
+                    && self.assets.is_loaded_with_dependencies(image.image.id())
+            })
+        });
+        if !rose_ready {
+            return Err("compass must bind its loaded authored rose artwork".into());
+        }
+        Ok(serde_json::json!({
+            "camera_yaw":camera_yaw,
+            "bearing_radians":bearing_angle,
+            "north_label_radians":north_angle,
+            "north_direction":north_direction.to_array(),
+            "map_screen_bounds":[map_bounds.min.to_array(), map_bounds.max.to_array()],
+            "ledger_screen_bounds":[book_bounds.min.to_array(), book_bounds.max.to_array()],
+            "button_gap_pixels":gap,
+            "right_margin_pixels":viewport.x - book_bounds.max.x,
+            "bottom_margin_pixels":viewport.y - map_bounds.max.y,
+            "dial_asset":dial_path,
+            "rose_asset":"ui/hud/compass-rose.png",
+        }))
     }
 
     fn visible_actor_count(&self) -> usize {
@@ -480,6 +580,9 @@ impl TourWorld<'_, '_> {
             "minimal card must retain only its expand action",
         )?;
         let modal = matches!(name, "02-character" | "04-map" | "06-ledger");
+        if check_bounds && !modal {
+            self.compass_evidence()?;
+        }
         for shell in [
             "Selected character card",
             "World clock",
@@ -678,6 +781,11 @@ fn inspect(
         "map_open":world.map.0, "encyclopedia_open":world.encyclopedia.0,
         "selected_entities":world.selection.len(), "visible_dressed_actors":world.visible_actor_count(), "hud":named,
         "encyclopedia_panel_visible":world.encyclopedia_panels.iter().any(|entity|world.entity_onscreen(entity)),
+        "compass":if !rehearsal.combat && world.visible("Exploration navigation", true) {
+            Some(world.compass_evidence().expect("visible compass evidence"))
+        } else {
+            None
+        },
         "input":"production button and Escape handlers",
         "fixture":"offline hero and town records; no connected simulation claim",
     });

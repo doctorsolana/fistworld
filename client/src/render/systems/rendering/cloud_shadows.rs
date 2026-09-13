@@ -81,8 +81,8 @@ struct CloudShadowLanes {
     storm: Vec4,
 }
 
-/// Which chunk entities receive the pending lanes THIS frame: every entity not
-/// yet at `generation`, at most `budget` of them, in iteration order. Pure so
+/// At most `budget` pending writes, with never-initialized materials before
+/// ordinary anchor refreshes. Ordering within each group is stable. Pure so
 /// the amortisation contract is testable without materials or a GPU.
 fn lane_sweep_targets(
     entities: impl Iterator<Item = Entity>,
@@ -90,10 +90,22 @@ fn lane_sweep_targets(
     generation: u32,
     budget: usize,
 ) -> Vec<Entity> {
-    entities
-        .filter(|entity| applied.get(entity) != Some(&generation))
-        .take(budget)
-        .collect()
+    let mut newcomers = Vec::new();
+    let mut refresh = Vec::new();
+    for entity in entities {
+        match applied.get(&entity) {
+            None if newcomers.len() < budget => newcomers.push(entity),
+            Some(previous) if *previous != generation && refresh.len() < budget => {
+                refresh.push(entity);
+            }
+            _ => {}
+        }
+    }
+    // Existing chunks already have a usable anchor; a new material has none.
+    // Give publication priority while retaining the same total upload budget.
+    refresh.truncate(budget.saturating_sub(newcomers.len()));
+    newcomers.extend(refresh);
+    newcomers
 }
 
 /// Push the shared cloud-field parameters into every terrain chunk material
@@ -183,39 +195,11 @@ pub fn sync_cloud_shadow_params(
     let clouds_c = Vec4::new(anchor_time, sun_proj_vel.x, speed_client, sun_proj_vel.y);
     // Static per map: half extent + the world-seed climate phase (NOT the
     // cloud seed — climate is terrain, identical across sessions).
-    let half_extent = terrain
+    let climate = terrain
         .as_ref()
-        .map(|terrain| {
-            let bounds = terrain.generator.active_map_bounds();
-            (bounds.max[0] - bounds.min[0]) * 0.5
-        })
-        .unwrap_or(4096.0);
-    let climate_phase = terrain
-        .as_ref()
-        .and_then(|terrain| {
-            terrain
-                .generator
-                .loaded_map()
-                .definition
-                .generated
-                .as_ref()
-                .map(|g| shared::worldgen::climate_phase(g.seed))
-        })
-        .unwrap_or(0.0);
-    // zw: the seed's prevailing dune wind, for windward/lee dune shading.
-    let dune_dir = terrain
-        .as_ref()
-        .and_then(|terrain| {
-            terrain
-                .generator
-                .loaded_map()
-                .definition
-                .generated
-                .as_ref()
-                .map(|g| shared::worldgen::dune_direction(g.seed))
-        })
-        .unwrap_or(Vec2::ZERO);
-    let climate = Vec4::new(half_extent, climate_phase, dune_dir.x, dune_dir.y);
+        .map(|terrain| crate::terrain::terrain_climate_for_generator(&terrain.generator))
+        .unwrap_or(Vec4::new(4096.0, 0.0, 0.0, 0.0));
+    let half_extent = climate.x;
     // THE storm system: center anchored at this write (shaders extrapolate it
     // with the cloud drift), strength zeroed with clouds disabled so both the
     // rain darkening AND its per-fragment fbm cost vanish with the sky
@@ -314,6 +298,24 @@ pub fn sync_cloud_shadow_params(
 #[cfg(test)]
 mod lane_sweep_tests {
     use super::*;
+
+    #[test]
+    fn a_new_chunk_is_initialized_before_the_pending_weather_resweep() {
+        let old: Vec<_> = (1..=96u32)
+            .map(|id| Entity::from_raw_u32(id).unwrap())
+            .collect();
+        let newcomer = Entity::from_raw_u32(1000).unwrap();
+        let applied = old.iter().map(|entity| (*entity, 6)).collect();
+        let targets = lane_sweep_targets(
+            old.iter().copied().chain(std::iter::once(newcomer)),
+            &applied,
+            7,
+            LANE_WRITES_PER_FRAME,
+        );
+        assert_eq!(targets.len(), LANE_WRITES_PER_FRAME);
+        assert_eq!(targets[0], newcomer);
+        assert_eq!(&targets[1..], &old[..LANE_WRITES_PER_FRAME - 1]);
+    }
 
     /// 289 chunks at 48 per frame finish in seven frames, no chunk is written
     /// twice for one generation, and a chunk streaming in afterwards is topped

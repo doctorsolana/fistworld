@@ -39,6 +39,7 @@ pub(super) fn autoconnect_from_main_menu(
 pub(super) fn autoconnect_submit_name(
     mut commands: Commands,
     mut player_name: ResMut<crate::ui::name_entry::PlayerNameInput>,
+    mut phase: ResMut<crate::ui::name_entry::NameEntryPhase>,
     client_query: Query<
         (Entity, &MessageSender<SubmitPlayerName>),
         (With<crate::GameClient>, Without<PlayerNameSubmitted>),
@@ -55,6 +56,7 @@ pub(super) fn autoconnect_submit_name(
     // CommandedBy account on the player's boat.
     player_name.name.clone_from(&name);
     player_name.submitted = true;
+    *phase = crate::ui::name_entry::NameEntryPhase::Submitting;
     info!("FISTFORCE_AUTOCONNECT: submitting player name '{name}'");
     commands.queue(move |world: &mut World| {
         if let Some(mut sender) = world.get_mut::<MessageSender<SubmitPlayerName>>(client_entity) {

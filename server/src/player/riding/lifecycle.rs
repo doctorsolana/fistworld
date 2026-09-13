@@ -18,7 +18,11 @@ pub fn tick(world: &mut World, mut scratch: Local<MountScratch>) {
             .query::<&Horse>()
             .iter(world)
             .all(|h| h.rider.is_none())
-        && world.query::<&super::cavalry::CavalryMount>().iter(world).next().is_none()
+        && world
+            .query::<&super::cavalry::CavalryMount>()
+            .iter(world)
+            .next()
+            .is_none()
     {
         return;
     }
@@ -64,7 +68,8 @@ pub fn tick(world: &mut World, mut scratch: Local<MountScratch>) {
                     && world.get::<OfflineHero>(*e).is_none()
                     && world.get::<Health>(*e).is_none_or(|h| !h.is_dead())
                     && world.get::<AboardBoat>(*e).is_none()
-                    && (world.get::<super::cavalry::CavalryMount>(entity).is_none() || world.get::<CommandedBy>(*e).is_some())
+                    && (world.get::<super::cavalry::CavalryMount>(entity).is_none()
+                        || world.get::<CommandedBy>(*e).is_some())
             });
             if let Some((rider, mut mounted)) = rider {
                 if world.get::<SoldierRole>(rider) == Some(&SoldierRole::Cavalry) {

@@ -203,12 +203,11 @@ mod tests {
         app.world_mut().clear_trackers();
         app.world_mut().resource_mut::<GodNotice>().seconds_left -= 0.1;
         app.update();
-        assert!(
-            !app.world()
-                .get_resource_ref::<Notices>()
-                .unwrap()
-                .is_changed()
-        );
+        assert!(!app
+            .world()
+            .get_resource_ref::<Notices>()
+            .unwrap()
+            .is_changed());
         assert_eq!(app.world().resource::<Notices>().unread(), 1);
     }
 

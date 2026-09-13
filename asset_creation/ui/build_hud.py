@@ -148,6 +148,88 @@ def medallion():
     canvas.save("medallion.png")
 
 
+def compass():
+    """Separate recessed case and turning bearings; north stays native UI text.
+
+    Author at 128 logical pixels, export at 2x the 112px HUD dial. The restrained
+    grain and fixed scratches are baked once, never generated while playing.
+    """
+    case = Drawing(128, 128)
+    pixels = case.image.load()
+    for y in range(case.image.height):
+        for x in range(case.image.width):
+            dx, dy = x / SCALE - 64, y / SCALE - 64
+            radius = math.hypot(dx, dy)
+            if radius > 60:
+                continue
+            # Charcoal instrument face, with a quiet rubbed centre and a dark
+            # inset beneath the metal. Avoid the crest medallion's wood grain.
+            light = max(0, 1 - radius / 60) * 7
+            grain = math.sin(dy * 2.4 + math.sin(dx * .04)) * .45
+            pixels[x, y] = tuple(round(c + light + grain) for c in (35, 34, 28)) + (255,)
+    case.ellipse((1, 1, 127, 127), None, (29, 24, 17), 2)
+    case.ellipse((3, 3, 125, 125), None, mix(AGED, WOOD, .28), 6)
+    # Directional metal lighting and slow, uneven patina, not a flat gold ring.
+    for i in range(384):
+        a = i * math.tau / 384
+        b = (i + 1.3) * math.tau / 384
+        wear = math.sin(a * 13) * .035 + math.sin(a * 31) * .022
+        lighting = .44 + .30 * math.cos(a + 2.15) + wear
+        color = mix(mix(AGED, WOOD, .14), mix(GOLD, CREAM, .43), lighting)
+        for radius, width in [(60.0, 2.3), (56.0, .8)]:
+            case.line([(64 + math.cos(a) * radius, 64 + math.sin(a) * radius),
+                       (64 + math.cos(b) * radius, 64 + math.sin(b) * radius)], color, width)
+    case.ellipse((10, 10, 118, 118), None, (14, 17, 16), 2)
+    case.ellipse((12, 12, 116, 116), None, mix(AGED, WOOD, .56), .65)
+    # Short worn highlights on the lip and four small inset retaining pins.
+    for i in range(19):
+        a = i * 2.39996
+        radius = 58.7 + math.sin(i * 7.1) * .6
+        x, y = 64 + math.cos(a) * radius, 64 + math.sin(a) * radius
+        case.line([(x, y), (x - math.sin(a) * 1.2, y + math.cos(a) * 1.2)],
+                  mix(GOLD, CREAM, .18), .45)
+    for a in [math.pi / 4 + i * math.pi / 2 for i in range(4)]:
+        x, y = 64 + math.cos(a) * 59, 64 + math.sin(a) * 59
+        case.ellipse((x - 1, y - 1, x + 1, y + 1), mix(AGED, WOOD, .15))
+        case.line([(x - .5, y - .3), (x + .5, y + .3)], mix(GOLD, CREAM, .3), .45)
+
+    rose = Drawing(128, 128)
+    gold = mix(GOLD, CREAM, .32)
+    muted = mix(AGED, GOLD, .22)
+    dark = mix(WOOD, (0, 0, 0), .4)
+    # Leave the top sector clear for a native upright N. Only the bearing
+    # geometry turns, so the case's lighting never spins with camera yaw.
+    for i in range(32):
+        if min(i, 32 - i) < 3 or i % 8 == 0:
+            continue
+        a = i * math.tau / 32
+        outer = 58
+        inner = outer - (3.5 if i % 4 == 0 else 1.8)
+        rose.line([(64 + math.sin(a) * inner, 64 - math.cos(a) * inner),
+                   (64 + math.sin(a) * outer, 64 - math.cos(a) * outer)],
+                  muted if i % 4 == 0 else mix(muted, WOOD, .42), .65)
+    rose.polygon([(3, 64), (12, 61), (10, 64), (12, 67)], gold)
+    rose.polygon([(125, 64), (116, 61), (118, 64), (116, 67)], gold)
+    rose.polygon([(64, 116), (67, 121), (64, 126), (61, 121)], muted)
+    rose.line([(60, 112), (68, 112)], muted, .7)
+    # Narrow two-tone north needle and dark brass tail around a real pivot.
+    rose.polygon([(64, 29), (73, 65), (64, 96), (55, 65)], dark)
+    rose.polygon([(64, 31), (64, 64), (56.5, 65)], mix(GOLD, CREAM, .55))
+    rose.polygon([(64, 31), (71.5, 65), (64, 64)], gold)
+    rose.polygon([(56.5, 65), (64, 94), (64, 64)], mix(AGED, WOOD, .15))
+    rose.polygon([(64, 64), (64, 94), (71.5, 65)], mix(AGED, GOLD, .30))
+    rose.ellipse((57, 57, 71, 71), dark)
+    rose.ellipse((58, 58, 70, 70), gold)
+    rose.ellipse((61, 61, 67, 67), (41, 39, 30))
+    rose.ellipse((62, 60, 65, 63), mix(GOLD, CREAM, .63))
+    for canvas, name in [(case, "compass-dial.png"), (rose, "compass-rose.png")]:
+        # Palette-optimized PNG preserves transparent edges with a small fixed
+        # palette. 224px supplies two source texels per normal HUD pixel.
+        canvas.image.resize((224, 224), Image.Resampling.LANCZOS).quantize(
+            colors=256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE
+        ).save(OUT / name, optimize=True)
+
+
 def shape(name):
     c = Drawing(64, 64, "L")
     if name == "crest":
@@ -238,10 +320,11 @@ def main():
     panel()
     panel(pill=True)
     medallion()
+    compass()
     for name in ("crest", "purse", "sun", "moon", "bell", "person", "bag", "scales",
                  "book", "pin", "heart", "chevron", "compass"):
         icon(name)
-    print(f"Wrote 16 reusable HUD images ({sum(p.stat().st_size for p in OUT.glob('*.png')):,} bytes) to {OUT}")
+    print(f"Wrote {len(list(OUT.glob('*.png')))} reusable HUD images ({sum(p.stat().st_size for p in OUT.glob('*.png')):,} bytes) to {OUT}")
 
 
 if __name__ == "__main__":

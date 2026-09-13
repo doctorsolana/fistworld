@@ -15,6 +15,28 @@ use super::terrain::{
 use crate::world::village::*;
 
 pub(super) const MAX_SETTLEMENT_SEARCH_RADIUS: f32 = 320.0;
+/// One charter band and its 48-bearing open-land fallback per review. All
+/// ordinary land permits use this, including dense-town civic/services plots.
+pub(super) const PERMIT_SEARCH_RINGS: usize = 1;
+const SEARCH_RING_STEP: f32 = 6.0;
+
+/// A failed bounded band is progress, not proof that the settlement is full.
+/// Re-test the final band once before marking unchanged geometry exhausted.
+pub(super) fn advance_land_search(
+    clock: &mut VillageClock,
+    settlement: Entity,
+    kind: SettlementBuildingKind,
+) -> bool {
+    let radius = clock
+        .site_search_radii
+        .entry((settlement, kind))
+        .or_insert_with(|| kind.preferred_ring().0);
+    if *radius >= MAX_SETTLEMENT_SEARCH_RADIUS {
+        return false;
+    }
+    *radius = (*radius + SEARCH_RING_STEP).min(MAX_SETTLEMENT_SEARCH_RADIUS);
+    true
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SiteSearchRejections {
@@ -324,6 +346,48 @@ pub(in crate::world::village) fn find_site_with_plan(
     )
 }
 
+/// Live permits cannot opt out of the per-review land-search budget. Startup
+/// layout surveys and explicit geometry tests may use the full search below.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn find_permit_site(
+    terrain: &WorldTerrain,
+    hall: Vec3,
+    kind: SettlementBuildingKind,
+    occupied: &[(Vec3, f32)],
+    neighbors: &[PlotNeighbor],
+    roads: &[&VillageRoad],
+    planned_accesses: &[PlannedRoadAccess],
+    access_blockers: &[RoadAccessBlocker],
+    development: Option<&shared::components::SettlementDevelopment>,
+    colliders: Option<&StaticColliders>,
+    derived: Option<&DerivedColliderLibrary>,
+    minimum_radius_hint: Option<f32>,
+    rejections: Option<&mut SiteSearchRejections>,
+    urban: Option<&SettlementUrbanPlan>,
+    defenses: Option<&shared::components::SettlementDefenses>,
+    squares: &[&shared::components::SettlementCivicSquare],
+) -> Option<(Vec3, f32)> {
+    find_site_with_plan_diagnostics(
+        terrain,
+        hall,
+        kind,
+        occupied,
+        neighbors,
+        roads,
+        planned_accesses,
+        access_blockers,
+        development,
+        colliders,
+        derived,
+        minimum_radius_hint,
+        Some(PERMIT_SEARCH_RINGS),
+        rejections,
+        urban,
+        defenses,
+        squares,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn find_site_with_plan_diagnostics(
     terrain: &WorldTerrain,
@@ -353,7 +417,7 @@ pub(super) fn find_site_with_plan_diagnostics(
     }
     const SEEDED_BEARINGS: usize = 12;
     const FALLBACK_BEARINGS: usize = 48;
-    const RING_STEP: f32 = 6.0;
+    const RING_STEP: f32 = SEARCH_RING_STEP;
     const RESOURCE_PLOT_SHORTLIST: usize = 3;
     // Farms and timber plots still compare several directions and three
     // successive distance bands. Searching every ring out to an expanding
@@ -1119,3 +1183,7 @@ mod neighborhood_integration_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "land_search_tests.rs"]
+mod land_search_tests;

@@ -7,7 +7,7 @@ pub mod dropdown;
 pub mod layout;
 pub mod network_input;
 
-use actions::{animate_logo, handle_menu_actions};
+use actions::handle_menu_actions;
 use dropdown::{
     handle_dropdown_selection, handle_dropdown_toggle, spawn_dropdown, update_dropdown_display,
 };
@@ -19,7 +19,6 @@ use network_input::{
 use arboard::Clipboard;
 use bevy::app::AppExit;
 use bevy::input::keyboard::{Key, KeyboardInput};
-use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::ui::UiScale;
 use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow};
@@ -28,7 +27,6 @@ use serde::Deserialize;
 use super::foundation::{
     button_chrome, selected_button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant,
 };
-use super::styles::*;
 use crate::render::systems::{DisplayMode, DisplayResolution, LAUNCHER_RESOLUTION};
 use crate::states::GameState;
 use shared::protocol::SERVER_PORT;
@@ -37,11 +35,13 @@ pub struct MainMenuPlugin;
 
 impl Plugin for MainMenuPlugin {
     fn build(&self, app: &mut App) {
+        crate::ui::startup::install(app);
         // Load server presets synchronously during plugin build (before any systems run)
         let (presets, server_address) = load_server_presets_sync();
         app.insert_resource(presets);
         app.insert_resource(server_address);
         app.init_resource::<DropdownState>();
+        app.init_resource::<network_input::ServerAddressEditing>();
 
         app.add_systems(
             OnEnter(GameState::MainMenu),
@@ -51,15 +51,16 @@ impl Plugin for MainMenuPlugin {
         app.add_systems(
             Update,
             (
-                handle_menu_actions,
-                animate_logo,
+                handle_dropdown_selection,
                 handle_ip_input_focus,
                 handle_ip_keyboard_input,
+                handle_menu_actions,
                 update_ip_display,
                 handle_dropdown_toggle,
-                handle_dropdown_selection,
                 update_dropdown_display,
+                layout::sync_connection_error,
             )
+                .chain()
                 .run_if(in_state(GameState::MainMenu)),
         );
     }
@@ -120,13 +121,6 @@ pub struct DropdownState {
 #[derive(Component)]
 struct MainMenuRoot;
 
-/// Marker for the logo (for animation)
-#[derive(Component)]
-struct LogoImage {
-    base_scale: f32,
-    time: f32,
-}
-
 /// Marker for the IP input field
 #[derive(Component)]
 struct IpInputField {
@@ -148,10 +142,6 @@ enum MenuButton {
 #[derive(Component)]
 struct DropdownToggle;
 
-/// Dropdown text display (shows selected preset name)
-#[derive(Component)]
-struct DropdownText;
-
 /// Container for dropdown options (shown when expanded)
 #[derive(Component)]
 struct DropdownOptions;
@@ -161,19 +151,3 @@ struct DropdownOptions;
 struct DropdownOption {
     index: usize,
 }
-
-// =============================================================================
-// STARTUP: LOAD CONFIG
-// =============================================================================
-
-// =============================================================================
-// MENU SPAWN
-// =============================================================================
-
-// =============================================================================
-// INTERACTIONS
-// =============================================================================
-
-// =============================================================================
-// DROPDOWN LOGIC
-// =============================================================================

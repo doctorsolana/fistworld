@@ -9,6 +9,7 @@
 mod construction;
 mod geometry;
 mod routing;
+mod start_recovery;
 mod steward;
 
 pub(crate) use construction::hall_connected_road_keys;
@@ -1413,7 +1414,19 @@ pub(crate) fn doorway_approach(
     let door = Vec2::new(door3.x, door3.z);
     let center = Vec2::new(building_position.x, building_position.z);
     let outward = (door - center).normalize_or_zero();
-    (door, door + outward * DOOR_APPROACH_LENGTH)
+    let length = if kind == SettlementBuildingKind::Tavern {
+        // Its door opens into a walkable courtyard. Keep that straight,
+        // narrow private apron until clear of the reserved patio before a
+        // full-width public lane may turn toward an existing street.
+        let reserved = kind.placement_definition();
+        let front_reach = reserved.footprint.y * 0.5 - reserved.footprint_center.y;
+        (front_reach + RoadClass::Lane.initial_reserved_width() * 0.5 + 0.55
+            - door.distance(center))
+        .max(DOOR_APPROACH_LENGTH)
+    } else {
+        DOOR_APPROACH_LENGTH
+    };
+    (door, door + outward * length)
 }
 
 fn point_segment_distance_squared(point: Vec2, start: Vec2, end: Vec2) -> f32 {
@@ -2063,7 +2076,22 @@ fn blockers_for_agent_route(
 ) -> PropBlockers {
     let mut blockers = PropBlockers::default();
     for chunk in agent_route_prop_chunks(start, goal, connector_reach) {
+        // A loaded chunk is authoritative live collision, including roads,
+        // crops, plots and trees already cleared by workers. Replaying its
+        // immutable recipe here resurrects invisible obstacles that movement
+        // no longer sees. Those surviving instances are added once below.
+        if derived.is_some()
+            && colliders.is_some_and(|colliders| colliders.loaded_chunks.contains(&chunk))
+        {
+            continue;
+        }
         for prop in cache.chunk(terrain, chunk) {
+            // Retain known axe-work clearance while its chunk is unloaded.
+            if prop.kind.is_road_clearable()
+                && colliders.is_some_and(|colliders| colliders.road_tree_was_cleared(prop.point))
+            {
+                continue;
+            }
             // These deterministic props are cleared from completed plots.
             // Do not resurrect an invisible trunk inside a building.
             if buildings.point_blocked(prop.point) {
@@ -2379,6 +2407,20 @@ impl NavigationBuildingCache {
             });
             self.blockers.push(navigation.blocker);
             self.buildings.push(navigation);
+            if building.building_type == BuildingType::Tavern {
+                // Match movement's courtyard collision. Tables need ordinary
+                // detours, never the inn's doorway recovery exemption.
+                for obstacle in
+                    shared::building::tavern::table_obstacles(position.0, building.rotation)
+                {
+                    self.blockers.push(BuildingBlocker {
+                        center: obstacle.center,
+                        half: obstacle.half_extents,
+                        rotation: obstacle.rotation,
+                    });
+                    self.spatial.insert(obstacle);
+                }
+            }
         }
         for obstacle in defenses.flat_map(|section| section.ground_obstacles()) {
             self.blockers.push(BuildingBlocker {

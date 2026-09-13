@@ -77,11 +77,20 @@ pub struct LoadedPropChunks {
 #[derive(Resource, Default)]
 pub struct PendingPropSpawns {
     pub queue: std::collections::VecDeque<(ChunkCoord, Vec<shared::props::PropSpawn>)>,
+    /// Resident chunks with newly released ground. Keep their current roots
+    /// until the normal spawn budget fills only missing candidates.
+    pub refill: HashSet<ChunkCoord>,
 }
 
 impl PendingPropSpawns {
     pub fn discard_chunk(&mut self, coord: ChunkCoord) {
         self.queue.retain(|(queued, _)| *queued != coord);
+        self.refill.remove(&coord);
+    }
+
+    pub fn request_refill(&mut self, coord: ChunkCoord) {
+        self.discard_chunk(coord);
+        self.refill.insert(coord);
     }
 }
 
@@ -89,6 +98,16 @@ impl PendingPropSpawns {
 #[derive(Resource, Default)]
 pub struct PropChunkIndex {
     pub by_chunk: HashMap<ChunkCoord, Vec<Entity>>,
+}
+
+/// Source geometry retained across component updates within one joined world.
+/// Keep this resettable: removal events can expire while Playing is paused.
+#[derive(Resource, Default)]
+pub(crate) struct PropFootprintSources {
+    pub(super) buildings: HashMap<Entity, Vec<BuildZoneEntry>>,
+    pub(super) squares: HashMap<Entity, BuildZoneEntry>,
+    pub(super) field_revision: u64,
+    pub(super) initialized: bool,
 }
 
 /// Cached build-zone lookup by chunk for prop exclusion checks.

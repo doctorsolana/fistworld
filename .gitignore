@@ -48,6 +48,8 @@ client_data/
 # Regenerable asset review output, including nested building/character renders.
 # Keep runtime assets and editable source .blend files tracked.
 /asset_creation/**/renders/
+# Unsorted user audio downloads; accepted originals move to the SFX source catalogue.
+/asset_creation/audio/sfx/inbox/
 /asset_creation/boats/.orbit/
 /asset_creation/boats/.sail_states/
 

@@ -7,6 +7,7 @@ mod debug;
 pub(crate) mod foliage;
 mod ground_cover_chunked;
 mod ground_cover_instancing;
+mod grounding;
 mod kinds;
 mod lod;
 mod plugin;
@@ -34,6 +35,7 @@ pub(crate) fn reset_world_streaming(world: &mut bevy::prelude::World) {
     world.insert_resource(PendingPropSpawns::default());
     world.insert_resource(PropChunkIndex::default());
     world.insert_resource(BuildZoneChunkIndex::default());
+    world.insert_resource(PropFootprintSources::default());
     let _ = world.run_system_once(ground_cover_chunked::clear_chunked_ground_cover);
 }
 

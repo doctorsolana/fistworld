@@ -4,11 +4,16 @@
 //! The external runner writes numbered JSON commands and waits for replies or
 //! replicated state. Screenshots use the real renderer's completion observer.
 
+mod audio;
+
 use super::{live_capture_request, CaptureInspection};
 use crate::{camera_rts::CommanderCamera, capture_artifact::*, states::GameState};
 use bevy::{
     ecs::system::SystemState,
-    input::InputSystems,
+    input::{
+        keyboard::{Key, KeyboardInput, NativeKeyCode},
+        ButtonState, InputSystems,
+    },
     prelude::*,
     render::view::screenshot::Screenshot,
     ui::{InteractionDisabled, RelativeCursorPosition, UiSystems},
@@ -34,11 +39,40 @@ struct Request {
 #[derive(Clone, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
-    Key { key: String },
-    Button { name: String },
-    RightClick { x: f32, z: f32 },
-    View { x: f32, z: f32, zoom: f32 },
-    Capture { name: String },
+    Key {
+        key: String,
+    },
+    Text {
+        text: String,
+        #[serde(default)]
+        replace: bool,
+    },
+    Button {
+        name: String,
+    },
+    /// Drag a retained UI slider through its normal pointer handler.
+    Slider {
+        name: String,
+        value: f32,
+    },
+    RightClick {
+        x: f32,
+        z: f32,
+    },
+    View {
+        x: f32,
+        z: f32,
+        zoom: f32,
+    },
+    Capture {
+        name: String,
+    },
+    /// Continuous connected gameplay, after the same initial readiness as a still.
+    Record {
+        name: String,
+        frames: u32,
+        interval_ms: u64,
+    },
     Quit,
 }
 
@@ -51,10 +85,14 @@ struct SessionCapture {
     button: Option<Entity>,
     ticket: Option<u64>,
     started: Instant,
+    session_started: Instant,
     poll: Instant,
     status: Instant,
     last_chunks: usize,
     stable: u32,
+    startup_phase: Option<(GameState, crate::ui::name_entry::NameEntryPhase)>,
+    recorded: u32,
+    next_capture: Instant,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -76,13 +114,23 @@ pub(crate) fn install(app: &mut App) {
         button: None,
         ticket: None,
         started: Instant::now(),
+        session_started: Instant::now(),
         poll: Instant::now(),
         status: Instant::now(),
         last_chunks: 0,
         stable: 0,
+        startup_phase: None,
+        recorded: 0,
+        next_capture: Instant::now(),
     });
     app.insert_resource(bevy::winit::WinitSettings::continuous());
-    app.add_systems(PreUpdate, drive.after(InputSystems).after(UiSystems::Focus));
+    app.add_systems(
+        PreUpdate,
+        drive
+            .after(InputSystems)
+            .after(UiSystems::Focus)
+            .before(crate::ui::sound::collect_button_press),
+    );
 }
 
 fn write_json(path: &Path, value: &Value) {
@@ -93,6 +141,7 @@ fn write_json(path: &Path, value: &Value) {
 }
 
 fn snapshot(world: &mut World) -> Value {
+    let audio = audio::snapshot(world);
     let local = world
         .get_resource::<crate::camera_rts::LocalPeerId>()
         .map(|id| id.0);
@@ -165,7 +214,43 @@ fn snapshot(world: &mut World) -> Value {
     let notice = world
         .get_resource::<crate::ui::hud::GodNotice>()
         .map(|notice| json!({"text":notice.text,"remaining":notice.seconds_left}));
-    json!({"account":account,"hero":own.map(|(_,_,hero)|hero),"markets":markets,"towns":towns,"yards":yards,"clock":clock,"camera":camera,"buttons":buttons,"selection":selected,"notice":notice,
+    let game_state = world
+        .get_resource::<State<GameState>>()
+        .map(|state| format!("{:?}", state.get()));
+    let name_phase = world
+        .get_resource::<crate::ui::name_entry::NameEntryPhase>()
+        .map(|phase| format!("{phase:?}"));
+    let submitted = world
+        .get_resource::<crate::ui::name_entry::PlayerNameInput>()
+        .is_some_and(|input| input.submitted);
+    let name_error = world
+        .get_resource::<crate::ui::name_entry::NameSubmissionFeedback>()
+        .and_then(|feedback| feedback.error_message.clone());
+    let connection_error = world
+        .get_resource::<crate::render::systems::ConnectionFeedback>()
+        .and_then(|feedback| feedback.error_message.clone());
+    let startup_art_ready = world
+        .get_resource::<crate::ui::startup::StartupArtwork>()
+        .is_some_and(|art| art.ready(world.resource::<AssetServer>()));
+    let focused_control = world
+        .get_resource::<bevy::input_focus::InputFocus>()
+        .and_then(|focus| focus.get())
+        .and_then(|entity| world.get::<Name>(entity))
+        .map(|name| name.as_str().to_owned());
+    let window_title = world
+        .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
+        .iter(world)
+        .next()
+        .map(|window| window.title.clone());
+    let server_address = world
+        .get_resource::<crate::ui::main_menu::ServerAddress>()
+        .map(|address| json!({"host":address.ip,"port":address.port}));
+    let presets_expanded = world
+        .get_resource::<crate::ui::main_menu::DropdownState>()
+        .is_some_and(|state| state.expanded);
+    json!({"audio":audio,"game_state":game_state,"name_phase":name_phase,"submitted":submitted,"name_error":name_error,"connection_error":connection_error,"startup_art_ready":startup_art_ready,
+        "focused_control":focused_control,"window_title":window_title,"server_address":server_address,"presets_expanded":presets_expanded,
+        "account":account,"hero":own.map(|(_,_,hero)|hero),"markets":markets,"towns":towns,"yards":yards,"clock":clock,"camera":camera,"buttons":buttons,"selection":selected,"notice":notice,
         "ui_blocking":world.get_resource::<crate::input::InputState>().is_some_and(|s|s.ui_blocking()),
         "playing":world.get_resource::<State<GameState>>().is_some_and(|s|*s.get()==GameState::Playing),
         "creator":world.get_resource::<crate::ui::hero_creator::HeroCreatorOpen>().is_some_and(|s|s.0),
@@ -175,6 +260,15 @@ fn snapshot(world: &mut World) -> Value {
 
 fn drive(world: &mut World) {
     world.resource_scope(|world, mut state: Mut<SessionCapture>| {
+        if let (Some(game), Some(phase)) = (world.get_resource::<State<GameState>>(), world.get_resource::<crate::ui::name_entry::NameEntryPhase>()) {
+            let current = (*game.get(), *phase);
+            if state.startup_phase != Some(current) {
+                state.startup_phase = Some(current);
+                use std::io::Write;
+                let record = json!({"elapsed_seconds":state.session_started.elapsed().as_secs_f64(),"state":snapshot(world)});
+                writeln!(std::fs::OpenOptions::new().create(true).append(true).open(state.out.join("startup.transitions.jsonl")).expect("startup phase journal"), "{record}").expect("startup phase evidence");
+            }
+        }
         if state.status.elapsed() >= Duration::from_secs(1) {
             write_json(&state.out.join("status.json"), &snapshot(world));
             state.status = Instant::now();
@@ -189,7 +283,8 @@ fn drive(world: &mut World) {
                 state.last_id = request.id;
                 state.current = Some(request);
                 state.started = Instant::now();
-                state.phase = 0; state.stable = 0;
+                state.phase = 0; state.stable = 0; state.recorded = 0;
+                state.next_capture = Instant::now();
             }
         }
         let Some(request) = state.current.clone() else { return; };
@@ -215,8 +310,53 @@ fn key_code(key: &str) -> Result<KeyCode, String> {
         "N" => Ok(KeyCode::KeyN),
         "M" => Ok(KeyCode::KeyM),
         "Escape" => Ok(KeyCode::Escape),
+        "Enter" => Ok(KeyCode::Enter),
+        "Backspace" => Ok(KeyCode::Backspace),
+        "Tab" => Ok(KeyCode::Tab),
         _ => Err(format!("unsupported session key {key}")),
     }
+}
+
+fn logical_key(code: KeyCode) -> Key {
+    match code {
+        KeyCode::Home => Key::Home,
+        KeyCode::Escape => Key::Escape,
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Tab => Key::Tab,
+        KeyCode::ControlLeft => Key::Control,
+        KeyCode::KeyA => Key::Character("a".into()),
+        KeyCode::KeyE => Key::Character("e".into()),
+        KeyCode::KeyN => Key::Character("n".into()),
+        KeyCode::KeyM => Key::Character("m".into()),
+        _ => Key::Unidentified(bevy::input::keyboard::NativeKey::Unidentified),
+    }
+}
+
+fn keyboard_event(
+    world: &mut World,
+    code: KeyCode,
+    key: Key,
+    text: Option<String>,
+    pressed: bool,
+) -> Result<(), String> {
+    let window = world
+        .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+        .single(world)
+        .map_err(|_| "no primary window for keyboard input")?;
+    world.write_message(KeyboardInput {
+        key_code: code,
+        logical_key: key,
+        text: text.map(Into::into),
+        state: if pressed {
+            ButtonState::Pressed
+        } else {
+            ButtonState::Released
+        },
+        repeat: false,
+        window,
+    });
+    Ok(())
 }
 
 fn release_input(world: &mut World, state: &mut SessionCapture) {
@@ -242,11 +382,46 @@ fn advance(
             match state.phase {
                 0 => {
                     world.resource_mut::<ButtonInput<KeyCode>>().press(code);
+                    keyboard_event(world, code, logical_key(code), None, true)?;
                 }
                 1 => {
                     world.resource_mut::<ButtonInput<KeyCode>>().release(code);
+                    keyboard_event(world, code, logical_key(code), None, false)?;
                 }
                 _ => return Ok(true),
+            }
+        }
+        Command::Text { text, replace } => {
+            if text.len() > 1024 {
+                return Err("text command is too large".into());
+            }
+            if *replace && state.phase < 2 {
+                let pressed = state.phase == 0;
+                for code in [KeyCode::ControlLeft, KeyCode::KeyA] {
+                    if pressed {
+                        world.resource_mut::<ButtonInput<KeyCode>>().press(code);
+                    } else {
+                        world.resource_mut::<ButtonInput<KeyCode>>().release(code);
+                    }
+                    keyboard_event(world, code, logical_key(code), None, pressed)?;
+                }
+            } else if state.phase == if *replace { 2 } else { 0 } {
+                // Text may contain composed characters. Send the same logical
+                // text events used by the production editors; never mutate drafts.
+                let code = KeyCode::Unidentified(NativeKeyCode::Unidentified);
+                for ch in text.chars() {
+                    let value = ch.to_string();
+                    keyboard_event(
+                        world,
+                        code,
+                        Key::Character(value.clone().into()),
+                        Some(value.clone()),
+                        true,
+                    )?;
+                    keyboard_event(world, code, Key::Character(value.into()), None, false)?;
+                }
+            } else {
+                return Ok(true);
             }
         }
         Command::Button { name } => {
@@ -281,6 +456,42 @@ fn advance(
                 }
                 if let Some(mut cursor) = world.get_mut::<RelativeCursorPosition>(entity) {
                     cursor.cursor_over = true;
+                }
+            }
+        }
+        Command::Slider { name, value } => {
+            if !value.is_finite() || !(0.0..=1.0).contains(value) {
+                return Err("slider value must be between zero and one".into());
+            }
+            if state.phase == 0 {
+                let candidate = world.query_filtered::<(Entity, &Name, &ComputedNode, Has<InteractionDisabled>), With<Button>>()
+                    .iter(world).find(|(_, label, node, disabled)| label.as_str() == name && !disabled && node.size().min_element() > 0.0)
+                    .map(|(entity, ..)| entity);
+                let Some(entity) = candidate else {
+                    return Ok(false);
+                };
+                state.button = Some(entity);
+                world
+                    .resource_mut::<ButtonInput<MouseButton>>()
+                    .press(MouseButton::Left);
+            } else if state.phase == 2 {
+                world
+                    .resource_mut::<ButtonInput<MouseButton>>()
+                    .release(MouseButton::Left);
+            } else if state.phase > 2 {
+                return Ok(true);
+            }
+            if let Some(entity) = state.button {
+                if let Some(mut interaction) = world.get_mut::<Interaction>(entity) {
+                    *interaction = if state.phase < 2 {
+                        Interaction::Pressed
+                    } else {
+                        Interaction::Hovered
+                    };
+                }
+                if let Some(mut cursor) = world.get_mut::<RelativeCursorPosition>(entity) {
+                    cursor.cursor_over = true;
+                    cursor.normalized = Some(Vec2::new(value - 0.5, 0.0));
                 }
             }
         }
@@ -320,7 +531,26 @@ fn advance(
             }
             return Ok(true);
         }
-        Command::Capture { name } => {
+        Command::Capture { name } | Command::Record { name, .. } => {
+            let (frames, interval) = match command {
+                Command::Record {
+                    frames,
+                    interval_ms,
+                    ..
+                } if (2..=180).contains(frames)
+                    && (50..=1000).contains(interval_ms)
+                    && u64::from(*frames) * interval_ms <= 60_000 =>
+                {
+                    (*frames, Duration::from_millis(*interval_ms))
+                }
+                Command::Record { .. } => {
+                    return Err(
+                        "record requires 2–180 frames, 50–1000 ms spacing, at most 60 seconds"
+                            .into(),
+                    )
+                }
+                _ => (1, Duration::ZERO),
+            };
             if name.is_empty()
                 || name.len() > 64
                 || !name
@@ -340,9 +570,38 @@ fn advance(
                     if done.comparison_failed {
                         Err("capture comparison failed".into())
                     } else {
-                        Ok(true)
+                        state.recorded += 1;
+                        Ok(state.recorded >= frames)
                     }
                 };
+            }
+            if Instant::now() < state.next_capture {
+                return Ok(false);
+            }
+            let frontend = world
+                .get_resource::<State<GameState>>()
+                .is_some_and(|game| *game.get() != GameState::Playing);
+            if frontend {
+                let art_ready = world
+                    .resource::<crate::ui::startup::StartupArtwork>()
+                    .ready(world.resource::<AssetServer>());
+                let layout_ready =
+                    world
+                        .query::<(&Name, &ComputedNode)>()
+                        .iter(world)
+                        .any(|(name, node)| {
+                            name.as_str() == "startup-root" && node.size().min_element() > 0.0
+                        });
+                let motion_ready = world
+                    .query::<(&crate::ui::motion::UiReveal, &ComputedNode)>()
+                    .iter(world)
+                    .filter(|(_, node)| node.size().min_element() > 0.0)
+                    .all(|(motion, _)| motion.is_settled());
+                if !art_ready || !layout_ready || !motion_ready {
+                    state.stable = 0;
+                    return Ok(false);
+                }
+                state.stable += 1;
             }
             let mut inspection = SystemState::<(
                 CaptureInspection,
@@ -359,35 +618,53 @@ fn advance(
                 camera.focus.xz().distance(camera.focus_target.xz()) < 0.3
                     && (camera.zoom - camera.zoom_target).abs() < 0.3
             });
-            if chunks < 64
-                || chunks != state.last_chunks
-                || !stable_camera
-                || !inspection.yard_presentation_ready()
+            if !frontend
+                && (chunks < 64
+                    || chunks != state.last_chunks
+                    || !stable_camera
+                    || !inspection.yard_presentation_ready())
             {
                 state.stable = 0;
-            } else {
+            } else if !frontend {
                 state.stable += 1;
             }
             state.last_chunks = chunks;
-            if state.stable < 12 {
+            if state.recorded == 0 && state.stable < 12 {
                 return Ok(false);
             }
             let Some(target) = inspection.presentation_target.as_ref() else {
                 return Err("composed capture target unavailable".into());
             };
             let target = target.image.clone();
+            let name = if frames > 1 {
+                format!("{name}-{:04}", state.recorded)
+            } else {
+                name.clone()
+            };
             let mut request = live_capture_request(
                 state.out.join(format!("{name}.png")),
-                "first-session",
-                name,
+                if frontend {
+                    "connected-startup"
+                } else {
+                    "first-session"
+                },
+                &name,
                 CaptureTarget::Window,
             );
-            inspection.complete_live_request(
-                &mut request,
-                cameras.iter().next(),
-                clocks.iter().next(),
-                state.stable,
-            )?;
+            if frontend {
+                // A pre-join menu has not accepted the server map yet. Record
+                // actual counters without claiming a validated in-world view.
+                request.metadata.map = "startup-unjoined".into();
+                request.metadata.world = inspection.world_snapshot(clocks.iter().next());
+                request.metadata.readiness_frames = state.stable;
+            } else {
+                inspection.complete_live_request(
+                    &mut request,
+                    cameras.iter().next(),
+                    clocks.iter().next(),
+                    state.stable,
+                )?;
+            }
             state.ticket = Some(world.resource_scope(
                 |world, mut completions: Mut<CaptureCompletions>| {
                     request_capture(
@@ -398,6 +675,7 @@ fn advance(
                     )
                 },
             ));
+            state.next_capture = Instant::now() + interval;
             write_json(
                 &state.out.join(format!("{name}.session.json")),
                 &snapshot(world),

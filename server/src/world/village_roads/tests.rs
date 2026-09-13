@@ -1,5 +1,7 @@
 use super::*;
 
+mod tavern;
+
 #[test]
 fn fenced_farm_work_stands_remain_reachable_through_the_shared_entrance() {
     let farm = Vec3::new(1700., 80., 0.);
@@ -553,6 +555,89 @@ fn a_burst_of_reasserted_failed_routes_sleeps_until_real_time_backoff() {
     assert!(movers
         .iter()
         .all(|mover| app.world().get::<NavigationRouteBackoff>(*mover).is_none()));
+}
+
+#[test]
+fn reasserting_a_destination_preserves_an_in_progress_route() {
+    let mut app = road_test_app();
+    app.init_resource::<Time>();
+    app.add_systems(Update, queue_villager_travel_routes);
+    let goal = Vec3::X * 12.0;
+    let mover = app
+        .world_mut()
+        .spawn((
+            CharacterKind::Villager,
+            MoveTarget(goal),
+            TravelRoute {
+                goal,
+                next: 1,
+                geometry_version: 7,
+                waypoints: vec![
+                    RouteWaypoint {
+                        position: Vec3::X * 4.0,
+                        on_road: true,
+                    },
+                    RouteWaypoint {
+                        position: goal,
+                        on_road: true,
+                    },
+                ],
+            },
+        ))
+        .id();
+    for _ in 0..5 {
+        app.world_mut().entity_mut(mover).insert(MoveTarget(goal));
+        app.update();
+        assert_eq!(
+            app.world().get::<TravelRoute>(mover).map(|r| r.next),
+            Some(1),
+            "reasserting a work destination must not send the walker back to the first waypoint"
+        );
+        assert!(app.world().get::<NavigationRoutePending>(mover).is_none());
+    }
+    app.world_mut()
+        .entity_mut(mover)
+        .insert(MoveTarget(goal + Vec3::Z * 5.0));
+    app.update();
+    assert!(app.world().get::<TravelRoute>(mover).is_none());
+    assert_eq!(
+        app.world()
+            .get::<NavigationRoutePending>(mover)
+            .unwrap()
+            .goal,
+        goal + Vec3::Z * 5.0
+    );
+}
+
+#[test]
+fn reasserting_a_destination_keeps_the_existing_pending_survey() {
+    let mut app = road_test_app();
+    app.init_resource::<Time>();
+    app.add_systems(Update, queue_villager_travel_routes);
+    let goal = Vec3::X * 20.0;
+    let mut pending = NavigationRoutePending::new(goal);
+    pending.attempts = 3;
+    let mover = app
+        .world_mut()
+        .spawn((CharacterKind::Villager, MoveTarget(goal), pending))
+        .id();
+    app.update();
+    app.world_mut().entity_mut(mover).insert(MoveTarget(goal));
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<NavigationRoutePending>(mover)
+            .unwrap()
+            .attempts,
+        3
+    );
+    app.world_mut()
+        .entity_mut(mover)
+        .insert(MoveTarget(goal + Vec3::Z));
+    app.update();
+    let pending = app.world().get::<NavigationRoutePending>(mover).unwrap();
+    assert_eq!(pending.goal, goal + Vec3::Z);
+    assert_eq!(pending.attempts, 0);
 }
 
 #[test]
@@ -4169,3 +4254,99 @@ fn certified_building_diagonals_do_not_relax_water_corner_checks() {
 }
 
 mod yard_frontage;
+
+#[test]
+fn route_prop_recipe_does_not_resurrect_cleared_loaded_trees() {
+    let terrain = WorldTerrain::default();
+    let start = Vec2::new(64.0, 64.0);
+    let goal = Vec2::new(144.0, 64.0);
+    let cleared = Vec2::new(84.0, 72.0);
+    let rock = Vec2::new(104.0, 72.0);
+    let unloaded_tree = Vec2::new(142.0, 72.0);
+    let felled = Vec2::new(152.0, 85.0);
+    let loaded_chunk = ChunkCoord::new(1, 1);
+    let unloaded_chunk = ChunkCoord::new(2, 1);
+    let cached = |point, kind| CachedRouteProp {
+        point,
+        kind,
+        scale: 1.0,
+    };
+    let mut cache = RoutePropChunkCache::default();
+    // Isolate the cache/live-state contract from arbitrary world prop recipes.
+    for chunk in agent_route_prop_chunks(start, goal, 0.0) {
+        cache.chunks.insert(chunk, Vec::new());
+    }
+    cache.chunks.insert(
+        loaded_chunk,
+        vec![
+            cached(cleared, PropKind::OakA),
+            cached(rock, PropKind::SmallRockA),
+        ],
+    );
+    cache.chunks.insert(
+        unloaded_chunk,
+        vec![
+            cached(unloaded_tree, PropKind::OakA),
+            cached(felled, PropKind::OakA),
+        ],
+    );
+    let derived = DerivedColliderLibrary {
+        by_kind: [PropKind::OakA, PropKind::SmallRockA]
+            .into_iter()
+            .map(|kind| {
+                (
+                    kind,
+                    DerivedCollider {
+                        horizontal_radius: 0.75,
+                    },
+                )
+            })
+            .collect(),
+    };
+    let mut live = StaticColliders::default();
+    live.loaded_chunks.insert(loaded_chunk);
+    live.chunk_instances.insert(loaded_chunk, vec![1]);
+    let cell = (
+        (rock.x / 16.0).floor() as i32,
+        (rock.y / 16.0).floor() as i32,
+    );
+    live.cells.insert(cell, vec![1]);
+    live.instances.insert(
+        1,
+        StaticColliderInstance {
+            kind: PropKind::SmallRockA,
+            position: Vec3::new(rock.x, 0.0, rock.y),
+            scale: 1.0,
+            rotation: Quat::IDENTITY,
+            cell,
+        },
+    );
+    live.mark_road_tree_cleared(felled);
+    let blockers = blockers_for_agent_route(
+        &terrain,
+        start,
+        goal,
+        &SpatialObstacleGrid::default(),
+        Some(&derived),
+        Some(&live),
+        0.0,
+        &mut cache,
+    );
+    assert!(navigation_point_is_clear_of_props(cleared, &live, &derived));
+    assert!(
+        !blockers.blocks(cleared),
+        "a road-cleared tree must agree with live movement collision"
+    );
+    assert!(
+        blockers.blocks(rock),
+        "the surviving permanent collider remains authoritative"
+    );
+    assert!(
+        blockers.blocks(unloaded_tree),
+        "unloaded forest remains conservatively blocked"
+    );
+    assert!(
+        !blockers.blocks(felled),
+        "known axe-work clearance survives unloading"
+    );
+}

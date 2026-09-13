@@ -110,6 +110,7 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Character clips and animation culling | `client/src/hero/animation.rs` |
 | Carry/tool joints and props | `client/src/hero/attachments.rs` |
 | Porter cart scenes, loads and wheels | `client/src/hero/carts.rs` |
+| Music, audio preferences and planned sound effects | `client/src/audio/`; [audio design and implementation status](AUDIO-DESIGN.md), [SFX asset pipeline](../asset_creation/audio/SFX_PIPELINE.md) |
 | Settlement plugin ordering | `client/src/settlement/mod.rs` |
 | Buildings, worksites, farm ground and flocks | `client/src/settlement/buildings.rs`, `construction.rs`, `grounds.rs`, `livestock.rs` |
 | Doors, windmills and local lighting | `client/src/settlement/animation.rs`, `lighting.rs` |

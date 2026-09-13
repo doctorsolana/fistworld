@@ -7,7 +7,7 @@ use super::{
 };
 use crate::player::hero::{navigation_segment_clear, MoveTarget};
 use crate::player::orders::{FormationRoutes, MarchOrder};
-use crate::world::village_roads::{TravelRoute, NavigationRoutePending, NavigationRouteFailed};
+use crate::world::village_roads::{NavigationRouteFailed, NavigationRoutePending, TravelRoute};
 use bevy::prelude::*;
 use shared::components::*;
 use std::collections::HashMap;
@@ -67,7 +67,14 @@ pub fn steer_skirmishers(
             continue;
         };
         if attack.is_some_and(|a| space.clear_strike(entity, a.target)) {
-            if mounted && march.is_some() { commands.entity(entity).remove::<(MarchOrder, TravelRoute, NavigationRoutePending, NavigationRouteFailed)>(); }
+            if mounted && march.is_some() {
+                commands.entity(entity).remove::<(
+                    MarchOrder,
+                    TravelRoute,
+                    NavigationRoutePending,
+                    NavigationRouteFailed,
+                )>();
+            }
             continue;
         }
         candidates.clear();
@@ -115,12 +122,29 @@ pub fn steer_skirmishers(
                     continue;
                 }
                 let clear = if mounted {
-                    crate::player::siege::ground_clear(body.point, goal, HORSE_CLEARANCE, terrain.as_deref(), buildings.as_deref(), colliders.as_deref(), derived.as_deref())
+                    crate::player::siege::ground_clear(
+                        body.point,
+                        goal,
+                        HORSE_CLEARANCE,
+                        terrain.as_deref(),
+                        buildings.as_deref(),
+                        colliders.as_deref(),
+                        derived.as_deref(),
+                    )
                 } else {
-                    navigation_segment_clear(body.point, goal, buildings.as_deref(), colliders.as_deref(), derived.as_deref())
-                        && terrain.as_deref().is_none_or(|t| crate::player::hero::terrain_segment_walkable(t, body.point, goal))
+                    navigation_segment_clear(
+                        body.point,
+                        goal,
+                        buildings.as_deref(),
+                        colliders.as_deref(),
+                        derived.as_deref(),
+                    ) && terrain.as_deref().is_none_or(|t| {
+                        crate::player::hero::terrain_segment_walkable(t, body.point, goal)
+                    })
                 };
-                if !clear { continue; }
+                if !clear {
+                    continue;
+                }
 
                 chosen = Some((*enemy, goal));
                 break 'opponents;
@@ -143,7 +167,9 @@ pub fn steer_skirmishers(
         });
         {
             if direct {
-                if mounted && march.is_some() { commands.entity(entity).remove::<MarchOrder>(); }
+                if mounted && march.is_some() {
+                    commands.entity(entity).remove::<MarchOrder>();
+                }
                 commands
                     .entity(entity)
                     .insert_if_new(DirectCombatApproach)
@@ -177,11 +203,28 @@ pub fn steer_skirmishers(
                     )));
                 }
             }
-            if mounted && !direct && march.is_none_or(|m| m.destination.xz().distance_squared(goal) > 0.75 * 0.75) {
+            if mounted
+                && !direct
+                && march.is_none_or(|m| m.destination.xz().distance_squared(goal) > 0.75 * 0.75)
+            {
                 if let Some(routes) = routes.as_mut() {
-                    let group = routes.register_with_clearance(vec![body.point, goal], goal, HORSE_CLEARANCE);
-                    let destination = Vec3::new(goal.x, terrain.as_deref().map_or(position.0.y, |t| t.get_height(goal.x, goal.y)), goal.y);
-                    commands.entity(entity).insert(MarchOrder { destination, facing: (goal - body.point).normalize_or_zero(), group });
+                    let group = routes.register_with_clearance(
+                        vec![body.point, goal],
+                        goal,
+                        HORSE_CLEARANCE,
+                    );
+                    let destination = Vec3::new(
+                        goal.x,
+                        terrain
+                            .as_deref()
+                            .map_or(position.0.y, |t| t.get_height(goal.x, goal.y)),
+                        goal.y,
+                    );
+                    commands.entity(entity).insert(MarchOrder {
+                        destination,
+                        facing: (goal - body.point).normalize_or_zero(),
+                        group,
+                    });
                 }
             }
             commands.entity(entity).insert_if_new(CombatReady);

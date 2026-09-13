@@ -108,6 +108,21 @@ it does not claim a connected session or successful transaction. Each image has 
 accounts for inherited visibility, layout and intersection with the output viewport. Inspect
 this companion together with the PNG and `.capture.json`.
 
+`ui-medieval-compass.ron` isolates four cardinal camera headings. Its `.hud.json`
+compass evidence checks the actual case/rose image bindings, visible and separate
+map/book hit targets, camera-relative bearings, and the north glyph's upright global
+rotation and bearing position. Run at 1600×1000 and 1280×720, and retain the full
+`ui-medieval-hud.ron` tour to verify Map/Encyclopedia clicks, modal hiding and restoration.
+The case and surrounding controls stay fixed while the bearings turn.
+
+Verified 2026-09-12 in `logs/compass-review/`: the four-heading scenario and full
+12-shot HUD action tour passed at both sizes (32 PNG/capture/HUD artifact sets).
+Inspected views show an inset worn-brass dial, upright north at each heading and
+clear separate book control, including after modal returns and at night. The measured
+button gap is 6px at 1600×1000 and 5px at 1280×720; outer margins are 32px and 26px.
+Workspace build/check and all 1,369 regular tests passed. This is retained-UI evidence,
+not a connected gameplay or frame-time benchmark.
+
 `capture/scenarios/ui-medieval-combat.ron` stages sixteen battalion records with canonical
 dressed soldiers and one rendered catapult at 1280×720. Its six shots cover:
 
@@ -187,6 +202,31 @@ live-world evidence, not deterministic pixel baselines: the actual market and NP
 to run. All outputs belong under ignored `logs/`, never in the asset tree or Git.
 
 ## Town art and planted land
+
+### Ordinary world distribution
+
+`capture/world_overview.py run` owns a normal seeded server and client, uses ordinary
+character creation, then issues camera-only views of the global directory, a populated
+region and two distant towns before returning to world zoom. It refuses an occupied
+server port. It grants no stock, places no actors and issues no movement orders.
+
+```sh
+cargo build --workspace --profile playtest
+python3 capture/world_overview.py run --seed 4794248476676134349 \
+  --out logs/world-distribution/connected
+```
+
+Inspect all five PNGs with their `.capture.json` and `.session.json`, plus `report.json`.
+Assertions require the complete replicated directory and populated, asset-ready detail
+at town zoom. This verifies startup and streaming presentation; it does not prove caravan
+travel or long-term food production. The server-side production-plan audit and eight-day
+economy test are documented in [NEW-WORLD.md](NEW-WORLD.md).
+
+`capture/world_overview.py compare` combines an earlier founding log with the audit CSVs
+to compare equal-area suitable-site coverage. These distance statistics use the same
+survey for both layouts; they are not route lengths or a demand to populate ocean/mountains.
+
+### Local town presentation
 
 `capture/scenarios/town-art-direction.ron` keeps the same camera composition for
 daylight, reverse, nearby yards and crops, evening and night comparisons.
@@ -281,6 +321,16 @@ PNG sidecars record `building_lod_counts` as `[full, reduced, hidden]`,
 `building_lod_pending`, `building_triangles_full` and `building_triangles_selected`.
 These describe loaded roots, not GPU-visible draws. The force flag also works with
 normal door/night scenarios. See [the LOD build and inspection recipe](../asset_creation/BUILDING_LODS.md).
+
+`building-lods-crossing.ron` is the shorter 151-frame, every-frame visual regression
+for full/reduced transitions in both directions. On 2026-09-12 the saved old binary
+produced exploded colored geometry at frame 028 and transient missing buildings at
+034/124; its readiness assertions still passed. The corrected run in
+`logs/performance-review/lod-after` retained identical camera poses and LOD count
+sequences across all 151 sidecars. All frames and transition triptychs were inspected:
+the reproduced corruption and dropouts were absent. Capture metadata is sampled in
+Update before PostUpdate LOD selection, so inspect the image preceding each count change
+as well. This is a rendering correctness comparison, not an FPS measurement.
 
 `house-cabin-l1.ron`, `house-cabin-l2.ron`, `house-long-l1.ron` and
 `house-long-l2.ron` inspect each occupied home at daylight, midnight, rear and gameplay
@@ -403,6 +453,54 @@ batches count instanced render entities, not individual tufts. Inspect the PNGs 
 vegetation before and after both round trips and no props/batches at full map zoom.
 Assertions run on steady probes, after deferred streaming and visibility propagation
 have had time to follow the camera; they do not assert on the transition frame.
+
+## Construction refresh continuity
+
+`capture/construction_refresh.py` generates a compact, repeatable 361-frame flight over
+`village_lab`. Its opt-in fixture publishes a no-op `PlacedBuilding` write at frame 24,
+house footprint growth at 72, a new house with quantized `TerrainDeltaChunk` earthworks
+across a four-chunk corner at 132, and the original building's removal at 216. The camera
+moves within one streaming center so expected travel unloads cannot excuse unrelated scenery
+being replaced.
+
+```bash
+python3 capture/construction_refresh.py logs/captures/construction-refresh
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario logs/captures/construction-refresh/construction-refresh.ron
+python3 capture/construction_refresh.py \
+  --verify logs/captures/construction-refresh/frames
+```
+
+Warmup waits for resident ground, the initial house scene, grass and stable prop counts
+with empty refill/spawn queues. It is bounded; after warmup the flight never pauses for
+streaming. `construction-refresh.jsonl` records every frame's terrain entity/mesh identities,
+resident membership, protected prop identities, pending work and ingested delta versions.
+It also validates each monitored terrain material's four climate lanes against the actual
+map recipe, recording the material, entity, coordinate and lane of any mismatch.
+The fixture covers the flatten operation's blend apron and seam-neighbor chunks, requires
+every edited chunk's resident replacement, and preserves identities outside that area.
+The final `construction-refresh.json` reports continuity and replacement readiness. The
+verifier also requires all 31 real PNGs and their passing `.capture.json` assertions.
+Inspect each change and its following probes; generated RON and evidence stay under `logs/`.
+
+This exercises real client consumers using explicitly staged offline component changes.
+It does not test NPC building labor, network delivery or server-authoritative construction.
+Entity identity proves retained client scene state, not GPU visibility or correct materials;
+grass evidence counts batches, not coverage of every tuft. PNGs are sampled every twelfth
+frame, so use every-frame visual probes for a one-frame shader/LOD flash. Screenshot readback
+and per-frame evidence writing also make this unsuitable for FPS comparisons.
+
+Verified 2026-09-12 in `logs/performance-review/construction-climate-final`: an every-frame variant
+produced 361 PNGs, 361 capture sidecars and 361 passing identity samples. All 49 monitored
+terrain chunks stayed resident; all 19 protected props survived and 26 grass batches remained.
+The four edited meshes stayed visible while rebuilding at frame 132 and were replaced at 133.
+Inspection around all four changes confirmed no scenery disappearances; the old cabin remains
+in frame 72 and the replacement appears in 73, fixing the previous one-frame house gap.
+All 17,689 material samples used the correct map climate, including newly published materials
+at frame 133. Native PNGs 132/133/134 and `review-earthworks-surface.png` confirm that the former
+local brown pulse is gone after initializing replacement materials from their generator's
+climate. The fixture's refill queues drained within each sampled frame; this does not establish
+a dense forest refill budget or connected construction performance.
 
 ## Window, offscreen scene and diagnostics
 
@@ -562,7 +660,11 @@ FISTWORLD_VOYAGE_CAPTURE_EXIT=1 target/playtest/client
 
 An unattended NPC observer can use the existing `FISTWORLD_AUTOSPAWN_HERO=1` smoke mode to
 suppress the new-player creator. Without server god capability, that flag only skips the creator;
-it does not grant a hero. Inspect the village image itself: replicated population counters can
+it does not grant a hero. With that capability, the hook still submits the server-gated
+`DevCommand::SpawnHero` and exercises replication/movement. These explicit development
+hooks remain available after removal of the interactive God-panel Create Hero control;
+normal character creation is startup-only. Inspect the village image itself: replicated
+population counters can
 be correct while a modal or creator preview occupies the view. The normal client propagates
 Bevy's exit status, so a live capture failure returns a nonzero process status.
 
@@ -897,7 +999,87 @@ These connected screenshots use `target: scene`; use the offline scenarios above
 for UI layout. This exercises real action handlers, not native pointer hit-testing,
 and `FISTFORCE_NO_SETTINGS_FILE=1` prevents any read or write of player preferences.
 
+## Actual application audio on macOS
+
+`capture/record_app_audio.swift` records the owned Bevy `client` or `capture`
+process through ScreenCaptureKit. It includes only the supplied PID, disables
+microphone capture and writes stereo 48 kHz float WAV plus a
+`.wav.capture-audio.json` report. This preserves actual application output and
+per-channel peak/RMS evidence; screenshots or manually mixed source files cannot
+replace it. This tool does not request permissions: it checks existing capture
+access and fails if unavailable. Its target must be a client/capture executable
+under this repository's `target/` directory.
+
+Build from the repository root, then pass the PID of the client the rehearsal owns:
+
+```sh
+mkdir -p logs/tools
+swiftc -O -parse-as-library "$PWD/capture/record_app_audio.swift" -o logs/tools/record_app_audio
+logs/tools/record_app_audio CLIENT_PID logs/audio-review/mix.wav logs/audio-review/stop
+```
+
+The runner should launch the recorder asynchronously, wait for
+`mix.wav.ready`, then drive its semantic rehearsal. Create the stop file only
+after the required actions finish. The optional fourth argument selects another
+ready path; the fifth sets a hard timeout of at most 120 seconds (the default).
+Existing output/control files are refused. Ready means capture started, not that
+non-silent audio has been observed. The final report includes frame and nonzero
+frame counts, sample timestamps, output peaks/RMS and stop reason; inspect it and
+audition the WAV. A timeout is a failed bounded rehearsal, not acceptance.
+
+Capability checks on 2026-09-13 found existing screen-capture access and the
+ScreenCaptureKit APIs on this Mac, but no FFmpeg loopback audio input. FFmpeg's
+AVFoundation input and `screencapture -g` would select the built-in microphone.
+The recorder compiled and passed non-recording refusal checks; this availability
+check does not establish successful actual-game recording or listening approval.
+
+`capture/sfx_review.py` orchestrates a bounded connected first-pack rehearsal:
+
+```sh
+python3 capture/sfx_review.py --out logs/sfx-review/run-01 --seed 4800834198907808058
+```
+
+Build matching `target/playtest/server`, `target/playtest/client` and the recorder
+first. The runner refuses an occupied game port, owns only its child processes,
+isolates saved audio preferences, uses a fresh `logs/` output and limits the total
+run to ten minutes including cleanup. It drives the real character creator and
+Audio controls, checks live music gain/muting, semantic N/Escape book sounds and
+Places/People page sounds, then observes a moving physical cart in the largest
+ordinary town. Native sink state, actual source displacement and decoder progress
+must agree for at least six contiguous seconds. Far zoom must release cart voices;
+returning near must readmit actual movement, and Effects mute must clear it.
+The distance extension in `capture/audio_distance_review.py` follows one ordinary
+moving cart with camera-only commands at minimum zoom 12, 100 and 12 again. It requires the
+same native voice and advancing decoder across multiple loop lengths, decreasing
+gain/cutoff on zoom-out and restored brightness on return. Cart audibility uses
+estimated post-distance gain, not just pre-spatial sink volume. It records
+`distance-evidence.json` and actual app audio; far zoom/mute must also release
+filtered voice assets. Prepared PCM stays cached within its bounded budget.
+
+Review `report.json`, `audio-timeline.jsonl`, named state snapshots, actual app WAVs
+and their audio metadata, plus every real PNG/`.capture.json`/`.session.json` pair.
+The runner records semantic/numeric pass separately from personal visual inspection
+and listening; those last two approval flags remain false until reviewed. A cart
+may finish its ordinary job, so at most three bounded near-cart attempts are retained
+rather than forcing it to keep moving. These tests do not implement future footsteps,
+army, battle or ambience banks, or establish a sound-on/off performance benchmark.
+
 ## Shared UI theme gallery and motion rehearsal
+
+`capture/scenarios/ui-music.ron` tests the actual Escape-menu music switch and
+Bevy audio sinks at 1280×720. Its seven shots cover background playback, off,
+resume on the same decoder while moving the camera, opening-cue priority, stopping
+that opening, returning to background, and quiet after completion. The final step
+silently accelerates the actual Vorbis decoder to 100× until it finishes (seeking
+is unsupported). Each PNG and `.capture.json`
+has a `.music.json` with the visible button bounds/text, current music entity and
+actual sink position/paused state. Read those alongside the images: screenshots
+alone cannot prove playback. `FISTFORCE_NO_SETTINGS_FILE=1` also protects saved audio
+preferences. The opening request is a fixture, not a connected-voyage claim.
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/scenarios/ui-music.ron --out logs/captures/music-review
+```
 
 `capture/ui_gallery.py` writes named RON scenarios for the real encyclopedia tabs,
 company controls (top/bottom), ledger, founding form, property board, market, compact
@@ -925,9 +1107,57 @@ navigation state to fabricate success. It is motion and action coverage, not a c
 of native mouse automation or a performance benchmark. Membership/network behavior
 remains covered by the connected army-management scenario above.
 
-`FISTFORCE_CAPTURE_FRONTEND=menu|name` selects the real launcher/name-entry state;
-these front-end captures require no terrain chunks. All other gallery pages retain
-the normal terrain readiness requirement. Inspect each PNG and its JSON together.
+`FISTFORCE_CAPTURE_FRONTEND=menu|name|name-error|connecting|submitting|preparing`
+selects the real FistWorld startup presentation. The maintained
+[startup scenarios](../capture/scenarios/startup/README.md) cover the launcher,
+join form, name rejection and three busy states at ordinary, small and narrow
+window sizes. The launcher also records native Connect hover, opening the saved
+server popup and closing it through real UI handlers. Its two preset entries are
+explicitly staged offline. The existing `ui-preparing-world.ron` remains a
+single-view entry.
+Fixtures set presentation resources only; the offline `CaptureConfig` suppresses
+real connection startup, and no generated-world progress is invented.
+
+Readiness waits for the actual artwork/font dependencies, settled panel reveal,
+visible status and control geometry. Name views additionally require continuous
+opaque wood backing and overlapping header/parchment geometry at the torn edge.
+Every image adds `.startup.json` containing
+the harness diagnostic window title, text, colors, image paths and bounds. Native
+game window branding is verified separately. The continuous
+`startup/loading-motion.ron` photographs 181 uninterrupted frames with probes
+every 15 frames; `loading-animation.json` checks three native diamond shapes,
+visible brightness changes, left-to-right pulse order and fixed group geometry.
+These front-end captures require no terrain chunks. Other gallery pages retain
+their normal terrain readiness requirement. Inspect each PNG, `.capture.json`
+and startup evidence together. These are offline appearance checks, not a
+connection, world-generation timing measurement or performance benchmark.
+
+Verified 2026-09-12: both name forms, all three busy views and continuous diamond
+motion passed at 1600×900, 1280×720 and 1024×768 in `logs/startup-review/matrix-2/`;
+launcher hover and preset opening/closing passed at those sizes in `matrix-final/`.
+After the FistWorld wordmark correction and name-panel seam repair, fresh
+`fistworld-final/` captures rechecked normal and error name forms at all three sizes,
+plus the launcher and preparing view at 1600×900. The six name captures show
+continuous wood behind the torn paper with 5–8 physical pixels of overlap.
+The saved-server popup renders above Connect (actual stack index 31 versus 26).
+Its 91-probe `fistworld-final/motion/` sequence passed all three pips' brightness,
+left-to-right order and fixed-geometry checks. `loading-preview.mp4` assembles
+those actual probes at 30 fps from native 60 Hz UI updates, without interpolation;
+`loading-preview.json` documents that cadence. PNGs and sidecars were inspected.
+These outputs remain ignored review artifacts, not regression baselines.
+
+The separate real connection test is `python3 capture/startup_session.py --out
+logs/startup-review/connected-final`. It starts an owned ordinary seeded server,
+refuses an occupied UDP port, and drives native keyboard events and production
+button handlers without autoconnect or fabricated account/world resources. The
+2026-09-12 run passed closed-preset Tab order, preset selection/default-port reset,
+keyboard cancellation during connection and world preparation, invalid address/DNS
+recovery, a 16-character wide name, authoritative reserved-name rejection, actual
+hero creation and reconnect preserving PersonId, wallet and cargo. Eight real
+screenshots and paired metadata were inspected; `report.json` also records the
+ordinary game Window title **FistWorld**. Both owned processes were stopped.
+Final workspace/all-target build and check passed, with 1,387 tests passed and
+21 intentionally ignored; whitespace checks passed too.
 
 ### Theme verification, 2026-09-06
 
@@ -1010,6 +1240,87 @@ in [RURAL_BUILDINGS.md](../asset_creation/RURAL_BUILDINGS.md).
 composed equipment selector with the mail preset selected. Full asset rebuild,
 clip ownership and stable wardrobe indices are documented in
 [CHARACTER_HANDOVER.md](../asset_creation/CHARACTER_HANDOVER.md).
+
+`character-creator-new-player.ron` is the single maintained creator action tour.
+Character creation is startup-only: there is no interactive God-panel entry or
+developer Place/Cancel purpose. The former `character-creator-god.ron` has been retired.
+The new-player tour's 16 shots cycle each of the four current wardrobe slots and skin
+in both directions, compare separated forward-idle views, check Escape/backdrop
+retention, inspect night lighting and exercise disconnected confirmation feedback.
+It does not claim that a server voyage was created. Run it at ordinary and small sizes:
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario capture/scenarios/character-creator-new-player.ron \
+  --resolution 1600x900 --out logs/character-creator/player-normal
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario capture/scenarios/character-creator-new-player.ron \
+  --resolution 1280x720 --out logs/character-creator/player-small
+```
+
+`ui-medieval-god.ron` is a separate one-shot review of the normal God HUD with no
+creator or hero fixture. Inspect its developer actions to confirm that character
+creation is absent; it does not restore the retired God creator workflow.
+
+The opt-in driver sends semantic cursor targets and mouse press/release edges
+after UI focus, then waits for production selection, wardrobe and layout results.
+Readiness also requires the four creator material images to finish loading.
+Every image has `.creator.json` evidence in addition to `.capture.json`: actual
+outfit, panel/control fit, forward facing, visual speed, active animation times
+and bounds projected from the current visible skinned vertices. Studio key/fill
+directional illuminance and visibility are recorded. The offline tour keeps the
+mandatory creator open. Check that its studio lights are off or hidden after a
+successful connected confirmation or departure from Playing separately.
+The capture-only
+sampler uses Bevy's weighted world-joint/inverse-bind transform, with a bounded
+vertex budget; conservative dynamic culling boxes do not control framing.
+Projection is converted from the scaled scene target into composed UI pixels.
+Inspect the PNGs for complete
+feet/head, clothing silhouettes, legibility and steady forward idle. The driver
+fails within the scenario's frame budget when a required result never appears.
+These are offline action and appearance checks, not native pointer or connected
+account-creation coverage.
+
+Verified 2026-09-12 after removing the God creator: the 16-shot startup tour passed
+at 1600×1000/render scale 1.0 and 1280×720/render scale 0.6 in
+`logs/character-creator/startup-only/player-{normal,small}`. All 32 creator records
+passed; representative PNGs and capture metadata show complete framing, all 11
+controls, forward idle, night lighting and retry feedback. A separate inspected
+`startup-only/god-hud/01-god-hud.png` shows the remaining developer controls with
+no hero creation button. Workspace check and 1,325 tests passed (20 ignored).
+Connected creation was not rerun for this removal; the earlier result below
+documents the unchanged reliable voyage request.
+
+### Historical creator verification
+
+Verified 2026-09-12, before the startup-only cleanup: the former two tours at
+1600×900 and 1280×720 produced 54 composed
+captures in `logs/character-creator/review-player-{normal,small}`,
+`review-god-normal-complete` and `review-god-small`. All 108 capture/creator
+sidecars passed inspection; representative day, night, small-window, connection
+feedback and restored-world PNGs were inspected. Checks cover each wardrobe
+selector and restoration, forward idle progression, current posed geometry
+inside the pane, required new-player retention, and god cancellation/placement.
+Both studio lights were zero and hidden after dismissal; only Place armed
+placement. That retired God tour used the offline god HUD capability fixture;
+its cancellation and placement captures are historical, not current workflows.
+Separately, three composed captures and session records in
+`logs/character-creator/connected-final` verified the real non-god flow from
+default/customized creator through confirmation to a server-created hero aboard
+the arrival boat; this does not cover landing or the later economy.
+
+The subsequent material/framing refinement, also before the startup-only cleanup,
+produced 36 more composed captures
+under `logs/character-creator/refinement/`: `player-final` at 1600×1000 with scene
+render scale 1.0, `player-small` at 1280×720 with scale 0.6, and `god-final` at
+1600×900 with scale 0.6. All creator evidence passed, with 90 ready frames and
+no comparison errors. Representative PNGs confirm the complete figure, all five
+selector rows, worn surfaces, native arrow/diamond shapes, night lighting,
+connection feedback and the restored world. Both preview lights are zero and
+hidden after Place. This pass changes presentation; it does not constitute
+another connected voyage test. Workspace check and 1,326 tests passed (20 ignored).
+
+### Connected character activity review
 
 The connected Village Lab accepts `FISTWORLD_LAB_CAPTURE_ACTIVITY=rest` with its
 usual capture flags. It waits for a **replicated** `LyingDown` resident and focuses
@@ -1150,3 +1461,39 @@ both ends of their scrollable content. They open pages through production button
 handlers, inspect local draft edits across a changed company snapshot, and return
 through real Back/Cancel controls. Inspect each PNG, `.capture.json` and `.nested.json`;
 these offline fixtures do not validate successful server transactions.
+
+## Connected NPC movement and porter regression
+
+`capture/npc_movement.py` runs an ordinary generated world, creates a character
+through the real UI and observes a populated town. It does not stage NPCs, grant
+resources, issue worker orders or accelerate time. Build first, then use a fresh
+ignored output directory:
+
+```bash
+cargo build --workspace --all-targets --profile playtest
+python3 capture/npc_movement.py --out logs/npc-movement-review --seconds 360
+```
+
+The default reproducer seed is `4800834198907808058`. `--seed` selects another
+normal generated world, and `--town-index` selects a town ordered by population.
+The runner records three moving porters and a continuous town view using the real
+composed Bevy capture target. Initial capture waits for camera/chunk/yard readiness;
+recording then lets simulation continue through subsequent frames. Every frame has
+`.capture.json` and `.session.json` sidecars. Inspect the PNG sequence as well as
+`movement-analysis.json`; the optional `--observe-only` retains known-bad baseline
+evidence without failing the runner.
+
+`FISTWORLD_MOVEMENT_TRACE_DIR` enables separate, read-only server route and client
+animation journals (5 Hz and 10 Hz, capped at 2,048 actors per sample). Without that
+flag their systems and file writers are not installed. The client samples actual
+post-animation leg transforms as well as the bound player's name, active clip,
+seek, speed and weight. The analyzer checks sustained movement orders without
+position progress and moving porters with incorrect/frozen body animation, while
+excluding ordinary idle/queue waiting and culled rigs. It requires observed moving
+porters, rejects counter timeout fallbacks, and reports its limited scope. Re-run
+analysis with `python3 capture/npc_movement_analysis.py logs/npc-movement-review`.
+
+The session command `record` accepts a name, 2–180 frames and an `interval_ms` of
+50–1,000, for at most 60 seconds. Screenshot completion can make the actual cadence
+slower than requested; inspect capture metadata and recording timestamps, and do
+not treat these readback/instrumentation runs as frame-rate benchmarks.

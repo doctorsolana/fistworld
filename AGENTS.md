@@ -8,6 +8,10 @@ preserved.
 Before authoring building or prop assets, read `asset_creation/PROP_PIPELINE.md`,
 including the ground-contact, supported-cargo, structural-joint, hinge and roof-underside checks.
 
+Before adding audio effects or changing playback, read `docs/AUDIO-DESIGN.md` and
+`asset_creation/audio/SFX_PIPELINE.md`. Respect their implemented/planned boundaries.
+Audio acceptance requires actual playback/mix evidence and listening, not screenshots alone.
+
 Keep generated screenshots, recordings and assembled Blender review scenes out of Git.
 Use `logs/` or the ignored `asset_creation/**/renders/` directories for review output;
 retain canonical editable `.blend` sources, runtime assets, generators and capture

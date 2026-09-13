@@ -23,6 +23,7 @@ pub(crate) use mesh::terrain_cell_subdivisions;
 pub use streaming::TerrainDeltaState;
 pub(crate) use surface::rendered_cell_height;
 // Cloud-shadow sync writes the palette's cloud fields into chunk materials.
+pub(crate) use materials::terrain_climate_for_generator;
 pub use materials::TerrainSplatMaterial;
 pub(crate) use streaming::TerrainStreamingState;
 

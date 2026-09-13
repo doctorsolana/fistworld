@@ -8,13 +8,14 @@
 //! freight fee only after physical delivery.
 
 use super::*;
+use crate::world::new_world::trade_access::{FoundingLandNetwork, LandTradeAccess};
 
 use lightyear::prelude::{NetworkTarget, Replicate};
 use shared::components::{
     CharacterObjective, CivicHallUpgradeWorksite, CivicTradeContract, CompanyTradeRoute,
-    ConstructionSite, TradeContractId, TradeContractStatus, TradeRouteHistory, TradeRouteId,
-    TradeRouteMode, TradeRouteSchedule, TradeRouteStatus, TradeRouteStop, TradeRouteStopAction,
-    TradeRouteTrip,
+    ConstructionSite, SettlementId, TradeContractId, TradeContractStatus, TradeRouteHistory,
+    TradeRouteId, TradeRouteMode, TradeRouteSchedule, TradeRouteStatus, TradeRouteStop,
+    TradeRouteStopAction, TradeRouteTrip,
 };
 use shared::economy::{MarketSeller, FOUNDING_DAILY_WAGE};
 
@@ -648,6 +649,7 @@ pub fn review_autonomous_merchant_trade(
     world_time: Query<&WorldTime>,
     mut intelligence: ResMut<RegionalTradeIntelligence>,
     mut merchant_demand: ResMut<RegionalMerchantDemand>,
+    land_networks: Query<(&SettlementId, &FoundingLandNetwork), With<Settlement>>,
     halls: Query<
         (
             &shared::components::SettlementId,
@@ -695,6 +697,7 @@ pub fn review_autonomous_merchant_trade(
         return;
     }
     intelligence.processed_day = Some(day);
+    let land_access = LandTradeAccess::from_tags(land_networks.iter());
 
     let mut markets: Vec<_> = halls
         .iter()
@@ -1101,6 +1104,7 @@ pub fn review_autonomous_merchant_trade(
                     .filter(|observation| {
                         observation.good == good
                             && observation.settlement != warehouse.settlement
+                            && land_access.allows(warehouse.settlement, observation.settlement)
                             && day.saturating_sub(observation.observed_day)
                                 <= TRADE_INTEL_MAX_AGE_DAYS
                     })
@@ -1154,6 +1158,7 @@ pub fn review_autonomous_merchant_trade(
                     .filter(|observation| {
                         observation.good == good
                             && observation.settlement != warehouse.settlement
+                            && land_access.allows(warehouse.settlement, observation.settlement)
                             && day.saturating_sub(observation.observed_day)
                                 <= TRADE_INTEL_MAX_AGE_DAYS
                     })
@@ -1334,6 +1339,7 @@ pub fn review_autonomous_merchant_trade(
 pub fn post_civic_import_contracts(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
+    land_networks: Query<(&SettlementId, &FoundingLandNetwork), With<Settlement>>,
     projects: Query<(
         &CivicHallUpgradeWorksite,
         &shared::components::BuildingOf,
@@ -1349,6 +1355,7 @@ pub fn post_civic_import_contracts(
     contracts: Query<&CivicTradeContract>,
 ) {
     let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    let land_access = LandTradeAccess::from_tags(land_networks.iter());
     let active: HashSet<_> = contracts
         .iter()
         .filter(|contract| contract.status.is_active())
@@ -1418,7 +1425,11 @@ pub fn post_civic_import_contracts(
         let source_offer = source_offers
             .iter()
             .copied()
-            .filter(|(origin, _, good, _, _)| *origin != building_of.0 && *good == project.material)
+            .filter(|(origin, _, good, _, _)| {
+                *origin != building_of.0
+                    && *good == project.material
+                    && land_access.allows(*origin, building_of.0)
+            })
             .min_by_key(|(origin, seller, _, price, _)| (*price, *origin, *seller));
         // An unbound tender exists to invite production in *another*
         // settlement. With no possible remote origin it would only remove the
@@ -1426,9 +1437,9 @@ pub fn post_civic_import_contracts(
         // attempts forever. Keep the treasury liquid and let the local market
         // publish its ordinary unmet-demand signal instead.
         if source_offer.is_none()
-            && !settlement_ids
-                .iter()
-                .any(|settlement| *settlement != building_of.0)
+            && !settlement_ids.iter().any(|settlement| {
+                *settlement != building_of.0 && land_access.allows(*settlement, building_of.0)
+            })
         {
             continue;
         }
@@ -1511,6 +1522,7 @@ pub fn manage_company_trade_routes(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
     mut next_review_world_seconds: Local<f64>,
+    land_networks: Query<(&SettlementId, &FoundingLandNetwork), With<Settlement>>,
     halls: Query<
         (
             Entity,
@@ -1567,6 +1579,7 @@ pub fn manage_company_trade_routes(
     }
     *next_review_world_seconds = now + ROUTE_MANAGEMENT_INTERVAL_WORLD_SECONDS;
     let day = clock.day;
+    let land_access = LandTradeAccess::from_tags(land_networks.iter());
     let hall_snapshots: HashMap<_, _> = halls
         .iter()
         .map(|(_entity, id, position, rotation, _, _)| {
@@ -1686,6 +1699,7 @@ pub fn manage_company_trade_routes(
                 .copied()
                 .filter(|(origin, _, good, price, units)| {
                     *origin != contract.destination
+                        && land_access.allows(*origin, contract.destination)
                         && *good == contract.good
                         && *price <= contract.maximum_unit_price
                         && *units >= contract.remaining_units()
@@ -1707,6 +1721,9 @@ pub fn manage_company_trade_routes(
         let Some(origin_id) = contract.origin else {
             continue;
         };
+        if !land_access.allows(origin_id, contract.destination) {
+            continue;
+        }
         if !regional_markets.contains(&origin_id)
             || !regional_markets.contains(&contract.destination)
         {
@@ -1806,6 +1823,7 @@ pub fn manage_company_trade_routes(
             || route.assigned_caravaner.is_some()
             || route.active_contract.is_none()
             || route.mode != TradeRouteMode::ContractCarrier
+            || !land_access.allows(route.origin, route.destination)
         {
             continue;
         }
@@ -1896,10 +1914,11 @@ pub fn manage_company_trade_routes(
             continue;
         };
         if schedule.is_some_and(|schedule| {
-            schedule
-                .stops()
-                .iter()
-                .any(|stop| !regional_markets.contains(&stop.settlement))
+            land_access.validate_schedule(schedule.stops()).is_err()
+                || schedule
+                    .stops()
+                    .iter()
+                    .any(|stop| !regional_markets.contains(&stop.settlement))
         }) {
             route.status = TradeRouteStatus::Mothballed;
             continue;
@@ -3134,6 +3153,16 @@ mod tests {
 
     #[test]
     fn autonomous_importer_uses_delayed_intel_to_open_one_physical_food_trial() {
+        assert_autonomous_importer_land_access(None, true);
+    }
+
+    #[test]
+    fn autonomous_importer_rejects_separate_land_networks_but_keeps_connected_trials() {
+        assert_autonomous_importer_land_access(Some((7, 9)), false);
+        assert_autonomous_importer_land_access(Some((7, 7)), true);
+    }
+
+    fn assert_autonomous_importer_land_access(groups: Option<(u64, u64)>, expected: bool) {
         let mut app = App::new();
         app.init_resource::<RegionalTradeIntelligence>()
             .init_resource::<RegionalMerchantDemand>()
@@ -3239,7 +3268,44 @@ mod tests {
             TradeRouteHistory::default(),
         ));
 
+        if let Some((source, destination)) = groups {
+            let halls: Vec<_> = app
+                .world_mut()
+                .query::<(Entity, &SettlementId)>()
+                .iter(app.world())
+                .map(|(entity, id)| (entity, *id))
+                .collect();
+            for (entity, id) in halls {
+                app.world_mut()
+                    .entity_mut(entity)
+                    .insert(FoundingLandNetwork(if id == SOURCE {
+                        source
+                    } else {
+                        destination
+                    }));
+            }
+        }
         app.update();
+        if !expected {
+            assert_eq!(app.world_mut().query::<&CompanyTradeRoute>().iter(app.world()).count(), 1,
+                "the existing contract lane is preserved but no impossible merchant trial is created");
+            assert_eq!(
+                app.world_mut()
+                    .query::<&CompanyAccount>()
+                    .single(app.world())
+                    .unwrap()
+                    .cash,
+                350,
+                "rejecting a separated market must not spend the company's cash"
+            );
+            assert!(app
+                .world_mut()
+                .query::<&AutonomousMerchantRoute>()
+                .iter(app.world())
+                .next()
+                .is_none());
+            return;
+        }
 
         let (_, route, schedule) = app
             .world_mut()
@@ -3341,6 +3407,92 @@ mod tests {
             7_760,
             "contract cash must leave the spendable treasury immediately"
         );
+    }
+
+    #[test]
+    fn separate_land_networks_cannot_lock_civic_cash_with_stock_or_an_unbound_tender() {
+        for source_units in [0, 8] {
+            let mut app = App::new();
+            app.add_systems(Update, post_civic_import_contracts);
+            app.world_mut().spawn(WorldTime::new_default());
+            let mut market = regional_market(MootMarket::founding());
+            let mut stock = GoodsInventory::new(shared::economy::capacity::HALL);
+            if source_units > 0 {
+                market.consign(
+                    MarketSeller::Business(QUARRY),
+                    Good::Stone,
+                    source_units,
+                    250,
+                );
+                stock.add(Good::Stone, source_units);
+            }
+            let source = app
+                .world_mut()
+                .spawn((
+                    hall(SOURCE, "Other coast", Vec3::ZERO, 0, market, stock),
+                    FoundingLandNetwork(2),
+                ))
+                .id();
+            let destination = app
+                .world_mut()
+                .spawn((
+                    hall(
+                        DESTINATION,
+                        "Local town",
+                        Vec3::X * 40.0,
+                        10_000,
+                        regional_market(MootMarket::founding()),
+                        GoodsInventory::new(shared::economy::capacity::HALL),
+                    ),
+                    FoundingLandNetwork(1),
+                ))
+                .id();
+            app.world_mut().spawn((
+                CivicHallUpgradeWorksite {
+                    target: CivicHallLevel::Town,
+                    material: Good::Stone,
+                    material_required: 8,
+                },
+                BuildingOf(DESTINATION),
+                ConstructionSite {
+                    kind: SettlementBuildingKind::Hall,
+                    settlement: "Local town".into(),
+                    raising: false,
+                    stand: Vec3::new(40.0, 0.0, -5.2),
+                    rotation: 0.0,
+                },
+                GoodsInventory::new(8 * Good::Stone.bulk_per_unit()),
+            ));
+            app.update();
+            assert!(app
+                .world_mut()
+                .query::<&CivicTradeContract>()
+                .iter(app.world())
+                .next()
+                .is_none());
+            assert_eq!(
+                app.world().get::<Settlement>(destination).unwrap().treasury,
+                10_000
+            );
+
+            // The identical economic opportunity becomes valid when the
+            // source belongs to the actual connected group.
+            app.world_mut()
+                .entity_mut(source)
+                .insert(FoundingLandNetwork(1));
+            app.update();
+            let contract = app
+                .world_mut()
+                .query::<&CivicTradeContract>()
+                .single(app.world())
+                .expect("a connected source permits ordinary civic trade");
+            assert_eq!(contract.origin, (source_units > 0).then_some(SOURCE));
+            assert!(contract.escrow_cash > 0);
+            assert_eq!(
+                app.world().get::<Settlement>(destination).unwrap().treasury + contract.escrow_cash,
+                10_000
+            );
+        }
     }
 
     #[test]

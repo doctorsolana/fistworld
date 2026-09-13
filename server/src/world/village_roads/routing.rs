@@ -396,10 +396,15 @@ impl VillageRoadGraph {
             !route.windows(2).any(|pair| {
                 let start = pair[0].0;
                 let end = pair[1].0;
-                let min_x = (start.x.min(end.x) / CHUNK_SIZE).floor() as i32;
-                let max_x = (start.x.max(end.x) / CHUNK_SIZE).floor() as i32;
-                let min_z = (start.y.min(end.y) / CHUNK_SIZE).floor() as i32;
-                let max_z = (start.y.max(end.y) / CHUNK_SIZE).floor() as i32;
+                // Collider ownership follows its root chunk, but its radius
+                // can reach a route in a neighbouring chunk. Supported prop
+                // radii plus actor clearance are smaller than one chunk, so
+                // one ring also covers diagonal boundary crossings without
+                // discarding routes elsewhere in the world.
+                let min_x = ((start.x.min(end.x) / CHUNK_SIZE).floor() as i32).saturating_sub(1);
+                let max_x = ((start.x.max(end.x) / CHUNK_SIZE).floor() as i32).saturating_add(1);
+                let min_z = ((start.y.min(end.y) / CHUNK_SIZE).floor() as i32).saturating_sub(1);
+                let max_z = ((start.y.max(end.y) / CHUNK_SIZE).floor() as i32).saturating_add(1);
                 (min_x..=max_x)
                     .any(|x| (min_z..=max_z).any(|z| changed.contains(&ChunkCoord::new(x, z))))
             })
@@ -736,6 +741,8 @@ type RouteMoverData = (
     &'static MoveTarget,
     Option<&'static NavigationRouteFailed>,
     Option<&'static NavigationRouteBackoff>,
+    Option<&'static TravelRoute>,
+    Option<&'static NavigationRoutePending>,
 );
 
 type RouteMoverFilter = (
@@ -781,7 +788,7 @@ pub fn queue_villager_travel_routes(
     >,
 ) {
     let now = simulation_time.elapsed_real_seconds_f64();
-    for (entity, kind, target, failed, backoff) in movers.iter() {
+    for (entity, kind, target, failed, backoff, route, pending) in movers.iter() {
         if *kind != CharacterKind::Villager || formations.contains(entity) {
             continue;
         }
@@ -791,6 +798,20 @@ pub fn queue_villager_travel_routes(
         // write erased a static failure and launched the identical A* search
         // again every three fixed ticks.
         if failed.is_some_and(|failed| failed.goal.distance_squared(target.0) <= 0.01) {
+            continue;
+        }
+        // Reasserting the same job marks MoveTarget as Changed even though
+        // the destination is unchanged. Keep the current waypoint cursor (or
+        // pending survey) instead of restarting the approach every tick.
+        // Stale failures still need clearing, and movement certifies an old
+        // route against live collision when world geometry changes.
+        if failed.is_none()
+            && (pending.is_some_and(|p| p.goal.distance_squared(target.0) <= 0.01)
+                || (pending.is_none()
+                    && route.is_some_and(|r| {
+                        !r.waypoints.is_empty() && r.goal.distance_squared(target.0) <= 0.01
+                    })))
+        {
             continue;
         }
         let destination_changed = backoff.is_some_and(|backoff| !backoff.matches(target.0));
@@ -905,6 +926,7 @@ pub(crate) struct RouteRequestState {
     incremental_jobs: HashMap<Entity, IncrementalRouteJob>,
     collision_snapshot: RouteCollisionSnapshot,
     warning_limiter: RouteWarningLimiter,
+    recovery_progress: start_recovery::RecoveryProgress,
 }
 
 #[derive(Default)]
@@ -1043,6 +1065,7 @@ pub struct NavigationLoad {
 
 #[derive(SystemParam)]
 pub(crate) struct RoutePlannerAux<'w, 's> {
+    recovery_positions: Query<'w, 's, &'static PlayerPosition, With<CharacterKind>>,
     fields: crate::world::farm_boundaries::FarmBoundarySource<'w, 's>,
     navigation_load: Option<ResMut<'w, NavigationLoad>>,
     placed_buildings: Query<'w, 's, (&'static PlacedBuilding, &'static BuildingPosition)>,
@@ -1555,6 +1578,7 @@ fn reject_navigation_route(
     now: f64,
     reason: &'static str,
     warning_limiter: &mut RouteWarningLimiter,
+    diagnose: impl FnOnce(),
 ) {
     let backoff = NavigationRouteBackoff::after_failure(
         previous,
@@ -1565,6 +1589,9 @@ fn reject_navigation_route(
         entity,
     );
     if backoff.should_warn() && warning_limiter.allow(target, now) {
+        if std::env::var_os("FISTWORLD_LAB_ROUTE_DIAGNOSTICS").is_some() {
+            diagnose();
+        }
         warn!(
             "Villager route to {:.1},{:.1} {reason}; retry {} no earlier than {:.1}s real time",
             target.x,
@@ -1632,6 +1659,12 @@ pub fn plan_villager_travel_routes(
     let planner_started = Instant::now();
     let now = simulation_time.elapsed_real_seconds_f64();
     let Some(terrain) = terrain else { return };
+    request_state.recovery_progress.observe(now, |entity| {
+        aux.recovery_positions
+            .get(entity)
+            .ok()
+            .map(|position| position.0)
+    });
     let obstacles = collision.obstacles.as_deref();
     let colliders = collision.colliders.as_deref();
     let derived = collision.derived.as_deref();
@@ -1849,6 +1882,33 @@ pub fn plan_villager_travel_routes(
         else {
             continue;
         };
+        // Evaluated only for an emitted, coalesced failure warning with the
+        // opt-in lab flag. Ordinary routing never formats or samples this data.
+        let diagnose_failure = || {
+            eprintln!(
+                "LAB rejected route entity={entity:?} from={:?} to={:?} intent={_intent:?} objective={objective:?}",
+                position.0, target.0,
+            );
+            for (label, point) in [("start", position.0.xz()), ("goal", target.0.xz())] {
+                let live_prop_clear = colliders.zip(derived).map(|(colliders, derived)| {
+                    navigation_point_is_clear_of_props(point, colliders, derived)
+                });
+                eprintln!(
+                    "LAB rejected endpoint {label} at={point:?} dry={} cached_building={} live_building={} live_prop_clear={live_prop_clear:?}",
+                    road_sample_is_dry(&terrain, point),
+                    building_cache.spatial.point_blocked(point),
+                    obstacles.is_some_and(|grid| grid.point_blocked(point)),
+                );
+                if let Some(grid) = obstacles {
+                    for obstacle in grid
+                        .get_nearby(point)
+                        .filter(|entry| entry.contains_point(point))
+                    {
+                        eprintln!("LAB rejected endpoint obstacle {label} {obstacle:?}");
+                    }
+                }
+            }
+        };
         let local_distance = position.0.distance(target.0);
         // Personal travel enters this same bounded planner. A long hero trip
         // needs the regional detour window just like a certified immigrant
@@ -1907,6 +1967,32 @@ pub fn plan_villager_travel_routes(
         request_state.last_request_bits_by_priority[priority] = Some(entity.to_bits());
         telemetry.requests = telemetry.requests.saturating_add(1);
 
+        if let Some(corrected) = colliders.zip(derived).and_then(|(colliders, derived)| {
+            start_recovery::recover_prop_overlap(
+                position.0, &terrain, obstacles, colliders, derived,
+            )
+        }) {
+            // Restore a valid embodied origin once; keep the real destination
+            // and let the ordinary planner certify the complete onward trip.
+            // No collision-exemption marker survives this correction.
+            commands
+                .entity(entity)
+                .insert((
+                    PlayerPosition(corrected),
+                    shared::region::RegionCoord::from_world_pos(corrected),
+                    NavigationRoutePending::new(target.0),
+                ))
+                .remove::<TravelRoute>()
+                .remove::<NavigationObstacleEscape>()
+                .remove::<NavigationRouteBackoff>()
+                .remove::<NavigationRouteFailed>();
+            request_state.incremental_jobs.remove(&entity);
+            request_state
+                .recovery_progress
+                .note(entity, position.0, corrected, now);
+            continue;
+        }
+
         // The previous full A* already proved this exact route impossible for
         // the current geometry. High-level AI may have consumed its failure
         // result to preserve a work transaction, but must not make the server
@@ -1927,6 +2013,7 @@ pub fn plan_villager_travel_routes(
                 now,
                 "is still blocked by unchanged geometry",
                 &mut request_state.warning_limiter,
+                &diagnose_failure,
             );
             continue;
         }
@@ -2019,6 +2106,7 @@ pub fn plan_villager_travel_routes(
                                     now,
                                     "failed final live-obstacle certification",
                                     &mut request_state.warning_limiter,
+                                    &diagnose_failure,
                                 );
                             }
                         }
@@ -2039,6 +2127,7 @@ pub fn plan_villager_travel_routes(
                                 now,
                                 "is blocked",
                                 &mut request_state.warning_limiter,
+                                &diagnose_failure,
                             );
                         }
                         continue;
@@ -2602,6 +2691,7 @@ pub fn plan_villager_travel_routes(
                 now,
                 "is blocked",
                 &mut request_state.warning_limiter,
+                &diagnose_failure,
             );
             continue;
         };
@@ -2645,6 +2735,7 @@ pub fn plan_villager_travel_routes(
                     now,
                     "failed final live-obstacle certification",
                     &mut request_state.warning_limiter,
+                    &diagnose_failure,
                 );
                 continue;
             }
@@ -2998,7 +3089,7 @@ mod local_tests {
     }
 
     #[test]
-    fn streamed_prop_change_invalidates_only_routes_crossing_that_chunk() {
+    fn streamed_prop_change_invalidates_nearby_routes_and_preserves_distant_routes() {
         let mut graph = VillageRoadGraph::default();
         let start = Vec2::new(8.0, 8.0);
         let goal = Vec2::new(24.0, 8.0);
@@ -3010,5 +3101,105 @@ mod local_tests {
 
         graph.invalidate_tactical_routes_in_chunks(&HashSet::from([ChunkCoord::new(0, 0)]));
         assert!(graph.tactical_route(start, goal).is_none());
+    }
+
+    #[test]
+    fn cross_boundary_colliders_invalidate_forward_reverse_and_cohort_routes() {
+        use crate::collision::library::{DerivedCollider, StaticColliderInstance};
+        use shared::props::PropKind;
+
+        let derived = DerivedColliderLibrary {
+            by_kind: [(
+                PropKind::OakA,
+                DerivedCollider {
+                    horizontal_radius: 0.8,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        // Positive boundary, negative-to-positive boundary, diagonal corner.
+        for (start, goal, tree) in [
+            (
+                Vec2::new(63.5, 8.0),
+                Vec2::new(63.5, 24.0),
+                Vec2::new(64.1, 16.0),
+            ),
+            (
+                Vec2::new(-0.5, 8.0),
+                Vec2::new(-0.5, 24.0),
+                Vec2::new(0.1, 16.0),
+            ),
+            (
+                Vec2::new(63.4, 62.0),
+                Vec2::new(63.4, 63.6),
+                Vec2::new(64.1, 64.1),
+            ),
+        ] {
+            let mut graph = VillageRoadGraph::default();
+            graph.cache_tactical_route(start, goal, &[(start, false), (goal, false)], true);
+            let remote_start = Vec2::new(640.0, 640.0);
+            let remote_goal = remote_start + Vec2::X * 16.0;
+            graph.cache_tactical_route(
+                remote_start,
+                remote_goal,
+                &[(remote_start, false), (remote_goal, false)],
+                false,
+            );
+
+            let mut live = StaticColliders::default();
+            assert!(!static_collider_overlaps_segment(
+                &live,
+                &derived,
+                start,
+                goal,
+                VILLAGER_PROP_RADIUS,
+            ));
+            let position = Vec3::new(tree.x, 0.0, tree.y);
+            let chunk = ChunkCoord::from_world_pos(position);
+            let cell = (
+                (tree.x / 16.0).floor() as i32,
+                (tree.y / 16.0).floor() as i32,
+            );
+            live.loaded_chunks.insert(chunk);
+            live.chunk_instances.insert(chunk, vec![1]);
+            live.cells.insert(cell, vec![1]);
+            live.instances.insert(
+                1,
+                StaticColliderInstance {
+                    kind: PropKind::OakA,
+                    position,
+                    scale: 1.0,
+                    rotation: Quat::IDENTITY,
+                    cell,
+                },
+            );
+            assert!(
+                static_collider_overlaps_segment(
+                    &live,
+                    &derived,
+                    start,
+                    goal,
+                    VILLAGER_PROP_RADIUS,
+                ),
+                "the newly loaded neighbouring tree reaches the cached route"
+            );
+            assert_ne!(
+                chunk,
+                ChunkCoord::from_world_pos(Vec3::new(start.x, 0.0, start.y))
+            );
+            assert_ne!(
+                chunk,
+                ChunkCoord::from_world_pos(Vec3::new(goal.x, 0.0, goal.y))
+            );
+
+            graph.invalidate_tactical_routes_in_chunks(&HashSet::from([chunk]));
+            assert!(graph.tactical_route(start, goal).is_none());
+            assert!(graph.tactical_route(goal, start).is_none());
+            assert!(graph.cohort_route_candidates(start, goal).is_empty());
+            assert!(graph.cohort_route_candidates(goal, start).is_empty());
+            assert!(graph.tactical_route(remote_start, remote_goal).is_some());
+            assert_eq!(graph.tactical_order.len(), 1);
+        }
     }
 }

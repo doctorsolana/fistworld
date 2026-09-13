@@ -31,16 +31,15 @@ pub struct TerrainLayerDef {
     /// Source image packed into this index of `terrain_albedo_array.ktx2`.
     /// `tools/terrain_ktx_builder` reads the order from here.
     ///
-    /// Two of these do not match their layer's name, and that is recorded rather than fixed.
-    /// See the per-layer comments: with `stylize.x = 1.0` the albedo texture supplies only an
-    /// 18% chroma grain, so "correcting" the images would change the look for no gain.
+    /// Dirt retains its painted value and colour detail; other layers use the
+    /// palette with restrained texture grain/value. Sand borrows a dirt image.
     pub albedo_source: &'static str,
     /// Source image packed into this index of `terrain_normal_array.ktx2`.
     pub normal_source: &'static str,
     /// World metres per texture repeat.
     pub tile_metres: f32,
-    /// The flat colour this layer actually renders as. Because `stylize.x` is 1.0, this --
-    /// not the albedo texture -- is what you see.
+    /// Linear palette colour. The shader grades authored texture detail around
+    /// this colour rather than treating the source image as final lighting.
     pub color: [f32; 4],
 }
 
@@ -58,19 +57,11 @@ pub const TERRAIN_LAYERS: [TerrainLayerDef; 4] = [
     TerrainLayerDef {
         layer: TerrainLayer::Dirt,
         display_name: "Dirt",
-        // NOT a dirt image -- this is the second GRASS texture, and it is deliberate that the
-        // table says so out loud. The albedo array only contributes an 18% chroma grain
-        // (`bands.z`), so what the ground reads as is `color` below, which is brown. Swapping
-        // in a dirt image would shift the grain by under 3% and change a look that is signed
-        // off. The lie was previously invisible: the builder said Grass_Texture_02 and the
-        // shader said `uv_dirt`, in different files, with nothing connecting them.
-        // Was `Ground_Normals_02.png`, which is the SAME IMAGE as `Dirt_Normals_01.png` --
-        // identical decoded pixels, and the 1k derivatives were byte-identical files. The
-        // array was carrying 5.3 MB of it twice. Naming the real file makes the duplication
-        // impossible to reintroduce; the built array is bit-identical either way.
-        albedo_source: "Grass_Texture_02.png",
+        // Small painted earth patches and embedded pale chips. Keep this source
+        // paired with the average-colour grading in terrain_splat.wgsl.
+        albedo_source: "Painted_Road_01.png",
         normal_source: "Dirt_Normals_01.png",
-        tile_metres: 7.0,
+        tile_metres: 4.0,
         // Dark enough to read as compacted earth in full daylight while the
         // splat shoulder still has room to fade naturally into meadow grass.
         color: [0.60, 0.40, 0.22, 1.0],
@@ -79,7 +70,7 @@ pub const TERRAIN_LAYERS: [TerrainLayerDef; 4] = [
         layer: TerrainLayer::Sand,
         display_name: "Sand",
         // Also not what it says: the repo has no sand image, so dirt's stands in for the grain.
-        // Same reasoning as Dirt above -- `color` is what you actually see.
+        // Sand keeps the palette-led treatment with restrained chroma grain.
         albedo_source: "Dirt_Texture_01.png",
         // There is no sand normal map in the repo; dirt's relief stands in. Deliberate,
         // not an oversight -- sand reads by its palette colour, and at 6 m tiling under an
@@ -145,10 +136,9 @@ pub struct TerrainSplatExtension {
 
     // --- Stylised palette ---
     //
-    // The photographic splat textures read as "realistic dirt" no matter how the frame is
-    // graded, which fights the low-poly look. These flat per-layer colours replace them.
-    // `stylize.x` blends between the two (0 = photo textures, 1 = flat colour) so the
-    // change stays A/B-able instead of being a one-way rewrite.
+    // Palette grading keeps the terrain in the low-poly art direction. Dirt
+    // retains its painted patches/chips, while other layers use restrained
+    // texture grain/value. `stylize.x` blends raw albedo (0) with this grade (1).
     //
     // Packed into ONE binding on purpose: seven separate `#[uniform]` attributes each
     // allocate their own buffer, which overran the Metal vertex-stage buffer limit
@@ -238,9 +228,9 @@ pub fn stylized_palette() -> TerrainPalette {
         // Bands span 0..90m of height, with a little texture break-up so large flat areas
         // are not perfectly uniform (which reads as untextured rather than stylised).
         //
-        // `bands.z` is the entire remaining contribution of the 5.3 MB albedo array: a
-        // chroma-only grain multiply. Set it to 0.0 to preview the terrain with no albedo
-        // texture at all -- that is exactly what deleting the array would look like.
+        // `bands.z` controls chroma grain on palette-led layers. Dirt retains
+        // its authored patch/chip detail separately; grass and cobble also
+        // retain a restrained value contribution.
         //
         // `bands.w` is the meadow-variation master strength (two-scale value
         // mottling + sparse worn-earth patches on soft grassy ground). 0.0

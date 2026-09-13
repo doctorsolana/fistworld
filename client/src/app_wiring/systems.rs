@@ -14,7 +14,7 @@ pub fn setup_systems(app: &mut App) {
 fn wire_common_systems(app: &mut App) {
     app.add_systems(
         OnEnter(GameState::Connecting),
-        apply_connect_window_settings,
+        apply_connect_window_settings.run_if(not(resource_exists::<crate::capture::CaptureConfig>)),
     );
 
     app.add_systems(Startup, game_systems::setup_rendering);
@@ -99,14 +99,7 @@ fn wire_common_systems(app: &mut App) {
     );
 
     // Connection systems
-    app.add_systems(
-        OnEnter(GameState::Connecting),
-        game_systems::handle_start_connection,
-    );
-    app.add_systems(
-        Update,
-        game_systems::update_connection_status.run_if(in_state(GameState::Connecting)),
-    );
+    game_systems::install_connection_flow(app);
 
     // Keep hierarchy transform/visibility parents consistent to avoid B0004 warning spam.
     app.add_systems(
@@ -172,6 +165,7 @@ fn wire_common_systems(app: &mut App) {
         // projection reads is current-frame.
         game_systems::sync_cloud_shadow_params
             .after(game_systems::update_day_night_cycle)
+            .after(terrain::TerrainUpdateSet)
             .run_if(in_state(GameState::Playing)),
     );
 }

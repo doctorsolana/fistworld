@@ -40,6 +40,9 @@ public storage. Changes to company/civic account privacy are a separate policy.
   initialize. `new_world/` surveys sites and land regions, validates complete layouts and
   initializes named society once before the socket opens. It has no recurring growth or
   economy overrides; see [NEW-WORLD.md](../docs/NEW-WORLD.md).
+  `new_world/layout/economy.rs` rates initial food chains and workforce from approved plots.
+  `new_world/trade_access.rs` owns the server-only founding land-group gate consumed by
+  civic and player trade routes; it does not bypass ordinary caravan navigation.
 - `identity.rs`: allocates and indexes durable `PersonId`, `SettlementId`,
   `BuildingId` and `CompanyId` values and migrates remaining readable legacy relationships.
 - `simulation_time.rs` and `time.rs`: the one real/world/warp clock and world-day state.
@@ -165,9 +168,38 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   loaded chunks even when all desired chunks are already present.
 - A `StrategicPerson` retains durable social/economic state but owns no tactical path,
   door timer, seat or animation progress. World-wide work belongs in aggregate passes.
+- Tactical prop surveys use live static colliders for loaded chunks. Replaying the
+  immutable prop recipe there would resurrect trees already cleared by roads, fields
+  or building plots. Unloaded ground retains conservative generated blockers and known
+  axe-work clearance; surviving permanent colliders remain solid.
+- A Tavern's land reservation includes its walkable courtyard. Its own road connector
+  certifies a straight apron between the actual tables and starts public-road turns
+  outside the patio; neighbouring plots still respect the whole reserved courtyard.
+  Cached actor routes include the same shared table obstacles as movement collision;
+  only the inn shell participates in doorway recovery.
+- `village_roads/start_recovery` repairs an embodied route origin caught inside newly
+  available live prop collision. It admits at most a 4 m correction within the route
+  budget, with a dry connector that monotonically exits every initial overlap and
+  crosses no other prop or building. The destination then uses ordinary route
+  certification; no collision bypass persists on the actor. Opt-in lab diagnostics
+  record the initial solid and subsequent actual movement.
 - Embodied routes must remain bounded, cached and shared where possible. Army commands
   already use bounded shared local fields; future regional routing must extend that
   boundary rather than multiplying per-soldier A*.
+- Live land permits enter `planning::plots::find_permit_site`, which always budgets
+  one outward band plus its open-land fallback. All ordinary kinds share the budget;
+  dense service/civic sites must not bypass it and synchronously scan a whole town.
+  A failed band resumes at the next review, and the fixed Marketplace square remains
+  its authoritative anchor. Startup layout surveys retain their separate full search.
+- `planning/search_access.rs` compares built-road geometry and local terrain chunk
+  revisions only at an admitted permit review. Meaningful access changes rewind that
+  settlement's ordinary land searches; metadata, unfinished suffixes and distant
+  terrain edits preserve progress. Road completion must wake an exhausted search even
+  when no new road entity was added.
+- `commerce/collection_failures.rs` keeps eight recent failed pickup sites per porter
+  in fixed server-only storage. Alternate sellers remain eligible; failed entrances
+  retry after 20–25 unwarped seconds or immediately after that entrance moves. This
+  prevents alternating destinations from bypassing navigation's single-goal backoff.
 - Watercraft use the separate `player::boat` stack. `Vessel` is the generic navigation
   opt-in; road/character routes must never move a vessel. Direct water lines are the fast
   path, obstructed searches are water-certified A*, and `VesselNavigationQueue` admits at

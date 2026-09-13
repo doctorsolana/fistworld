@@ -3,7 +3,7 @@ use crate::{
     combat_mode::CombatMode,
     selection::Selection,
     ui::foundation::{
-        UiButtonLabel, UiButtonStyle, UiButtonVariant, button_chrome, surface_block, type_scale,
+        button_chrome, surface_block, type_scale, UiButtonLabel, UiButtonStyle, UiButtonVariant,
     },
     ui::styles::{PARCHMENT, SIGN_WOOD},
 };

@@ -1,0 +1,23 @@
+// Real composed God HUD with no hero or creator fixture. Inspect the developer
+// actions and verify that character creation is absent from this surface.
+(
+    version: 1,
+    name: "medieval-god-hud",
+    map: "village_lab",
+    output_dir: "logs/captures/ui-medieval-god",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: window,
+    show_window: false,
+    warmup_frames: 180,
+    readiness: (minimum_frames: 90, maximum_frames: 1200,
+                minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_HUD": "god",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "01-god-hud", focus: (-15.0, 0.0, -15.0), yaw: 0.0,
+         zoom: 30.0, time_of_day: 0.43),
+    ],
+)

@@ -32,11 +32,9 @@ fn bakery_preserves_its_plot_and_interactive_nodes() {
         assert!(nodes.iter().any(|n| n["name"] == name), "missing {name}");
     }
     for i in 1..=6 {
-        assert!(
-            nodes
-                .iter()
-                .any(|n| n["name"] == format!("Stock_Bread_{i}") && n["mesh"].is_u64())
-        );
+        assert!(nodes
+            .iter()
+            .any(|n| n["name"] == format!("Stock_Bread_{i}") && n["mesh"].is_u64()));
     }
     assert_eq!(doc["meshes"].as_array().unwrap().len(), 9);
     for node in nodes.iter().filter(|n| n["mesh"].is_u64()) {

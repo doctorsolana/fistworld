@@ -391,15 +391,24 @@ mod tests {
 
     #[test]
     fn mounted_opponents_trade_blows_without_pushing_their_horses_inside_each_other() {
-        use shared::components::{Mounted, HorseGait, RidingPhase};
+        use shared::components::{HorseGait, Mounted, RidingPhase};
         let mut app = App::new();
         app.init_resource::<fronts::CombatSpace>();
-        app.add_systems(Update, (fronts::rebuild_combat_space, pursue_attack_orders).chain());
+        app.add_systems(
+            Update,
+            (fronts::rebuild_combat_space, pursue_attack_orders).chain(),
+        );
         let (a, b) = spawn_duel(&mut app);
         for (entity, id, owner) in [(a, 1, "alice"), (b, 2, "bob")] {
             app.world_mut().entity_mut(entity).insert((
-                Mounted { horse: id, gait: HorseGait::Gallop, phase: RidingPhase::Riding, since: 0. },
-                PlayerRotation(0.), CommandedBy(owner.into()),
+                Mounted {
+                    horse: id,
+                    gait: HorseGait::Gallop,
+                    phase: RidingPhase::Riding,
+                    since: 0.,
+                },
+                PlayerRotation(0.),
+                CommandedBy(owner.into()),
             ));
         }
         app.world_mut().get_mut::<PlayerPosition>(b).unwrap().0 = Vec3::X * 3.2;
@@ -411,7 +420,10 @@ mod tests {
             advance_world_seconds(&mut app, 0.25);
             app.update();
         }
-        assert!(app.world().get::<Health>(b).unwrap().current < shared::components::CHARACTER_MAX_HEALTH);
+        assert!(
+            app.world().get::<Health>(b).unwrap().current
+                < shared::components::CHARACTER_MAX_HEALTH
+        );
         assert_eq!(app.world().get::<PlayerPosition>(b).unwrap().0.x, 3.2);
     }
 

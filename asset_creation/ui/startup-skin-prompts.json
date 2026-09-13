@@ -1,0 +1,52 @@
+{
+  "created": "2026-09-12",
+  "method": "Built-in image_gen; transparent background extraction through the same built-in tool. Only delivery trim, size and PNG encoding use the maintained Pillow importer.",
+  "reason": "Match approved startup concept paper, input bevel, dark secondary button and compact wordmark without crest.",
+  "assets": [
+    {
+      "name": "panel-paper",
+      "runtime": "client/assets/ui/startup/panel-paper.png",
+      "source": "logs/startup-review/ornament-sources/panel-paper.png",
+      "draft": "logs/startup-review/ornament-sources/panel-paper-rgb-draft.png",
+      "generator_file": "exec-34e459e3-d95c-4a81-9613-b58891ee6c93.png",
+      "draft_generator_file": "exec-f57fd806-cb85-446b-898e-bb9d6e27cb07.png",
+      "prompt": "Use case: background-extraction / stylized-concept. Asset type: a text-free production game UI panel skin for FirstWorld. The reference is the approved preparing-world modal; reproduce the EMPTY parchment and its narrow dark recessed perimeter, excluding its brass rails, metal corners, compass, lettering and loading dots.\nCreate a square, front-on sheet of warm fibrous ivory/cream parchment with a calm softly textured center and visibly darker warm brown burnished/scalloped irregular edges. Small delicate wrinkles and wear become strongest in the outer 7 percent of the sheet. Keep a narrow dark walnut/leather recessed rim underneath the parchment, just at the outer perimeter, no gold hardware. It should feel like thick real antique parchment mounted inside the metal frame from the reference. The center remains light and calm enough for perfectly legible brown type. Match the reference's buttery warm cream and amber-brown edges; do not make the center cold white, grey, heavily stained or patterned.\nComposition: square canvas, object fills nearly all canvas with minimal transparent outer margin. This skin will be nine-sliced: edge detail stays within the outer 7 percent, corners continuous and slightly scalloped, center evenly lit. Viewed perfectly flat and face-on, no perspective.\nBackground: actual transparent alpha outside the uneven outer silhouette; center parchment is opaque. No painted checkerboard or solid outer rectangle. No words, no letters, no compass or icons, no ornaments, no screw hardware, no brass/gold rails. Do not recreate the background landscape or entire modal screenshot.",
+      "alpha_correction_prompt": "Make the background transparent. Remove the entire gray-and-white checkerboard background from this image. Preserve the foreground artwork exactly as it is. Output an actual transparent PNG cutout with a real alpha channel, not another picture of a checkerboard. No replacement background, no new objects, no changes to the artwork."
+    },
+    {
+      "name": "input-field",
+      "runtime": "client/assets/ui/startup/input-field.png",
+      "source": "logs/startup-review/ornament-sources/input-field.png",
+      "draft": "logs/startup-review/ornament-sources/input-field-rgb-draft.png",
+      "generator_file": "exec-440d4e05-eef0-46ec-ad3d-09d5686c0827.png",
+      "draft_generator_file": "exec-8df9749b-3487-4781-a704-a2b8d3ad8fcd.png",
+      "prompt": "Use case: background-extraction. Asset type: one empty production game UI text-input skin.\nReference: reproduce only the small long name-input rectangle around \"aldric\" from the approved FirstWorld join modal, but REMOVE ALL lettering and the caret completely.\nOne wide shallow ivory parchment inset with a fine but clearly layered aged-brass beveled border, clipped/diagonally beveled corners. Target asset width-to-height ratio 4.6:1. The narrow border has warm gold upper lip, darker recessed brown inner line and subdued tarnish; roughly 3 percent of width around ends, 10 percent of height top/bottom. Very subtle ivory fiber texture in a calm light center. Match the reference input field's beautiful inset brass rim, not a big ornate primary button. Interior should remain broad, clean, light and readable.\nFace-on flat UI sprite. The field fills the image width, with only enough transparent margin to avoid clipping. All outside is actual RGBA transparent alpha, not checkerboard, not black/white background. No text, no placeholder, no caret, no symbols, no labels, no scene, no surrounding parent panel. All pixels of the field interior are opaque. Fine authentic worn surface at edges, not photoreal-object perspective.",
+      "alpha_correction_prompt": "Create a transparent PNG sprite of this exact empty ivory input field with its clipped gold bevel border. Preserve the ivory interior and the worn brass frame. Put the wide horizontal field in the middle of a SQUARE canvas with lots of fully transparent empty space above and below. Remove the reference's gray patterned backdrop completely. The output must have actual alpha transparency around the field, including all corners. Only one blank medieval input field, no text or other objects."
+    },
+    {
+      "name": "dark-button",
+      "runtime": "client/assets/ui/startup/dark-button.png",
+      "source": "logs/startup-review/ornament-sources/dark-button.png",
+      "draft": "logs/startup-review/ornament-sources/dark-button-rgb-draft.png",
+      "generator_file": "exec-f8b60a7a-dfd2-4534-8d93-d65e63cc4f5a.png",
+      "draft_generator_file": "exec-016b0be1-287e-48f8-ae24-80d0a6542709.png",
+      "prompt": "Use case: precise-object-edit / background-extraction. Asset type: one blank secondary-button production game UI sprite.\nImage 1 is the existing text-free FirstWorld primary button; image 2 shows the approved launcher style. Recreate the EXACT wide clipped-octagonal silhouette and multi-step warm worn-brass beveled rim of image 1, but change ONLY the central golden plate material to dark brown walnut/leather like the EXIT button from image 2. Deep brown charcoal center, warm subtly varied old leather texture, restrained scratches and tiny mottled aging. Retain the beautiful narrow double antique gold and dark brown bevel all around. Text-free center must remain calmly dark, very readable under cream typography.\nAspect ratio about 3.84:1. Perfectly face-on, centered single isolated wide shallow button, no perspective or thick 3D block. Minimal outer transparent margin, full silhouette visible.\nOutput actual transparent alpha outside the button; no painted checkerboard, no black rectangle. Zero letters, zero labels, zero symbols or screws inside the center, no landscape, no other controls. Gold rim strongly legible but subdued dark fill. Runtime nine-slice ready, most edge detail within outer 6 percent horizontally.",
+      "alpha_correction_prompt": "Create a transparent PNG sprite of this exact empty dark leather button with its clipped double gold bevel border. Preserve the dark brown leather interior and the worn brass frame. Put the wide horizontal button in the middle of a SQUARE canvas with lots of fully transparent empty space above and below. Remove the reference's gray patterned backdrop completely. The output must have actual alpha transparency around the button, including all corners. Only one blank medieval dark button, no text or other objects."
+    },
+    {
+      "name": "wordmark-compact",
+      "runtime": "client/assets/ui/startup/wordmark-compact.png",
+      "source": "logs/startup-review/ornament-sources/wordmark-compact.png",
+      "draft": "logs/startup-review/ornament-sources/wordmark-compact-rgb-draft.png",
+      "generator_file": "exec-76fd2ce9-d019-4516-905f-b12b5c83c7ba.png",
+      "draft_generator_file": "exec-64061821-77d0-41b1-b359-240c827efd2c.png",
+      "prompt": "Use case: precise-object-edit / background-extraction. Asset type: compact transparent FirstWorld game wordmark.\nEdit the attached existing FirstWorld logo. Remove ONLY the compass crest and the long horizontal line ornament ABOVE the word \"FirstWorld\". Carefully remove the entire crest, including its downward point that currently reaches near the top of the W. Preserve ALL letters of \"FirstWorld\" EXACTLY, including the tops of the F and d, the same letter shapes, word spacing, gold texture, bevels, shadows and relative proportions. Preserve the lower thin horizontal divider with center hollow diamond EXACTLY. Do not redesign or retype the lettering.\nOutput just \"FirstWorld\" and its original LOWER diamond divider, tightly framed with modest genuine transparent padding. No crest, no top ornament, no remaining crest tip above W. Text verbatim FirstWorld, uppercase F and W, no space.\nBackground must be genuine transparent RGBA alpha, not a painted checkerboard, not a solid black or white rectangle. Keep alpha in and around letters. This is a production alternate sprite, not a mockup, no extra words or objects.",
+      "alpha_correction_prompt": "Make the background transparent. Remove the entire gray-and-white checkerboard background from this image. Preserve the foreground artwork exactly as it is. Output an actual transparent PNG cutout with a real alpha channel, not another picture of a checkerboard. No replacement background, no new objects, no changes to the artwork.",
+      "current_revision": {
+        "brand_text": "FistWorld",
+        "provenance": "asset_creation/ui/startup-branding-correction-prompts.json",
+        "note": "The original prompt/source above are preserved as historical generation provenance. The correction manifest identifies the current runtime source and exact edit prompt."
+      }
+    }
+  ]
+}

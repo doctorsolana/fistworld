@@ -25,7 +25,6 @@ pub use settings::{
 };
 pub use setup::setup_rendering;
 
-use bevy::audio::SpatialListener;
 use bevy::camera::{Exposure, Hdr};
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;

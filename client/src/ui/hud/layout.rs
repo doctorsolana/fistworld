@@ -180,7 +180,6 @@ fn god_plate() -> impl Bundle {
                 ],
             ),
             hairline(),
-            spawn_hero_button(),
             spawn_npc_button(),
             spawn_catapult_button(),
             spawn_immigrant_boat_button(),
@@ -228,32 +227,6 @@ fn warp_button(text: &str, factor: f32) -> impl Bundle {
             Text::new(text),
             UiButtonLabel,
             crate::ui::typography::text(13.0),
-            TextColor(INK),
-        )],
-    )
-}
-
-fn spawn_hero_button() -> impl Bundle {
-    (
-        SpawnHeroButton,
-        Button,
-        Node {
-            // Full width so the column reads as one stack rather than a
-            // right-aligned button floating in its own row of empty plate.
-            width: Val::Percent(100.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(2.0)),
-            ..default()
-        },
-        button_chrome(UiButtonVariant::Secondary),
-        children![(
-            SpawnHeroLabel,
-            UiButtonLabel,
-            Text::new("SPAWN HERO"),
-            crate::ui::typography::text(11.0),
             TextColor(INK),
         )],
     )

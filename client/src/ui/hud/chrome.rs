@@ -27,10 +27,11 @@ pub(crate) enum HudIcon {
     Heart,
     Chevron,
     Compass,
+    CompassRose,
 }
 
 impl HudIcon {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::Crest,
         Self::Purse,
         Self::Sun,
@@ -44,6 +45,7 @@ impl HudIcon {
         Self::Heart,
         Self::Chevron,
         Self::Compass,
+        Self::CompassRose,
     ];
 
     fn path(self) -> &'static str {
@@ -61,6 +63,7 @@ impl HudIcon {
             Self::Heart => "ui/hud/heart.png",
             Self::Chevron => "ui/hud/chevron.png",
             Self::Compass => "ui/hud/compass.png",
+            Self::CompassRose => "ui/hud/compass-rose.png",
         }
     }
 }
@@ -70,14 +73,16 @@ enum HudSurface {
     Panel,
     Pill,
     Medallion,
+    CompassDial,
 }
 
 #[derive(Resource)]
 pub(crate) struct HudArtwork {
-    icons: [Handle<Image>; 13],
+    icons: [Handle<Image>; 14],
     panel: Handle<Image>,
     pill: Handle<Image>,
     medallion: Handle<Image>,
+    compass_dial: Handle<Image>,
 }
 
 impl HudArtwork {
@@ -85,7 +90,7 @@ impl HudArtwork {
     /// clock phases even when only one is currently visible. No ordinary HUD
     /// system polls this; callers opt in to the asset-server dependency check.
     pub(crate) fn ready(&self, assets: &AssetServer) -> bool {
-        [&self.panel, &self.pill, &self.medallion]
+        [&self.panel, &self.pill, &self.medallion, &self.compass_dial]
             .into_iter()
             .chain(self.icons.iter())
             .all(|image| assets.is_loaded_with_dependencies(image.id()))
@@ -111,6 +116,7 @@ fn load_artwork(mut commands: Commands, assets: Res<AssetServer>) {
         panel: assets.load("ui/hud/panel.png"),
         pill: assets.load("ui/hud/pill.png"),
         medallion: assets.load("ui/hud/medallion.png"),
+        compass_dial: assets.load("ui/hud/compass-dial.png"),
     });
 }
 
@@ -144,8 +150,17 @@ pub(crate) fn pill_panel() -> impl Bundle {
 
 /// Circular binding used behind the crest, portrait and map controls.
 pub(crate) fn medallion() -> impl Bundle {
+    round_surface(HudSurface::Medallion)
+}
+
+/// Recessed compass face; the bearings turn independently above this case.
+pub(crate) fn compass_dial() -> impl Bundle {
+    round_surface(HudSurface::CompassDial)
+}
+
+fn round_surface(surface: HudSurface) -> impl Bundle {
     (
-        HudSurface::Medallion,
+        surface,
         ImageNode {
             image_mode: NodeImageMode::Stretch,
             visual_box: VisualBox::BorderBox,
@@ -184,6 +199,7 @@ fn bind_surfaces(
             HudSurface::Panel => &art.panel,
             HudSurface::Pill => &art.pill,
             HudSurface::Medallion => &art.medallion,
+            HudSurface::CompassDial => &art.compass_dial,
         }
         .clone();
     }

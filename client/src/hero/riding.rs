@@ -186,7 +186,7 @@ mod tests {
     use super::*;
     #[test]
     fn horse_and_rider_share_intermediate_render_samples_without_new_packets() {
-        use crate::animation_clock::{AnimationClock, update};
+        use crate::animation_clock::{update, AnimationClock};
         let mut app = App::new();
         app.init_resource::<Time<Real>>()
             .init_resource::<AnimationClock>()
@@ -288,11 +288,9 @@ mod playback_tests {
         let active = player.animation(upper).unwrap();
         assert!((active.seek_time() - COMBAT_WINDUP_SECONDS).abs() < 0.0001);
         assert_eq!(active.weight(), 1.);
-        assert!(
-            clips
-                .drive(&mut player, 0.2, 10.5, None, false, None, None)
-                .is_none()
-        );
+        assert!(clips
+            .drive(&mut player, 0.2, 10.5, None, false, None, None)
+            .is_none());
         assert!(!player.is_playing_animation(upper));
     }
 }

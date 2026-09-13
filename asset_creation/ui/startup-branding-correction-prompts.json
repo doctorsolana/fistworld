@@ -1,0 +1,60 @@
+{
+  "created": "2026-09-12",
+  "method": "Built-in image_gen edits. Runtime sizing/indexed PNG encoding via the maintained import_startup_ornaments.py; no API generation or manual glyph editing.",
+  "reason": "The user corrected the final game branding to FistWorld. Historical FirstWorld concept and generation prompts remain verbatim in their original manifests.",
+  "brand_text": "FistWorld",
+  "historical_manifests": [
+    "asset_creation/ui/startup-ornament-prompts.json",
+    "asset_creation/ui/startup-skin-prompts.json"
+  ],
+  "assets": [
+    {
+      "name": "wordmark",
+      "runtime": "client/assets/ui/startup/wordmark.png",
+      "dimensions": [
+        900,
+        375
+      ],
+      "compressed_bytes": 79822,
+      "base_rgba_bytes": 1350000,
+      "source": "logs/startup-review/ornament-sources/wordmark-fistworld.png",
+      "generator_file": "exec-6f31a78a-42f5-471c-8e14-2507d8be94aa.png",
+      "edit_target_backup": "logs/startup-review/ornament-sources/wordmark-before-branding.png",
+      "draft": "logs/startup-review/ornament-sources/wordmark-fistworld-rgb-draft.png",
+      "draft_generator_file": "exec-3d982bee-f043-4d64-be4c-ef22a49a2696.png",
+      "prompt": "Use case: text-localization / precise-object-edit.\nAsset type: production transparent medieval game logo, full crest version.\nEdit target: the attached existing gold wordmark. Change ONLY its brand spelling to the exact text \"FistWorld\". This is F i s t W o r l d, nine letters, capital F and W, no spaces. Remove the FIRST lowercase r, the r between i and s, and naturally close that gap. Keep the r in World. It must read FistWorld, NOT FirstWorld.\nPreserve the existing aged-gold serif letterforms, tall ornamental F and W, warm metallic bevel, subtle hammered scratches, brown recessed shading, and full-width balanced proportions. Preserve the entire upper compass crest with its two horizontal ornaments and preserve the lower thin divider with a central hollow diamond. Keep those ornaments centered over the corrected word. Same composition and aspect ratio as the edit target; nothing clipped. Do not add other words.\nBackground: actual RGBA TRANSPARENT alpha everywhere outside and between the lettering and ornaments. Preserve the input transparency. No painted checkerboard, no solid black or white background, no backdrop or panel. This is an isolated runtime logo, not a mockup.",
+      "alpha_correction_prompt": "Create a transparent PNG cutout of this exact gold FistWorld wordmark with its compass crest above and diamond divider below. Preserve all letters and ornaments. Put the entire wide logo in the middle of a SQUARE canvas with large fully transparent empty space above and below. Remove the gray checkerboard backdrop completely. The output must have actual alpha transparency outside and between all letter shapes, including their holes. Only the gold FistWorld logo, no text changes, no new objects, no painted background.",
+      "rejected_alpha_retry": {
+        "source": "logs/startup-review/ornament-sources/wordmark-fistworld-rgb-alpha-retry.png",
+        "generator_file": "exec-462717af-987d-4061-9473-9040d237827b.png",
+        "prompt": "Make the background transparent. Remove the entire gray-and-white checkerboard background from this image. Preserve the foreground artwork exactly as it is, including the correct FistWorld lettering, upper compass ornament and lower divider. Output an actual transparent PNG cutout with a real alpha channel, not another picture of a checkerboard. No replacement background, no new objects, no changes to the artwork. Keep the full original framing.",
+        "reason": "Generator returned an RGB painted checkerboard, so this output was rejected."
+      },
+      "delivery": "The approved square RGBA source is alpha-trimmed with the importer's existing alpha > 16 rule before normal 900x375 resizing and 256-color indexed PNG encoding. For reproduction, import the maintained module, add 'wordmark' to TRIM_DELIVERY_MARGINS, then call main() with --wordmark <source>. No glyph retouching or background removal is performed outside image_gen.",
+      "review": "logs/startup-review/ornament-review/wordmark-fistworld-on-wood.png"
+    },
+    {
+      "name": "wordmark-compact",
+      "runtime": "client/assets/ui/startup/wordmark-compact.png",
+      "dimensions": [
+        600,
+        170
+      ],
+      "compressed_bytes": 34764,
+      "base_rgba_bytes": 408000,
+      "source": "logs/startup-review/ornament-sources/wordmark-compact-fistworld.png",
+      "generator_file": "exec-bd309468-04b8-49b6-8d1b-8f3d21b0db69.png",
+      "edit_target_backup": "logs/startup-review/ornament-sources/wordmark-compact-before-branding.png",
+      "prompt": "Use case: text-localization / precise-object-edit.\nAsset type: production transparent medieval game logo, compact version without top crest.\nEdit target: attached existing compact gold wordmark. Change ONLY its brand spelling to exact text \"FistWorld\". Spell it F i s t W o r l d, nine letters, capital F and W, no spaces. Remove the FIRST lowercase r between i and s and naturally close the gap. Retain the r in World. Final text must read FistWorld, NOT FirstWorld.\nPreserve existing ornate gold serif letter shapes, tall F and W, warm hammered/brass surface, fine metallic bevel, age and brown edge shadows. Keep the original thin gold lower divider with central hollow diamond centered below corrected text. This compact variant has NO compass crest and NO top ornament: do not add them. Keep same wide compact composition with tight safe transparent margins and all letters fully visible.\nBackground: actual RGBA TRANSPARENT alpha everywhere outside and between letters and lower divider, exactly as input. No painted checkerboard, no white/black/gray background, no scene or panel. Only this corrected wordmark and the existing lower divider.",
+      "delivery": "Existing importer --wordmark-compact option: alpha > 16 trim, 600x170 resize, 256-color indexed PNG encoding. No glyph retouching.",
+      "review": "logs/startup-review/ornament-review/wordmark-compact-fistworld-on-wood.png"
+    }
+  ],
+  "validation": {
+    "actual_alpha": "Both approved sources are RGBA with alpha extrema [0,255]. Delivered indexed PNGs preserve transparent palette entries and are personally inspected at runtime size.",
+    "spelling": "Both delivered variants personally inspected and read FistWorld, with only one r, in World.",
+    "runtime_compressed_total_bytes": 1276615,
+    "runtime_base_rgba_total_bytes": 10936528,
+    "budget_scope": "Eight startup assets plus three reused creator assets. Base decoded RGBA excludes mipmaps, fonts, render targets and driver allocations."
+  }
+}

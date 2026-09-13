@@ -20,7 +20,6 @@ pub fn setup_resources(app: &mut App) {
     app.init_resource::<perf_overlay::PerfDropMonitor>();
     app.init_resource::<perf_overlay::ClientPerfConfig>();
     app.init_resource::<perf_overlay::ClientPerfSnapshot>();
-    app.init_resource::<audio::RemoteAudioEmitterIndex>();
 
     // Graphics settings (toggleable from pause menu)
     let settings_store = game_systems::GraphicsSettingsStore::default();

@@ -4,7 +4,7 @@ use shared::building::{BuildingPosition, PlacedBuilding};
 use shared::components::VillageRoad;
 use shared::props::PropSpawn;
 use shared::terrain::{WorldTerrain, CHUNK_SIZE};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
 use crate::streaming::{
@@ -17,22 +17,22 @@ use super::foliage::needs_foliage_materials;
 use super::{
     try_spawn_simple_prop_mesh, BuildZoneChunkIndex, EnvironmentProp, LoadedPropChunks,
     NeedsFoliageMaterials, PendingPropSpawns, PendingPropVisibility, PropAssets, PropChunkIndex,
-    PropKindTag, SimplePropMeshCache, TreeActiveLod, TreeLodMeshHandles, TreeLodRoot,
-    TreeLodRuntimeState,
+    PropFootprintSources, PropKindTag, SimplePropMeshCache, TreeActiveLod, TreeLodMeshHandles,
+    TreeLodRoot, TreeLodRuntimeState,
 };
 
 /// Maximum prop instances realized per frame across all pending chunks.
 const MAX_PROP_INSTANCE_SPAWNS_PER_FRAME: usize = 48;
 
-/// Accepted crop edits replace only their old/new chunks, including releasing
-/// any inferred legacy rectangle. Re-entry uses the ordinary spawn budget.
+/// Accepted crop edits clear only covered roots and refill released ground.
 pub(super) fn invalidate_props_for_farm_fields(
     mut commands: Commands,
     mut changes: FarmFieldClaimChanges,
     mut zones: ResMut<BuildZoneChunkIndex>,
-    mut loaded: ResMut<LoadedPropChunks>,
+    loaded: Res<LoadedPropChunks>,
     mut pending: ResMut<PendingPropSpawns>,
     mut props: ResMut<PropChunkIndex>,
+    transforms: Query<&GlobalTransform>,
 ) {
     let previous = zones.fields.version();
     let touched = changes.sync(&mut zones.bypass_change_detection().fields);
@@ -41,157 +41,170 @@ pub(super) fn invalidate_props_for_farm_fields(
     }
     zones.dirty = true;
     for coord in touched {
-        if let Some(entities) = props.by_chunk.remove(&coord) {
-            for entity in entities {
-                commands.entity(entity).try_despawn();
-            }
+        if let Some(entities) = props.by_chunk.get_mut(&coord) {
+            entities.retain(|entity| {
+                let covered = transforms.get(*entity).is_ok_and(|transform| {
+                    zones.fields.contains_point(transform.translation().xz())
+                });
+                if covered {
+                    commands.entity(*entity).try_despawn();
+                }
+                !covered
+            });
         }
-        pending.discard_chunk(coord);
-        loaded.chunks.remove(&coord);
+        if loaded.chunks.contains(&coord) {
+            pending.request_refill(coord);
+        }
     }
 }
 
-/// When a new building is placed, invalidate prop chunks that overlap with its build zone.
+/// Reconcile actual footprint changes, never component change ticks alone.
+/// Interest removals and upgrades release only their previous plots; surviving
+/// scenery remains visible while the normal streamer fills newly free ground.
 pub(super) fn invalidate_props_for_new_buildings(
     mut commands: Commands,
-    new_buildings: Query<(Entity, &PlacedBuilding, &BuildingPosition), Added<PlacedBuilding>>,
-    changed_buildings: Query<Entity, Or<(Changed<PlacedBuilding>, Changed<BuildingPosition>)>>,
+    changed_buildings: Query<
+        (Entity, &PlacedBuilding, &BuildingPosition),
+        Or<(Changed<PlacedBuilding>, Changed<BuildingPosition>)>,
+    >,
     mut removed_buildings: RemovedComponents<PlacedBuilding>,
-    mut loaded_prop_chunks: ResMut<LoadedPropChunks>,
+    mut removed_positions: RemovedComponents<BuildingPosition>,
+    loaded_prop_chunks: Res<LoadedPropChunks>,
     mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
     mut build_zone_index: ResMut<BuildZoneChunkIndex>,
     prop_transforms: Query<&GlobalTransform>,
-    new_squares: Query<
+    changed_squares: Query<
         (Entity, &shared::components::SettlementCivicSquare),
         Changed<shared::components::SettlementCivicSquare>,
     >,
     mut removed_squares: RemovedComponents<shared::components::SettlementCivicSquare>,
-    mut square_zones: Local<HashMap<Entity, shared::building::BuildZoneEntry>>,
+    mut sources: ResMut<PropFootprintSources>,
+    all_sources: (
+        Query<(Entity, &PlacedBuilding, &BuildingPosition)>,
+        Query<(Entity, &shared::components::SettlementCivicSquare)>,
+    ),
 ) {
-    // Additions only clear their own footprint. A changed/removed reservation
-    // also releases its previous ground: let the ordinary budgeted streamer
-    // regenerate those chunks, without disturbing the rest of the scenery.
+    let (all_buildings, all_squares) = all_sources;
+    let PropFootprintSources {
+        buildings: previous_buildings,
+        squares: previous_squares,
+        field_revision,
+        initialized,
+    } = &mut *sources;
+    // A world reset may retain entities whose components did not change. Seed
+    // the new cache once from live sources, then resume incremental updates.
+    let initial = !*initialized;
+    *initialized = true;
+    // Adding/removing the first/last accepted field changes a farm's inferred
+    // reservation even when the building itself has not been re-replicated.
+    let fields_changed = *field_revision != build_zone_index.fields.version();
+    *field_revision = build_zone_index.fields.version();
     let mut released_zones = Vec::new();
+    let mut added_zones = Vec::new();
+    for entity in removed_buildings.read().chain(removed_positions.read()) {
+        if let Some(previous) = previous_buildings.remove(&entity) {
+            released_zones.extend(previous);
+        }
+    }
+    let changed = changed_buildings.iter().chain(
+        all_buildings
+            .iter()
+            .take(if initial || fields_changed {
+                usize::MAX
+            } else {
+                0
+            })
+            .filter(|(_, building, _)| {
+                initial || building.building_type == shared::building::BuildingType::Farmstead
+            }),
+    );
+    for (entity, building, position) in changed {
+        let next = build_zone_index.fields.building_zones(
+            position.0,
+            building.building_type,
+            building.rotation,
+        );
+        if previous_buildings.get(&entity) == Some(&next) {
+            continue;
+        }
+        if let Some(previous) = previous_buildings.insert(entity, next.clone()) {
+            released_zones.extend(previous);
+        }
+        added_zones.extend(next);
+    }
     for entity in removed_squares.read() {
-        if let Some(previous) = square_zones.remove(&entity) {
+        if let Some(previous) = previous_squares.remove(&entity) {
             released_zones.push(previous);
         }
     }
-    for (entity, square) in &new_squares {
-        let zone = shared::building::BuildZoneEntry::from_rotated_rect(
+    for (entity, square) in
+        changed_squares.iter().chain(
+            all_squares
+                .iter()
+                .take(if initial { usize::MAX } else { 0 }),
+        )
+    {
+        let next = shared::building::BuildZoneEntry::from_rotated_rect(
             square.center.xz(),
             square.half_extents,
             square.rotation,
         );
-        if let Some(previous) = square_zones.insert(entity, zone) {
-            if previous != zone {
-                released_zones.push(previous);
-            }
+        if previous_squares.get(&entity) == Some(&next) {
+            continue;
         }
+        if let Some(previous) = previous_squares.insert(entity, next) {
+            released_zones.push(previous);
+        }
+        added_zones.push(next);
     }
-    let added_entities = new_buildings
-        .iter()
-        .map(|(entity, _, _)| entity)
-        .collect::<HashSet<_>>();
-    let zones = new_buildings
-        .iter()
-        .flat_map(|(_, building, position)| {
-            build_zone_index.fields.building_zones(
-                position.0,
-                building.building_type,
-                building.rotation,
-            )
-        })
-        .chain(new_squares.iter().map(|(_, square)| {
-            shared::building::BuildZoneEntry::from_rotated_rect(
-                square.center.xz(),
-                square.half_extents,
-                square.rotation,
-            )
-        }));
+    if added_zones.is_empty() && released_zones.is_empty() {
+        return;
+    }
+    build_zone_index.dirty = true;
 
-    // Remove ONLY the props standing on the new plot.
-    //
-    // This used to unload every affected chunk and respawn it wholesale.
-    // A chunk is 64 m and a building's zone can touch four of them, so
-    // putting up one hut made several hundred trees vanish and trickle back
-    // at the spawn budget -- the "everything reloads" flicker. The building
-    // covers a few metres; only those few metres need to change.
-    for zone in zones {
-        let (min_chunk_x, max_chunk_x, min_chunk_z, max_chunk_z) = zone.chunk_bounds();
-        for cx in min_chunk_x..=max_chunk_x {
-            for cz in min_chunk_z..=max_chunk_z {
-                let coord = shared::terrain::ChunkCoord::new(cx, cz);
+    // Only the new plot may remove an existing tree/bush. Adjacent roots and
+    // their loaded meshes retain their identity throughout construction.
+    for zone in added_zones {
+        let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                let coord = shared::terrain::ChunkCoord::new(x, z);
                 if let Some(entities) = prop_chunk_index.by_chunk.get_mut(&coord) {
                     entities.retain(|prop| {
                         let Ok(transform) = prop_transforms.get(*prop) else {
                             return true;
                         };
-                        let at = transform.translation();
-                        if zone.contains_point(Vec2::new(at.x, at.z)) {
-                            commands.entity(*prop).despawn();
+                        if zone.contains_point(transform.translation().xz()) {
+                            commands.entity(*prop).try_despawn();
                             false
                         } else {
                             true
                         }
                     });
                 }
-                // Anything still queued for this chunk has not been spawned
-                // yet; drop the ones that would land inside the building rather
-                // than letting them appear indoors a few frames later.
-                for (queued_coord, spawns) in pending_spawns.queue.iter_mut() {
-                    if *queued_coord != coord {
-                        continue;
+                for (queued_coord, spawns) in &mut pending_spawns.queue {
+                    if *queued_coord == coord {
+                        spawns.retain(|spawn| !zone.contains_point(spawn.position.xz()));
                     }
-                    spawns.retain(|spawn| {
-                        !zone.contains_point(Vec2::new(spawn.position.x, spawn.position.z))
-                    });
                 }
             }
         }
     }
-    let mut changed_existing = false;
-    for entity in changed_buildings.iter() {
-        if !added_entities.contains(&entity) {
-            changed_existing = true;
-            break;
+    let mut released_chunks = HashSet::new();
+    for zone in released_zones {
+        let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                released_chunks.insert(shared::terrain::ChunkCoord::new(x, z));
+            }
         }
     }
-    let removed_any = removed_buildings.read().next().is_some();
-
-    if !added_entities.is_empty() || changed_existing || removed_any {
-        build_zone_index.dirty = true;
-    }
-
-    // For moved/rotated/removed buildings, rebuild props in loaded chunks from scratch.
-    if changed_existing || removed_any {
-        for entities in prop_chunk_index.by_chunk.values() {
-            for entity in entities {
-                commands.entity(*entity).despawn();
-            }
-        }
-        loaded_prop_chunks.chunks.clear();
-        pending_spawns.queue.clear();
-        prop_chunk_index.by_chunk.clear();
-    } else {
-        let mut released_chunks = HashSet::new();
-        for zone in released_zones {
-            let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
-            for x in min_x..=max_x {
-                for z in min_z..=max_z {
-                    released_chunks.insert(shared::terrain::ChunkCoord::new(x, z));
-                }
-            }
-        }
-        for coord in released_chunks {
-            if let Some(entities) = prop_chunk_index.by_chunk.remove(&coord) {
-                for entity in entities {
-                    commands.entity(entity).despawn();
-                }
-            }
-            pending_spawns.discard_chunk(coord);
-            loaded_prop_chunks.chunks.remove(&coord);
+    for coord in released_chunks {
+        // Re-evaluate candidates but keep all surviving roots. Stage 1 filters
+        // already-present positions, so a refill neither blinks nor duplicates.
+        if loaded_prop_chunks.chunks.contains(&coord) {
+            pending_spawns.request_refill(coord);
         }
     }
 }
@@ -200,23 +213,9 @@ pub(super) fn invalidate_props_for_new_buildings(
 pub(super) fn sync_build_zone_chunk_index(
     mut build_zone_index: ResMut<BuildZoneChunkIndex>,
     buildings_query: Query<(&PlacedBuilding, &BuildingPosition)>,
-    changed_buildings: Query<
-        (),
-        Or<(
-            Added<PlacedBuilding>,
-            Changed<PlacedBuilding>,
-            Changed<BuildingPosition>,
-        )>,
-    >,
-    squares: Query<Ref<shared::components::SettlementCivicSquare>>,
-    mut removed_squares: RemovedComponents<shared::components::SettlementCivicSquare>,
+    squares: Query<&shared::components::SettlementCivicSquare>,
 ) {
-    let removed_square = removed_squares.read().count() > 0;
-    let changed_any = !changed_buildings.is_empty()
-        || squares.iter().any(|square| square.is_changed())
-        || removed_square;
-    let needs_initial_build = build_zone_index.by_chunk.is_empty() && !buildings_query.is_empty();
-    if !build_zone_index.dirty && !changed_any && !needs_initial_build {
+    if !build_zone_index.dirty {
         return;
     }
 
@@ -268,14 +267,18 @@ pub(super) fn spawn_chunk_props(
     mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
     build_zone_index: Res<BuildZoneChunkIndex>,
-    roads: Query<&VillageRoad>,
-    world_root_query: Query<Entity, With<ClientWorldRoot>>,
+    scenery: (
+        Query<&GlobalTransform>,
+        Query<&VillageRoad>,
+        Query<Entity, With<ClientWorldRoot>>,
+    ),
     settings: Res<GraphicsSettings>,
     mut perf: ResMut<PerfHitchStats>,
 ) {
     let start = std::time::Instant::now();
     let (player_query, camera_query) = anchor;
     let (gltfs, gltf_nodes, gltf_meshes) = gltf_assets;
+    let (existing_transforms, roads, world_root_query) = scenery;
     let Some(assets) = prop_assets else { return };
     let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
         return;
@@ -294,6 +297,7 @@ pub(super) fn spawn_chunk_props(
         // as well so zooming to map view cannot continue realizing scenery for
         // a frame while that cleanup is deferred.
         pending_spawns.queue.clear();
+        pending_spawns.refill.clear();
         return;
     }
 
@@ -311,7 +315,9 @@ pub(super) fn spawn_chunk_props(
             })
         })
         .filter(|coord| {
-            loaded_chunks.chunks.contains(coord) && !loaded_prop_chunks.chunks.contains(coord)
+            loaded_chunks.chunks.contains(coord)
+                && (!loaded_prop_chunks.chunks.contains(coord)
+                    || pending_spawns.refill.contains(coord))
         })
         .min_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
 
@@ -358,9 +364,18 @@ pub(super) fn spawn_chunk_props(
                     )
                 })
         });
+        if let Some(existing) = prop_chunk_index.by_chunk.get(&coord) {
+            let occupied = existing
+                .iter()
+                .filter_map(|entity| existing_transforms.get(*entity).ok())
+                .map(|transform| prop_position_key(transform.translation()))
+                .collect::<HashSet<_>>();
+            spawns.retain(|spawn| !occupied.contains(&prop_position_key(spawn.position)));
+        }
         // Mark loaded immediately so the chunk is not re-enqueued while its
         // instances trickle in from the queue.
         loaded_prop_chunks.chunks.insert(coord);
+        pending_spawns.refill.remove(&coord);
         perf.props_chunks_spawned += 1;
         if !spawns.is_empty() {
             pending_spawns.queue.push_back((coord, spawns));
@@ -410,6 +425,12 @@ pub(super) fn spawn_chunk_props(
         perf.props_instances_spawned += spawned_instances;
     }
     perf.props_spawn_ms += start.elapsed().as_secs_f32() * 1000.0;
+}
+
+// Height may change with earthworks; generated horizontal positions remain
+// stable. Compare the original coordinates without snapping distinct plants.
+fn prop_position_key(position: Vec3) -> (u32, u32) {
+    (position.x.to_bits(), position.z.to_bits())
 }
 
 /// Remove vegetation covered by newly completed road sections.
@@ -607,6 +628,7 @@ pub(super) fn sync_props_enabled_state(
     }
     loaded_prop_chunks.chunks.clear();
     pending_spawns.queue.clear();
+    pending_spawns.refill.clear();
     prop_chunk_index.by_chunk.clear();
 }
 
@@ -703,6 +725,7 @@ mod tests {
             .init_resource::<PendingPropSpawns>()
             .init_resource::<PropChunkIndex>()
             .init_resource::<BuildZoneChunkIndex>()
+            .init_resource::<PropFootprintSources>()
             .add_systems(
                 Update,
                 (
@@ -713,6 +736,107 @@ mod tests {
                     .chain(),
             );
         app
+    }
+
+    #[test]
+    fn world_reset_discards_expired_source_history_and_reseeds_unchanged_entities() {
+        #[derive(Resource)]
+        struct Playing(bool);
+
+        let mut app = App::new();
+        app.insert_resource(Playing(true))
+            .init_resource::<LoadedPropChunks>()
+            .init_resource::<PendingPropSpawns>()
+            .init_resource::<PropChunkIndex>()
+            .init_resource::<BuildZoneChunkIndex>()
+            .init_resource::<PropFootprintSources>()
+            .init_resource::<super::super::ground_cover_chunked::ChunkedGroundCoverState>()
+            .init_resource::<Assets<super::super::ground_cover_instancing::InstancedGrassMaterial>>(
+            )
+            .add_systems(
+                Update,
+                (
+                    invalidate_props_for_farm_fields,
+                    invalidate_props_for_new_buildings,
+                    sync_build_zone_chunk_index,
+                )
+                    .chain()
+                    .run_if(|playing: Res<Playing>| playing.0),
+            );
+        let building = || PlacedBuilding {
+            building_type: shared::building::BuildingType::LogCabin,
+            rotation: 0.0,
+        };
+        let old = app
+            .world_mut()
+            .spawn((building(), BuildingPosition(Vec3::new(32., 0., 32.))))
+            .id();
+        let retained = app
+            .world_mut()
+            .spawn((building(), BuildingPosition(Vec3::new(160., 0., 32.))))
+            .id();
+        let old_square = app.world_mut().spawn(square_at(96.)).id();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<PropFootprintSources>()
+                .buildings
+                .len(),
+            2
+        );
+
+        // Match a disconnect followed by time in the menu: readers do not run
+        // while removal messages expire, but their previous source data remains.
+        app.world_mut().resource_mut::<Playing>().0 = false;
+        app.world_mut().despawn(old);
+        app.world_mut().despawn(old_square);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(app
+            .world()
+            .resource::<PropFootprintSources>()
+            .buildings
+            .contains_key(&old));
+        super::super::reset_world_streaming(app.world_mut());
+        let cache = app.world().resource::<PropFootprintSources>();
+        assert!(cache.buildings.is_empty() && cache.squares.is_empty());
+        assert_eq!(cache.field_revision, 0);
+        assert!(!cache.initialized);
+
+        let new = app
+            .world_mut()
+            .spawn((building(), BuildingPosition(Vec3::new(288., 0., 32.))))
+            .id();
+        let new_square = app.world_mut().spawn(square_at(352.)).id();
+        app.world_mut().resource_mut::<Playing>().0 = true;
+        app.update();
+        let cache = app.world().resource::<PropFootprintSources>();
+        assert_eq!(
+            cache.buildings.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([retained, new])
+        );
+        assert_eq!(
+            cache.squares.keys().copied().collect::<HashSet<_>>(),
+            HashSet::from([new_square])
+        );
+
+        // The unmodified retained entity was reseeded, so a later removal also
+        // releases its old footprint correctly rather than leaving stale land.
+        app.world_mut().despawn(retained);
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<BuildZoneChunkIndex>()
+            .by_chunk
+            .contains_key(&ChunkCoord::new(2, 0)));
+        assert_eq!(
+            app.world()
+                .resource::<PropFootprintSources>()
+                .buildings
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -789,6 +913,58 @@ mod tests {
         assert!(app.world().get_entity(remote).is_ok());
     }
 
+    #[test]
+    fn removing_last_accepted_field_restores_only_the_legacy_farm_reservation() {
+        use shared::building::{clearance_zones_for_building, BuildingType};
+        use shared::components::{FarmField, FarmFieldShape, PlayerPosition, PlayerRotation};
+        let mut app = square_app();
+        let at = Vec3::new(32.0, 0.0, 32.0);
+        app.world_mut().spawn((
+            PlacedBuilding {
+                building_type: BuildingType::Farmstead,
+                rotation: 0.0,
+            },
+            BuildingPosition(at),
+        ));
+        // An explicit empty field is still a worker-authored reservation record:
+        // it suppresses the historical rectangular field fallback.
+        let field = app
+            .world_mut()
+            .spawn((
+                FarmField {
+                    settlement: "Test".into(),
+                    farmstead: at,
+                    plot_index: 0,
+                    quality: 1.0,
+                    layout_version: 1,
+                    shape: Some(FarmFieldShape::default()),
+                },
+                PlayerPosition(at),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        app.update();
+        let zones = clearance_zones_for_building(at, BuildingType::Farmstead, 0.0);
+        let point = (-90..90)
+            .flat_map(|x| (-90..90).map(move |z| at + Vec3::new(x as f32, 0.0, z as f32)))
+            .find(|p| {
+                zones.iter().skip(1).any(|zone| zone.contains_point(p.xz()))
+                    && !zones[0].contains_point(p.xz())
+            })
+            .expect("farm has legacy crop land outside its building");
+        let crop_land = resident_prop(&mut app, point);
+        let remote = resident_prop(&mut app, Vec3::new(720.0, 0.0, 720.0));
+        app.update();
+        assert!(app.world().get_entity(crop_land).is_ok());
+        app.world_mut().despawn(field);
+        app.update();
+        assert!(
+            app.world().get_entity(crop_land).is_err(),
+            "legacy crop reservation becomes active again"
+        );
+        assert!(app.world().get_entity(remote).is_ok());
+    }
+
     fn square_at(x: f32) -> SettlementCivicSquare {
         SettlementCivicSquare {
             center: Vec3::new(x, 0.0, 32.0),
@@ -797,6 +973,70 @@ mod tests {
             market_position: Vec3::new(x, 0.0, 34.0),
             market_rotation: 0.0,
         }
+    }
+
+    #[test]
+    fn building_replication_and_local_changes_preserve_unaffected_scenery() {
+        use shared::building::BuildingType;
+        let mut app = square_app();
+        let old = Vec3::new(32.0, 0.0, 32.0);
+        let neighbor = resident_prop(&mut app, Vec3::new(2.0, 0.0, 32.0));
+        let remote = resident_prop(&mut app, Vec3::new(720.0, 0.0, 720.0));
+        let covered = resident_prop(&mut app, old);
+        let building = app
+            .world_mut()
+            .spawn((
+                PlacedBuilding {
+                    building_type: BuildingType::LogCabin,
+                    rotation: 0.0,
+                },
+                BuildingPosition(old),
+            ))
+            .id();
+        app.update();
+        assert!(app.world().get_entity(covered).is_err());
+        assert!(app.world().get_entity(neighbor).is_ok());
+
+        // Re-replication and foundation-height changes do not alter an XZ
+        // reservation and must not reset the scenery or its queued instances.
+        let original_queue = app.world().resource::<PendingPropSpawns>().queue.len();
+        app.world_mut().entity_mut(building).insert((
+            PlacedBuilding {
+                building_type: BuildingType::LogCabin,
+                rotation: 0.0,
+            },
+            BuildingPosition(old + Vec3::Y),
+        ));
+        app.update();
+        assert!(app.world().get_entity(neighbor).is_ok());
+        assert!(app.world().get_entity(remote).is_ok());
+        assert_eq!(
+            app.world().resource::<PendingPropSpawns>().queue.len(),
+            original_queue
+        );
+        assert!(app
+            .world()
+            .resource::<LoadedPropChunks>()
+            .chunks
+            .contains(&ChunkCoord::new(0, 0)));
+
+        let newly_covered = resident_prop(&mut app, old + Vec3::X * 64.0);
+        app.world_mut()
+            .entity_mut(building)
+            .insert(BuildingPosition(old + Vec3::X * 64.0));
+        app.update();
+        assert!(app.world().get_entity(newly_covered).is_err());
+        assert!(app.world().get_entity(neighbor).is_ok());
+        assert!(app.world().get_entity(remote).is_ok());
+        app.world_mut().despawn(building);
+        app.update();
+        assert!(app.world().get_entity(neighbor).is_ok());
+        assert!(app.world().get_entity(remote).is_ok());
+        assert!(app
+            .world()
+            .resource::<LoadedPropChunks>()
+            .chunks
+            .contains(&ChunkCoord::new(11, 11)));
     }
 
     fn resident_prop(app: &mut App, point: Vec3) -> Entity {
@@ -856,11 +1096,11 @@ mod tests {
 
         let loaded = &app.world().resource::<LoadedPropChunks>().chunks;
         assert!(
-            !loaded.contains(&old_chunk),
-            "released ground must be eligible for regeneration"
+            loaded.contains(&old_chunk),
+            "released ground retains resident scenery while refilling"
         );
         assert!(loaded.contains(&remote_chunk));
-        assert!(app.world().get_entity(old_neighbor).is_err());
+        assert!(app.world().get_entity(old_neighbor).is_ok());
         assert!(app.world().get_entity(remote).is_ok());
         assert!(!app
             .world()
@@ -897,12 +1137,12 @@ mod tests {
         app.world_mut().entity_mut(square).insert(square_at(96.0));
         app.update();
         let loaded = &app.world().resource::<LoadedPropChunks>().chunks;
-        assert!(!loaded.contains(&old_chunk));
+        assert!(loaded.contains(&old_chunk));
         assert!(
             loaded.contains(&new_chunk),
             "new footprint uses narrow culling, not chunk reload"
         );
-        assert!(app.world().get_entity(old_neighbor).is_err());
+        assert!(app.world().get_entity(old_neighbor).is_ok());
         assert!(app.world().get_entity(newly_covered).is_err());
         assert!(app.world().get_entity(new_neighbor).is_ok());
         assert!(!app

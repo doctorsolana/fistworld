@@ -12,7 +12,9 @@ pub fn inherit_equipment(
     }
     let mut unit = world.entity_mut(soldier);
     unit.insert((role, policy));
-    if role == SoldierRole::Cavalry { unit.insert_if_new(CombatReady); }
+    if role == SoldierRole::Cavalry {
+        unit.insert_if_new(CombatReady);
+    }
     if role == SoldierRole::Archer {
         unit.insert_if_new(Quiver::default())
             .insert_if_new(ArcherState::default());
@@ -96,7 +98,11 @@ pub fn apply_equipment_order(
     }
     match order {
         ArmyOrder::SetRole { role, .. } => {
-            if role != SoldierRole::Cavalry && members.iter().any(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Cavalry)) {
+            if role != SoldierRole::Cavalry
+                && members
+                    .iter()
+                    .any(|e| world.get::<SoldierRole>(*e) == Some(&SoldierRole::Cavalry))
+            {
                 return (0, "Cavalry keeps its issued horses; stable equipment changes are not available yet".into());
             }
             if role == SoldierRole::Cavalry

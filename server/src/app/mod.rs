@@ -35,6 +35,7 @@ pub(crate) fn run() {
 
     bootstrap::configure_bootstrap(&mut app);
     schedule::configure_fixed_schedule(&mut app);
+    crate::telemetry::movement::install(&mut app);
 
     info!("Starting server on port {}", SERVER_PORT);
     app.run();

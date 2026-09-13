@@ -25,11 +25,15 @@ pub(super) fn sync_pause_menu_cursor(
 pub(super) fn reset_menu_state(mut state: ResMut<PauseMenuState>) {
     state.graphics_open = false;
     state.controls_open = false;
+    state.audio_open = false;
     state.transition = 0.0;
 }
 
 pub(super) fn handle_pause_actions(
-    buttons: Query<(&Interaction, &PauseButton), Changed<Interaction>>,
+    buttons: Query<
+        (Entity, Ref<Interaction>, &PauseButton),
+        Without<bevy::ui::InteractionDisabled>,
+    >,
     mut pause_open: ResMut<PauseMenuOpen>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
@@ -39,9 +43,21 @@ pub(super) fn handle_pause_actions(
     mut next_state: ResMut<NextState<GameState>>,
     windows: Query<Entity, With<PrimaryWindow>>,
     mut cursor_opts: Query<&mut CursorOptions>,
+    focus: Option<Res<bevy::input_focus::InputFocus>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut sounds: crate::ui::sound::UiActionSounds,
 ) {
-    for (interaction, action) in buttons.iter() {
-        if *interaction == Interaction::Pressed {
+    let activate =
+        keyboard.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]);
+    for (entity, interaction, action) in buttons.iter() {
+        let key = activate
+            && focus
+                .as_ref()
+                .is_some_and(|focus| focus.get() == Some(entity));
+        if (interaction.is_changed() && *interaction == Interaction::Pressed) || key {
+            if key {
+                sounds.emit(crate::audio::sfx::SfxCue::UiClick);
+            }
             match action {
                 PauseButton::Resume => {
                     pause_open.0 = false;
@@ -54,6 +70,7 @@ pub(super) fn handle_pause_actions(
                         menu_state.graphics_open = false;
                     } else {
                         menu_state.controls_open = false;
+                        menu_state.audio_open = false;
                         menu_state.graphics_open = true;
                     }
                 }
@@ -63,8 +80,14 @@ pub(super) fn handle_pause_actions(
                         menu_state.controls_open = false;
                     } else {
                         menu_state.graphics_open = false;
+                        menu_state.audio_open = false;
                         menu_state.controls_open = true;
                     }
+                }
+                PauseButton::Audio => {
+                    menu_state.audio_open = !menu_state.audio_open;
+                    menu_state.graphics_open = false;
+                    menu_state.controls_open = false;
                 }
                 PauseButton::Disconnect => {
                     info!("Disconnecting from server...");

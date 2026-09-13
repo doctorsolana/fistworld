@@ -112,6 +112,13 @@ but funded export or merchant opportunity signals can support a standalone logis
 autonomously duplicate a depot in the same branch. Players remain free to buy the tier-unlocked
 permit as a speculative infrastructure investment.
 
+Ordinary founded towns have server-only certified land-group tags. Civic supplier
+selection and tender eligibility exclude different known groups before reserving escrow;
+binding and dispatch check again. This prevents an overseas opportunity from becoming an
+impossible caravan obligation. Same-group journeys still need ordinary route validation.
+Unclassified authored labs keep their existing checks; shipping and connectivity changes
+from future bridges remain separate work. See [NEW-WORLD.md](NEW-WORLD.md).
+
 Independent player merchant routes use the same company asset and Company Porter but never
 borrow civic escrow. Their ordered timetable contains two to eight Marketplace towns. `Buy` spends the
 company treasury against real public offers up to its ceiling; `Sell` physically consigns cargo
@@ -177,7 +184,7 @@ All arrows move existing coin. Neither the market nor policy review creates mone
 
 1. A business produces a physical good into its workplace inventory.
 2. Its company's local branch protects an absolute retain amount and decides whether excess may be sold; the rule is applied once across all of that company's sites in the settlement.
-3. An available Moot Steward or local Company Porter moves a bounded load to the hall and creates a listing owned by that business. Dispatch rotates fairly through available sites and goods without using price as freight priority; an active claim excludes that workplace from other porters until the trip finishes. Private porters work only for their own company.
+3. An available Moot Steward or local Company Porter moves a bounded load to the hall and creates a listing owned by that business. Dispatch rotates fairly through available sites and goods without using price as freight priority; an active claim excludes that workplace from other porters until the trip finishes. Private porters work only for their own company. A failed outbound pickup leaves all stock at its owner and defers that entrance for 20–25 real simulation seconds while other sellers remain eligible. Each porter remembers at most eight such failures; this prevents repeated trips to an unreachable pair of sellers from defeating route backoff.
 4. A real buyer purchases the cheapest acceptable listed units.
 5. The buyer loses the gross price. The operating company treasury receives gross minus the market fee. The
    treasury receives the fee.
@@ -341,6 +348,14 @@ legal business remains available at full price. An impossible or declined opport
 briefly deferred, allowing another household or investor to act instead of freezing growth.
 Once the bounded shoreline survey proves that the current terrain has no viable coast,
 fishing disappears from that hall's board entirely; a terrain-version change reopens it.
+
+Ordinary land permits survey one outward band per review, including civic and service
+buildings, then resume at the next band after a miss. They retain the same footprint,
+water, prop, road and access checks; a partial survey is not a declaration that the town
+is full. A reserved Marketplace square remains its fixed civic anchor.
+Completing or changing local road access, or editing nearby terrain, reopens the
+inner land bands. The access snapshot uses the built road geometry and local
+terrain revisions, so road metadata and distant earthworks preserve search progress.
 
 Prospective owners apply their persistent automatic strategy to estimated revenue, input
 cost, wages, market fee, local yield quality, existing holdings and deterministic personal

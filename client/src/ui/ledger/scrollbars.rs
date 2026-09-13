@@ -38,7 +38,7 @@ pub(super) fn bind_scrollbars(
         ),
     >,
     hierarchy: Query<Option<&ChildOf>, With<Node>>,
-    panels: Query<(), With<EncyclopediaPanel>>,
+    panels: Query<(), Or<(With<EncyclopediaPanel>, With<super::LedgerButtonScope>)>>,
     tracks: Query<(Entity, &ScrollTrack, &ChildOf)>,
 ) {
     for (entity, track, _) in &tracks {

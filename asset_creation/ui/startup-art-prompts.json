@@ -1,0 +1,171 @@
+{
+  "date": "2026-09-12",
+  "tool": "Built-in image_gen.imagegen",
+  "status": "Implemented and verified native FistWorld startup UI. Final wordmarks, window title, paper/header seam, three-size visual captures and connected join/reconnect flow passed. Original FirstWorld concept prompts remain verbatim as historical provenance.",
+  "concepts": [
+    {
+      "role": "Reusable text-free launcher background",
+      "prompt": "Create a beautiful, text-free 16:9 landscape launcher illustration for the medieval life-simulation / RTS game FirstWorld. This is reusable background key art, NOT a UI screenshot. Image 1 is the actual game and is the fidelity and subject reference: keep its charming, chunky low-poly world, small timber-and-plaster houses with terracotta roofs, stone civic hall, chapel, windmills, warm winding ochre dirt roads, naturally irregular little fenced gardens and wheat fields. Image 2 is only the game's current UI material/color reference; do not copy its character creator or any UI. Improve the scenic composition and lighting while still clearly depicting THIS approachable low-poly game, not a photorealistic epic-fantasy game. Wide cinematic elevated view looking from a grassy hillside down into a living medieval village, gentle rolling meadow countryside fading into a hazy valley. Golden late-afternoon light from upper left, clear welcoming blue sky with softly faceted clouds, luminous warm roofs, rich olive and sage foliage, restrained atmospheric depth, grounded soft contact shadows, slightly painterly facets with crisp readable silhouettes. Beautiful irregular sandy paths have pale stones, small patches of grass along edges, daisies and yellow wildflowers, little bushes, fences that follow the roads, kitchen gardens, a couple of clotheslines, faint natural chimney smoke. Crops follow the terrain in gently irregular planned fields. Several tiny blocky villagers go about their work; one simple blocky traveller in a blue tunic with a small brown satchel is visible near the lower-left foreground facing the village, relatively small, not a giant hero. Use enough trees to frame the left foreground and distant field edges but keep broad open meadows, no dense forest covering the village. Place the most appealing village composition across the left two thirds and center, with a winding road leading into it. The rightmost 28 percent should remain calmer and a little shaded, mainly soft meadow / distant valley, suitable for a readable small menu overlay later. Keep the upper central sky calm enough for a game title later. Organic, authored, warm, cute, beautiful and believable. No text, no lettering, no logo, no border, no buttons, no HUD, no title, no modern objects, no weapons, no castles towering over everything, no glowy magical effects. A polished indie strategy game cover illustration with strong low-poly identity, not photographic realism. Output a single full-frame landscape illustration.",
+      "references": [
+        "logs/world-distribution/connected/views/03-largest-town.png",
+        "logs/character-creator/startup-only/player-normal/01-front.png"
+      ],
+      "review": "logs/startup-review/concepts/firstworld-launcher-art.png",
+      "delivery": "client/assets/ui/startup/launcher-village.jpg"
+    },
+    {
+      "role": "Launcher screen concept",
+      "prompt": "Design a polished full-screen 16:9 MAIN MENU / LAUNCHER concept for the game titled exactly \"FirstWorld\". Use image 1 as the exact full-bleed background illustration; retain its scene, composition, warm late-afternoon light, charming low-poly traveller and village, and open meadow on the right. Do not replace it with a new setting. Image 2 is the real game's UI material reference: distressed warm brass, protruding screw-mounted brass corner pieces, dark brown leather/walnut, uneven fibrous parchment, readable medieval serif typography. Make a beautiful cohesive medieval game menu with excellent proportions and restraint. Keep the left 66 percent of the illustration unobstructed. Place the game wordmark \"FirstWorld\" prominently in the upper-right area, around x=78 percent y=24 percent, in finely crafted warm antique-gold medieval serif lettering with subtle bevel, darker shadow for contrast, and a tiny tasteful compass/leaf ornament above it. Capital F and W, no space. No subtitle or slogan. Beneath the wordmark place one modest, tactile dark walnut / leather panel around x=78 percent y=53 percent, about 25 percent of screen width and 36 percent of screen height, with fine imperfect brass trim and four small weathered brass corner protectors that sit on the OUTER corners, little screw heads, and a softly faded shadow. Inside the panel use a slightly darkened warm aged parchment inset whose fibers and mildly dirty edges are visible, with calm readable center. The functional content must be simple and legible: small label \"SERVER\"; a single broad inset editable field showing exactly \"127.0.0.1:5000\" with a small downward chevron on the right for saved addresses; then a wide inviting dark antique-gold embossed button reading \"CONNECT\" with light ivory medieval serif lettering, slightly irregular worn edges, subtle scratches and a quiet pressed inner border. Beneath it a smaller understated dark brown button reading \"EXIT\". Allow generous breathing room around elements without making panel huge. A tiny discreet \"v0.1.0\" can sit at the lower-right screen edge. Dimming must be a very gentle local gradient behind the menu only, not washing out the entire village. Overall a gorgeous professional indie strategy-game launcher that matches the existing brass and parchment UI, beautifully imperfect rather than a sterile web form. Render a single complete straight-on screen mockup, no monitor frame, no perspective on UI, no annotation labels, no extra controls, no invented multiplayer features, no slogans, no modern fist emblem. Exact readable text only: FirstWorld, SERVER, 127.0.0.1:5000, CONNECT, EXIT, v0.1.0.",
+      "references": [
+        "logs/startup-review/concepts/firstworld-launcher-art.png",
+        "logs/character-creator/startup-only/player-normal/01-front.png"
+      ],
+      "review": "logs/startup-review/concepts/01-launcher.png"
+    },
+    {
+      "role": "Name entry concept",
+      "prompt": "Create a polished full-screen 16:9 PLAYER NAME / JOIN GAME screen concept for the medieval low-poly RTS / life-simulation game FirstWorld. Image 1 is the exact shared launcher background artwork: preserve its village, traveller, light and composition. Image 2 is the approved visual design direction for this screen family: same distressed brass with screws, dark walnut/leather frames, aged parchment, medieval serif typography and tactile gold buttons. This is a DIFFERENT state, so REMOVE the right-hand launcher controls and large right-hand FirstWorld logo. Use the illustration full-bleed behind a subtle dark translucent scrim and a mild optical blur; retain beautiful village colors and forms clearly enough to identify the same scene. At top center add a modest small warm antique-gold wordmark reading exactly \"FirstWorld\". Center a compact, exquisitely crafted name-entry modal, roughly 35 percent of screen width and 46 percent of its height. It must feel like an authentic tactile game interface, not a website card or a framed poster. Outer frame of very dark walnut/leather with a thin weathered golden brass edge, slightly imperfect silhouette and brass corner protectors extending a little beyond the OUTER corners, each with a subtle screw head. Header is dark wood with large readable ivory/gold medieval serif text \"YOUR NAME\" and a tiny fine decorative divider, no slogan. The body is softly warm pale parchment, darker and irregular at its edges, smooth and calm around the text. Inside with balanced spacing: label \"PLAYER NAME\", a broad lightly recessed cream parchment field bordered in worn brass showing \"aldric\" in dark brown readable serif with a thin insertion cursor; small helper text \"3–16 characters\" directly below in muted dark brown. At bottom a prominent broad aged-gold button reading \"JOIN GAME\" in ivory serif, beveled but understated, slightly nicked corners and darker patina. Beneath the main button a smaller quiet text-like control \"Back\" with a tiny left-pointing brass arrow. This back control is a proposed UX addition. Keep input and all controls aligned with ample breathing room; avoid excessive dead space or giant margins inside modal. The main action must be readable and inviting. Use the exact visual language and material quality of image 2, slightly dirty and handmade, never perfectly flat sterile geometry. No loading indicator in this state, no progressbar, no server settings, no errors, no tips, no ornamental prose. Exact visible text only: FirstWorld, YOUR NAME, PLAYER NAME, aldric, 3–16 characters, JOIN GAME, Back. Output one complete straight-on game UI mockup, no annotations, no monitor bezel.",
+      "references": [
+        "logs/startup-review/concepts/firstworld-launcher-art.png",
+        "logs/startup-review/concepts/01-launcher.png"
+      ],
+      "review": "logs/startup-review/concepts/02-join-game.png"
+    },
+    {
+      "role": "World preparation concept",
+      "prompt": "Create a beautiful full-screen 16:9 PREPARING WORLD loading-state UI concept for the medieval game FirstWorld. Image 1 is the shared village background illustration; keep exactly the same scene, its charming low-poly traveller, timber houses, wheat fields and warm light. Image 2 is the companion FirstWorld name-entry mockup, and is the exact style reference for brass corners, dark wood, parchment, type and scene dimming. Replace its name-entry form with a SMALLER, calmer, elegant loading modal centered on the same backdrop. Keep the modest \"FirstWorld\" wordmark at top center, identical in visual treatment to image 2. Dim and gently soften the full village image enough for a quiet transitional screen without losing its color or atmosphere. A landscape-oriented panel about 36 percent of screen width and 31 percent of its height, centered at screen center. Delicate dark walnut/leather frame, thin imperfect aged-brass edge, four small protruding brass corner pieces with screw heads, warm parchment interior with fibrous, gently dirty edges. Inside: at upper center a small exquisitely engraved brass compass rose over a thin incomplete circular brass ring, serving as an indeterminate loading symbol, NOT a percentage gauge. Beneath it readable dark-brown medieval serif heading exactly \"Preparing world…\". Under the heading a fine ornamental divider and three tiny brass diamonds, one bright and two muted, illustrating the proposed sequential pulse animation. This is indeterminate loading: no numeric progress, no partly-filled horizontal progress bar, no list of fake completed stages, no claims of towns loaded, no countdown. Give the contents enough space to feel calm and intentional, with a lovely tactile craft quality. No editable field, no Join button, no error red, no tips, no story slogans, no cancel button in this concept. Preserve the sophisticated worn brass / parchment visual quality of image 2; simpler and more compact than the name modal. Only visible text \"FirstWorld\" and \"Preparing world…\". Output one single complete straight-on screen mockup, no monitor frame, no explanatory annotations.",
+      "references": [
+        "logs/startup-review/concepts/firstworld-launcher-art.png",
+        "logs/startup-review/concepts/02-join-game.png"
+      ],
+      "review": "logs/startup-review/concepts/03-preparing-world.png"
+    }
+  ],
+  "implementation": {
+    "module": "client/src/ui/startup/",
+    "runtime_assets": [
+      {
+        "path": "client/assets/ui/startup/launcher-village.jpg",
+        "width": 1672,
+        "height": 941,
+        "compressed_bytes": 542466,
+        "base_rgba_bytes": 6293408,
+        "reused": false
+      },
+      {
+        "path": "client/assets/ui/startup/wordmark.png",
+        "width": 900,
+        "height": 375,
+        "compressed_bytes": 79822,
+        "base_rgba_bytes": 1350000,
+        "reused": false
+      },
+      {
+        "path": "client/assets/ui/startup/wordmark-compact.png",
+        "width": 600,
+        "height": 170,
+        "compressed_bytes": 34764,
+        "base_rgba_bytes": 408000,
+        "reused": false
+      },
+      {
+        "path": "client/assets/ui/startup/loading-ring.png",
+        "width": 256,
+        "height": 256,
+        "compressed_bytes": 7641,
+        "base_rgba_bytes": 262144,
+        "reused": false
+      },
+      {
+        "path": "client/assets/ui/startup/loading-star.png",
+        "width": 256,
+        "height": 256,
+        "compressed_bytes": 11702,
+        "base_rgba_bytes": 262144,
+        "reused": false
+      },
+      {
+        "path": "client/assets/ui/startup/panel-paper.png",
+        "width": 512,
+        "height": 512,
+        "compressed_bytes": 441305,
+        "base_rgba_bytes": 1048576,
+        "reused": false
+      },
+      {
+        "path": "client/assets/ui/creator/frame.png",
+        "width": 512,
+        "height": 342,
+        "compressed_bytes": 23296,
+        "base_rgba_bytes": 700416,
+        "reused": true
+      },
+      {
+        "path": "client/assets/ui/creator/journey.png",
+        "width": 480,
+        "height": 100,
+        "compressed_bytes": 15892,
+        "base_rgba_bytes": 192000,
+        "reused": true
+      },
+      {
+        "path": "client/assets/ui/creator/brass.png",
+        "width": 96,
+        "height": 96,
+        "compressed_bytes": 4677,
+        "base_rgba_bytes": 36864,
+        "reused": true
+      },
+      {
+        "path": "client/assets/ui/startup/dark-button.png",
+        "width": 384,
+        "height": 100,
+        "compressed_bytes": 13860,
+        "base_rgba_bytes": 153600,
+        "reused": false
+      },
+      {
+        "path": "client/assets/ui/startup/input-field.png",
+        "width": 512,
+        "height": 112,
+        "compressed_bytes": 101190,
+        "base_rgba_bytes": 229376,
+        "reused": false
+      }
+    ],
+    "runtime_budget": {
+      "loaded_images": 11,
+      "compressed_bytes": 1276615,
+      "base_rgba_bytes": 10936528,
+      "notes": "Shared handles across startup states; base RGBA estimate excludes mipmaps, driver allocations, fonts and render targets. Full-screen mockup PNGs are never runtime textures."
+    },
+    "additional_prompt_manifests": [
+      "asset_creation/ui/startup-ornament-prompts.json",
+      "asset_creation/ui/startup-skin-prompts.json",
+      "asset_creation/ui/startup-branding-correction-prompts.json"
+    ],
+    "review": {
+      "initial_real_capture_root": "logs/startup-review/iteration-1/",
+      "initial_views": [
+        "menu/launcher.png",
+        "name/join-game.png",
+        "preparing/preparing-world.png"
+      ],
+      "refined_capture_root": "logs/startup-review/fistworld-final/",
+      "refined_matrix_status": "Passed and personally inspected; normal and name-error views at three sizes, launcher and preparing branding, continuous native loading animation.",
+      "connected_flow_status": "Passed; logs/startup-review/connected-final/report.json, eight inspected screenshots and paired metadata."
+    },
+    "retired_asset": "client/assets/ui/fistforce.png removed after confirming it was unchanged and unused by production code.",
+    "brand_text": "FistWorld",
+    "verification": {
+      "status": "passed",
+      "visual_evidence": "logs/startup-review/fistworld-final/",
+      "connected_evidence": "logs/startup-review/connected-final/report.json",
+      "native_window_title": "FistWorld",
+      "tests_passed": 1387,
+      "tests_ignored": 21,
+      "build_and_check": "cargo build --workspace --all-targets --profile playtest; cargo check --workspace --all-targets",
+      "animation": "logs/startup-review/fistworld-final/loading-preview.mp4"
+    }
+  }
+}

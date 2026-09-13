@@ -3,50 +3,44 @@
 How the ground is textured, and how to change it. Companion to
 [VEGETATION_PIPELINE.md](VEGETATION_PIPELINE.md) and [PROP_PIPELINE.md](PROP_PIPELINE.md).
 
-Everything here was read out of the engine or measured, not assumed.
+Current implementation notes were reconciled on 2026-09-12. Earlier measurements below are
+labelled historical; they were not rerun for the painted-road texture.
 
 ---
 
-## The one fact that drives every decision
+## Current shader contract
 
-**The terrain does not render its textures.** It renders flat colours.
+**Terrain combines a graded palette with texture detail.** `stylized_palette()` still sets
+`stylize.x = 1.0`, but the shader's `flat_albedo` name no longer means an entirely flat colour.
+In `client/assets/shaders/terrain_splat.wgsl`, the painted dirt layer retains its sampled
+**value and chroma**, graded against the dirt palette. Its small angular soil patches and
+white embedded stones must survive that grading; a chroma-only multiply would erase them.
 
-`stylized_palette()` sets `stylize.x = 1.0` (`shared/src/terrain/material.rs`), and the shader
-does:
-
-```wgsl
-albedo = mix(albedo, flat_albedo, stylize);   // terrain_splat.wgsl:375
-```
-
-With `stylize` at 1.0 the sampled texture is discarded outright and replaced by
-`palette.grass / dirt / sand / cobble` blended by the weightmap. What survives of the albedo
-array is one line above it:
-
-```wgsl
-let grain = mix(vec3(1.0), albedo / luminance(albedo), palette.bands.z);   // bands.z = 0.18
-```
-
-A **luminance-normalised, 18%-strength chroma multiply**. It adds variation, not colour.
-
-Two things follow, and they are the opposite of what people assume:
+Grass retains restrained texture-value detail as well as chroma grain. Cobblestone retains
+stronger stone/mortar value differences. Sand still uses the original low-strength grain
+with its own palette. The common chroma grain is `palette.bands.z = 0.18`; it is only one
+part of the current albedo response.
 
 | you want to change | change this |
 |---|---|
-| what colour the ground **is** | `TERRAIN_LAYERS[i].color` — a Rust constant |
-| how the ground **breaks up** | the albedo image |
+| overall ground colour | `TERRAIN_LAYERS[i].color` and that layer's shader grading |
+| soil patches, embedded stones and surface grain | the albedo image and its retained detail strength |
+| world size of those details | `TERRAIN_LAYERS[i].tile_metres` |
+| lighting relief | the normal image and distance-limited normal contribution |
 
-Editing an albedo texture to make grass greener will do almost nothing. Measured: swapping
-layer 1's image for a correct dirt texture moves the rendered pixel by **under 3%**.
+The normal array remains tangent-space lighting detail, independent of the colour art. The
+painted-road change reuses `Dirt_Normals_01.png`; it adds no normal map, material or draw call.
+Setting `bands.z = 0.0` now disables only common chroma grain, **not all albedo texture detail**.
 
-The **normal array is different** — it is genuinely used, for lighting relief, inside
-`splat_normal_radius` (35% of render distance). Normal maps matter; albedo barely does.
+### Historical chroma-only measurements
 
-> Want to see the terrain with no albedo texture at all? Set `bands.z = 0.0` and run. Zero code
-> risk, and it is exactly what deleting the array would look like.
+Before the current texture-value paths, the stylised shader discarded albedo value and kept
+only the luminance-normalised 18% chroma multiply. Under that older shader, swapping Dirt's
+grass image for a dirt image moved rendered pixels by under 3%. That result does not predict
+the effect of replacing today's painted dirt layer.
 
-That experiment has now been run, because the obvious next thought is "then delete the albedo
-array and save 5.3 MB". **Do not.** Two captures of the same meadow, identical camera, one with
-`bands.z = 0.18` and one with `0.0`:
+A separate earlier meadow comparison used identical cameras with `bands.z = 0.18` versus
+`0.0`. These recorded numbers are retained as historical evidence, not a new-road benchmark:
 
 | | |
 |---|---|
@@ -55,11 +49,8 @@ array and save 5.3 MB". **Do not.** Two captures of the same meadow, identical c
 | max channel delta | 84 / 255 |
 | channels changed at all | 97.1% |
 
-The mean says "invisible" and the tail says otherwise. The grain is a luminance-normalised
-*chroma* multiply, so it does almost nothing on the flat mid-green of open ground and swings
-hardest where the surface is already saturated. A mean of 6 spread over 97% of the frame is a
-global tint the eye reads as the ground being *the wrong green*, not as missing detail. The array
-stays; BC7 already took it from 21.3 MB to 5.3 MB, which was the win worth having.
+That comparison supported retaining the compressed albedo array. It did not establish that
+texture value is unnecessary, and it is not a reason to suppress the painted road's patches.
 
 ---
 
@@ -73,18 +64,39 @@ pub const TERRAIN_LAYERS: [TerrainLayerDef; 4] = [ ... ];
 
 | # | layer | albedo source | normal source | tiling | colour |
 |---|---|---|---|---|---|
-| 0 | Grass | `Grass_Texture_01.png` | `Ground_Normals_01.png` | 8 m | `0.26, 0.45, 0.20` |
-| 1 | Dirt | `Grass_Texture_02.png` ⚠ | `Dirt_Normals_01.png` | 7 m | `0.42, 0.32, 0.22` |
+| 0 | Grass | `Grass_Texture_01.png` | `Ground_Normals_01.png` | 8 m | `0.24, 0.40, 0.15` |
+| 1 | Dirt | `Painted_Road_01.png` | `Dirt_Normals_01.png` | 4 m | `0.60, 0.40, 0.22` |
 | 2 | Sand | `Dirt_Texture_01.png` ⚠ | `Dirt_Normals_01.png` | 6 m | `0.78, 0.70, 0.50` |
-| 3 | Cobblestone | `Cobblestone_Texture_01.png` | `Cobblestone_Normals_01.png` | 5 m | `0.40, 0.39, 0.38` |
+| 3 | Cobblestone | `Cobblestone_Texture_01.png` | `Cobblestone_Normals_01.png` | 3.2 m | `0.52, 0.47, 0.37` |
 
-⚠ **Slots 1 and 2 hold images that do not match their names**, and that is recorded on purpose
-rather than fixed. Slot 1 is Dirt but holds the second *grass* image. It renders brown, because
-colour comes from the palette. Correcting it would change a signed-off look by under 3%. The
-lie used to be invisible — the builder said `Grass_Texture_02` and the shader said `uv_dirt`, in
-different files, with nothing connecting them. Now the table says it out loud.
+The Dirt slot previously used `Grass_Texture_02.png` for its chroma grain. It now uses original
+painted colour art authored with the built-in image generator:
+[Painted_Road_01.png](terrain_source/Painted_Road_01.png), with its
+[generation prompt](terrain_source/Painted_Road_01.prompt.txt) beside the source. The generated
+output was 1254×1254; its canonical source was normalised to 1024×1024 using the builder's
+Lanczos3 resize, matching the packed top mip. The visual intent is
+small crisp ochre/pale soil patches and many small white stones, not broad blurred noise.
 
-There is **no sand image in the repo**; dirt's stands in for slot 2's grain.
+The shader reuses this sample to break up mixed grass/dirt shoulders, with a narrow smooth
+transition and a darker interrupted edge grade. The road weightmap still owns coverage;
+this does not move surveyed paths or add geometry. Soil is graded around its measured linear
+mean; pale chips bypass that soil colour correction so they keep their ivory colour.
+Soft meadow/dirt mixtures also reveal small grass tongues concentrated near the shoulders,
+with only rare detached turf pockets in the lane interior.
+They reuse the underlying grass weight, avoid sand/paving, fade on steep ground, and filter
+away as their projected size becomes too small. This is a material treatment of worn meadow
+ground, including natural bare patches; the chunk-wide endpoint-sampling flag is not a road
+identity mask. Farm and garden soil remain separate meshes.
+
+The source swap and grading still require real Bevy close, town-distance and moving captures;
+source generation and successful packing alone are not visual acceptance.
+On 2026-09-12 the road-border study was inspected at close and town distances with
+90 ready frames, 65 buildings and zero pending ground paint. The continuous town zoom
+round trip passed all 35 probes and its matching initial/recovered PNGs were inspected.
+These are visual checks, not a frame-rate benchmark or an approved pixel baseline.
+
+⚠ There is **no dedicated sand image in the layer table**; `Dirt_Texture_01.png` still supplies
+slot 2's grain. Dirt's normal image is shared by slots 1 and 2 intentionally.
 
 Colours are **LINEAR**, not sRGB. They go straight to the shader as uniforms. Anything
 converting them for display (tool previews or road materials) must use `linear_rgb`, never
@@ -112,9 +124,13 @@ The builder resizes to 1024, builds the mip chain, BC7-encodes, writes the KTX2 
 **re-parses its own output** before saving — asserting format, level count, layer count and every
 level length. Hand-assembled binary formats fail silently at load time otherwise.
 
+The source roster is compiled from the shared Rust table. Rebuild the tool after changing a
+filename; an older executable still contains the old roster.
+
 It writes only `client/assets/textures/terrain/optimized_1k/*.ktx2`. Source art stays in
 `asset_creation/terrain_source/`; resized intermediates go to `target/terrain_1k/`. Neither
-ships — that was 6.7 MB of the game bundle that the client never opened.
+ships as a runtime texture. Keep review screenshots in ignored `logs/`, and retain canonical
+source art, its prompt and the two packed runtime arrays in Git.
 
 ---
 
@@ -123,12 +139,14 @@ ships — that was 6.7 MB of the game bundle that the client never opened.
 | rule | why |
 |---|---|
 | **Square** | the builder calls `resize_exact(1024, 1024)`; anything else is stretched |
-| **≥ 1024 px**, power of two | smaller is upscaled: same VRAM, no extra detail |
-| **Tiles seamlessly** | repeats every 5-8 m, so a seam covers the whole map |
+| **≥ 1024 px**, preferably power of two | smaller is upscaled; larger square inputs such as 1254² are normalised to 1024² before mips |
+| **Tiles seamlessly** | current repeats span 3.2–8 m, so a seam repeats across the map |
 | **8-bit RGB/RGBA** | BC7 encodes 8-bit; 16-bit depth is discarded |
 | Normal maps: **tangent space, +Z out** | a colour image here renders as broken lighting, never as an error |
 
-Run the validator. It checks all of these, and it fails loudly:
+Run the validator. It reports errors for invalid art and warnings for concerns such as a
+non-power-of-two source. The 1254² road source's power-of-two warning does not mean its packed
+mips have irregular dimensions; resizing happens first.
 
 ```bash
 python3 asset_creation/inspect_terrain_texture.py                     # every layer in the table
@@ -157,6 +175,10 @@ VRAM**, 42.6 MB for four 1024² images.
 |---|---|---|
 | albedo array | 21.3 MB | **5.3 MB** |
 | normal array | 21.3 MB | **5.3 MB** |
+
+The current arrays are **5,592,768 bytes each** on disk, with 1024² pixels, four layers and
+nine mip levels (1024 down to 4). Replacing Dirt leaves those dimensions, mip count and GPU
+texture allocation unchanged. The new PNG is build input, not another runtime texture load.
 
 BC7 is 1 byte per texel against 4. It is also the portable choice: every desktop GPU has it, on
 Windows and on both Mac architectures. ASTC would have been Apple-only.
@@ -189,8 +211,13 @@ The packer is pure Rust: `ktx2` for the container and its data-format descriptor
 for the blocks. It used to use `ktx2-rw`, which builds Khronos' KTX-Software from C++ **via
 cmake**. That toolchain requirement is gone.
 
-Mips stop at 4×4 rather than 1×1. BC7 addresses 4×4 blocks, and a level below that describes an
-area the size of a football pitch at 5-8 m tiling. A partial chain is legal KTX2.
+Mips stop at 4×4 rather than 1×1. BC7 addresses 4×4 blocks; this existing partial mip chain is
+legal KTX2 and is unchanged for the painted road. The builder uses Lanczos3 for the initial
+resize and successive Triangle-filtered halves for mips, then opaque BC7 encoding. The colour
+array is sRGB; the normal array is linear UNORM. Keep the runtime repeat sampler's linear
+filters and 8× anisotropy: crisp source shapes should not require aliasing-prone nearest
+filtering. Check the small white stones in motion and at several zooms, where mip filtering
+necessarily reduces tiny details.
 
 ---
 
@@ -226,6 +253,13 @@ directly and the near terrain only indirectly.
 ---
 
 ## Traps
+
+**Dirt is a surface layer, not a road-only mask.** Roads, garden approaches and some generated
+biome mixtures use the same slot. Inspect those transitions when replacing its art.
+
+**A dominant-layer shortcut can discard a minority texture.** Dirt's sampled detail must
+remain continuous through grass/dirt shoulders; using the dominant mixed albedo as if it were
+always a dirt sample can create a visible threshold. Keep paving and sand boundaries intact.
 
 **Palette values are linear.** Feeding them through `Color::srgb` applies the transfer curve a
 second time and washes everything out.

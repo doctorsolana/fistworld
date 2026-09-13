@@ -879,16 +879,16 @@
   },
   {
     "source": "game_assets/buildings/village/Market.glb",
-    "sha256": "bd196989dfb4670321841a06870c3454105635ddfa82ae0a6e7e15af3302a843",
+    "sha256": "b0e0ffdd37ae2dadae47e2dc7ae1525f1a9a831e13fbf9abf71c3fd177d1e17e",
     "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
-    "library_sha256": "26d89479a54b301f022123e39fbae6b98f6bb6abdecd081f05ec6816b6501de7",
+    "library_sha256": "6ac3788836c9626f1ae81da09d1f83f27f5ec1aff0775954d7553b3a60d92705",
     "library": "game_assets/buildings/lod/Market.glb",
     "center": [
-      0.0,
+      0.040000200271606445,
       1.4299999475479126,
-      0.0
+      -0.029999971389770508
     ],
-    "radius": 8.630186926186502,
+    "radius": 8.390077200114977,
     "primitives": [
       {
         "source": "Mesh0/Primitive0",
@@ -896,40 +896,40 @@
           "Mesh0/Primitive0"
         ],
         "triangles": [
-          4200,
-          1590
+          3792,
+          1530
         ],
         "vertices": [
-          8400,
-          3426
+          7584,
+          3202
         ],
         "errors": [
           0.0,
-          0.01837768591940403
+          0.017217373475432396
         ]
       }
     ],
     "triangles": [
-      4200,
-      1590
+      3792,
+      1530
     ],
     "vertices": [
-      8400,
-      3426
+      7584,
+      3202
     ]
   },
   {
     "source": "game_assets/buildings/village/MarketPaved.glb",
-    "sha256": "0e716605940e54e8e694ef19c084af231e4ed3929b89959166d883d0c9228bea",
+    "sha256": "bf76e066d7c316a4e4b96e86122c30342ccc29253682e0462c667f93330016e5",
     "generator_sha256": "1cd860322c583fb080605767938f82f0eaa398a81b5f2a0c9420d54e0c3db36f",
-    "library_sha256": "94156aa09e0fb72a408e36e4ebd3c1109b858af8e46c687db0f7ff10a1b1f034",
+    "library_sha256": "5790b032d9cc75b546e438347ac2fc1080a4838015392567084db827b9563daf",
     "library": "game_assets/buildings/lod/MarketPaved.glb",
     "center": [
-      0.0,
+      0.040000200271606445,
       1.4299999475479126,
-      0.0
+      -0.029999971389770508
     ],
-    "radius": 8.630186926186502,
+    "radius": 8.390077200114977,
     "primitives": [
       {
         "source": "Mesh0/Primitive0",
@@ -937,26 +937,26 @@
           "Mesh0/Primitive0"
         ],
         "triangles": [
-          3624,
-          1476
+          3576,
+          1530
         ],
         "vertices": [
-          7248,
-          3094
+          7152,
+          3200
         ],
         "errors": [
           0.0,
-          0.01837768591940403
+          0.017217373475432396
         ]
       }
     ],
     "triangles": [
-      3624,
-      1476
+      3576,
+      1530
     ],
     "vertices": [
-      7248,
-      3094
+      7152,
+      3200
     ]
   },
   {

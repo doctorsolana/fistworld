@@ -36,7 +36,7 @@ import bmesh
 from mathutils import Vector, kdtree
 
 # --- level ---------------------------------------------------------------------------------------
-# TWO VARIANTS, AND THE ONLY DIFFERENCE IS THE EDGE (the ground itself is painted terrain).
+# Two surface levels share the stalls; their ground is painted by the terrain system.
 #
 #     blender --background --factory-startup --python build_market.py -- 1   -> market.blend
 #     blender --background --factory-startup --python build_market.py -- 2   -> market_paved.blend
@@ -47,8 +47,8 @@ from mathutils import Vector, kdtree
 # dropped on the site, and the halls' ladder gets away with wholesale rebuilds only because a hall
 # genuinely is reconstructed. Paving a square is paving a square.
 #
-# The kerb follows the floor rather than the level number: a dressed stone kerb around a dirt floor is
-# a detail that contradicts itself, so L1 gets timber edging instead.
+# Neither level has a perimeter kerb or timber edging. The market now sits inside the
+# town's public square and must read as stalls on that continuous surface, not its own plinth.
 import sys
 
 _argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -62,7 +62,7 @@ OUT_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{STEM}.bl
 DEPTH_X = 12.0
 WIDTH_Y = 12.0
 HX, HY = DEPTH_X / 2, WIDTH_Y / 2
-FLOOR_Z0, FLOOR_Z1 = -0.16, 0.06
+FOUNDATION_Z = -0.16
 
 COUNTER_Z = 0.90
 CANOPY_FRONT_Z = 2.42           # high at the shopper's side, so there is headroom to stand under it
@@ -79,17 +79,6 @@ C_BOARD = (0.2750, 0.1480, 0.0520)
 C_BOARD_LT = (0.3600, 0.2050, 0.0740)
 C_TRIM = (0.1750, 0.0920, 0.0380)
 C_DARK = (0.0170, 0.0140, 0.0125)
-C_COBBLE = (0.1950, 0.1720, 0.1420)
-C_COBBLE_LT = (0.2650, 0.2340, 0.1900)
-# Beaten earth for L1. Warm and low-saturation: a dirt floor that reads as MUD goes grey-brown and
-# fights the timber, and one that reads as SAND goes yellow and fights the canopies. This sits under
-# both, which is what a floor should do.
-# Pitched a little ABOVE the cobble it replaces (0.195 linear), because dry beaten earth in daylight
-# is not darker than wet grey stone -- at 0.142 it read as mud in shadow, and the mottling vanished
-# into it. Warm, so the two levels differ in hue as well as value and are told apart instantly.
-C_DIRT = (0.2100, 0.1450, 0.0880)
-C_DIRT_LT = (0.2950, 0.2100, 0.1300)
-C_DIRT_DK = (0.1400, 0.0950, 0.0570)
 C_STONE = (0.1480, 0.1200, 0.0910)
 C_STONE_LT = (0.2280, 0.1880, 0.1400)
 # Canopy cloth. Three stripe pairs so the stalls are not one repeated object -- the awning colour is
@@ -157,28 +146,9 @@ jrng = random.Random(4127)
 #   * the slab was a 22 cm plinth in its own dark palette that never matched the terrain's
 #     cobble/dirt colours, and its mottling read as camouflage from the RTS camera.
 #
-# What stays is the EDGE, which gives the square a boundary the paint's soft falloff cannot:
-# timber edging with pegs for beaten earth, a dressed stone kerb once it is paved. Both are sunk to
-# -0.16 like every foundation here, standing ~11 cm proud of the flattened ground.
+# No perimeter geometry: the wider civic square owns the ground and its boundary.
+# Posts and cargo keep their own ground contact, without a ring around the market plot.
 GROUND = 0.0                 # the flattened terrain surface, where everything now stands
-if LEVEL == 2:
-    for sy in (-1, 1):
-        box(-HX + 0.002, HX - 0.002, sy * (HY - 0.16), sy * (HY - 0.002),
-            FLOOR_Z0, GROUND + 0.11, shade(C_STONE, 1.10))
-    for sx in (-1, 1):
-        box(sx * (HX - 0.16), sx * (HX - 0.002), -HY + 0.002, HY - 0.002,
-            FLOOR_Z0, GROUND + 0.11, shade(C_STONE, 1.10))
-else:
-    for sy in (-1, 1):
-        box(-HX + 0.002, HX - 0.002, sy * (HY - 0.18), sy * (HY - 0.002),
-            FLOOR_Z0, GROUND + 0.12, shade(C_BOARD, 0.74))
-    for sx in (-1, 1):
-        box(sx * (HX - 0.18), sx * (HX - 0.002), -HY + 0.002, HY - 0.002,
-            FLOOR_Z0, GROUND + 0.12, shade(C_BOARD, 0.74))
-    for sy in (-1, 1):                               # pegs holding the edging down
-        for gx in (-4.20, -1.40, 1.40, 4.20):
-            box(gx - 0.09, gx + 0.09, sy * (HY - 0.22), sy * (HY - 0.04),
-                GROUND + 0.10, GROUND + 0.26, shade(C_TRIM, 1.10))
 
 
 # --- one stall ----------------------------------------------------------------------------------------
@@ -316,8 +286,8 @@ for sy in (-1, 1):
 # they are the reason the reserved 3.2 m height is now enough rather than merely survivable.
 for sy in (-1, 1):
     px, py = -5.35, sy * 5.35
-    box(px - 0.085, px + 0.085, py - 0.085, py + 0.085, FLOOR_Z0, POLE_Z, C_POST)
-    box(px - 0.22, px + 0.22, py - 0.22, py + 0.22, FLOOR_Z0, 0.22, C_STONE,
+    box(px - 0.085, px + 0.085, py - 0.085, py + 0.085, FOUNDATION_Z, POLE_Z, C_POST)
+    box(px - 0.22, px + 0.22, py - 0.22, py + 0.22, FOUNDATION_Z, 0.22, C_STONE,
         top_rgb=shade(C_STONE_LT, 1.05))
     pale, dark = CANOPY[0]
     for i in range(4):                                  # a hanging pennant, striped like the canopies
@@ -355,22 +325,16 @@ assert _worst < 1e-6, f"not symmetric about y=0: {_worst:.6f}"
 # ==================================================================================================
 if LEVEL == 1:
     # No mottling: the ground is painted terrain now, and the roads' dirt layer already carries
-    # the grain. Loose stones and weeds remain -- they stand ON the ground rather than being it.
+    # the grain. A few trodden-in stones remain on the earthen surface.
     for _k in range(18):                             # loose stones trodden into the surface
         _gx, _gy = jrng.uniform(-5.4, 5.4), jrng.uniform(-5.3, 5.3)
         _r = jrng.uniform(0.07, 0.15)
         box(_gx - _r, _gx + _r, _gy - _r * 0.8, _gy + _r * 0.8,
             GROUND - 0.04, GROUND + 0.012 + jrng.uniform(0.0, 0.022),
             shade(C_STONE_LT, jrng.uniform(0.78, 1.00)))
-    for _k in range(22):                             # weeds along the edging, where no one walks
-        _e = jrng.random()
-        _wx = jrng.uniform(-5.4, 5.4) if _e < 0.5 else (HX - 0.28) * (1 if jrng.random() < 0.5 else -1)
-        _wy = (HY - 0.28) * (1 if jrng.random() < 0.5 else -1) if _e < 0.5 else jrng.uniform(-5.4, 5.4)
-        box(_wx - 0.07, _wx + 0.06, _wy - 0.06, _wy + 0.07,
-            GROUND - 0.03, GROUND + jrng.uniform(0.10, 0.24), shade(C_GREEN, jrng.uniform(0.66, 0.98)))
 
 # Stray barrels and crates. Hand-placed rather than random so they sit in genuinely free ground, but
-# NOT in mirrored pairs -- that was the tell. Every one is in a corner or against the kerb; the
+# NOT in mirrored pairs -- that was the tell. Every one sits outside the central walking aisle; the
 # walkability assert below is what proves none of them has closed a route.
 for _lx, _ly, _kind, _r, _h in ((5.45, 5.25, 'barrel', 0.30, 0.66),
                                 (5.05, 5.55, 'barrel', 0.25, 0.54),
@@ -427,9 +391,9 @@ for nm in ("Specular IOR Level", "Specular"):
 me.materials.append(mat)
 
 # --- anchors --------------------------------------------------------------------------------------------
-# Anchor_Door is authored EXACTLY on door_offset(Market) = (0, -4.0) so the exporter's door-pin applies
+# Anchor_Door is authored EXACTLY on door_offset(Market) = (0, -6.5) so the exporter's door-pin applies
 # a zero shift. The pin would otherwise translate the whole model to place the door, which would move
-# footprint_center off the ZERO the def promises. Blender (-4.00, 0) maps to glTF (0, -4.00).
+# footprint_center off the ZERO the def promises. Blender (-6.50, 0) maps to glTF (0, -6.50).
 for nm, loc in (
     ("Anchor_Door",     (-6.50, 0.0, 0.0)),     # 0.5 m clear of the paving edge at -6.0
     ("Anchor_Counter",  (2.85, 0.0, 0.0)),      # OUTSIDE, in the plaza: where a customer stands

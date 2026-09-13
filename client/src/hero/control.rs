@@ -1,9 +1,8 @@
-//! Spawn intent for the hero.
+//! Terrain placement intent and explicit automated developer smoke hooks.
 //!
-//! God mode: the HUD arms placement, the next left click sends
-//! `DevCommand::SpawnHero`. Selecting the hero and ordering it to walk live in
-//! [`crate::selection`] -- left click selects, right click commands. Everything
-//! goes through the server; nothing here mutates world state directly.
+//! Normal heroes are created by the game-start voyage. God-mode terrain clicks
+//! place villagers, siege engines or settlements; selection and movement live
+//! in [`crate::selection`]. All world mutations go through the server.
 
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
@@ -16,13 +15,13 @@ use crate::camera_rts::{CursorTerrainHit, LocalPeerId};
 use crate::input::InputState;
 use crate::ui::hud::{GodCapability, HudMode};
 
-/// Outfit currently chosen in the spawn panel (client-side UI state).
+/// Outfit currently chosen in the game-start creator (client-side UI state).
 #[derive(Resource, Default)]
 pub struct SelectedOutfit(pub HeroOutfit);
 
 /// The one operation allowed to own the next terrain click.
 ///
-/// Keeping this as one enum is more than tidiness: hero spawning, test crowds,
+/// Keeping this as one enum is more than tidiness: siege engines, test crowds,
 /// settlement founding and paid permits must never be invisibly armed at the
 /// same time. Player permits retain their server-issued record here only as UI
 /// state; the authoritative copy remains on the replicated hero ledger.
@@ -30,7 +29,6 @@ pub struct SelectedOutfit(pub HeroOutfit);
 pub enum WorldPlacementMode {
     #[default]
     None,
-    SpawnHero,
     SpawnNpc,
     SpawnCatapult,
     FoundSettlement,
@@ -44,10 +42,6 @@ pub enum WorldPlacementMode {
 impl WorldPlacementMode {
     pub const fn is_armed(&self) -> bool {
         !matches!(self, Self::None)
-    }
-
-    pub const fn is_spawn_hero(&self) -> bool {
-        matches!(self, Self::SpawnHero)
     }
 
     pub const fn is_spawn_catapult(&self) -> bool {
@@ -68,11 +62,6 @@ pub fn placement_armed(mode: &WorldPlacementMode) -> bool {
     mode.is_armed()
 }
 
-/// True when a replicated hero owned by the local peer exists.
-pub fn local_hero_exists(heroes: &Query<&Hero>, local: &LocalPeerId) -> bool {
-    heroes.iter().any(|h| peer_id_to_u64(h.owner) == local.0)
-}
-
 /// The local player's hero entity, if it has replicated in.
 pub fn local_hero_entity(heroes: &Query<(Entity, &Hero)>, local: &LocalPeerId) -> Option<Entity> {
     heroes
@@ -89,10 +78,8 @@ pub(super) fn handle_world_clicks(
     hit: Res<CursorTerrainHit>,
     mode: Res<HudMode>,
     capability: Res<GodCapability>,
-    selected: Res<SelectedOutfit>,
     mut placement: ResMut<WorldPlacementMode>,
     local: Option<Res<LocalPeerId>>,
-    heroes: Query<&Hero>,
     ui_blockers: Query<&Interaction>,
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
     settlements: Query<(
@@ -119,8 +106,7 @@ pub(super) fn handle_world_clicks(
     // state must never swallow or convert a later click.
     let dev_placement = matches!(
         *placement,
-        WorldPlacementMode::SpawnHero
-            | WorldPlacementMode::SpawnNpc
+        WorldPlacementMode::SpawnNpc
             | WorldPlacementMode::SpawnCatapult
             | WorldPlacementMode::FoundSettlement
     );
@@ -137,11 +123,9 @@ pub(super) fn handle_world_clicks(
     let Some(target) = hit.0 else {
         return;
     };
-    let Some(local) = local else {
+    if local.is_none() {
         return;
-    };
-
-    let owns_hero = local_hero_exists(&heroes, &local);
+    }
 
     // Placement is the ONLY thing left click does here. Ordering the hero moved
     // to right click (see `crate::selection`), so a left click with nothing armed
@@ -150,20 +134,6 @@ pub(super) fn handle_world_clicks(
         // The permit UI owns validation, the ghost and the authoritative
         // placement request. Selection and dev placement must simply stand
         // aside for this click.
-        return;
-    }
-
-    if placement.is_spawn_hero() {
-        if !owns_hero {
-            if let Ok(mut sender) = dev_sender.single_mut() {
-                sender.send::<ReliableChannel>(DevCommand::SpawnHero {
-                    pos: target,
-                    outfit: selected.0,
-                });
-                info!("Hero spawn requested at {target:?}");
-            }
-        }
-        *placement = WorldPlacementMode::None;
         return;
     }
 

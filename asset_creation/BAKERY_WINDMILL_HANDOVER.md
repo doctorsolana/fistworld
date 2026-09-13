@@ -20,6 +20,17 @@
 > upgrade in place through `MarketLevel`, remain walkable in both collision systems, and use the
 > authored counter, trader and night-light anchors. See section 5a for the completed runtime seam.
 
+> **Market perimeter removed 2026-09-13.** Both levels now stand directly on the
+> wider civic square: no timber edging, pegs, stone curb, or perimeter weed blocks.
+> This supersedes the edge descriptions below. The 12 × 12 m reserved plot and all
+> service/light anchors are unchanged; mesh bounds are now 11.56 × 11.74 m, with
+> height 3.18 m and base −0.16 m. Posts and loose cargo retain their ground contact.
+> Full geometry: earthen 7,584 vertices / 3,792 triangles; paved 7,152 / 3,576.
+> Regenerate both `.blend`/GLB variants using the commands in section 7, then the
+> [building LODs](BUILDING_LODS.md). Review `capture/scenarios/civic-square.ron`
+> at full and reduced detail and refresh the market encyclopedia thumbnail with
+> `python3 asset_creation/ui/build_ledger_thumbnails.py --capture --only market`.
+
 Three village buildings, exported and contract-checked. All follow `PROP_PIPELINE.md`: authored
 facing Blender −X, turned −90° about Z on export, so in game they face Bevy forward.
 

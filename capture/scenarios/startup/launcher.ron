@@ -1,0 +1,26 @@
+// Real retained UI, with offline presentation inputs. No network or generation timing.
+(
+    version: 1,
+    name: "startup-launcher",
+    map: "battle_lab",
+    output_dir: "logs/captures/startup/launcher",
+    resolution: (1600, 900),
+    target: window,
+    show_window: false,
+    warmup_frames: 1,
+    readiness: (minimum_frames: 1, maximum_frames: 1200, minimum_loaded_chunks: 0, stable_loaded_chunk_frames: 1),
+    environment: {"FISTFORCE_CAPTURE_FRONTEND": "menu"},
+    shots: [(
+        name: "launcher",
+        focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 160.0, time_of_day: 0.5,
+    ), (
+        name: "launcher-hover",
+        focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 160.0, time_of_day: 0.5,
+    ), (
+        name: "launcher-presets",
+        focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 160.0, time_of_day: 0.5,
+    ), (
+        name: "launcher-presets-closed",
+        focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 160.0, time_of_day: 0.5,
+    )],
+)

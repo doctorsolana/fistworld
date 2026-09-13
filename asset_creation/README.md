@@ -77,8 +77,12 @@ canonical runtime GLBs; do not assume every model can be rebuilt from nothing.
 - `ui/build_hud.py` owns the HUD art. [Ledger art](ui/LEDGER-ART.md) describes
   procedural decorations, approved paintings, compression and model thumbnails.
   Retain compressed runtime artwork and fonts with their licences.
-- `sound/gameintrosource.wav` is the editable music source; the game loads its
-  compressed Ogg export. `branding/` contains the maintained emblem concept and prompt.
+- [Audio workshop](audio/README.md) owns music direction, ElevenLabs prompts,
+  source/provenance records, loudness checks and compact Ogg exports. The existing
+  adventure source remains `sound/gameintrosource.wav`. The
+  [SFX pipeline](audio/SFX_PIPELINE.md) defines effect authoring and points to the
+  planned runtime cue/voice architecture.
+- `branding/` contains the maintained emblem concept and prompt.
 
 ## Review output and verification
 

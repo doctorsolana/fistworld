@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "name": "First user-supplied menu and cart effects",
+  "imported_date": "2026-09-13",
+  "provenance": {
+    "source_kind": "user-supplied downloads",
+    "original_directory": "/Users/terminator2/Downloads",
+    "provider": "ElevenLabs (user workflow; project/generation links not supplied)",
+    "provider_project": null,
+    "exact_provider_prompts_confirmed": false,
+    "rights_note": "The user supplied these downloads and requested compression/fixes and game implementation. Provider-specific license/account entitlement was not supplied or independently verified.",
+    "reference_brief": "asset_creation/audio/sfx/FIRST-PACK.md",
+    "skipped_cues": [
+      "cart_creak"
+    ],
+    "skip_note": "The user explicitly said the creak was not needed."
+  },
+  "rebuild_command": "uv run --with imageio-ffmpeg==0.6.0 python asset_creation/audio/build_first_sfx_pack.py --overwrite",
+  "format": {
+    "sample_rate": 44100,
+    "channels": 1,
+    "one_shot": "16-bit PCM WAV",
+    "loop": "Ogg Vorbis quality 3",
+    "gain_policy": "Static gain only; no loudness normalization, compression or limiting."
+  },
+  "acceptance": {
+    "listening_approved": false,
+    "encoded_cart_loop_seam_verified": false,
+    "note": "Full-decode and peak checks are asset QA, not listening/mix acceptance. See ignored sfx/renders/first-pack-export.json; actual runtime mix review is recorded separately."
+  },
+  "cues": [
+    {
+      "id": "ui_click",
+      "kind": "one-shot",
+      "source": "asset_creation/audio/sfx/sources/ui_click.mp3",
+      "source_sha256": "ce21669e2d0518d485895bcfbea931924af6bbd62cf318de9b84f7a16dacbd13",
+      "source_bytes": 22509,
+      "reference_prompt": "asset_creation/audio/sfx/prompts/ui_click.txt",
+      "exact_provider_prompt": null,
+      "output": "client/assets/audio/sfx/ui/ui_click.wav",
+      "export_settings": {
+        "trim_start": 0,
+        "trim_end": 0.6,
+        "fade_in_ms": 0.15,
+        "fade_out_ms": 3,
+        "gain_db": -1
+      },
+      "processing_note": "Preserve the immediate attack; remove approximately 600 ms of near-silent padding after the natural decay. A 0.15 ms leading edge fade affects only the first few samples.",
+      "source_duration_seconds": 0.88,
+      "export_measurements": {
+        "duration_seconds": 0.28,
+        "export_bytes": 24774,
+        "decoded_pcm16_bytes": 24696,
+        "sample_peak_dbfs": -3.53708,
+        "oversampled_peak_dbfs": -3.53708,
+        "rms_dbfs": -26.981908,
+        "has_3db_peak_headroom": true
+      }
+    },
+    {
+      "id": "ui_confirm",
+      "kind": "one-shot",
+      "source": "asset_creation/audio/sfx/sources/ui_confirm.mp3",
+      "source_sha256": "6c0ed5b83d4a91d497324b26457121f1b8bf94fb465793661e8c54f46478b85e",
+      "source_bytes": 22509,
+      "reference_prompt": "asset_creation/audio/sfx/prompts/ui_confirm.txt",
+      "exact_provider_prompt": null,
+      "output": "client/assets/audio/sfx/ui/ui_confirm.wav",
+      "export_settings": {
+        "trim_start": 0.039,
+        "trim_end": 0.31,
+        "fade_in_ms": 2,
+        "fade_out_ms": 5,
+        "gain_db": -4
+      },
+      "processing_note": "Source decoded peak exceeds 0 dBFS slightly; reduce by 4 dB. Remove 39 ms of quiet lead and preserve all three latch transients and their tail.",
+      "source_duration_seconds": 0.88,
+      "export_measurements": {
+        "duration_seconds": 0.5309977324263039,
+        "export_bytes": 46912,
+        "decoded_pcm16_bytes": 46834,
+        "sample_peak_dbfs": -3.833647,
+        "oversampled_peak_dbfs": -3.77025,
+        "rms_dbfs": -29.441088,
+        "has_3db_peak_headroom": true
+      }
+    },
+    {
+      "id": "ui_reject",
+      "kind": "one-shot",
+      "source": "asset_creation/audio/sfx/sources/ui_reject.mp3",
+      "source_sha256": "addf8ae482c169b0dc69bc49dab115db48774b2d9b0183f5ea13e8431cf45879",
+      "source_bytes": 22509,
+      "reference_prompt": "asset_creation/audio/sfx/prompts/ui_reject.txt",
+      "exact_provider_prompt": null,
+      "output": "client/assets/audio/sfx/ui/ui_reject.wav",
+      "export_settings": {
+        "trim_start": 0,
+        "trim_end": 0.18,
+        "fade_in_ms": 0.15,
+        "fade_out_ms": 5,
+        "gain_db": 5
+      },
+      "processing_note": "Preserve the immediate dull hit and soft decay. Remove 180 ms of nearly silent padding, including an unrelated tiny final encoding-edge transient.",
+      "source_duration_seconds": 0.88,
+      "export_measurements": {
+        "duration_seconds": 0.7,
+        "export_bytes": 61818,
+        "decoded_pcm16_bytes": 61740,
+        "sample_peak_dbfs": -7.381476,
+        "oversampled_peak_dbfs": -7.379368,
+        "rms_dbfs": -33.656405,
+        "has_3db_peak_headroom": true
+      }
+    },
+    {
+      "id": "book_open",
+      "kind": "one-shot",
+      "source": "asset_creation/audio/sfx/sources/book_open.mp3",
+      "source_sha256": "d1c6c0a62af391a562d483459b55fba815397aca18e1e1e54c2bb0fa235404c4",
+      "source_bytes": 20781,
+      "reference_prompt": "asset_creation/audio/sfx/prompts/book_open.txt",
+      "exact_provider_prompt": null,
+      "output": "client/assets/audio/sfx/ui/book_open.wav",
+      "export_settings": {
+        "trim_start": 0,
+        "trim_end": 0.24,
+        "fade_in_ms": 1,
+        "fade_out_ms": 5,
+        "gain_db": 12
+      },
+      "processing_note": "Source is exceptionally quiet; apply only static +12 dB gain and preserve the faint initial handling before the paper/leather details. Match the remaining level in the cue catalogue.",
+      "source_duration_seconds": 0.8,
+      "export_measurements": {
+        "duration_seconds": 0.56,
+        "export_bytes": 49470,
+        "decoded_pcm16_bytes": 49392,
+        "sample_peak_dbfs": -17.103075,
+        "oversampled_peak_dbfs": -17.093929,
+        "rms_dbfs": -37.478229,
+        "has_3db_peak_headroom": true
+      }
+    },
+    {
+      "id": "book_close",
+      "kind": "one-shot",
+      "source": "asset_creation/audio/sfx/sources/book_close.mp3",
+      "source_sha256": "1fff0fae92ac33bef45588b9402eb6029853eade4c9c0f619cebaf61ad38d735",
+      "source_bytes": 20781,
+      "reference_prompt": "asset_creation/audio/sfx/prompts/book_close.txt",
+      "exact_provider_prompt": null,
+      "output": "client/assets/audio/sfx/ui/book_close.wav",
+      "export_settings": {
+        "trim_start": 0.29,
+        "trim_end": 0.2,
+        "fade_in_ms": 2,
+        "fade_out_ms": 5,
+        "gain_db": 2
+      },
+      "processing_note": "Remove 290 ms of very faint pre-action noise; preserve 59 ms before the first clear closing transient and the complete double thump/decay.",
+      "source_duration_seconds": 0.8,
+      "export_measurements": {
+        "duration_seconds": 0.31,
+        "export_bytes": 27420,
+        "decoded_pcm16_bytes": 27342,
+        "sample_peak_dbfs": -5.655682,
+        "oversampled_peak_dbfs": -5.652272,
+        "rms_dbfs": -26.397876,
+        "has_3db_peak_headroom": true
+      }
+    },
+    {
+      "id": "page_turn",
+      "kind": "one-shot",
+      "source": "asset_creation/audio/sfx/sources/page_turn.mp3",
+      "source_sha256": "b45cd21dd82e3d712dcce8fccd0dec5bb104afc0009855f73f5baa957799e84f",
+      "source_bytes": 20781,
+      "reference_prompt": "asset_creation/audio/sfx/prompts/page_turn.txt",
+      "exact_provider_prompt": null,
+      "output": "client/assets/audio/sfx/ui/page_turn.wav",
+      "export_settings": {
+        "trim_start": 0.028,
+        "trim_end": 0.15,
+        "fade_in_ms": 2,
+        "fade_out_ms": 5,
+        "gain_db": 4
+      },
+      "processing_note": "Preserve the gradual paper attack and natural decay, removing only 28 ms of quiet lead and the late near-silent noise floor.",
+      "source_duration_seconds": 0.8,
+      "export_measurements": {
+        "duration_seconds": 0.6219954648526077,
+        "export_bytes": 54938,
+        "decoded_pcm16_bytes": 54860,
+        "sample_peak_dbfs": -8.04886,
+        "oversampled_peak_dbfs": -8.037838,
+        "rms_dbfs": -32.073439,
+        "has_3db_peak_headroom": true
+      }
+    },
+    {
+      "id": "cart_roll",
+      "kind": "loop",
+      "source": "asset_creation/audio/sfx/sources/cart_roll.mp3",
+      "source_sha256": "b181b3be3209015fd36edb1621593fb9c3094a1abe4f349fcee62cfcb11dd5f0",
+      "source_bytes": 193581,
+      "reference_prompt": "asset_creation/audio/sfx/prompts/cart_roll.txt",
+      "exact_provider_prompt": null,
+      "output": "client/assets/audio/sfx/vehicles/cart_roll.ogg",
+      "export_settings": {
+        "trim_start": 0,
+        "trim_end": 0,
+        "fade_in_ms": 0,
+        "fade_out_ms": 0,
+        "gain_db": 0
+      },
+      "processing_note": "Use the stable 0.55\u20136.85 s interior. Tail/head 250 ms RMS differ by 1.31 dB and correlation is 0.01989. Circular equal-power overlap removes quieter outer padding; actual encoded seam remains unverified until repeated listening.",
+      "loop_preparation": {
+        "source_start_seconds": 0.55,
+        "source_end_seconds": 6.85,
+        "crossfade_seconds": 0.25,
+        "crossfade_curve": "equal-power quarter-sine",
+        "algorithm": "Append tail/head overlap to the unblended middle, so output endpoints are contiguous original samples; encode the resulting 6.05 s mono loop.",
+        "seamless_loop_verified": false
+      },
+      "source_duration_seconds": 8.0,
+      "export_measurements": {
+        "duration_seconds": 6.05,
+        "export_bytes": 62832,
+        "decoded_pcm16_bytes": 533610,
+        "sample_peak_dbfs": -7.373985,
+        "oversampled_peak_dbfs": -6.72275,
+        "rms_dbfs": -32.290136,
+        "has_3db_peak_headroom": true
+      }
+    }
+  ],
+  "runtime_budget": {
+    "provisional_limit_bytes": 10485760,
+    "encoded_bytes": 328164,
+    "all_cues_pcm16_equivalent_bytes": 798474,
+    "all_cues_float32_equivalent_bytes": 1596948,
+    "residency_note": "Encoded byte total is the loaded asset payload. Decoded equivalents are size comparisons, not a claim of eager predecode or measured total decoder residency."
+  },
+  "verification_record": "docs/AUDIO-VERIFICATION-2026-09-13.md"
+}

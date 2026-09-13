@@ -223,6 +223,7 @@ fn spawn_tab(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab) {
         .spawn((
             Button,
             TabButton(tab),
+            Name::new(format!("encyclopedia-tab-{tab:?}")),
             Node {
                 padding: UiRect::axes(Val::Px(11.0), Val::Px(14.0)),
                 flex_grow: 1.0,

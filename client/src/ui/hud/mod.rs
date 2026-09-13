@@ -12,13 +12,11 @@ mod selection_card;
 mod shell;
 pub mod state_sync;
 
-use actions::{
-    handle_mode_chip_button, handle_mode_toggle_key, handle_spawn_hero_button, handle_warp_buttons,
-};
+use actions::{handle_mode_chip_button, handle_mode_toggle_key, handle_warp_buttons};
 use layout::{despawn_hud, spawn_hud};
 use state_sync::{
     receive_dev_status, reset_dev_grant, style_warp_buttons, sync_clock_chip, sync_god_panel,
-    sync_mode_chip, sync_spawn_hero_button,
+    sync_mode_chip,
 };
 
 use bevy::prelude::*;
@@ -59,7 +57,6 @@ impl Plugin for HudPlugin {
                 handle_mode_toggle_key,
                 handle_mode_chip_button,
                 handle_warp_buttons,
-                handle_spawn_hero_button,
                 (
                     actions::handle_spawn_npc_button,
                     actions::handle_spawn_catapult_button,
@@ -71,7 +68,6 @@ impl Plugin for HudPlugin {
                 sync_mode_chip,
                 sync_god_panel,
                 style_warp_buttons,
-                sync_spawn_hero_button,
                 (
                     state_sync::sync_spawn_npc_button,
                     state_sync::sync_spawn_catapult_button,
@@ -211,12 +207,6 @@ struct GodPanel;
 
 #[derive(Component, Clone, Copy)]
 struct WarpButton(f32);
-
-#[derive(Component)]
-struct SpawnHeroButton;
-
-#[derive(Component)]
-struct SpawnHeroLabel;
 
 #[derive(Component)]
 struct SpawnNpcButton;

@@ -7,6 +7,10 @@ mod layout;
 mod planning;
 mod sites;
 mod spawn;
+pub(crate) mod trade_access;
+pub(crate) use trade_access::FoundingLandNetwork;
+#[cfg(test)]
+mod audit;
 #[cfg(test)]
 mod tests;
 
@@ -33,6 +37,9 @@ struct Community {
     name: String,
     arrival: Option<CoastalVoyage>,
     radius: f32,
+    /// Connected founding corridors, each with a certified coastal gateway.
+    /// Server-only: automatic land freight cannot cross between these groups.
+    land_network: u64,
 }
 
 pub(crate) fn populate(

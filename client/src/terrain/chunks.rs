@@ -19,10 +19,12 @@ pub struct TerrainMaterialLod {
     pub use_lite: bool,
 }
 
-/// Resource tracking which chunks are currently loaded.
+/// Resident ground remains loaded while an edited replacement is built.
+/// Vegetation and the far-terrain cutout depend on that residency contract.
 #[derive(Resource, Default)]
 pub struct LoadedChunks {
     pub chunks: HashSet<ChunkCoord>,
+    pub(crate) rebuilding: HashSet<ChunkCoord>,
 }
 
 /// Far terrain mesh (static, low-res).

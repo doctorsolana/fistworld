@@ -1,0 +1,41 @@
+{
+  "created": "2026-09-12",
+  "method": "Built-in image_gen tool. Sizing/indexed-PNG encoding via import_startup_ornaments.py; no API/CLI generation.",
+  "scope": "Transparent startup runtime ornaments matching approved concept images. Runtime assets are maintained; large originals and review composites remain ignored.",
+  "assets": [
+    {
+      "name": "wordmark",
+      "runtime": "client/assets/ui/startup/wordmark.png",
+      "source": "logs/startup-review/ornament-sources/wordmark.png",
+      "generator_file": "exec-8fb5d863-9f29-4cb7-b891-7c4a5c8ada05.png",
+      "prompt": "Use case: background-extraction / logo-brand\nAsset type: production transparent PNG game launcher wordmark.\nReference image: the attached FirstWorld launcher concept is only a precise logo style/reference. Reproduce ONLY the gold FirstWorld wordmark and its gold compass and thin line ornaments from the upper-right portion of that image as a clean isolated production logo.\nText verbatim: \"FirstWorld\" \u2014 uppercase F, uppercase W, exactly F i r s t W o r l d, no space.\nStyle: the same beautiful medieval high-contrast serif lettering with subtle irregular worn edges, softly tarnished hammered brass/gold bevels, warm bright top edges and dark brown recessed edge shading. Match the reference proportions: large tall F and W, smaller lowercase letters, readable restrained serif, not Gothic blackletter.\nComposition: one tightly composed isolated logo, centered horizontally. Small slender eight-point brass compass ornament with fine short horizontal rays ABOVE the wordmark. A fine gold horizontal divider with tiny hollow diamond BELOW the wordmark. Wordmark is dominant and spans almost the entire width. Overall artwork aspect around 2.4:1 with modest transparent padding, no clipping.\nBackground: genuine transparent alpha everywhere outside the logo. No solid rectangle, no scenic background, no painted checkerboard, no paper, no UI panel.\nConstraints: remove all content from the source except the wordmark and associated compass/divider; no server field/buttons/version, no new text, no broad outer glow or opaque drop-shadow rectangle. This is an actual runtime UI sprite, not a screenshot or mockup. Keep every ornament fully inside the image.",
+      "current_revision": {
+        "brand_text": "FistWorld",
+        "provenance": "asset_creation/ui/startup-branding-correction-prompts.json",
+        "note": "The original prompt/source above are preserved as historical generation provenance. The correction manifest identifies the current runtime source and exact edit prompt."
+      }
+    },
+    {
+      "name": "loading-compass",
+      "source": "logs/startup-review/ornament-sources/loading-compass.png",
+      "generator_file": "exec-3605a9a0-f11a-4728-97e9-1e1bcfa5d34f.png",
+      "prompt": "Use case: background-extraction.\nAsset type: transparent production UI compass ornament for a medieval game loading panel.\nReference image: supplied FirstWorld preparing-world concept. Faithfully isolate/recreate ONLY the gold compass emblem from the center of the parchment, including its surrounding interrupted circular ring and four small diamond tick markers. Exclude all text and all scenery and all parchment/frame.\nSubject: a crisp eight-point medieval navigator compass star, longer cardinal spikes with softly hammered gold/beveled triangular facets, dark recessed brown edge shading, smaller diagonal spikes. Around it a thin aged brass circular ring broken into four segments near the four cardinal points, with small outlined gold diamonds in the gaps. Exactly centered and viewed perfectly face-on, no perspective.\nStyle: same warm antique gold with slightly dark tarnish, clean sharp readable silhouette, aged brass ornament from the reference loading panel. Fine highlights on upper-left faces; deeper ochre/brown opposing faces. Restraint, not over-ornate, not modern glowing UI.\nComposition: single round emblem fits an approximately square canvas, full ring visible, modest 6 percent transparent margin. Star and circle are concentric.\nBackground: genuinely transparent alpha throughout all empty areas, including between spokes and inside/outside ring; no beige paper, no white or black rectangle, no painted checkerboard, no broad baked outer glow.\nConstraints: zero lettering, zero numbers, zero labels, no loading diamonds row below, no border frame. Actual reusable sprite, not screenshot.",
+      "review_delivery": "logs/startup-review/ornament-review/loading-compass-delivery.png",
+      "status": "Review-only composite; production uses separate ring and star sprites."
+    },
+    {
+      "name": "loading-ring",
+      "runtime": "client/assets/ui/startup/loading-ring.png",
+      "source": "logs/startup-review/ornament-sources/loading-ring.png",
+      "generator_file": "exec-1a303d9f-66d8-43b9-b6de-974b993390e0.png",
+      "prompt": "Use case: precise-object-edit / background-extraction.\nAsset type: transparent production UI loading ring.\nEdit target: attached isolated gold compass sprite. Create a sibling animation layer by REMOVING ONLY the entire central eight-point compass star. Keep the four gold segmented circular ring arcs and their four diamond tick markers exactly in the original position, proportions, diameter, orientation, texture and shading. Do not rotate, expand or redraw the circle differently. The center must become genuinely transparent alpha like the exterior. Preserve original square canvas framing so it can overlay the original compass sprite accurately.\nBackground: genuine transparent alpha, no painted checkerboard, no black/white rectangle. No center compass star, no letters, no text, no numbers, no scenery or parchment. Only the interrupted outer brass circle and four small diamond markers remain."
+    },
+    {
+      "name": "loading-star",
+      "runtime": "client/assets/ui/startup/loading-star.png",
+      "source": "logs/startup-review/ornament-sources/loading-star.png",
+      "generator_file": "exec-28d6e70a-eb31-4271-a188-d6d02e306d28.png",
+      "prompt": "Use case: background-extraction.\nCreate a genuine transparent PNG cutout of ONLY the original central eight-point gold compass star in the supplied image. This is a UI sprite extraction task. Remove the surrounding ring and the four outer diamonds. Retain the central compass's original scale and position on the original square canvas.\nCRITICAL: output actual RGBA alpha transparency, fully transparent outside the star. Do NOT draw a checkerboard pattern into an RGB image. Do NOT use a black, white, grey, or colored solid background. The output must be an actual transparent cutout.\nKeep the aged brass bevel texture and star shape from the input. No lettering or extra objects."
+    }
+  ]
+}

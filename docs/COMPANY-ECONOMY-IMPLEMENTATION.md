@@ -236,6 +236,10 @@ than destroying money or guessing a recipient.
   mothball or reopen it. Contract routes use the same presentation but their civic stops stay locked.
   The final stop may return to the home town, so one circuit can buy elsewhere and finish by
   selling at the home market or unloading into the home Storage Hall.
+  Creation, edits, reopening and dispatch reject schedules spanning different known
+  founding land groups, including through unclassified intermediate stops. Automatic
+  merchant opportunities use the same gate. These server-only tags prevent unsupported
+  overland commitments; they do not replace the normal navigation checks or add shipping.
 - Company sites link into their settlement/building records; shareholders link into People. Each site exposes separate `View Details` and `Manage Site` actions. Both drill-down paths provide `Back to Company`, and repeated management clicks preserve scroll position. `Company Controls` opens the existing authoritative management surface instead of duplicating mutation controls in a read-oriented directory.
 - **Full Ledger** pulls up to 365 completed days on demand by stable `CompanyId`. It consolidates sites across every settlement, eliminates internal supplier credits/buyer charges from profit, and retains those equal amounts as an audit memo. Charts cover P&L, cash/debt/assets, dividends/capital spending and internal flow; tables retain per-site contribution and recent daily records.
 

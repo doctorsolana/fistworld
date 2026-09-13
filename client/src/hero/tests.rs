@@ -63,6 +63,71 @@ fn animation_setup_test_app() -> App {
 }
 
 #[test]
+fn porter_animation_waits_for_the_character_scene_when_the_cart_loads_first() {
+    let mut app = animation_setup_test_app();
+    app.add_systems(Update, setup_hero_animation);
+    let porter = app.world_mut().spawn(CharacterKind::Villager).id();
+    let cart_player = app
+        .world_mut()
+        .spawn((AnimationPlayer::default(), ChildOf(porter)))
+        .id();
+    app.update();
+    assert!(
+        app.world().get::<HeroAnim>(porter).is_none(),
+        "the cart cannot own the person's locomotion"
+    );
+    assert!(app
+        .world()
+        .get::<AnimationGraphHandle>(cart_player)
+        .is_none());
+    let scene = app
+        .world_mut()
+        .spawn((super::appearance::HeroSceneRoot, ChildOf(porter)))
+        .id();
+    let body_player = app
+        .world_mut()
+        .spawn((AnimationPlayer::default(), ChildOf(scene)))
+        .id();
+    app.update();
+    assert_eq!(
+        app.world().get::<HeroAnim>(porter).unwrap().player,
+        body_player
+    );
+    assert!(app
+        .world()
+        .get::<AnimationGraphHandle>(cart_player)
+        .is_none());
+}
+
+#[test]
+fn simultaneous_cart_and_body_players_bind_independently_in_both_spawn_orders() {
+    for cart_first in [true, false] {
+        let mut app = animation_setup_test_app();
+        app.add_systems(Update, setup_hero_animation);
+        let owner = app.world_mut().spawn(CharacterKind::Villager).id();
+        let body = app
+            .world_mut()
+            .spawn((super::appearance::HeroSceneRoot, ChildOf(owner)))
+            .id();
+        let mut spawn_player = |parent| {
+            app.world_mut()
+                .spawn((AnimationPlayer::default(), ChildOf(parent)))
+                .id()
+        };
+        let (cart, humanoid) = if cart_first {
+            (spawn_player(owner), spawn_player(body))
+        } else {
+            let humanoid = spawn_player(body);
+            (spawn_player(owner), humanoid)
+        };
+        app.update();
+        assert_eq!(app.world().get::<HeroAnim>(owner).unwrap().player, humanoid);
+        assert!(app.world().get::<AnimationGraphHandle>(humanoid).is_some());
+        assert!(app.world().get::<AnimationGraphHandle>(cart).is_none());
+    }
+}
+
+#[test]
 fn skin_application_survives_a_same_frame_primitive_despawn() {
     let manifest = CharacterManifest::load().expect("shipped character manifest");
     let skin_material_name = manifest.skin.material.clone();
@@ -106,10 +171,15 @@ fn skin_application_survives_a_same_frame_primitive_despawn() {
 fn animation_setup_survives_a_same_frame_rig_despawn() {
     let mut app = animation_setup_test_app();
     let player = app.world_mut().spawn(AnimationPlayer::default()).id();
+    let scene = app
+        .world_mut()
+        .spawn(super::appearance::HeroSceneRoot)
+        .add_child(player)
+        .id();
     let root = app
         .world_mut()
         .spawn((CharacterKind::Villager, HeroFullRig))
-        .add_child(player)
+        .add_child(scene)
         .id();
 
     // A disconnect/world teardown can invalidate both deferred insertion

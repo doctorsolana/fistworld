@@ -4,7 +4,6 @@
 //! replicated hull, drives the authored sail rig from the same shared wind,
 //! and owns the one-time face-to-RTS opening camera transition.
 
-use bevy::audio::Volume;
 use bevy::prelude::*;
 use shared::components::{
     AboardBoat, CharacterMotion, CloudSeed, CommandedBy, Hero, PlayerBoat, PlayerPosition,
@@ -17,7 +16,6 @@ use crate::camera_rts::{CommanderCamera, LocalPeerId};
 use crate::states::GameState;
 
 const DINGHY_SCENE: &str = "game_assets/vehicles/boats/Dinghy.glb#Scene0";
-const GAME_INTRO_AUDIO: &str = "audio/music/game_intro.ogg";
 const CAMERA_HOLD_SECONDS: f32 = 3.5;
 const CAMERA_TRAVEL_SECONDS: f32 = 4.4;
 const PORTRAIT_PULLBACK_METERS: f32 = 1.35;
@@ -579,8 +577,7 @@ fn sail_wind_state(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drive_opening_cinematic(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    mut music: ResMut<crate::audio::music::MusicPlayback>,
     time: Res<Time>,
     terrain: Res<shared::terrain::WorldTerrain>,
     local: Option<Res<LocalPeerId>>,
@@ -664,13 +661,9 @@ pub(crate) fn drive_opening_cinematic(
         let end_target = boat_position.0 + Vec3::Y * 0.45;
         *camera_transform = start;
         if !opening.intro_played {
-            commands.spawn((
-                Name::new("Opening voyage music"),
-                AudioPlayer::new(asset_server.load(GAME_INTRO_AUDIO)),
-                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.82)),
-            ));
+            music.request_opening();
             opening.intro_played = true;
-            info!("opening cinematic: playing {GAME_INTRO_AUDIO}");
+            info!("opening cinematic: requested adventure music");
         }
         info!(
             "opening cinematic: hero={hero_entity:?} head={face:?} start={:?} end={:?}",
@@ -756,7 +749,7 @@ mod tests {
 
     use bevy::prelude::*;
 
-    use super::{orientation_from_surface_samples, smoothstep01, GAME_INTRO_AUDIO};
+    use super::{orientation_from_surface_samples, smoothstep01};
 
     #[test]
     fn opening_ease_starts_and_finishes_exactly() {
@@ -770,7 +763,7 @@ mod tests {
     fn opening_music_ships_in_the_runtime_asset_tree() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("assets")
-            .join(GAME_INTRO_AUDIO);
+            .join(crate::audio::paths::GAME_INTRO);
         assert!(path.is_file(), "missing opening music: {}", path.display());
     }
 

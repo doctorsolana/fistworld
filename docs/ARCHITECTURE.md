@@ -6,11 +6,21 @@ Read these boundaries before extending simulation code.
 
 Ordinary world bootstrap lives in `shared::map::session` (validated terrain recipe),
 `server::world::bootstrap` (seed selection) and `world::new_world` (site survey, complete
-layout validation and finite society initialization before the socket opens). Later growth
+layout validation and finite society initialization before the socket opens). Founding
+scores world-wide coverage and tags Halls with certified local land networks; trade review
+uses these server-only tags to reject cross-group commitments without per-tick path searches.
+Actual workplace quality and recipe throughput bound initial food capacity. Later growth
 remains owned by the ordinary village systems. Reliable name acceptance carries the map
 recipe/hash; `client::ui::name_entry::network` prepares it asynchronously, invalidates old
 rendering caches and enters Playing only after validation. Replicated earthworks remain
 separate from the immutable recipe. See [NEW-WORLD.md](NEW-WORLD.md).
+
+Client startup connection ownership lives in `render::systems::connection`: DNS runs
+on the I/O pool, connection attempts are bounded by a deadline, and cancellation or
+disconnect returns to the launcher with retained feedback. `ui::name_entry` separates
+editable, submitted and preparing phases, locking the submitted account identity and
+dropping the pending map-install path when leaving the screen. `ui::startup` owns only
+shared presentation; it does not invent world progress or bypass server validation.
 
 The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
 architecture: settlements, goods, caravans, clans, and the player's climb from one guy
@@ -21,6 +31,29 @@ ownership, municipal finance and settlement policy. The build order lives in
 capture artifact architecture live in [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md).
 [GAME-CODE-MAP.md](GAME-CODE-MAP.md) maps common changes to their current source owners.
 
+Music is local presentation under `client::audio::music`, with one non-spatial
+voice independent of scenery. The opening boat requests its cue there; the
+controller waits for actual sink completion before background music, pauses/resumes
+the retained background on mute, and clears playback on exit from Playing.
+`audio::catalog` retains seven approved effects. `audio::sfx` admits at most four
+UI voices from coalesced semantic requests; unavailable or stale clicks are dropped.
+`ui::sound` adapts accepted UI input and book navigation without owning game actions.
+`audio::carts` admits at most four observed moving-cart loops, with a ground-focused
+listener, zoom/distance fades and cleanup when idle, unobserved, muted or disconnected.
+`audio::perspective` defines reusable world-sound distance/zoom/tone profiles.
+`audio::filtered` prepares bounded shared mono PCM asynchronously and supplies
+live per-voice low-pass filtering through native Bevy `Decodable`. Its decoder
+owns looping (`PlaybackSettings::ONCE`); the producer owns voice lifetime. The
+cache holds at most eight 2 MiB clips, while carts still admit at most four voices.
+The obsolete remote-player walking loop has been removed. No effect networking is
+needed for this slice. `audio::settings` persists independent music/effects switches
+and Master/Music/Effects levels, with immediate mixing and debounced drag saves.
+The shared capture settings-isolation flag disables both file reads and writes.
+The [audio workshop](../asset_creation/audio/README.md) owns original sources,
+compression and provenance. Generation has no runtime or server dependency.
+The [sound-effects design](AUDIO-DESIGN.md) distinguishes this implemented first pack
+from future footsteps, combat and ambience adapters; asset authors follow its SFX pipeline.
+
 Accepted crop parcels and household yards are authoritative land geometry, not
 independent client decorations. The shared shape contracts supply fitting,
 containment, access and fence segments; the server owns publication, ownership,
@@ -29,6 +62,20 @@ domestic details from those contracts with bounded rebuilds and distance detail.
 Geometry revisions invalidate nearby terrain/vegetation caches; quality-only
 production changes do not rebuild the land. See [FARM-FIELDS.md](FARM-FIELDS.md),
 [HOUSEHOLD-YARDS.md](HOUSEHOLD-YARDS.md) and [TOWN-DRESSING.md](TOWN-DRESSING.md).
+
+A terrain edit keeps its old chunk resident while the replacement mesh builds;
+`LoadedChunks.rebuilding` tracks replacement work separately from streaming residency.
+Scenery consumers must not interpret a dirty chunk as an unload. Building and civic
+claims compare effective XZ geometry, so unchanged replication and foundation-height
+writes do not clear vegetation. Changed plots remove only covered roots; released
+plots use budgeted refills that preserve surviving root identities. Accepted farm
+records can change inferred plot clearances even without a building-component write.
+Committed earthworks re-ground local surviving props and refresh local grass batches.
+Building mesh LOD selection runs before Bevy's material specialization change detector,
+so retained draw bins see a mesh swap in the same frame.
+Building and civic-hall upgrades retain the current scene and its door/light wiring
+until the replacement asset and its dependencies are loaded; a pending strong handle
+keeps that request alive. Initial appearances retain ordinary streaming behavior.
 
 Road presentation paints only the replicated built prefix. Full planned-route tangents
 give its Hermite curves stable construction progress and exact surveyed door/junction

@@ -221,45 +221,6 @@ pub(super) fn style_warp_buttons(
     }
 }
 
-/// Spawn button reflects the real gate: armed, ready, or already spawned.
-pub(super) fn sync_spawn_hero_button(
-    mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
-    local: Option<Res<crate::camera_rts::LocalPeerId>>,
-    heroes: Query<&shared::components::Hero>,
-    mut buttons: Query<&mut UiButtonStyle, With<SpawnHeroButton>>,
-    mut labels: Query<&mut Text, With<SpawnHeroLabel>>,
-) {
-    let owns_hero = local
-        .as_ref()
-        .is_some_and(|local| crate::hero::control::local_hero_exists(&heroes, local));
-    if owns_hero && placement.is_spawn_hero() {
-        *placement = crate::hero::control::WorldPlacementMode::None;
-    }
-
-    let label = if owns_hero {
-        "HERO ACTIVE"
-    } else if placement.is_spawn_hero() {
-        // Armed is the one dev affordance that genuinely needs to shout, so it
-        // takes the slate inversion rather than the reserved accent.
-        "CLICK TERRAIN"
-    } else {
-        "SPAWN HERO"
-    };
-
-    for mut style in buttons.iter_mut() {
-        style.variant = if placement.is_spawn_hero() {
-            UiButtonVariant::Developer
-        } else {
-            UiButtonVariant::Secondary
-        };
-    }
-    for mut text in labels.iter_mut() {
-        if text.0 != label {
-            text.0 = label.to_string();
-        }
-    }
-}
-
 /// Show the selected-unit plate, and say who is selected and what they are.
 ///
 /// Reads `CharacterName` rather than the player's profile: every person in the

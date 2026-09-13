@@ -18,6 +18,8 @@ mod permits;
 mod plots;
 mod reservations;
 mod road_access;
+mod search_access;
+pub(super) use search_access::LandSearchAccess;
 mod terrain;
 pub(crate) use reservations::nearby_defense_reservations;
 
@@ -40,6 +42,7 @@ pub(crate) use road_access::{
     road_access_blockers_for_new_plot, road_access_blockers_for_plot, RoadAccessBlocker,
 };
 pub(super) use terrain::farmstead_earthwork_effort;
+pub(crate) use terrain::site_quality;
 #[cfg(test)]
 pub(super) use terrain::slope_at;
 pub use terrain::FREEBOARD;

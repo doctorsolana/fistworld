@@ -23,6 +23,7 @@ impl Plugin for PropsPlugin {
         app.init_resource::<PendingPropSpawns>();
         app.init_resource::<PropChunkIndex>();
         app.init_resource::<BuildZoneChunkIndex>();
+        app.init_resource::<super::PropFootprintSources>();
         app.init_resource::<FoliageMaterialCache>();
         app.init_resource::<PropLodDebugMode>();
         app.init_resource::<SimplePropMeshCache>();
@@ -41,6 +42,7 @@ impl Plugin for PropsPlugin {
             (
                 debug::toggle_prop_lod_debug,
                 debug::log_prop_density_snapshot,
+                super::grounding::reground_props_after_terrain_commit,
                 spawn::invalidate_props_for_farm_fields,
                 spawn::invalidate_props_for_new_buildings,
                 spawn::sync_build_zone_chunk_index,
@@ -49,6 +51,7 @@ impl Plugin for PropsPlugin {
                 (
                     super::ground_cover_chunked::mark_chunked_grass_dirty_for_buildings,
                     super::ground_cover_chunked::mark_chunked_grass_dirty_for_roads,
+                    super::ground_cover_chunked::mark_chunked_grass_dirty_for_terrain,
                     super::ground_cover_chunked::stream_chunked_ground_cover,
                 )
                     .chain(),
@@ -63,6 +66,7 @@ impl Plugin for PropsPlugin {
                 debug::debug_draw_prop_colliders,
             )
                 .chain()
+                .after(crate::terrain::TerrainUpdateSet)
                 .run_if(in_state(GameState::Playing)),
         );
     }

@@ -58,6 +58,7 @@ pub(super) fn community(
     let entity = commands
         .spawn((
             id,
+            super::FoundingLandNetwork(community.land_network),
             Settlement {
                 name: community.name.clone(),
                 tier,

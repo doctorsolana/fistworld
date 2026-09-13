@@ -6,11 +6,11 @@ use std::path::Path;
 use super::*;
 
 mod bakery;
-mod fisherman;
-mod tavern;
 mod civic;
+mod fisherman;
 mod roofs;
 mod rural;
+mod tavern;
 mod windmill;
 
 fn glb_document(path: &Path) -> serde_json::Value {

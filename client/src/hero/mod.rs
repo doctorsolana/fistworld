@@ -20,6 +20,7 @@ mod appearance;
 mod attachments;
 mod carts;
 mod combat_animation;
+mod diagnostics;
 mod mounted;
 mod riding;
 pub(crate) use mounted::MountedVisual;
@@ -55,6 +56,7 @@ pub struct HeroPlugin;
 
 impl Plugin for HeroPlugin {
     fn build(&self, app: &mut App) {
+        diagnostics::install(app);
         // The manifest ships beside the glb; a missing or malformed one means
         // a broken asset build, so fail loudly at startup rather than
         // rendering bald, naked heroes.

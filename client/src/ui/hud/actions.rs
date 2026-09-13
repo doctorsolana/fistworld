@@ -88,54 +88,6 @@ pub(super) fn handle_warp_buttons(
     }
 }
 
-/// SPAWN HERO opens the character creator (the modal owns outfit choice and
-/// arms placement on PLACE). Dead while a hero exists — one per player.
-pub(super) fn handle_spawn_hero_button(
-    mut creator: ResMut<crate::ui::hero_creator::HeroCreatorOpen>,
-    mut creator_purpose: ResMut<crate::ui::hero_creator::HeroCreatorPurpose>,
-    mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
-    local: Option<Res<crate::camera_rts::LocalPeerId>>,
-    heroes: Query<(
-        &shared::components::Hero,
-        &shared::components::PlayerPosition,
-    )>,
-    mut cameras: Query<&mut crate::camera_rts::CommanderCamera>,
-    mut notice: ResMut<super::GodNotice>,
-    buttons: Query<&Interaction, (With<SpawnHeroButton>, Changed<Interaction>)>,
-) {
-    for interaction in buttons.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        // You only ever have one hero, and it PERSISTS -- leaving the game does
-        // not delete it, so on rejoining the button will say HERO ACTIVE and
-        // refuse to place another. That is correct, but "HERO ACTIVE" answered
-        // a question nobody asked and left the button dead.
-        //
-        // It now takes you to them. The most likely reason a player is pressing
-        // it is that they cannot see their hero, and the honest answer to that
-        // is not a label, it is the camera.
-        let mine = local.as_ref().and_then(|local| {
-            heroes
-                .iter()
-                .find(|(hero, _)| shared::player::peer_id_to_u64(hero.owner) == local.0)
-                .map(|(_, at)| at.0)
-        });
-        if let Some(at) = mine {
-            *placement = crate::hero::control::WorldPlacementMode::None;
-            for mut camera in cameras.iter_mut() {
-                camera.focus = at;
-            }
-            notice.show("Your hero is here — you only get one");
-            continue;
-        }
-        // An armed placement reopens the creator instead of toggling blind.
-        *placement = crate::hero::control::WorldPlacementMode::None;
-        *creator_purpose = crate::ui::hero_creator::HeroCreatorPurpose::GodPlacement;
-        creator.0 = true;
-    }
-}
-
 /// Arm villager placement. Stays armed across clicks so a crowd can be dropped
 /// in one go; Escape or leaving god mode clears it.
 pub(super) fn handle_spawn_npc_button(

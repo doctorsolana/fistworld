@@ -1640,9 +1640,11 @@ fn handle_action_buttons(
 fn receive_results(
     mut receivers: Query<&mut MessageReceiver<HeroBusinessResult>, With<crate::GameClient>>,
     mut feedback: ResMut<BusinessFeedback>,
+    mut sounds: crate::ui::sound::UiActionSounds,
 ) {
     for mut receiver in receivers.iter_mut() {
         for result in receiver.receive() {
+            sounds.result(result.success);
             feedback.message = result.message;
             feedback.success = result.success;
         }

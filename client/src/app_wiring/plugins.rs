@@ -11,7 +11,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "FistForce".to_string(),
+                    title: "FistWorld".to_string(),
                     resolution: WindowResolution::new(LAUNCHER_RESOLUTION.0, LAUNCHER_RESOLUTION.1),
                     ..default()
                 }),

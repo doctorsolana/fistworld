@@ -132,9 +132,9 @@
     },
     "market": {
       "asset": "client/assets/game_assets/buildings/village/Market.glb",
-      "asset_sha256": "bd196989dfb4670321841a06870c3454105635ddfa82ae0a6e7e15af3302a843",
-      "bytes": 9034,
-      "capture_git_commit": "c58548b4b44a",
+      "asset_sha256": "b0e0ffdd37ae2dadae47e2dc7ae1525f1a9a831e13fbf9abf71c3fd177d1e17e",
+      "bytes": 10332,
+      "capture_git_commit": "7d6d993e4ef4",
       "encoding": "JPEG quality 80, progressive, 4:4:4",
       "height": 224,
       "scenario": "capture/scenarios/ledger-buildings/market.ron",

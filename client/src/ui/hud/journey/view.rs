@@ -1,10 +1,10 @@
 //! Bell composed into the clock row, with an optional recent-notice drawer.
 use super::*;
 use crate::ui::{
-    foundation::{UiButtonLabel, UiButtonVariant, button_chrome, surface_block},
-    hud::chrome::{HudIcon, icon, wood_panel},
+    foundation::{button_chrome, surface_block, UiButtonLabel, UiButtonVariant},
+    hud::chrome::{icon, wood_panel, HudIcon},
     motion::UiReveal,
-    styles::{BRASS, CRIMSON, PARCHMENT, plate_shadow},
+    styles::{plate_shadow, BRASS, CRIMSON, PARCHMENT},
 };
 
 pub(in crate::ui::hud) fn notice_button() -> impl Bundle {

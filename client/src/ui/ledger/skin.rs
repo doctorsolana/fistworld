@@ -13,6 +13,13 @@ use bevy::{
 #[derive(Component)]
 pub(super) struct LedgerButton;
 
+/// Optional artwork for an ordinary skinned button. The complete image recipe,
+/// including nine-slice borders and atlas rect, belongs to the caller; its base
+/// colour is multiplied by the shared interaction tint. Row/Ghost controls keep
+/// their existing presentation. This changes no input, focus or motion policy.
+#[derive(Component, Clone)]
+pub(crate) struct LedgerButtonFace(pub ImageNode);
+
 #[derive(Component)]
 pub(super) struct LedgerRow {
     edge: Entity,
@@ -31,13 +38,14 @@ pub(super) fn bind_buttons(
             &Interaction,
             Has<InteractionDisabled>,
             Has<EncyclopediaCloseButton>,
+            Option<&LedgerButtonFace>,
         ),
         Added<Button>,
     >,
     parents: Query<&ChildOf>,
-    panels: Query<(), With<EncyclopediaPanel>>,
+    panels: Query<(), Or<(With<EncyclopediaPanel>, With<super::LedgerButtonScope>)>>,
 ) {
-    for (entity, style, interaction, disabled, close) in &buttons {
+    for (entity, style, interaction, disabled, close, override_face) in &buttons {
         if style.variant == UiButtonVariant::Ghost {
             continue;
         }
@@ -80,14 +88,15 @@ pub(super) fn bind_buttons(
                     ));
                     break;
                 }
-                let mut image = sliced_button();
-                image.image = face(&art, *style, disabled, close).clone();
-                image.rect = if close {
-                    None
-                } else {
-                    face_rect(*style, disabled)
-                };
-                image.color = tint(*style, *interaction, disabled, 0.0);
+                let image = button_image(
+                    &art,
+                    *style,
+                    *interaction,
+                    disabled,
+                    close,
+                    override_face,
+                    0.0,
+                );
                 // Supply the real handle immediately: a new button must not
                 // show an untextured fallback face before the next paint pass.
                 commands.entity(entity).insert((
@@ -152,6 +161,51 @@ fn face_rect(style: UiButtonStyle, disabled: bool) -> Option<Rect> {
     Some(Rect::new(0.0, top, 192.0, top + 64.0))
 }
 
+fn button_image(
+    art: &LedgerArtwork,
+    style: UiButtonStyle,
+    interaction: Interaction,
+    disabled: bool,
+    close: bool,
+    override_face: Option<&LedgerButtonFace>,
+    offset: f32,
+) -> ImageNode {
+    let mut image = if let Some(override_face) = override_face {
+        override_face.0.clone()
+    } else {
+        let mut image = sliced_button();
+        image.image = face(art, style, disabled, close).clone();
+        image.rect = if close {
+            None
+        } else {
+            face_rect(style, disabled)
+        };
+        image
+    };
+    let base = image.color.to_linear();
+    let shade = tint(style, interaction, disabled, offset).to_linear();
+    image.color = Color::linear_rgba(
+        base.red * shade.red,
+        base.green * shade.green,
+        base.blue * shade.blue,
+        base.alpha * shade.alpha,
+    );
+    image
+}
+
+// ImageNode has no PartialEq. Compare the full recipe before assigning so
+// unchanged retained controls do not trigger another UI image/layout update.
+fn same_image(a: &ImageNode, b: &ImageNode) -> bool {
+    a.image == b.image
+        && a.color == b.color
+        && a.texture_atlas == b.texture_atlas
+        && a.rect == b.rect
+        && a.flip_x == b.flip_x
+        && a.flip_y == b.flip_y
+        && a.image_mode == b.image_mode
+        && a.visual_box == b.visual_box
+}
+
 fn tint(style: UiButtonStyle, interaction: Interaction, disabled: bool, offset: f32) -> Color {
     let light = if disabled {
         // Pale disabled faces need enough light for muted ink to stay legible;
@@ -209,6 +263,7 @@ pub(super) fn paint_buttons(
             &ButtonMotion,
             Has<InteractionDisabled>,
             Has<EncyclopediaCloseButton>,
+            Option<&LedgerButtonFace>,
             &mut ImageNode,
         ),
         (With<LedgerButton>, Without<LedgerRow>),
@@ -225,22 +280,18 @@ pub(super) fn paint_buttons(
     >,
     mut edges: Query<&mut BorderColor, With<LedgerRowEdge>>,
 ) {
-    for (style, interaction, motion, disabled, close, mut image) in &mut buttons {
-        let wanted = face(&art, *style, disabled, close);
-        if image.image != *wanted {
-            image.image = wanted.clone();
-        }
-        let rect = if close {
-            None
-        } else {
-            face_rect(*style, disabled)
-        };
-        if image.rect != rect {
-            image.rect = rect;
-        }
-        let wanted = tint(*style, *interaction, disabled, motion.offset());
-        if image.color != wanted {
-            image.color = wanted;
+    for (style, interaction, motion, disabled, close, override_face, mut image) in &mut buttons {
+        let wanted = button_image(
+            &art,
+            *style,
+            *interaction,
+            disabled,
+            close,
+            override_face,
+            motion.offset(),
+        );
+        if !same_image(&image, &wanted) {
+            *image = wanted;
         }
     }
     for (style, interaction, disabled, mut image, row) in &mut rows {
@@ -260,6 +311,120 @@ pub(super) fn paint_buttons(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[derive(Resource, Default)]
+    struct ImageChanges(Vec<Entity>);
+
+    fn record_image_changes(
+        changed: Query<Entity, (With<LedgerButton>, Changed<ImageNode>)>,
+        mut recorded: ResMut<ImageChanges>,
+    ) {
+        recorded.0.clear();
+        recorded.0.extend(changed.iter());
+    }
+
+    #[test]
+    fn explicit_face_survives_binding_and_interaction_then_restores_default_on_removal() {
+        use bevy::sprite::{BorderRect, TextureSlicer};
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_resource::<ImageChanges>()
+            .add_systems(Startup, super::super::artwork::load_artwork)
+            .add_systems(Update, (paint_buttons, record_image_changes).chain());
+        app.update();
+        let scope = app.world_mut().spawn(super::super::LedgerButtonScope).id();
+        let custom_image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        let recipe = ImageNode {
+            image: custom_image.clone(),
+            rect: Some(Rect::new(2.0, 3.0, 62.0, 61.0)),
+            image_mode: NodeImageMode::Sliced(TextureSlicer {
+                border: BorderRect::all(14.0),
+                ..default()
+            }),
+            flip_x: true,
+            visual_box: VisualBox::PaddingBox,
+            ..default()
+        };
+        let normal = app
+            .world_mut()
+            .spawn((
+                Button,
+                ChildOf(scope),
+                UiButtonStyle::new(UiButtonVariant::Primary),
+            ))
+            .id();
+        let custom = app
+            .world_mut()
+            .spawn((
+                Button,
+                ChildOf(scope),
+                UiButtonStyle::new(UiButtonVariant::Primary),
+                LedgerButtonFace(recipe.clone()),
+            ))
+            .id();
+        app.world_mut().run_system_once(bind_buttons).unwrap();
+        assert!(
+            same_image(app.world().get::<ImageNode>(custom).unwrap(), &recipe),
+            "the initial bind must already carry the caller's complete slice recipe"
+        );
+        let ordinary = app.world().get::<ImageNode>(normal).unwrap().clone();
+        assert_ne!(ordinary.image, custom_image);
+
+        app.world_mut()
+            .get_mut::<UiButtonStyle>(custom)
+            .unwrap()
+            .focused = true;
+        *app.world_mut().get_mut::<Interaction>(custom).unwrap() = Interaction::Hovered;
+        app.update();
+        let focused = app.world().get::<ImageNode>(custom).unwrap();
+        assert_eq!(focused.image, recipe.image);
+        assert_eq!(focused.rect, recipe.rect);
+        assert_eq!(focused.image_mode, recipe.image_mode);
+        assert_eq!(focused.visual_box, recipe.visual_box);
+        assert!(focused.flip_x);
+        assert_ne!(
+            focused.color, recipe.color,
+            "shared focus tint remains active"
+        );
+        assert!(
+            same_image(app.world().get::<ImageNode>(normal).unwrap(), &ordinary),
+            "another screen's ordinary buttons keep their original atlas face"
+        );
+        app.update();
+        assert!(
+            app.world().resource::<ImageChanges>().0.is_empty(),
+            "unchanged retained images must not be dirtied by repaint"
+        );
+
+        app.world_mut()
+            .entity_mut(custom)
+            .insert(InteractionDisabled);
+        app.update();
+        let disabled = app.world().get::<ImageNode>(custom).unwrap();
+        assert_eq!(disabled.image, recipe.image);
+        assert_eq!(disabled.image_mode, recipe.image_mode);
+        assert_ne!(disabled.color, recipe.color);
+
+        app.world_mut()
+            .entity_mut(custom)
+            .remove::<LedgerButtonFace>();
+        app.world_mut()
+            .entity_mut(normal)
+            .insert(InteractionDisabled);
+        app.update();
+        assert!(
+            same_image(
+                app.world().get::<ImageNode>(custom).unwrap(),
+                app.world().get::<ImageNode>(normal).unwrap(),
+            ),
+            "removal restores the default texture, rect, slice borders, flips and visual box"
+        );
+    }
 
     #[test]
     fn disabled_and_developer_faces_match_the_shared_label_contrast_policy() {

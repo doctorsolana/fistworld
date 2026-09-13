@@ -198,16 +198,18 @@ not be taken away by a generator. That is a courtesy extended to the person who
 did the founding, not a claim that founding requires one.
 
 **Seeded settlements — current opening.** The ordinary server chooses a random seed
-and creates roughly ten independent inhabited places on a substantial coastal land region.
-Flat, dry sites with a plausible local food base are ranked by resources, spacing and
-useful overland connections. Local carrying capacity and seeded age influence population;
+and creates roughly ten independent inhabited places across eligible coastal land regions.
+Flat, dry sites with a plausible local food base are ranked by broad world coverage,
+resources and useful overland connections. Each independent group has a certified coastal
+arrival; overland trade rejects commitments across different known groups. Surrounding
+carrying capacity, actual workplace quality and seeded age influence population;
 there is no fixed quota of towns or hamlets. Full food chains, homes, door access, fields
 and local dirt lanes must pass the existing plot/road validators before a site is committed.
 The initial people, businesses and finite assets are mutable server state afterward.
 See [NEW-WORLD.md](NEW-WORLD.md) for the implemented contract.
 
-**Future scope.** Import-dependent harsh-region settlements, multiple inhabited continents,
-clan-held starting clusters and refounding ruins need the associated trade, political and
+**Future scope.** Import-dependent harsh-region settlements, freight and army transport
+between disconnected land regions, clan-held starting clusters and refounding ruins need the associated trade, political and
 founding systems. The present generator does not claim to simulate centuries of history.
 
 > **[correction]** This used to cite "the same spiral-search logic the old landmark

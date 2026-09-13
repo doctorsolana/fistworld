@@ -395,23 +395,29 @@ fn food_and_housing_permits_are_approved_without_waiting_for_construction() {
         ));
     }
 
-    for expected_sites in 1..=2 {
+    // Siting is deliberately spread over reviews. No construction system is
+    // running: the second independent permit must still be approved while
+    // the first worksite remains untouched, within a bounded founding search.
+    let mut site_count = 0;
+    for _ in 0..12 {
         app.world_mut()
             .resource_mut::<Time>()
             .advance_by(std::time::Duration::from_secs_f32(PERMIT_INTERVAL + 0.1));
         app.update();
-        let (site_count, site_kinds) = {
+        site_count = {
             let world = app.world_mut();
-            let mut query = world.query::<&UnderConstruction>();
-            let kinds = query.iter(world).map(|site| site.kind).collect::<Vec<_>>();
-            (kinds.len(), kinds)
+            world.query::<&UnderConstruction>().iter(world).count()
         };
-        assert_eq!(
-            site_count, expected_sites,
-            "the next distinct permit must not wait for earlier construction; pending={site_kinds:?} deferred={:?}",
-            app.world().resource::<VillageClock>().deferred_opportunities,
+        assert!(
+            site_count <= 2,
+            "distinct opportunities must not duplicate pending permits"
         );
+        if site_count == 2 {
+            break;
+        }
     }
+    assert_eq!(site_count, 2,
+        "both independent permits must finish their bounded searches without any construction progress");
 
     let mut world = std::mem::take(&mut *app.world_mut());
     let sites: Vec<_> = world
@@ -656,10 +662,22 @@ fn the_reeve_builds_public_progression_without_stopping_essential_trades() {
         ));
     }
 
-    app.world_mut()
-        .resource_mut::<Time>()
-        .advance_by(std::time::Duration::from_secs_f32(PERMIT_INTERVAL + 0.1));
-    app.update();
+    // The public site uses the same bounded band budget as private permits.
+    // No construction/production step runs while it searches for clear land.
+    for _ in 0..12 {
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(PERMIT_INTERVAL + 0.1));
+        app.update();
+        let world = app.world_mut();
+        if world
+            .query::<&UnderConstruction>()
+            .iter(world)
+            .any(|site| site.kind == SettlementBuildingKind::Market)
+        {
+            break;
+        }
+    }
 
     let world = app.world_mut();
     let (site_entity, site) = world

@@ -201,9 +201,14 @@ pub fn deployment_shape(
             1 + (w.max(0.0) / base).round() as usize
         })
         .clamp(1, limit);
-    let spacing = width
-        .filter(|_| files > 1)
-        .map_or(if mounted && preferred.spacing < minimum { base } else { preferred.spacing }, |w| w / (files - 1) as f32);
+    let spacing = width.filter(|_| files > 1).map_or(
+        if mounted && preferred.spacing < minimum {
+            base
+        } else {
+            preferred.spacing
+        },
+        |w| w / (files - 1) as f32,
+    );
     BattalionFormation {
         files: files as u8,
         spacing: if spacing.is_finite() {
@@ -445,11 +450,23 @@ mod cavalry_tests {
             key: 1,
             role: SoldierRole::Cavalry,
             shape: BattalionFormation::default(),
-            soldiers: (0..8).map(|i| FormationSoldier {
-                entity: Entity::from_raw_u32(i + 1).unwrap(), identity: u64::from(i), position: Vec3::ZERO, seat: None,
-            }).collect(),
+            soldiers: (0..8)
+                .map(|i| FormationSoldier {
+                    entity: Entity::from_raw_u32(i + 1).unwrap(),
+                    identity: u64::from(i),
+                    position: Vec3::ZERO,
+                    seat: None,
+                })
+                .collect(),
         };
-        let blocks = layout(vec![group], Vec3::Z * 20., Some(FormationFrontage { facing: Vec2::Y, width: 1. }));
+        let blocks = layout(
+            vec![group],
+            Vec3::Z * 20.,
+            Some(FormationFrontage {
+                facing: Vec2::Y,
+                width: 1.,
+            }),
+        );
         let block = &blocks[0];
         assert_eq!(block.files, 1);
         assert_eq!(block.clearance, crate::components::HORSE_CLEARANCE);

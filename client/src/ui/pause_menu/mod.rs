@@ -5,10 +5,13 @@
 
 pub mod actions;
 pub mod animation;
+mod audio;
 mod capture_fixture;
 mod display;
 mod display_capture;
+mod effects;
 pub mod layout;
+mod music;
 mod sliders;
 pub mod widgets;
 
@@ -52,7 +55,8 @@ pub(crate) fn open_for_capture(commands: &mut Commands, panel: &str) {
     commands.insert_resource(PauseMenuState {
         graphics_open,
         controls_open,
-        transition: if graphics_open || controls_open {
+        audio_open: panel == "audio",
+        transition: if graphics_open || controls_open || panel == "audio" {
             1.0
         } else {
             0.0
@@ -68,6 +72,13 @@ impl Plugin for PauseMenuPlugin {
         capture_fixture::install(app);
         app.init_resource::<PauseMenuState>();
         app.init_resource::<PauseMenuOpen>();
+        app.init_resource::<audio::AudioDrag>();
+        app.add_systems(
+            Update,
+            audio::handle_audio_controls
+                .after(handle_pause_actions)
+                .after(handle_escape_key),
+        );
         app.add_systems(Update, sync_pause_menu_cursor.run_if(pause_menu_open));
         app.add_systems(Update, spawn_pause_menu.run_if(pause_menu_open));
         app.add_systems(
@@ -78,6 +89,8 @@ impl Plugin for PauseMenuPlugin {
             Update,
             (
                 handle_pause_actions,
+                music::handle_music_toggle,
+                effects::handle_effects_toggle,
                 handle_graphics_toggles,
                 handle_slider_steps,
                 handle_display_modes,
@@ -91,7 +104,13 @@ impl Plugin for PauseMenuPlugin {
         );
         app.add_systems(
             PostUpdate,
-            (sync_display_controls, sync_slider_controls)
+            (
+                sync_display_controls,
+                sync_slider_controls,
+                music::sync_music_toggle,
+                effects::sync_effects_toggle,
+                audio::sync_audio_controls,
+            )
                 .before(super::button_motion::animate_buttons)
                 .run_if(pause_menu_open),
         );
@@ -107,6 +126,7 @@ impl Plugin for PauseMenuPlugin {
 struct PauseMenuState {
     graphics_open: bool,
     controls_open: bool,
+    audio_open: bool,
     /// Animation progress: 0.0 = closed (centered), 1.0 = open (shifted left)
     transition: f32,
 }
@@ -135,15 +155,31 @@ struct GraphicsSettingsPanel;
 #[derive(Component)]
 struct ControlsSettingsPanel;
 
+#[derive(Component)]
+struct AudioSettingsPanel;
+
 /// Pause menu button actions
 #[derive(Component, Clone, Copy)]
 enum PauseButton {
     Resume,
     Graphics,
     Controls,
+    Audio,
     Disconnect,
     Exit,
 }
+
+#[derive(Component)]
+pub(crate) struct MusicToggle;
+
+#[derive(Component)]
+struct MusicToggleLabel;
+
+#[derive(Component)]
+pub(crate) struct EffectsToggle;
+
+#[derive(Component)]
+struct EffectsToggleLabel;
 
 /// Graphics toggle buttons
 #[derive(Component, Clone, Copy, Debug)]

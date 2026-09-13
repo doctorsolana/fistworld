@@ -1,0 +1,38 @@
+[
+  {
+    "id": "launcher_v1",
+    "title": "FistWorld Main Theme",
+    "generation_url": "https://elevenlabs.io/app/music/project/ccPI8SrhIuJNBaeTNvFA?selectedSongId=pyhTEFQFCQoMo0K2ddJx",
+    "seconds": 120,
+    "prompt": "prompts/launcher.txt",
+    "status": "rejected",
+    "feedback": "Calm and unobtrusive is good, but too long to get started and a little dark."
+  },
+  {
+    "id": "village_v1",
+    "title": "FistWorld Village Theme",
+    "generation_url": "https://elevenlabs.io/app/music/project/GK4Nkr00hVllFmkWF0jA?selectedSongId=L7uHIwKmTTHt8hDzNvtq",
+    "seconds": 240,
+    "prompt": "prompts/meadow.txt",
+    "status": "rejected",
+    "feedback": "Too much like a children's lullaby; needs atmosphere and some quiet grandeur."
+  },
+  {
+    "id": "launcher_v2",
+    "title": "FistWorld Theme",
+    "generation_url": "https://elevenlabs.io/app/music/project/S2ucz3Ple9OeY4qdFpiF?selectedSongId=zzEsN2pbnu6YiMV6XxAD",
+    "seconds": 120,
+    "status": "rejected",
+    "direction": "Immediate motif, warmer major/suspended harmony, lute, low strings and a light pulse.",
+    "feedback": "Too jolly, still felt like a children's game."
+  },
+  {
+    "id": "village_v2",
+    "title": "Sunlit Grasslands Of FistWorld",
+    "generation_url": "https://elevenlabs.io/app/music/project/TadNg5pjggH853b1GIBu?selectedSongId=5ebu1DS0nzhvWsXCfVaM",
+    "seconds": 360,
+    "status": "rejected_direction",
+    "direction": "Longer atmospheric folk score with low strings, lute, subtle drum and distant horn colour.",
+    "feedback": "Reset away from jolly folk and repetitive two-note accompaniment."
+  }
+]

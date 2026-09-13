@@ -64,7 +64,9 @@ impl AcquisitionScratch {
                     let distance = candidate.point.distance_squared(other.point);
                     let range = if candidate.range > 0. && candidate.range < ACQUISITION_RANGE {
                         (candidate.radius + other.radius + 0.5).max(MELEE_REACH)
-                    } else { candidate.range };
+                    } else {
+                        candidate.range
+                    };
                     if distance > range * range {
                         continue;
                     }
@@ -126,7 +128,11 @@ pub fn acquire_targets(
         } else {
             continue;
         };
-        let hold_reach = if mounts.contains(entity) { HORSE_BODY_RADIUS * 2. + 0.5 } else { MELEE_REACH };
+        let hold_reach = if mounts.contains(entity) {
+            HORSE_BODY_RADIUS * 2. + 0.5
+        } else {
+            MELEE_REACH
+        };
         let range = if engaged || formed || bows.contains(entity) {
             0.0
         } else {
@@ -149,7 +155,11 @@ pub fn acquire_targets(
             point: position.0.xz(),
             side,
             range,
-            radius: if mounts.contains(entity) { HORSE_BODY_RADIUS } else { super::BODY_RADIUS },
+            radius: if mounts.contains(entity) {
+                HORSE_BODY_RADIUS
+            } else {
+                super::BODY_RADIUS
+            },
         });
     }
     if scratch.candidates.len() < 2 {

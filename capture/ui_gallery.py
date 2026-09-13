@@ -7,6 +7,7 @@ from pathlib import Path
 PAGES = {
     "menu": {"FRONTEND": "menu"},
     "name": {"FRONTEND": "name"},
+    "preparing": {"FRONTEND": "preparing"},
     "hero": {"HERO_CREATOR": "1"},
     "army": {"ENCYCLOPEDIA": "army"},
     "people": {"ENCYCLOPEDIA": "people"},

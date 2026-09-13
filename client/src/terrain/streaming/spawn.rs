@@ -97,6 +97,7 @@ pub(crate) fn update_terrain_chunks(
         paint_state.weightmaps.remove(&coord);
         commands.entity(entity).despawn();
         loaded_chunks.chunks.remove(&coord);
+        loaded_chunks.rebuilding.remove(&coord);
     }
     if removed_count > 0 {
         perf.terrain_chunks_unloaded += removed_count as u32;
@@ -212,7 +213,9 @@ pub(crate) fn spawn_terrain_chunks(
             return true;
         }
 
-        if loaded_chunks.chunks.contains(&coord) || tasks.contains_key(&coord) {
+        if (loaded_chunks.chunks.contains(&coord) && !loaded_chunks.rebuilding.contains(&coord))
+            || tasks.contains_key(&coord)
+        {
             return true;
         }
 
@@ -253,6 +256,7 @@ pub(crate) fn spawn_terrain_chunks(
                 coord,
                 mesh,
                 water_params: water_params_for_generator(&generator),
+                climate: crate::terrain::terrain_climate_for_generator(&generator),
                 weights,
                 resolution,
             }

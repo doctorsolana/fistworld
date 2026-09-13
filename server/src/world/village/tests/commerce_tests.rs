@@ -1338,3 +1338,115 @@ fn the_moot_steward_buys_inputs_for_any_business_policy() {
         "Treasury-owned migration stock receives the purchase through the same seller path"
     );
 }
+
+#[test]
+fn failed_market_pickups_try_other_sellers_then_sleep_without_losing_stock() {
+    let mut app = village_test_app();
+    app.init_resource::<Time>();
+    app.add_systems(Update, run_market_collections);
+    let settlement_id = shared::components::SettlementId(9_900);
+    let hall = app
+        .world_mut()
+        .spawn((
+            settlement_id,
+            Settlement {
+                name: "Pickupretry".into(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 4,
+                treasury: 0,
+            },
+            PlayerPosition(Vec3::ZERO),
+            PlayerRotation(0.0),
+            GoodsInventory::new_partitioned(shared::economy::capacity::HALL),
+            MootMarket::founding(),
+        ))
+        .id();
+    let mut businesses = Vec::new();
+    for (index, x) in [20.0, -20.0].into_iter().enumerate() {
+        let company = shared::components::CompanyId(9_911 + index as u64);
+        spawn_test_company(&mut app, company.0, 0);
+        let mut inventory = GoodsInventory::new(shared::economy::capacity::LUMBERJACK_HUT);
+        inventory.add(Good::Wood, 30);
+        businesses.push(
+            app.world_mut()
+                .spawn((
+                    shared::components::BuildingId(9_901 + index as u64),
+                    shared::components::BuildingOf(settlement_id),
+                    shared::components::OperatedBy(company),
+                    SettlementBuilding {
+                        kind: SettlementBuildingKind::LumberjackHut,
+                        settlement: "Pickupretry".into(),
+                        owner: Some(format!("Owner{index}")),
+                        quality: 0.8,
+                        workers: Vec::new(),
+                    },
+                    PlayerPosition(Vec3::new(x, 0.0, 0.0)),
+                    PlayerRotation(0.0),
+                    inventory,
+                    BusinessSalePolicy::default(),
+                    BusinessAccount::default(),
+                    BusinessWagePolicy::default(),
+                    BusinessProcurementPolicy::default(),
+                ))
+                .id(),
+        );
+    }
+    let porter = app
+        .world_mut()
+        .spawn((
+            CharacterKind::Villager,
+            MootSteward { settlement: hall },
+            PlayerPosition(Vec3::ZERO),
+            CharacterActivity::Indoors,
+            GoodsInventory::new(shared::economy::capacity::PORTER),
+        ))
+        .id();
+    app.update();
+    let mut attempted = HashSet::new();
+    for _ in 0..2 {
+        let active = app
+            .world()
+            .get::<MarketCollectionRoutine>(porter)
+            .expect("try an unblocked seller");
+        assert!(
+            attempted.insert(active.business),
+            "a failed site must not monopolise the next attempt"
+        );
+        let goal = app.world().get::<MoveTarget>(porter).unwrap().0;
+        app.world_mut()
+            .entity_mut(porter)
+            .insert(crate::world::village_roads::NavigationRouteFailed { goal });
+        app.update(); // consume the route result, preserve stock at its owner
+        app.update(); // choose another seller, or sleep when both are blocked
+    }
+    assert_eq!(attempted.len(), 2);
+    for _ in 0..30 {
+        app.update();
+        assert!(app.world().get::<MarketCollectionRoutine>(porter).is_none());
+        assert!(app.world().get::<MoveTarget>(porter).is_none());
+    }
+    assert_eq!(
+        app.world()
+            .get::<GoodsInventory>(porter)
+            .unwrap()
+            .used_bulk(),
+        0
+    );
+    for &business in &businesses {
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(business)
+                .unwrap()
+                .amount(Good::Wood),
+            30
+        );
+    }
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_secs(26));
+    app.update();
+    assert!(
+        app.world().get::<MarketCollectionRoutine>(porter).is_some(),
+        "the next timed attempt must recover without a global geometry change"
+    );
+}

@@ -22,6 +22,7 @@ use shared::protocol::{
 };
 
 use super::hero::OfflineHero;
+use crate::world::new_world::trade_access::{FoundingLandNetwork, LandTradeAccess};
 use crate::world::village::CompanyPorter;
 
 const MAX_ROUTES_PER_COMPANY: usize = 24;
@@ -114,6 +115,10 @@ pub fn handle_hero_trade_route_orders(
     heroes: Query<(&Hero, &PersonId), Without<OfflineHero>>,
     companies: Query<(&CompanyId, &CompanyLeadership)>,
     settlements: Query<(&SettlementId, &shared::economy::MootMarket)>,
+    land_networks: Query<
+        (&SettlementId, &FoundingLandNetwork),
+        With<shared::components::Settlement>,
+    >,
     warehouses: Query<(
         &BuildingId,
         &OperatedBy,
@@ -129,6 +134,7 @@ pub fn handle_hero_trade_route_orders(
         &mut TradeRouteSchedule,
     )>,
 ) {
+    let land_access = LandTradeAccess::from_tags(land_networks.iter());
     let known_settlements: HashSet<_> = settlements.iter().map(|(id, _)| *id).collect();
     let regional_markets: HashSet<_> = settlements
         .iter()
@@ -201,6 +207,7 @@ pub fn handle_hero_trade_route_orders(
                             &regional_markets,
                             &storage_settlements,
                         )?;
+                        land_access.validate_schedule(&stops)?;
                         let cargo_target = validate_trade_values(
                             good,
                             cargo_target,
@@ -283,6 +290,7 @@ pub fn handle_hero_trade_route_orders(
                             &regional_markets,
                             &storage_settlements,
                         )?;
+                        land_access.validate_schedule(&stops)?;
                         let cargo_target = validate_trade_values(
                             good,
                             cargo_target,
@@ -308,7 +316,7 @@ pub fn handle_hero_trade_route_orders(
                         Ok("Caravan timetable updated.".to_string())
                     }
                     HeroTradeRouteAction::SetMothballed { route, mothballed } => {
-                        let Some((_, _, mut route_state, _)) =
+                        let Some((_, _, mut route_state, schedule)) =
                             routes.iter_mut().find(|(_, id, route_state, _)| {
                                 **id == route && route_state.company == order.company
                             })
@@ -328,6 +336,9 @@ pub fn handle_hero_trade_route_orders(
                                 "Wait for the caravan to return before changing its service state.",
                             );
                         }
+                        if !mothballed {
+                            land_access.validate_schedule(schedule.stops())?;
+                        }
                         route_state.status = if mothballed {
                             TradeRouteStatus::Mothballed
                         } else {
@@ -340,7 +351,7 @@ pub fn handle_hero_trade_route_orders(
                         })
                     }
                     HeroTradeRouteAction::DispatchOnce { route } => {
-                        let Some((_, _, mut route_state, _)) =
+                        let Some((_, _, mut route_state, schedule)) =
                             routes.iter_mut().find(|(_, id, route_state, _)| {
                                 **id == route && route_state.company == order.company
                             })
@@ -355,6 +366,7 @@ pub fn handle_hero_trade_route_orders(
                         {
                             return Err("This caravan is not idle at its home warehouse.");
                         }
+                        land_access.validate_schedule(schedule.stops())?;
                         route_state.status = TradeRouteStatus::WaitingForPorter;
                         Ok("One caravan circuit queued.".to_string())
                     }
@@ -425,6 +437,32 @@ mod tests {
             },
         ];
         assert!(validate_schedule(&stops, HOME, &known, &markets, &storage).is_ok());
+    }
+
+    #[test]
+    fn otherwise_valid_player_schedule_rejects_an_uncertified_caravan_connection() {
+        let stops = [
+            TradeRouteStop {
+                settlement: HOME,
+                action: TradeRouteStopAction::Buy,
+            },
+            TradeRouteStop {
+                settlement: AWAY,
+                action: TradeRouteStopAction::Sell,
+            },
+        ];
+        let markets = known();
+        assert!(validate_schedule(&stops, HOME, &known(), &markets, &HashSet::new()).is_ok());
+        let tags = [
+            (HOME, FoundingLandNetwork(3)),
+            (AWAY, FoundingLandNetwork(4)),
+        ];
+        let access = LandTradeAccess::from_tags(tags.iter().map(|(id, group)| (id, group)));
+        assert_eq!(
+            access.validate_schedule(&stops),
+            Err("These towns are not connected by a supported caravan route yet.")
+        );
+        assert!(LandTradeAccess::default().validate_schedule(&stops).is_ok());
     }
 
     #[test]

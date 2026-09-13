@@ -237,7 +237,37 @@ pub(in crate::world::village) fn planned_road_access_path(
     // Construction then quite correctly sees that shell and rejects the same
     // reserved path forever. Match the road survey's source-building margin;
     // crop plots retain the wider permanent reservation below.
-    let proposed_definition = kind.placement_definition();
+    // The Tavern's reservation includes its open patio. Treating that land
+    // as a solid shell seals its own door even on perfectly flat empty land.
+    // Other plots still see the complete reservation via the caller's
+    // blockers; this owner connector sees the inn and actual courtyard tables.
+    let proposed_definition = if kind == SettlementBuildingKind::Tavern {
+        kind.art().definition()
+    } else {
+        kind.placement_definition()
+    };
+    let courtyard_tables = (kind == SettlementBuildingKind::Tavern).then(|| {
+        shared::building::tavern::table_obstacles(position, rotation).map(|table| {
+            RoadAccessBlocker {
+                center: table.center,
+                half: table.half_extents
+                    + Vec2::splat(
+                        crate::world::village_roads::VILLAGE_ROAD_WIDTH * 0.5 + 0.15
+                            - shared::physics::CHARACTER_NAV_RADIUS,
+                    ),
+                rotation: table.rotation,
+            }
+        })
+    });
+    if let Some(tables) = &courtyard_tables {
+        if tables
+            .iter()
+            .any(|table| table.blocks_segment(door, approach))
+        {
+            return None;
+        }
+        local_blockers.extend(tables.iter().copied());
+    }
     local_blockers.push(RoadAccessBlocker {
         center: proposed_definition.world_footprint_center(position, rotation),
         half: proposed_definition.footprint * 0.5
@@ -753,5 +783,68 @@ mod road_access_tests {
 
         clock.site_search_radii.insert((settlement, kind), maximum);
         assert!(!advance_incremental_fishing_search(&mut clock, settlement));
+    }
+}
+
+#[cfg(test)]
+mod courtyard_tests {
+    use super::*;
+
+    #[test]
+    fn tavern_owner_access_crosses_its_walkable_courtyard_without_crossing_solids() {
+        let mut terrain = WorldTerrain::default();
+        let hall = Vec3::new(1700.0, 80.0, 0.0);
+        terrain.apply_flatten_rect(hall, Vec2::splat(100.0), 0.0, 4.0);
+        let kind = SettlementBuildingKind::Tavern;
+        let position = hall + Vec3::new(35.0, 0.0, 20.0);
+        for turn in 0..16 {
+            let yaw = turn as f32 * std::f32::consts::TAU / 16.0;
+            let (door, approach) =
+                crate::world::village_roads::doorway_approach(kind, position, yaw);
+            let claims = road_access_blockers_for_plot(kind, position, yaw);
+            assert!(
+                claims.iter().any(|claim| claim.contains(door)),
+                "the courtyard still reserves its land from neighbours"
+            );
+            assert!(
+                !claims.iter().any(|claim| claim.contains(approach)),
+                "public-road bends begin outside the courtyard reservation"
+            );
+            let route = planned_road_access_path(
+                &terrain,
+                hall,
+                kind,
+                position,
+                yaw,
+                &[],
+                &[],
+                &HashSet::new(),
+            )
+            .expect("a rotated inn has a legal route through its open patio");
+            assert_eq!(route.first().copied(), Some(door));
+            let solid = kind.art().definition();
+            let mut physical = vec![RoadAccessBlocker {
+                center: solid.world_footprint_center(position, yaw),
+                half: solid.footprint * 0.5 + Vec2::splat(shared::physics::CHARACTER_NAV_RADIUS),
+                rotation: yaw,
+            }];
+            physical.extend(
+                shared::building::tavern::table_obstacles(position, yaw).map(|table| {
+                    RoadAccessBlocker {
+                        center: table.center,
+                        half: table.half_extents,
+                        rotation: table.rotation,
+                    }
+                }),
+            );
+            for segment in route.windows(2) {
+                assert!(
+                    physical
+                        .iter()
+                        .all(|solid| !solid.blocks_segment(segment[0], segment[1])),
+                    "yaw {yaw}: access crosses the inn or a table: {segment:?}"
+                );
+            }
+        }
     }
 }

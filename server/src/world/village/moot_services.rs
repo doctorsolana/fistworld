@@ -7,6 +7,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod navigation_tests;
+
 const QUEUE_REACH: f32 = 0.55;
 const QUEUE_SPACING: f32 = 1.45;
 /// A follower advances only after the person ahead has physically cleared
@@ -374,9 +377,11 @@ pub(crate) fn advance_moot_service_queues(
                 }
                 if ticket.head_wait_seconds >= MAX_QUEUE_HEAD_WAIT_SECONDS {
                     warn!(
-                        "A villager made no progress at the front of the Moot {} line for {:.0} world seconds; completing at the counter fallback",
+                        "A villager made no progress at the front of the Moot {} line for {:.0} world seconds; completing at the counter fallback (entity={person:?} at={:?} target={target:?} distance={distance:.2} route={:?})",
                         ticket.kind.label(),
                         ticket.head_wait_seconds,
+                        position.0,
+                        travel_route.map(|route| (route.next, route.waypoints.len())),
                     );
                     ticket.state = MootQueueState::Ready;
                     commands
@@ -464,10 +469,18 @@ pub(crate) fn advance_moot_service_queues(
                         .remove::<NavigationRouteFailed>();
                 } else {
                     commands.entity(person).remove::<MootQueueTransit>();
-                    // A previous direct forecourt step may have discovered a
-                    // newly streamed blocker. Preserve the pending request it
-                    // created so ordinary A* can route around it.
-                    if route_pending.is_none() {
+                    // A blocked straight line needs a detour, not a fresh
+                    // detour every tick. Once installed, preserve its cursor
+                    // until the person reaches the open forecourt. Restarting
+                    // a cached path here sent walkers back to its first point
+                    // indefinitely, then falsely completed the counter timeout.
+                    let following_route = travel_route.is_some_and(|route| {
+                        // Like arrival and ensure_move_target, compare ground
+                        // coordinates: nearby construction may level the soil
+                        // without moving the queue's actual destination.
+                        !route.waypoints.is_empty() && ground_distance(route.goal, target) <= 0.1
+                    });
+                    if route_pending.is_none() && !following_route {
                         commands
                             .entity(person)
                             .insert(NavigationRoutePending::new(target));

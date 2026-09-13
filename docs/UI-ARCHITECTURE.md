@@ -1,6 +1,6 @@
 # Client UI architecture
 
-Last reconciled with Bevy 0.19 on 2026-09-11. This is the contract for new UI and for
+Last reconciled with Bevy 0.19 on 2026-09-12. This is the contract for new UI and for
 touching an existing screen. The goal is a coherent medieval ledger interface without
 screen-specific hover logic, accidental world input, or full-tree churn at simulation speed.
 
@@ -28,6 +28,14 @@ inspected layouts, connected behavior, compressed art budget and portrait timing
 | `client/src/ui/hud/portrait.rs` | HUD selection consumer of the shared portrait service |
 | `client/src/ui/portraits/` | Actual observed outfits, shared canonical geometry, one raster worker and a 32 MiB LRU texture cache |
 | `client/src/ui/ledger/` | Shared paper/wood/hardware, framed portraits, building illustrations and textured buttons |
+| `client/src/ui/startup/` | Shared FistWorld background, artwork handles, framed controls, responsive startup scale and three-diamond loading motion |
+| `client/src/ui/main_menu/` | Server-address draft, presets, launcher layout and Connect/Exit actions |
+| `client/src/ui/name_entry/` | Account-name editing, submission lock, authoritative rejection and asynchronous world preparation |
+| `client/src/render/systems/connection.rs` | Asynchronous DNS, connection deadline, cancellation and disconnect recovery |
+| `client/src/ui/hero_creator/layout.rs` | Retained wardrobe book, manifest-indexed selectors and inline submission status |
+| `client/src/ui/hero_creator/artwork.rs` | Creator material handles, readiness and slicing recipes |
+| `client/src/ui/hero_creator/actions.rs` | Guarded mouse/keyboard actions, changed-only value bindings and authoritative creation intent |
+| `client/src/ui/hero_creator/preview.rs` | Main-view idle character diorama, framing from the actual preview pane and fixed facing |
 | `client/src/ui/hud/chrome.rs` | Small authored wood/brass frames and icon handles, with native text and input |
 | `client/src/ui/hud/journey.rs` | Shared exploration/combat bell and bounded recent notice drawer |
 | `client/src/battalion_bar.rs` and `battalion_bar/navigation.rs` | Retained battalion cards, bounded paging and selection reveal |
@@ -79,6 +87,14 @@ and generator in Git, never bake labels, values or whole-screen mockups into a H
 Panels use nine-slicing; native text uses the bundled medieval fonts. Artwork uses shared
 button state and motion rather than introducing another hover animation system.
 
+The exploration compass has its own recessed charcoal/brass case and transparent
+bearing artwork, leaving shared crest/portrait medallions unchanged. The case stays
+fixed while bearings follow commander yaw; the native north label follows that bearing
+but counter-rotates to stay readable. Its 112px control and separate 48px encyclopedia
+button sit inside a 32px edge inset, with a 6px gap at UI scale 1. Both palette-optimized
+224px PNGs together use about 11 KB on disk and share the existing artwork handles,
+readiness and button lighting. No textures are regenerated as the camera turns.
+
 The market layout and actions remain in `market.rs`; its read-only model lives in
 `market/model.rs`. Quote another seller's eligible offer, not the exchange's headline ask
 (which may be the player's own offer). The displayed BUY price also becomes the order's
@@ -86,6 +102,40 @@ server-enforced price ceiling. Ordered trade replies are associated with the ori
 market so changing pages cannot show another town's feedback.
 
 ## Visual contract
+
+The startup views use one shared village image and a bounded five-tap UI material
+for the modal backdrop. The launcher keeps the illustration clear, with a local
+shade behind its controls. Name entry and connection/world preparation reuse the
+same artwork handles and worn frames. Text, fields, buttons and loading diamonds
+remain native Bevy UI; generated full-screen concepts are review output, never
+interactive screen textures. The background node and material are removed on
+entering Playing. Small shared art handles remain cached for returning to the menu.
+See [STARTUP-ART.md](../asset_creation/ui/STARTUP-ART.md) for source provenance,
+compression and the delivery budget.
+
+`NameEntryPhase` separates Editing, Submitting and Preparing. A reliable submission
+locks the account name immediately, before deferred work can permit a second click.
+Busy text uses neutral ink, three sequentially pulsing diamonds and a rotating
+compass ring. It never implies a measured completion percentage. Validation errors
+return to the editable form; Back/Cancel drops pending installation and disconnects.
+The server remains authoritative for reserved names, account identity and the map
+recipe. DNS runs on the I/O pool and the connection attempt has a real-time deadline,
+so an invalid address cannot freeze the menu or leave it indefinitely blank.
+
+Server and name fields consume logical keyboard events, preserve UTF-8 boundaries,
+and support selection, deletion and clipboard shortcuts. The server field keeps an
+incomplete draft separate from the parsed hostname/IP and port. Name guidance follows
+the existing server format: letters, numbers, underscore or hyphen, with a 3–16-byte
+wire limit. Wide names fit inside the field using the existing font atlas. Shared
+button focus and spring feedback apply to startup controls too. The startup modal
+tab group removes hidden retained controls from navigation and disables their
+actions; focus returns to a visible field or Cancel after a state change. Presets
+use their configured port, or the server default, independently of a custom draft.
+The name form has continuous wood behind its overlapping torn parchment, so a
+validation message can grow the page without opening a gap onto the backdrop.
+Startup sizing follows the physical window; Playing restores the graphics-settings
+owner. Offline scenarios check presentation and motion; the connected startup lab
+checks actual submission, rejection, creation and reconnect behavior.
 
 - In-world panels use warm parchment and dark ink. Wood headers, brass binding and
   parchment lettering connect the encyclopedia and menus to the combat UI. Dark panels
@@ -105,6 +155,45 @@ market so changing pages cannot show another town's feedback.
 - Authored HUD frames use nine-sliced `ImageNode`s. They replace chrome,
   never become baked text or screen-sized bitmaps.
 
+The hero creator reuses ledger typography and button behavior, with four dedicated
+worn material sprites in `ui/creator/`. `LedgerButtonFace` supplies explicit image
+recipes without losing shared hover, focus, disabled or spring feedback. Its larger
+46/54 composition leaves breathing room around the idle figure; parchment edges
+carry wear while the reading centre stays quiet. Arrows and button diamonds use
+native geometry so they cannot turn into missing-font boxes. See
+[CREATOR-ART.md](../asset_creation/ui/CREATOR-ART.md) for the compressed asset budget.
+Keep it free of decorative slogans: use functional labels and reserve footer status for
+useful connection feedback. The visual hierarchy comes from the frame and spacing.
+Its layout stays mounted while selections change: only the affected wardrobe/skin label binds again,
+along with labels added by a new tree or changed manifest. The local preview follows
+the chosen outfit without changing any replicated character. Tab uses the foundation's
+modal focus group; Enter, Numpad Enter and Space activate the focused enabled control.
+Mouse actions wait for a completed in-modal press/release, including the first macOS
+click whose press arrives before a cursor position. The opening click cannot select or
+confirm an option. A connection-pending creation request leaves the modal open and
+shows its retry message inside the footer, since the ordinary HUD is hidden there.
+
+Character creation is a startup-only flow for an account that needs its first hero.
+BEGIN JOURNEY sends the existing reliable `CreateHero` intent and the server owns
+arrival. The God panel has no Create Hero control, and the creator has no developer
+Place/Cancel mode. Ordinary Escape and backdrop clicks retain the mandatory screen.
+The capability-checked developer skip remains available for inspecting a world without
+starting a voyage; it cannot reopen the creator. `FISTWORLD_AUTOSPAWN_HERO=1` and the
+server-gated `DevCommand::SpawnHero` remain explicit development/lab hooks, not interactive
+creation controls. This screen's transparent UI backdrop is an intentional modal
+exception: the live idle character and
+its backdrop are rendered through the main 3D view, rather than a second PBR camera.
+The preview holds a readable fixed facing and derives framing from its laid-out pane.
+Its studio lights switch off whenever the pane is closed or unready. Do not put a
+filled panel shadow behind the transparent cutout: Bevy's box-shadow quad covers
+its interior and darkens the character. The 3D surround supplies the backdrop.
+The maintained startup tour in [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md) exercises all
+wardrobe selectors, skin, idle framing, Escape/backdrop retention and disconnected
+submission. The former God creator tour is retired. The startup-only cleanup was
+verified at normal and small sizes, together with the God HUD's remaining controls;
+current and historical evidence are recorded separately in the capture guide.
+Connected creation is checked separately.
+
 ## Encyclopedia materials and portraits
 
 The five spreads and nested pages use the same `ledger` catalogue. `paper()`,
@@ -118,6 +207,11 @@ separate from the retained frame. Illustration components bind shared `UiMateria
 handles by artwork and finish. Printed vignettes contain the whole illustration
 with transparent, irregular paper fades; medallions fill their circular frame.
 Fixed shader grain stays still, and the source image is never copied per widget.
+
+`ledger::LedgerButtonScope` opts a retained panel outside the encyclopedia into the
+shared worn button faces and ledger scrollbars. It changes presentation scope, not
+input ownership or modal behavior. `ledger::selector_face()` supplies the reusable
+paper inset behind selector values; screen layouts own its dimensions and live text.
 `LedgerIllustration::settlement` maps Hamlet, Village, Town and City to separate
 paintings in the directory, Overview and page header. Settlement upgrades update
 those retained instances without replacing observed building appearances. Ruins

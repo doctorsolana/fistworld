@@ -602,9 +602,11 @@ fn receive_company_founding_results(
     mut page: ResMut<FoundingPageOpen>,
     mut selected: ResMut<crate::ui::encyclopedia::companies::SelectedCompany>,
     mut tab: ResMut<EncyclopediaTab>,
+    mut sounds: crate::ui::sound::UiActionSounds,
 ) {
     for mut receiver in receivers.iter_mut() {
         for result in receiver.receive() {
+            sounds.result(result.success);
             draft.pending = false;
             feedback.message = result.message;
             feedback.success = result.success;

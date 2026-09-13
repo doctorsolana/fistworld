@@ -22,7 +22,8 @@ arrival and reusable ship-navigation contract are documented in
 - A chunk-streamed generated world with biomes, rivers, coastlines, water, foliage,
   atmospheric day/night lighting and a seamless commander camera.
 - The ordinary launch creates a random seeded world with roughly ten inhabited settlements.
-  Terrain, local resources and certified access govern their sites, sizes and businesses;
+  Towns spread across suitable land, with certified arrivals for separate land groups.
+  Surrounding land and each workplace's actual resource quality govern sizes and businesses;
   named residents, homes, companies and finite opening stock become ordinary simulation
   state. See [NEW-WORLD.md](docs/NEW-WORLD.md).
 - [Wild horse herds](docs/WILDLIFE.md) on meadow grass, with server-owned identity,
@@ -122,7 +123,8 @@ arrival and reusable ship-navigation contract are documented in
   posting an offer deposits cargo into a person-owned consignment and pays nothing until a
   real buyer clears it. A newly created hero begins with 20 coin; reconnecting to that same
   live hero preserves the existing wallet instead of granting the endowment again.
-- A new account now creates its Hero outside God Mode and begins aboard an authored Dinghy
+- A new account chooses its Hero in the startup-only character creator and begins aboard
+  an authored Dinghy
   at a server-chosen map edge. The opening camera moves from the dressed Hero's face into
   the RTS view; the selected boat follows water-only routes, sails faster or slower with
   the shared wind and turns/fills its sail from apparent wind. Right-clicking nearby dry
@@ -213,7 +215,10 @@ uses that server's recipe automatically. Explicit lab commands keep their fixed 
 
 ### First journey
 
-Create your hero, then right-click land to sail ashore and continue on foot. The compact **Notices** button below the clock expands to recent messages,
+Choose your appearance in the startup creator and select **BEGIN JOURNEY**, then
+right-click land to sail ashore and continue on foot. Character creation is not a God-panel
+action; reconnecting to a live hero skips it. The compact **Notices** button below the
+clock expands to recent messages,
 nearby-town information and your hero's coin/cargo. **View Town**
 helps choose a destination; **Home** selects and finds your hero again, and **M** opens
 the world map. Press **E** near a Hall or Marketplace counter to trade.

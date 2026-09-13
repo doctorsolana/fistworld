@@ -9,7 +9,7 @@ use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use shared::building::point_in_any_build_zone_entries;
+use shared::building::{point_in_any_build_zone_entries, BuildZoneEntry};
 use shared::components::{distance_squared_to_segment, VillageRoad};
 use shared::props::{PropKind, PropSpawn};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
@@ -19,7 +19,7 @@ use crate::streaming::{
     camera_view_distance, chunk_stream_priority, streaming_anchor, streaming_view_priority,
     AnchorCamera, AnchorPlayer,
 };
-use crate::terrain::LoadedChunks;
+use crate::terrain::{LoadedChunks, TerrainChunk};
 
 use super::foliage::flatten_base;
 use super::ground_cover_instancing::{
@@ -73,6 +73,8 @@ pub struct ChunkedGroundCover;
 #[derive(Default)]
 struct ChunkGrassInstances {
     field_revision: u64,
+    building_zones: Vec<BuildZoneEntry>,
+    terrain_mesh: Option<bevy::asset::AssetId<Mesh>>,
     short: Vec<GrassInstance>,
     tall: Vec<GrassInstance>,
     fern_a: Vec<GrassInstance>,
@@ -114,6 +116,8 @@ pub struct ChunkedGroundCoverState {
     material_cutout: Option<bool>,
     reported_chunk_count: usize,
     yard_version: u64,
+    road_bounds: HashMap<Entity, (ChunkCoord, ChunkCoord)>,
+    roads_initialized: bool,
 }
 
 fn in_radius(coord: ChunkCoord, anchor: ChunkCoord, radius: i32) -> bool {
@@ -369,6 +373,7 @@ fn clear_render_entities(commands: &mut Commands, state: &mut ChunkedGroundCover
 
 fn build_chunk(
     coord: ChunkCoord,
+    terrain_mesh: bevy::asset::AssetId<Mesh>,
     terrain: &WorldTerrain,
     stress_density: f32,
     state: &mut ChunkedGroundCoverState,
@@ -388,6 +393,8 @@ fn build_chunk(
     let dryness = shared::props::MeadowDryness::new(seed);
     let mut data = ChunkGrassInstances {
         field_revision: zones.fields.chunk_revision(coord),
+        building_zones: zones.by_chunk.get(&coord).cloned().unwrap_or_default(),
+        terrain_mesh: Some(terrain_mesh),
         ..default()
     };
     for spawn in &spawns {
@@ -522,6 +529,7 @@ pub(super) fn stream_chunked_ground_cover(
     zones: Res<BuildZoneChunkIndex>,
     roads: Query<&VillageRoad>,
     yards: Option<Res<crate::settlement::yards::YardGroundCover>>,
+    terrain_meshes: Query<(&TerrainChunk, &Mesh3d)>,
 ) {
     let enabled = settings.props_enabled;
     if state.material_cutout != Some(settings.foliage_cutout_enabled) {
@@ -619,11 +627,20 @@ pub(super) fn stream_chunked_ground_cover(
         .dirty
         .iter()
         .copied()
-        .filter(|coord| state.chunks.contains_key(coord))
+        .filter(|coord| {
+            state.chunks.contains_key(coord) && !loaded_chunks.rebuilding.contains(coord)
+        })
         .min_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
     if let Some(coord) = next_dirty {
+        let Some(mesh) = terrain_meshes
+            .iter()
+            .find_map(|(chunk, mesh)| (chunk.coord == coord).then_some(mesh.id()))
+        else {
+            return;
+        };
         build_chunk(
             coord,
+            mesh,
             &terrain,
             stress_density.0,
             &mut state,
@@ -653,11 +670,22 @@ pub(super) fn stream_chunked_ground_cover(
             (-GROUND_COVER_CHUNK_RADIUS..=GROUND_COVER_CHUNK_RADIUS)
                 .map(move |dz| ChunkCoord::new(anchor_chunk.x + dx, anchor_chunk.z + dz))
         })
-        .filter(|coord| loaded_chunks.chunks.contains(coord) && !state.chunks.contains_key(coord))
+        .filter(|coord| {
+            loaded_chunks.chunks.contains(coord)
+                && !loaded_chunks.rebuilding.contains(coord)
+                && !state.chunks.contains_key(coord)
+        })
         .min_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
     if let Some(coord) = next {
+        let Some(mesh) = terrain_meshes
+            .iter()
+            .find_map(|(chunk, mesh)| (chunk.coord == coord).then_some(mesh.id()))
+        else {
+            return;
+        };
         build_chunk(
             coord,
+            mesh,
             &terrain,
             stress_density.0,
             &mut state,
@@ -698,22 +726,28 @@ pub(super) fn stream_chunked_ground_cover(
 
 pub(super) fn mark_chunked_grass_dirty_for_roads(
     changed: Query<(Entity, &VillageRoad), Changed<VillageRoad>>,
+    all: Query<(Entity, &VillageRoad)>,
     mut removed: RemovedComponents<VillageRoad>,
-    mut previous: Local<HashMap<Entity, (ChunkCoord, ChunkCoord)>>,
     mut state: ResMut<ChunkedGroundCoverState>,
 ) {
+    let initial = !state.roads_initialized;
+    state.roads_initialized = true;
     let mut dirty_bounds = Vec::new();
     for entity in removed.read() {
-        if let Some(bounds) = previous.remove(&entity) {
+        if let Some(bounds) = state.road_bounds.remove(&entity) {
             dirty_bounds.push(bounds);
         }
     }
-    for (entity, road) in &changed {
-        if let Some(bounds) = previous.remove(&entity) {
+    for (entity, road) in
+        changed
+            .iter()
+            .chain(all.iter().take(if initial { usize::MAX } else { 0 }))
+    {
+        if let Some(bounds) = state.road_bounds.remove(&entity) {
             dirty_bounds.push(bounds);
         }
         if let Some(bounds) = road_chunk_bounds(road, TENDED_ROAD_VERGE) {
-            previous.insert(entity, bounds);
+            state.road_bounds.insert(entity, bounds);
             dirty_bounds.push(bounds);
         }
     }
@@ -729,66 +763,41 @@ pub(super) fn mark_chunked_grass_dirty_for_roads(
     }
 }
 
+/// Compare the exact exclusions used by each resident chunk with the shared
+/// prop index. This also catches removals, rotations, movement and the switch
+/// from inferred farm clearances to accepted fields without another owner cache.
 pub(super) fn mark_chunked_grass_dirty_for_buildings(
-    added: Query<
-        (
-            &shared::building::PlacedBuilding,
-            &shared::building::BuildingPosition,
-        ),
-        Added<shared::building::PlacedBuilding>,
-    >,
     mut state: ResMut<ChunkedGroundCoverState>,
     zones: Res<BuildZoneChunkIndex>,
-    squares: Query<
-        (Entity, &shared::components::SettlementCivicSquare),
-        Changed<shared::components::SettlementCivicSquare>,
-    >,
-    mut removed_squares: RemovedComponents<shared::components::SettlementCivicSquare>,
-    mut square_zones: Local<HashMap<Entity, shared::building::BuildZoneEntry>>,
 ) {
-    let mut changed_zones = Vec::new();
-    for entity in removed_squares.read() {
-        if let Some(zone) = square_zones.remove(&entity) {
-            changed_zones.push(zone);
+    if !zones.is_changed() {
+        return;
+    }
+    let state = &mut *state;
+    for (&coord, data) in &state.chunks {
+        let current = zones.by_chunk.get(&coord).map_or(&[][..], Vec::as_slice);
+        if data.building_zones.as_slice() != current {
+            state.dirty.insert(coord);
         }
     }
-    for (entity, square) in &squares {
-        let zone = shared::building::BuildZoneEntry::from_rotated_rect(
-            square.center.xz(),
-            square.half_extents,
-            square.rotation,
-        );
-        if let Some(previous) = square_zones.insert(entity, zone) {
-            changed_zones.push(previous);
-        }
-        changed_zones.push(zone);
-    }
-    for zone in changed_zones {
-        let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
-        for x in min_x..=max_x {
-            for z in min_z..=max_z {
-                let coord = ChunkCoord::new(x, z);
-                if state.chunks.contains_key(&coord) {
-                    state.dirty.insert(coord);
-                }
-            }
-        }
-    }
-    for (building, position) in added.iter() {
-        for zone in
-            zones
-                .fields
-                .building_zones(position.0, building.building_type, building.rotation)
-        {
-            let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
-            for x in min_x..=max_x {
-                for z in min_z..=max_z {
-                    let coord = ChunkCoord::new(x, z);
-                    if state.chunks.contains_key(&coord) {
-                        state.dirty.insert(coord);
-                    }
-                }
-            }
+}
+
+/// Edited terrain stays resident while its replacement is built. Refresh the
+/// affected grass only after that replacement exists, keeping its old render
+/// batch visible until the budgeted instance-buffer update is ready.
+pub(super) fn mark_chunked_grass_dirty_for_terrain(
+    terrain_meshes: Query<(&TerrainChunk, &Mesh3d), Changed<Mesh3d>>,
+    mut state: ResMut<ChunkedGroundCoverState>,
+) {
+    let state = &mut *state;
+    for (chunk, mesh) in &terrain_meshes {
+        let Some(data) = state.chunks.get(&chunk.coord) else {
+            continue;
+        };
+        // PBR also marks Mesh3d changed when its material changes. Water-clock
+        // and splat updates do not change the height surface or grass placement.
+        if data.terrain_mesh != Some(mesh.id()) {
+            state.dirty.insert(chunk.coord);
         }
     }
 }
@@ -831,12 +840,287 @@ pub(super) fn clear_chunked_ground_cover(
         materials.remove(material.id());
     }
     state.dirty.clear();
+    state.road_bounds.clear();
+    state.roads_initialized = false;
     state.reported_chunk_count = 0;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn grass_footprint_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<ChunkedGroundCoverState>()
+            .init_resource::<BuildZoneChunkIndex>()
+            .init_resource::<super::super::PropFootprintSources>()
+            .init_resource::<super::super::LoadedPropChunks>()
+            .init_resource::<super::super::PendingPropSpawns>()
+            .init_resource::<super::super::PropChunkIndex>()
+            .add_systems(
+                Update,
+                (
+                    super::super::spawn::invalidate_props_for_new_buildings,
+                    super::super::spawn::sync_build_zone_chunk_index,
+                    mark_chunked_grass_dirty_for_buildings,
+                )
+                    .chain(),
+            );
+        for coord in [
+            ChunkCoord::new(0, 0),
+            ChunkCoord::new(3, 0),
+            ChunkCoord::new(8, 0),
+        ] {
+            app.world_mut()
+                .resource_mut::<ChunkedGroundCoverState>()
+                .chunks
+                .insert(coord, default());
+        }
+        app
+    }
+
+    /// Advance the invalidation fixture to the geometry a completed grass
+    /// rebuild would retain, without requiring a GPU or procedural meadow.
+    fn accept_grass_footprints(app: &mut App) {
+        let zones = app
+            .world()
+            .resource::<BuildZoneChunkIndex>()
+            .by_chunk
+            .clone();
+        let mut state = app.world_mut().resource_mut::<ChunkedGroundCoverState>();
+        for (&coord, data) in &mut state.chunks {
+            data.building_zones = zones.get(&coord).cloned().unwrap_or_default();
+        }
+        state.dirty.clear();
+    }
+
+    #[test]
+    fn building_changes_dirty_old_and_new_grass_without_resetting_surroundings() {
+        use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
+        let mut app = grass_footprint_app();
+        let old = ChunkCoord::new(0, 0);
+        let new = ChunkCoord::new(3, 0);
+        let batch = app.world_mut().spawn(ChunkedGroundCover).id();
+        let key = GrassBatchKey {
+            x: 0,
+            z: 0,
+            kind: PropKind::GrassShortA,
+        };
+        app.world_mut()
+            .resource_mut::<ChunkedGroundCoverState>()
+            .render_entities
+            .insert(key, batch);
+        let building = app
+            .world_mut()
+            .spawn((
+                PlacedBuilding {
+                    building_type: BuildingType::LogCabin,
+                    rotation: 0.0,
+                },
+                BuildingPosition(Vec3::new(32.0, 0.0, 32.0)),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old])
+        );
+        accept_grass_footprints(&mut app);
+
+        // A replicated height correction leaves the XZ exclusions unchanged.
+        app.world_mut()
+            .entity_mut(building)
+            .insert(BuildingPosition(Vec3::new(32.0, 1.0, 32.0)));
+        app.update();
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
+
+        app.world_mut()
+            .get_mut::<PlacedBuilding>(building)
+            .unwrap()
+            .rotation = 0.8;
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old])
+        );
+        accept_grass_footprints(&mut app);
+        app.world_mut()
+            .entity_mut(building)
+            .insert(BuildingPosition(Vec3::new(224.0, 1.0, 32.0)));
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old, new])
+        );
+        accept_grass_footprints(&mut app);
+
+        // Missing placement components release land even while the entity lives.
+        app.world_mut()
+            .entity_mut(building)
+            .remove::<BuildingPosition>();
+        app.update();
+        let state = app.world().resource::<ChunkedGroundCoverState>();
+        assert_eq!(state.dirty, HashSet::from([new]));
+        assert_eq!(state.chunks.len(), 3);
+        assert_eq!(state.render_entities.get(&key), Some(&batch));
+        assert!(app.world().get_entity(batch).is_ok());
+    }
+
+    #[test]
+    fn square_metadata_does_not_dirty_grass_but_moving_and_removing_its_land_does() {
+        use shared::components::SettlementCivicSquare;
+        let mut app = grass_footprint_app();
+        let old = ChunkCoord::new(0, 0);
+        let new = ChunkCoord::new(3, 0);
+        let square = app
+            .world_mut()
+            .spawn(SettlementCivicSquare {
+                center: Vec3::new(32.0, 0.0, 32.0),
+                half_extents: Vec2::new(12.0, 8.0),
+                rotation: 0.0,
+                market_position: Vec3::new(32.0, 0.0, 34.0),
+                market_rotation: 0.0,
+            })
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old])
+        );
+        accept_grass_footprints(&mut app);
+        app.world_mut()
+            .get_mut::<SettlementCivicSquare>(square)
+            .unwrap()
+            .market_rotation = 0.7;
+        app.update();
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
+        app.world_mut()
+            .get_mut::<SettlementCivicSquare>(square)
+            .unwrap()
+            .center
+            .x = 224.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old, new])
+        );
+        accept_grass_footprints(&mut app);
+        app.world_mut().despawn(square);
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([new])
+        );
+    }
+
+    #[test]
+    fn terrain_mesh_replacement_refreshes_only_resident_grass_and_ignores_material_ticks() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<ChunkedGroundCoverState>()
+            .add_systems(Update, mark_chunked_grass_dirty_for_terrain);
+        let handles = {
+            let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+            [
+                meshes.add(Cuboid::default()),
+                meshes.add(Cuboid::new(1.0, 2.0, 1.0)),
+            ]
+        };
+        let coord = ChunkCoord::new(0, 0);
+        app.world_mut()
+            .resource_mut::<ChunkedGroundCoverState>()
+            .chunks
+            .insert(
+                coord,
+                ChunkGrassInstances {
+                    terrain_mesh: Some(handles[0].id()),
+                    ..default()
+                },
+            );
+        let chunk = app
+            .world_mut()
+            .spawn((
+                TerrainChunk {
+                    coord,
+                    weightmap: default(),
+                    material: default(),
+                },
+                Mesh3d(handles[0].clone()),
+            ))
+            .id();
+        app.update();
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
+        app.world_mut()
+            .get_mut::<Mesh3d>(chunk)
+            .unwrap()
+            .set_changed();
+        app.update();
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
+
+        app.world_mut()
+            .entity_mut(chunk)
+            .insert(Mesh3d(handles[1].clone()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([coord])
+        );
+        {
+            let mut state = app.world_mut().resource_mut::<ChunkedGroundCoverState>();
+            state.chunks.get_mut(&coord).unwrap().terrain_mesh = Some(handles[1].id());
+            state.dirty.clear();
+        }
+        app.world_mut()
+            .get_mut::<Mesh3d>(chunk)
+            .unwrap()
+            .set_changed();
+        app.world_mut().spawn((
+            TerrainChunk {
+                coord: ChunkCoord::new(8, 0),
+                weightmap: default(),
+                material: default(),
+            },
+            Mesh3d(handles[1].clone()),
+        ));
+        app.update();
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
+
+        // Terrain currently replaces entities, but both lifetime forms work.
+        app.world_mut().despawn(chunk);
+        app.world_mut().spawn((
+            TerrainChunk {
+                coord,
+                weightmap: default(),
+                material: default(),
+            },
+            Mesh3d(handles[0].clone()),
+        ));
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([coord])
+        );
+    }
 
     #[test]
     fn tended_meadow_is_continuous_across_chunks_without_a_chunk_repeat() {
@@ -946,6 +1230,36 @@ mod tests {
         assert_eq!(
             app.world().resource::<ChunkedGroundCoverState>().dirty,
             HashSet::from([new])
+        );
+    }
+
+    #[test]
+    fn clearing_ground_cover_also_discards_previous_world_road_bounds() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<ChunkedGroundCoverState>();
+        world.init_resource::<Assets<InstancedGrassMaterial>>();
+        let road = world.spawn_empty().id();
+        world
+            .resource_mut::<ChunkedGroundCoverState>()
+            .road_bounds
+            .insert(road, (ChunkCoord::new(0, 0), ChunkCoord::new(1, 0)));
+        world
+            .resource_mut::<ChunkedGroundCoverState>()
+            .roads_initialized = true;
+        world.despawn(road);
+        world.clear_trackers();
+        world.clear_trackers();
+        world.run_system_once(clear_chunked_ground_cover).unwrap();
+        assert!(world
+            .resource::<ChunkedGroundCoverState>()
+            .road_bounds
+            .is_empty());
+        assert!(
+            !world
+                .resource::<ChunkedGroundCoverState>()
+                .roads_initialized
         );
     }
 

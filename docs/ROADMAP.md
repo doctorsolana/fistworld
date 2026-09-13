@@ -77,6 +77,9 @@ same-process reconnects. See [NEW-WORLD.md](NEW-WORLD.md).
 - [x] Ordinary inhabited opening: server-selected random seed, reliable join-time terrain
       recipe, roughly ten geography-aware communities and a coast connected to an inhabited Hall.
       Founding supplies are finite; no lab policies, refills or scripted growth run afterward.
+- [x] Spread founded towns across eligible land regions, certify each independent group's
+      coastal arrival, and size food chains from actual workplace quality and available labour.
+      Known separate groups cannot promise overland freight; bridges and army shipping remain future work.
 - [x] New-player presentation: mandatory character creator, dressed Hero/boat readiness
       gate, face-to-RTS opening camera, selected water-only boat and shore disembark. See
       [PLAYER-START-AND-VESSELS.md](PLAYER-START-AND-VESSELS.md).

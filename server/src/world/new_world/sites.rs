@@ -11,6 +11,8 @@ use shared::{
 #[derive(Clone, Debug)]
 pub(super) struct Site {
     pub hall: Vec3,
+    /// Resource potential of the usable surrounding catchment. Each actual
+    /// workplace still has to qualify on its own plot during layout approval.
     pub resources: ResourceProfile,
     pub potential_population: usize,
     pub rank: f32,
@@ -37,11 +39,9 @@ pub(super) fn survey(terrain: &WorldTerrain, seed: u64) -> Vec<Site> {
             );
             let hall = Vec3::new(at.x, terrain.get_height(at.x, at.y), at.y);
             let gradient = slope(terrain, at);
-            let resources = field.resources(at.x, at.y, hall.y, gradient);
             // Even a specialised inland hamlet needs a plausible local food
             // base until shipping can reliably sustain a wholly import-fed town.
             if gradient < 0.10
-                && resources.farmland >= 0.22
                 && shared::components::minimum_building_water_clearance(
                     terrain,
                     hall,
@@ -49,25 +49,28 @@ pub(super) fn survey(terrain: &WorldTerrain, seed: u64) -> Vec<Site> {
                     0.0,
                 ) >= shared::components::SETTLEMENT_FREEBOARD
             {
-                let usable = [-144.0, -72.0, 0.0, 72.0, 144.0]
+                let usable_resources: Vec<_> = [-144.0, -72.0, 0.0, 72.0, 144.0]
                     .into_iter()
                     .flat_map(|dx| {
                         [-144.0, -72.0, 0.0, 72.0, 144.0]
                             .into_iter()
                             .map(move |dz| at + Vec2::new(dx, dz))
                     })
-                    .filter(|point| {
+                    .filter_map(|point| {
                         let height = terrain.get_height(point.x, point.y);
-                        slope(terrain, *point) < 0.16
+                        let gradient = slope(terrain, point);
+                        (gradient < 0.16
                             && terrain
                                 .water_surface_height(point.x, point.y)
                                 .is_none_or(|water| {
                                     height - water >= shared::components::SETTLEMENT_FREEBOARD
-                                })
+                                }))
+                        .then(|| field.resources(point.x, point.y, height, gradient))
                     })
-                    .count() as f32
-                    / 25.0;
-                if usable >= 0.76 {
+                    .collect();
+                let usable = usable_resources.len() as f32 / 25.0;
+                let resources = catchment_resources(&usable_resources);
+                if usable >= 0.76 && resources.farmland >= 0.22 {
                     let maturity = 0.15 + ((salt >> 24) & 1023) as f32 / 1023.0 * 0.85;
                     let capacity = (resources.farmland * usable).clamp(0.0, 1.0);
                     let potential_population = (12.0 + 64.0 * capacity * maturity.powi(2)) as usize;
@@ -88,6 +91,16 @@ pub(super) fn survey(terrain: &WorldTerrain, seed: u64) -> Vec<Site> {
         x += step;
     }
     sites
+}
+
+fn catchment_resources(samples: &[ResourceProfile]) -> ResourceProfile {
+    let count = samples.len().max(1) as f32;
+    ResourceProfile {
+        farmland: samples.iter().map(|p| p.farmland).sum::<f32>() / count,
+        wood: samples.iter().map(|p| p.wood).sum::<f32>() / count,
+        stone: samples.iter().map(|p| p.stone).sum::<f32>() / count,
+        iron: samples.iter().map(|p| p.iron).sum::<f32>() / count,
+    }
 }
 
 pub(super) fn slope(terrain: &WorldTerrain, point: Vec2) -> f32 {

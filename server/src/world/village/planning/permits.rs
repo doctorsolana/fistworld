@@ -12,11 +12,12 @@ use super::funding::{
 use super::market_signals::accumulate_business_signals;
 use super::neighborhood::PlotNeighbor;
 use super::plots::{
-    find_site_with_plan_diagnostics, SiteSearchRejections, MAX_SETTLEMENT_SEARCH_RADIUS,
+    advance_land_search, find_permit_site, SiteSearchRejections, MAX_SETTLEMENT_SEARCH_RADIUS,
 };
 use super::road_access::{
     planned_road_access_path, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
 };
+use super::search_access::refresh_land_search_access;
 use super::terrain::site_quality;
 use crate::world::village::development_market::{
     investor_score, investor_threshold, minimum_startup_capital, private_opportunities,
@@ -962,11 +963,22 @@ pub fn consider_permits(
                 None,
             ));
         }
+        let land_access_version = refresh_land_search_access(
+            &mut clock,
+            settlement_entity,
+            hall.0,
+            terrain,
+            &village_roads,
+        );
         let search_signature = FailedSiteSearch {
             kind: missing,
             occupied_plots: occupied.len(),
-            roads: village_roads.len(),
-            terrain_version: terrain.modification_version(),
+            // Coastal searches retain their separate whole-terrain contract.
+            access_version: if missing == SettlementBuildingKind::FishermansHut {
+                u64::from(terrain.modification_version())
+            } else {
+                land_access_version
+            },
         };
         let repeated_failed_search = clock
             .failed_site_searches
@@ -1026,14 +1038,10 @@ pub fn consider_permits(
             if kind == SettlementBuildingKind::FishermansHut {
                 return None;
             }
-            let bounded_resource_search = matches!(
-                kind,
-                SettlementBuildingKind::Farmstead
-                    | SettlementBuildingKind::LumberjackHut
-                    | SettlementBuildingKind::Windmill
-                    | SettlementBuildingKind::StoneQuarry
-            );
-            find_site_with_plan_diagnostics(
+            // Every ordinary land permit shares the same bounded survey. A
+            // Tavern/Church used to scan thousands of candidates in one tick
+            // while farms correctly resumed one ring at a time.
+            find_permit_site(
                 terrain,
                 hall.0,
                 kind,
@@ -1045,15 +1053,10 @@ pub fn consider_permits(
                 developments.get(settlement_entity).ok(),
                 planning.colliders.as_deref(),
                 planning.derived.as_deref(),
-                bounded_resource_search
-                    .then(|| {
-                        clock
-                            .site_search_radii
-                            .get(&(settlement_entity, kind))
-                            .copied()
-                    })
-                    .flatten(),
-                bounded_resource_search.then_some(1),
+                clock
+                    .site_search_radii
+                    .get(&(settlement_entity, kind))
+                    .copied(),
                 Some(&mut primary_rejections),
                 Some(&urban_plan),
                 defenses,
@@ -1145,24 +1148,17 @@ pub fn consider_permits(
                 );
                 continue;
             }
-            if let Some(searched_kind) = requested.filter(|kind| {
-                matches!(
-                    kind,
-                    SettlementBuildingKind::Farmstead
-                        | SettlementBuildingKind::LumberjackHut
-                        | SettlementBuildingKind::Windmill
-                        | SettlementBuildingKind::StoneQuarry
-                )
-            }) {
-                let cursor = clock
-                    .site_search_radii
-                    .entry((settlement_entity, searched_kind))
-                    .or_insert_with(|| searched_kind.preferred_ring().0);
-                if *cursor < MAX_SETTLEMENT_SEARCH_RADIUS {
-                    // One outward ring per decision is a deliberate server
-                    // budget. Resume at the next ring on the next permit tick
-                    // instead of turning one mature-city search into a hitch.
-                    *cursor = (*cursor + 6.0).min(MAX_SETTLEMENT_SEARCH_RADIUS);
+            // A Market with a durable square has exactly one civic anchor;
+            // retry it after geometry changes instead of drifting away from
+            // the reserved centre. Other land plots resume their next band.
+            let anchored_market = requested == Some(SettlementBuildingKind::Market)
+                && civic_squares
+                    .iter()
+                    .any(|square| square.center.xz().distance(hall.0.xz()) < 80.0);
+            if let Some(searched_kind) = requested
+                .filter(|kind| *kind != SettlementBuildingKind::FishermansHut && !anchored_market)
+            {
+                if advance_land_search(&mut clock, settlement_entity, searched_kind) {
                     clock.failed_site_searches.remove(&settlement_entity);
                     clock.deferred_opportunities.insert(
                         (settlement_entity, searched_kind),
@@ -1242,25 +1238,10 @@ pub fn consider_permits(
                 && advance_incremental_fishing_search(&mut clock, settlement_entity)
             {
                 clock.failed_site_searches.remove(&settlement_entity);
-            } else if matches!(
-                kind,
-                SettlementBuildingKind::Farmstead
-                    | SettlementBuildingKind::LumberjackHut
-                    | SettlementBuildingKind::Windmill
-                    | SettlementBuildingKind::StoneQuarry
-            ) {
-                let cursor = clock
-                    .site_search_radii
-                    .entry((settlement_entity, kind))
-                    .or_insert_with(|| kind.preferred_ring().0);
-                if *cursor < MAX_SETTLEMENT_SEARCH_RADIUS {
-                    *cursor = (*cursor + 6.0).min(MAX_SETTLEMENT_SEARCH_RADIUS);
-                    clock.failed_site_searches.remove(&settlement_entity);
-                } else {
-                    clock
-                        .failed_site_searches
-                        .insert(settlement_entity, search_signature);
-                }
+            } else if kind != SettlementBuildingKind::FishermansHut
+                && advance_land_search(&mut clock, settlement_entity, kind)
+            {
+                clock.failed_site_searches.remove(&settlement_entity);
             } else {
                 clock
                     .failed_site_searches
@@ -1288,12 +1269,16 @@ pub fn consider_permits(
             continue;
         }
         clock.failed_site_searches.remove(&settlement_entity);
+        // Resource plots rank their actual radius. Domestic/civic frontage may
+        // lie beyond the current band; retain that band's cursor instead of
+        // skipping legal inner infill after a far frontage happens to succeed.
         if matches!(
             kind,
             SettlementBuildingKind::Farmstead
                 | SettlementBuildingKind::LumberjackHut
                 | SettlementBuildingKind::Windmill
                 | SettlementBuildingKind::StoneQuarry
+                | SettlementBuildingKind::LivestockFarm
         ) {
             clock.site_search_radii.insert(
                 (settlement_entity, kind),

@@ -103,7 +103,7 @@ pub use planning::{
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
 pub(crate) use planning::{
     nearby_defense_reservations, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
-    validate_manual_plot, ManualPlotApproval, RoadAccessBlocker,
+    site_quality, validate_manual_plot, ManualPlotApproval, RoadAccessBlocker,
 };
 pub use population::{
     advance_immigration_departures, arrive_at_settlement, recount_residents, seek_settlement,
@@ -1240,10 +1240,10 @@ pub struct VillageClock {
     /// same failure every four simulated seconds at 100x. Population is not
     /// geometry: immigration alone must not invalidate this cache.
     failed_site_searches: HashMap<Entity, FailedSiteSearch>,
-    /// Last successful outward ring for each settlement/building kind.
-    /// Completed plots never relocate or free their ground, so restarting a
-    /// mature Farmstead search at its founding ring is pure repeated work.
+    /// Resumable outward ring for each settlement/building kind. Meaningful
+    /// local road access or terrain changes reopen the inner land search.
     site_search_radii: HashMap<(Entity, SettlementBuildingKind), f32>,
+    land_search_access: HashMap<Entity, planning::LandSearchAccess>,
     /// A coastline that has been exhausted ring by ring cannot become a
     /// fishing site merely because another inland house was completed. Retry
     /// only after edited terrain changes the physical shoreline.
@@ -1254,8 +1254,7 @@ pub struct VillageClock {
 struct FailedSiteSearch {
     kind: SettlementBuildingKind,
     occupied_plots: usize,
-    roads: usize,
-    terrain_version: u32,
+    access_version: u64,
 }
 
 impl Default for VillageClock {
@@ -1267,6 +1266,7 @@ impl Default for VillageClock {
             deferred_opportunities: HashMap::new(),
             failed_site_searches: HashMap::new(),
             site_search_radii: HashMap::new(),
+            land_search_access: HashMap::new(),
             failed_fishing_terrain_versions: HashMap::new(),
         }
     }

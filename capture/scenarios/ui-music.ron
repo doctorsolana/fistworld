@@ -1,0 +1,22 @@
+// Actual music sinks and the normal Escape-menu toggle; no alternate UI.
+(
+    version: 1, name: "music-and-pause-menu", map: "battle_lab",
+    output_dir: "logs/captures/ui-music",
+    resolution: (1280, 720), target: window, show_window: false,
+    warmup_frames: 180,
+    readiness: (minimum_frames: 30, maximum_frames: 1200,
+        minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_PAUSE": "audio",
+        "FISTWORLD_CAPTURE_MUSIC": "1",
+    },
+    shots: [
+        (name: "01-playing", focus: (0.0, 0.0, 0.0), zoom: 160.0, time_of_day: 0.5),
+        (name: "02-music-off", focus: (0.0, 0.0, 0.0), zoom: 160.0, time_of_day: 0.5),
+        (name: "03-resumed", focus: (16.0, 0.0, 12.0), zoom: 100.0, time_of_day: 0.5),
+        (name: "04-opening-priority", focus: (16.0, 0.0, 12.0), zoom: 100.0, time_of_day: 0.5),
+        (name: "05-opening-off", focus: (16.0, 0.0, 12.0), zoom: 100.0, time_of_day: 0.5),
+        (name: "06-gameplay-return", focus: (0.0, 0.0, 0.0), zoom: 160.0, time_of_day: 0.5),
+        (name: "07-quiet-after-finish", focus: (0.0, 0.0, 0.0), zoom: 160.0, time_of_day: 0.5),
+    ],
+)

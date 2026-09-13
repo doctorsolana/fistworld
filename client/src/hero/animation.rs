@@ -1,6 +1,6 @@
 //! Shared character animation graphs, activity clips and visibility culling.
 
-use super::appearance::{HeroAssets, HeroManifest, HeroPreviewRig};
+use super::appearance::{HeroAssets, HeroManifest, HeroPreviewRig, HeroSceneRoot};
 use super::motion::HeroVisual;
 use bevy::animation::{AnimationTargetId, RepeatAnimation};
 use bevy::camera::primitives::{Frustum, Sphere};
@@ -146,6 +146,7 @@ pub(super) fn setup_hero_animation(
     parents: Query<&ChildOf>,
     names: Query<&Name>,
     children_q: Query<&Children>,
+    character_scenes: Query<(), With<HeroSceneRoot>>,
     rig_roots: Query<
         Entity,
         (
@@ -158,6 +159,23 @@ pub(super) fn setup_hero_animation(
         return;
     }
 
+    // A porter also owns an independently animated cart. Only the player
+    // inside the authored humanoid scene can drive the person's bones. Scene
+    // assets instantiate asynchronously, so neither query order nor a cached
+    // graph tells us which of those two players loaded first.
+    let character_owner = |player: Entity| {
+        let mut ancestor = player;
+        let mut in_character_scene = character_scenes.contains(ancestor);
+        while let Ok(parent) = parents.get(ancestor) {
+            ancestor = parent.parent();
+            in_character_scene |= character_scenes.contains(ancestor);
+            if rig_roots.contains(ancestor) {
+                return in_character_scene.then_some(ancestor);
+            }
+        }
+        None
+    };
+
     if assets.graph.is_none() {
         let Some(gltf) = assets.gltf.as_ref().and_then(|handle| gltfs.get(handle)) else {
             return;
@@ -165,16 +183,10 @@ pub(super) fn setup_hero_animation(
         // Mask groups are derived from the LIVE rig rather than a hardcoded
         // bone table: a renamed or added bone lands in the body group
         // automatically instead of silently escaping every mask.
-        let Some((player_entity, _)) = players.iter().find(|(entity, _)| {
-            let mut ancestor = *entity;
-            while let Ok(parent) = parents.get(ancestor) {
-                ancestor = parent.parent();
-                if rig_roots.contains(ancestor) {
-                    return true;
-                }
-            }
-            false
-        }) else {
+        let Some((player_entity, _)) = players
+            .iter()
+            .find(|(entity, _)| character_owner(*entity).is_some())
+        else {
             return;
         };
         let mut graph = AnimationGraph::new();
@@ -265,17 +277,7 @@ pub(super) fn setup_hero_animation(
     let hero_graph = assets.graph.clone().expect("graph built above");
 
     for (player_entity, mut player) in players.iter_mut() {
-        // Only adopt players that live under a hero/preview root.
-        let mut ancestor = player_entity;
-        let mut rig_root = None;
-        while let Ok(child_of) = parents.get(ancestor) {
-            ancestor = child_of.parent();
-            if let Ok(root) = rig_roots.get(ancestor) {
-                rig_root = Some(root);
-                break;
-            }
-        }
-        let Some(rig_root) = rig_root else {
+        let Some(rig_root) = character_owner(player_entity) else {
             continue;
         };
 

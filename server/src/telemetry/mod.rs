@@ -7,6 +7,7 @@
 //! - May read cross-domain state for observability.
 //! - Should not mutate gameplay authority/state transitions.
 
+pub(crate) mod movement;
 pub mod network;
 pub mod perf;
 

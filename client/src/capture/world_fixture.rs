@@ -61,7 +61,8 @@ pub(super) fn enter_world_offline(
     next_state.set(
         match std::env::var("FISTFORCE_CAPTURE_FRONTEND").as_deref() {
             Ok("menu") => GameState::MainMenu,
-            Ok("name") => GameState::Connected,
+            Ok("name" | "name-error" | "submitting" | "preparing") => GameState::Connected,
+            Ok("connecting") => GameState::Connecting,
             _ => GameState::Playing,
         },
     );

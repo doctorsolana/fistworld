@@ -76,8 +76,8 @@ FPS benchmark; reduced meshes retain draw calls, and shared LOD assets add memor
 | LongCabin | 2,296 | 1,256 | 4,604 | 3,312 |
 | LongCabinL2 | 3,194 | 1,512 | 6,400 | 3,902 |
 | LumberjackHut | 3,422 | 2,123 | 6,734 | 4,900 |
-| Market | 4,200 | 1,590 | 8,400 | 3,426 |
-| MarketPaved | 3,624 | 1,476 | 7,248 | 3,094 |
+| Market | 3,792 | 1,530 | 7,584 | 3,202 |
+| MarketPaved | 3,576 | 1,530 | 7,152 | 3,200 |
 | MootHall | 5,477 | 2,800 | 10,931 | 6,325 |
 | StoneQuarry | 2,491 | 1,507 | 4,905 | 3,198 |
 | StorageHall | 4,032 | 2,077 | 7,976 | 4,691 |
@@ -85,7 +85,7 @@ FPS benchmark; reduced meshes retain draw calls, and shared LOD assets add memor
 | TownHall | 20,381 | 5,358 | 40,433 | 12,699 |
 | VillageHall | 6,836 | 2,990 | 13,596 | 7,117 |
 | WindMill | 6,120 | 3,649 | 12,200 | 9,310 |
-| **One of every variant** | **101,010** | **43,339** | **200,751** | **100,935** |
+| **One of every variant** | **100,554** | **43,333** | **199,839** | **100,817** |
 
 ## Verification
 

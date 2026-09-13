@@ -45,6 +45,9 @@ enum ShellText {
 #[derive(Component)]
 struct CompassRose;
 
+#[derive(Component)]
+struct CompassNorth;
+
 #[derive(Resource, Default)]
 struct ViewedPlace(Option<(SettlementId, Vec3)>);
 
@@ -192,10 +195,10 @@ pub(super) fn navigation() -> impl Bundle {
         Name::new("Exploration navigation"),
         Node {
             position_type: PositionType::Absolute,
-            right: Val::Px(18.0),
-            bottom: Val::Px(18.0),
-            width: Val::Px(145.0),
-            height: Val::Px(110.0),
+            right: Val::Px(32.0),
+            bottom: Val::Px(32.0),
+            width: Val::Px(166.0),
+            height: Val::Px(112.0),
             ..default()
         },
         Pickable::IGNORE,
@@ -209,21 +212,22 @@ pub(super) fn navigation() -> impl Bundle {
                     position_type: PositionType::Absolute,
                     left: Val::Px(0.0),
                     bottom: Val::Px(0.0),
-                    width: Val::Px(108.0),
-                    height: Val::Px(108.0),
+                    width: Val::Px(112.0),
+                    height: Val::Px(112.0),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     border_radius: BorderRadius::MAX,
                     ..default()
                 },
                 button_chrome(UiButtonVariant::Ribbon),
-                chrome::medallion(),
+                chrome::compass_dial(),
                 plate_shadow(),
                 children![(
                     CompassRose,
+                    Name::new("Compass bearing"),
                     Node {
-                        width: Val::Px(84.0),
-                        height: Val::Px(84.0),
+                        width: Val::Px(90.0),
+                        height: Val::Px(90.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
@@ -232,18 +236,21 @@ pub(super) fn navigation() -> impl Bundle {
                     UiTransform::default(),
                     Pickable::IGNORE,
                     children![
+                        chrome::icon(chrome::HudIcon::CompassRose, 90.0),
                         (
+                            CompassNorth,
+                            Name::new("Compass north"),
                             Node {
                                 position_type: PositionType::Absolute,
                                 top: Val::Px(0.0),
                                 ..default()
                             },
                             Text::new("N"),
-                            typography::heading(13.0),
+                            typography::heading(14.0),
                             TextColor(PARCHMENT),
+                            UiTransform::default(),
                             Pickable::IGNORE,
                         ),
-                        chrome::icon(chrome::HudIcon::Compass, 52.0),
                     ],
                 )],
             ),
@@ -255,9 +262,9 @@ pub(super) fn navigation() -> impl Bundle {
                 Node {
                     position_type: PositionType::Absolute,
                     right: Val::Px(0.0),
-                    bottom: Val::Px(18.0),
-                    width: Val::Px(45.0),
-                    height: Val::Px(45.0),
+                    bottom: Val::Px(24.0),
+                    width: Val::Px(48.0),
+                    height: Val::Px(48.0),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     border_radius: BorderRadius::MAX,
@@ -296,14 +303,21 @@ fn sync_visibility(
 fn turn_compass(
     cameras: Query<&CommanderCamera>,
     mut roses: Query<&mut UiTransform, With<CompassRose>>,
+    mut north: Query<&mut UiTransform, (With<CompassNorth>, Without<CompassRose>)>,
 ) {
     let Ok(camera) = cameras.single() else { return };
     // The screen's positive y points down: viewed north rotates clockwise as
-    // the camera's world yaw increases. Rotate the N label with the rose.
+    // the camera's world yaw increases. Move N with the bearing, but keep its
+    // glyph upright so facing south never turns the label upside down.
     let rotation = Rot2::radians(camera.yaw);
     for mut rose in &mut roses {
         if rose.rotation != rotation {
             rose.rotation = rotation;
+        }
+    }
+    for mut label in &mut north {
+        if label.rotation != rotation.inverse() {
+            label.rotation = rotation.inverse();
         }
     }
 }

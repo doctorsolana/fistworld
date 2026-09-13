@@ -65,6 +65,8 @@ pub mod property_market;
 pub mod scroll;
 pub mod settlement_names;
 pub mod settlement_panel;
+pub(crate) mod sound;
+pub(crate) mod startup;
 pub mod styles;
 pub mod typography;
 pub mod world_map;

@@ -1,7 +1,6 @@
 //! Bounded rendering interpolation of authoritative character snapshots.
 
 use bevy::prelude::*;
-use shared::character::locomotion::WALK_CYCLE_SPEED;
 use shared::components::{CharacterMotion, PlayerPosition, PlayerRotation, TimeWarp};
 
 /// Client-side smoothing/animation state on the hero root.
@@ -22,6 +21,11 @@ pub(crate) struct HeroMotionSnapshot {
 }
 
 impl HeroVisual {
+    /// A stationary local rig using the normal idle body and face animations.
+    pub fn idle() -> Self {
+        Self { speed: 0.0 }
+    }
+
     /// Smoothed visual speed, m/s.
     ///
     /// The honest source for "is this character moving?". The replicated
@@ -29,14 +33,6 @@ impl HeroVisual {
     /// answers "did a packet land this frame?" rather than "is it walking?".
     pub fn speed(&self) -> f32 {
         self.speed
-    }
-
-    /// A rig that should always animate at full walk speed (the character
-    /// creator preview walks in place on its turntable).
-    pub fn walking_in_place() -> Self {
-        Self {
-            speed: WALK_CYCLE_SPEED,
-        }
     }
 }
 

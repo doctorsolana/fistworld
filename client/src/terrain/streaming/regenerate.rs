@@ -62,11 +62,15 @@ pub(crate) fn regenerate_dirty_chunks(
     //
     // Tasks are still cancelled here so a rebuild in flight against the OLD
     // heights is discarded rather than finalised over the new ones.
+    // Cancel even a first load that has not produced an entity yet: its
+    // snapshot may predate this edit too.
+    for coord in &dirty {
+        tasks.remove(coord);
+    }
     for (entity, chunk, _mesh_handle) in chunk_query.iter() {
         if dirty.contains(&chunk.coord) {
-            tasks.remove(&chunk.coord);
             commands.entity(entity).insert(StaleChunk);
-            loaded_chunks.chunks.remove(&chunk.coord);
+            loaded_chunks.rebuilding.insert(chunk.coord);
         }
     }
     perf.terrain_regen_ms += start.elapsed().as_secs_f32() * 1000.0;
@@ -174,7 +178,9 @@ pub(crate) fn process_chunk_tasks(
         };
         tasks.tasks.remove(&coord);
         tasks.order_dirty = true;
-        if loaded_chunks.chunks.contains(&result.coord) {
+        if loaded_chunks.chunks.contains(&result.coord)
+            && !loaded_chunks.rebuilding.contains(&result.coord)
+        {
             continue;
         }
 
@@ -186,34 +192,23 @@ pub(crate) fn process_chunk_tasks(
 
         let mesh_handle = meshes.add(result.mesh);
 
-        let palette = crate::terrain::materials::stylized_palette();
-        let material = materials.add(TerrainSplatMaterial {
-            base: StandardMaterial {
-                base_color: Color::WHITE,
-                perceptual_roughness: 0.97,
-                metallic: 0.0,
-                reflectance: 0.08,
-                ..default()
+        let material = materials.add(crate::terrain::materials::new_chunk_material(
+            &render_assets,
+            weightmap.handle.clone(),
+            shared::terrain::TerrainSplatParams {
+                layer_tiling: render_assets.layer_tiling,
+                water_params: result.water_params,
+                debug_mode: debug_settings.mode,
+                normal_strength: desired_terrain_normal_strength(
+                    result.coord,
+                    player_chunk,
+                    view_distance,
+                ),
+                weightmap_endpoint_samples: 0.0,
+                _pad: 0.0,
             },
-            extension: TerrainSplatExtension {
-                weight_map: weightmap.handle.clone(),
-                albedo_array: render_assets.albedo_array.clone(),
-                normal_array: render_assets.normal_array.clone(),
-                params: shared::terrain::TerrainSplatParams {
-                    layer_tiling: render_assets.layer_tiling,
-                    water_params: result.water_params,
-                    debug_mode: debug_settings.mode,
-                    normal_strength: desired_terrain_normal_strength(
-                        result.coord,
-                        player_chunk,
-                        view_distance,
-                    ),
-                    weightmap_endpoint_samples: 0.0,
-                    _pad: 0.0,
-                },
-                palette,
-            },
-        });
+            result.climate,
+        ));
 
         // Retire the superseded chunk now, in the same batch as the spawn
         // below, so the swap happens between frames rather than across them.
@@ -253,6 +248,7 @@ pub(crate) fn process_chunk_tasks(
 
         paint_state.weightmaps.insert(result.coord, weightmap);
         loaded_chunks.chunks.insert(result.coord);
+        loaded_chunks.rebuilding.remove(&result.coord);
         finalized += 1;
     }
 
@@ -260,4 +256,56 @@ pub(crate) fn process_chunk_tasks(
         perf.terrain_chunks_finalized += finalized;
     }
     perf.terrain_finalize_ms += start.elapsed().as_secs_f32() * 1000.0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editing_resident_ground_does_not_publish_a_chunk_unload() {
+        let mut app = App::new();
+        app.init_resource::<TerrainDeltaState>()
+            .init_resource::<LoadedChunks>()
+            .init_resource::<DebugPerfSettings>()
+            .init_resource::<TerrainChunkTasks>()
+            .init_resource::<PerfHitchStats>()
+            .add_systems(Update, regenerate_dirty_chunks);
+        let coord = ChunkCoord::new(2, 3);
+        let entity = app
+            .world_mut()
+            .spawn((
+                TerrainChunk {
+                    coord,
+                    weightmap: default(),
+                    material: default(),
+                },
+                Mesh3d::default(),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<LoadedChunks>()
+            .chunks
+            .insert(coord);
+        let mut deltas = app.world_mut().resource_mut::<TerrainDeltaState>();
+        deltas.dirty_chunks.insert(coord);
+        deltas.dirty_queue.push_back(coord);
+        app.update();
+        let loaded = app.world().resource::<LoadedChunks>();
+        assert!(
+            loaded.chunks.contains(&coord),
+            "grass, props and far terrain still have resident ground"
+        );
+        assert!(loaded.rebuilding.contains(&coord));
+        assert!(app.world().get::<StaleChunk>(entity).is_some());
+        assert!(app.world().get::<Mesh3d>(entity).is_some());
+        app.update();
+        assert!(app
+            .world()
+            .resource::<LoadedChunks>()
+            .chunks
+            .contains(&coord));
+        let mut chunks = app.world_mut().query::<&TerrainChunk>();
+        assert_eq!(chunks.iter(app.world()).count(), 1);
+    }
 }

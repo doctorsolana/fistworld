@@ -15,8 +15,9 @@
 //!
 //! The arrays used to ship as uncompressed `R8G8B8A8`: 21.3 MB each on disk and the same again
 //! in VRAM, 42.6 MB total, for four 1024x1024 images. BC7 is 1 byte per texel against 4, so the
-//! pair lands near 10.6 MB with no visible difference -- and the albedo array only supplies an
-//! 18% chroma grain, so it had quality budget to spare. BC7 is also the portable choice: every
+//! pair lands near 10.6 MB. The earlier chroma-only shader had ample compression quality
+//! budget; the current painted dirt retains sampled value and chroma under palette grading,
+//! so new art also needs close and moving visual checks. BC7 is the portable choice: every
 //! desktop GPU has it, on Windows and on both Mac architectures. ASTC would have been Apple-only.
 //!
 //! The shader samples `.rgb` from albedo and `.xyz` from normals, so alpha is dead weight in
@@ -216,9 +217,9 @@ fn build_ktx2_array(
     let level_count = level_dims.len();
 
     // Alpha is never sampled from either array, so let the encoder spend its whole budget on
-    // the channels the shader reads. `basic` rather than `slow`: on flat photographic ground
-    // under an 18% grain multiply, the quality difference does not survive to the screen, and
-    // `slow` turns a seconds-long build into a minutes-long one.
+    // the channels the shader reads. Keep the existing `basic` encoding cost; it was selected
+    // for the earlier chroma-only treatment. Painted dirt now retains texture value too, so
+    // inspect small soil patches and white chips in real close/moving captures after packing.
     let settings = bc7::opaque_basic_settings();
 
     // Encode: for each level, for each layer. Mip chains are built per layer by successive

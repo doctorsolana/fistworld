@@ -8,31 +8,30 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
         PauseButton::Disconnect | PauseButton::Exit => UiButtonVariant::Danger,
         _ => UiButtonVariant::Inverse,
     };
-    parent
-        .spawn((
-            Button,
-            Name::new(format!("pause-{text}")),
-            action,
-            Node {
-                width: Val::Px(280.0),
-                height: Val::Px(55.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                margin: UiRect::all(Val::Px(8.0)),
-                border: UiRect::all(Val::Px(2.0)),
-                border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                ..default()
-            },
-            button_chrome(variant),
-        ))
-        .with_children(|btn| {
-            btn.spawn((
-                Text::new(text),
-                UiButtonLabel,
-                crate::ui::typography::text(22.0),
-                TextColor(INK),
-            ));
-        });
+    let mut button = parent.spawn((
+        Button,
+        Name::new(format!("pause-{text}")),
+        action,
+        Node {
+            width: Val::Px(280.0),
+            height: Val::Px(55.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            margin: UiRect::all(Val::Px(8.0)),
+            border: UiRect::all(Val::Px(2.0)),
+            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+            ..default()
+        },
+        button_chrome(variant),
+    ));
+    button.with_children(|btn| {
+        btn.spawn((
+            Text::new(text),
+            UiButtonLabel,
+            crate::ui::typography::text(22.0),
+            TextColor(INK),
+        ));
+    });
 }
 
 pub(super) fn spawn_graphics_panel(

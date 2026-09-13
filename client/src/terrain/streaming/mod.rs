@@ -29,9 +29,7 @@ use crate::ui::DebugPerfSettings;
 
 use super::chunks::{FarTerrain, FarTerrainState, LoadedChunks, TerrainChunk, TerrainMaterialLod};
 use super::debug::{PerfHitchStats, TerrainDebugSettings};
-use super::materials::{
-    water_params_for_generator, TerrainRenderAssets, TerrainSplatExtension, TerrainSplatMaterial,
-};
+use super::materials::{water_params_for_generator, TerrainRenderAssets, TerrainSplatMaterial};
 use super::mesh::{build_far_terrain_mesh, build_terrain_mesh, compute_chunk_tangents};
 use super::paint::{
     build_weightmap_from_weights, log_weightmap_stats, TerrainPaintState, WEIGHTMAP_RESOLUTION,
@@ -102,6 +100,7 @@ pub struct ChunkBuildResult {
     pub coord: ChunkCoord,
     pub mesh: Mesh,
     pub water_params: Vec4,
+    pub climate: Vec4,
     pub weights: Vec<[u8; 4]>,
     pub resolution: u32,
 }

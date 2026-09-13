@@ -83,6 +83,45 @@ pub struct TerrainTextureSources {
     pub far_mesh_material: Handle<FarTerrainMaterial>,
 }
 
+/// Static map lanes used by both newly published ground and later weather
+/// updates. The climate phase also seeds the meadow's worn-earth pattern.
+pub(crate) fn terrain_climate_for_generator(generator: &shared::terrain::TerrainGenerator) -> Vec4 {
+    let bounds = generator.active_map_bounds();
+    let half_extent = (bounds.max[0] - bounds.min[0]) * 0.5;
+    let generated = generator.loaded_map().definition.generated.as_ref();
+    let phase = generated.map_or(0.0, |map| shared::worldgen::climate_phase(map.seed));
+    let dune = generated.map_or(Vec2::ZERO, |map| shared::worldgen::dune_direction(map.seed));
+    Vec4::new(half_extent, phase, dune.x, dune.y)
+}
+
+pub(super) fn new_chunk_material(
+    render_assets: &TerrainRenderAssets,
+    weight_map: Handle<Image>,
+    params: shared::terrain::TerrainSplatParams,
+    climate: Vec4,
+) -> TerrainSplatMaterial {
+    let mut palette = stylized_palette();
+    // Publish the right biome/mottle immediately, before any budgeted weather
+    // synchronization can run. A default phase briefly paints another world.
+    palette.climate = climate;
+    TerrainSplatMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.97,
+            metallic: 0.0,
+            reflectance: 0.08,
+            ..default()
+        },
+        extension: TerrainSplatExtension {
+            weight_map,
+            albedo_array: render_assets.albedo_array.clone(),
+            normal_array: render_assets.normal_array.clone(),
+            params,
+            palette,
+        },
+    }
+}
+
 /// Create shared terrain material once.
 pub(super) fn setup_terrain_render_assets(
     mut commands: Commands,
@@ -252,5 +291,55 @@ pub(super) fn sync_terrain_water_clock(
             continue;
         };
         material.extension.params.water_params.z = sync.offset;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_chunk_material_has_active_map_climate_before_weather_sync() {
+        let generator = shared::terrain::TerrainGenerator::from_loaded_map(
+            shared::map::load_map("village_lab").expect("maintained generated fixture"),
+        );
+        let climate = terrain_climate_for_generator(&generator);
+        let seed = generator
+            .loaded_map()
+            .definition
+            .generated
+            .as_ref()
+            .unwrap()
+            .seed;
+        let bounds = generator.active_map_bounds();
+        let dune = shared::worldgen::dune_direction(seed);
+        let expected = Vec4::new(
+            (bounds.max[0] - bounds.min[0]) * 0.5,
+            shared::worldgen::climate_phase(seed),
+            dune.x,
+            dune.y,
+        );
+        assert_ne!(expected, stylized_palette().climate);
+        let assets = TerrainRenderAssets {
+            albedo_array: default(),
+            normal_array: default(),
+            layer_tiling: layer_tiling(),
+            far_mesh_material: default(),
+        };
+        let material = new_chunk_material(
+            &assets,
+            default(),
+            shared::terrain::TerrainSplatParams {
+                layer_tiling: assets.layer_tiling,
+                water_params: water_params_for_generator(&generator),
+                debug_mode: 0,
+                normal_strength: 1.0,
+                weightmap_endpoint_samples: 0.0,
+                _pad: 0.0,
+            },
+            climate,
+        );
+        // No world clock, weather system or follow-up material write exists.
+        assert_eq!(material.extension.palette.climate, expected);
     }
 }

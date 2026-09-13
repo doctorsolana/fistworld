@@ -738,6 +738,7 @@ mod tests {
             include_str!("../../capture/scenarios/isolated-fern.ron"),
             include_str!("../../capture/scenarios/lighting-readability.ron"),
             include_str!("../../capture/scenarios/ui-company.ron"),
+            include_str!("../../capture/scenarios/ui-medieval-god.ron"),
         ] {
             let scenario: CaptureScenario = ron::from_str(text).unwrap();
             scenario.validate().unwrap();

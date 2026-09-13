@@ -1,8 +1,19 @@
 //! network systems.
 
 use super::*;
+use bevy::ecs::system::SystemParam;
 use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
+use lightyear::prelude::*;
 use shared::map::LoadedMap;
+use shared::protocol::{NameRejectionReason, NameSubmissionResult, ReliableChannel};
+
+#[derive(SystemParam)]
+pub(super) struct JoinPresentation<'w> {
+    input: ResMut<'w, PlayerNameInput>,
+    phase: ResMut<'w, NameEntryPhase>,
+    feedback: ResMut<'w, NameSubmissionFeedback>,
+    connection_feedback: ResMut<'w, crate::render::systems::ConnectionFeedback>,
+}
 
 #[derive(Resource, Default)]
 pub(super) struct PendingWorldJoin {
@@ -47,24 +58,27 @@ fn load_server_map(result: &NameSubmissionResult) -> Result<LoadedMap, String> {
 
 pub(super) fn handle_name_submission_result(
     mut next_state: ResMut<NextState<GameState>>,
-    mut feedback: ResMut<NameSubmissionFeedback>,
+    mut presentation: JoinPresentation,
     mut client_query: Query<
         (
             Entity,
             &mut MessageReceiver<NameSubmissionResult>,
             &mut MessageSender<shared::protocol::CreateHero>,
         ),
-        (With<crate::GameClient>, With<PlayerNameSubmitted>),
+        (
+            With<crate::GameClient>,
+            With<PlayerNameSubmitted>,
+            With<Connected>,
+        ),
     >,
-    mut error_text_query: Query<&mut Text, With<ErrorMessageText>>,
     mut commands: Commands,
     mut creator_open: ResMut<crate::ui::hero_creator::HeroCreatorOpen>,
-    mut creator_purpose: ResMut<crate::ui::hero_creator::HeroCreatorPurpose>,
     mut cinematic: ResMut<crate::boat::OpeningCinematic>,
     selected: Res<crate::hero::control::SelectedOutfit>,
     mut pending_view: ResMut<crate::camera_rts::PendingCommanderView>,
     mut pending_world: ResMut<PendingWorldJoin>,
     mut terrain: ResMut<shared::terrain::WorldTerrain>,
+    mut sounds: crate::ui::sound::UiActionSounds,
 ) {
     let Ok((client_entity, mut receiver, mut create_sender)) = client_query.single_mut() else {
         return;
@@ -87,11 +101,12 @@ pub(super) fn handle_name_submission_result(
                 vec![accepted]
             }
             Err(message) => {
+                sounds.emit(crate::audio::sfx::SfxCue::UiReject);
                 error!("Cannot join server world: {message}");
-                feedback.error_message = Some(message.clone());
-                for mut text in &mut error_text_query {
-                    text.0 = message.clone();
-                }
+                presentation.input.submitted = false;
+                *presentation.phase = NameEntryPhase::Editing;
+                presentation.connection_feedback.error_message = Some(message);
+                next_state.set(GameState::MainMenu);
                 commands.trigger(Disconnect {
                     entity: client_entity,
                 });
@@ -104,9 +119,8 @@ pub(super) fn handle_name_submission_result(
     for result in results {
         if let NameSubmissionResult::Accepted { map, .. } = &result {
             if *map != shared::components::ActiveMapState::from_terrain(&terrain) {
-                for mut text in &mut error_text_query {
-                    text.0 = "Preparing your world…".into();
-                }
+                *presentation.phase = NameEntryPhase::Preparing;
+                presentation.feedback.error_message = None;
                 pending_world.task = Some(AsyncComputeTaskPool::get().spawn(async move {
                     let loaded = load_server_map(&result);
                     (result, loaded)
@@ -121,6 +135,7 @@ pub(super) fn handle_name_submission_result(
                 commander_view,
                 ..
             } => {
+                sounds.emit(crate::audio::sfx::SfxCue::UiConfirm);
                 pending_view.0 = commander_view;
                 // Matching recipes do not imply matching mutable worlds: a
                 // restarted server can reuse a seed with different earthworks.
@@ -147,7 +162,8 @@ pub(super) fn handle_name_submission_result(
                     .entity(client_entity)
                     .remove::<PlayerNameSubmitted>();
 
-                // Transition to Playing state
+                // Transition only after the accepted server recipe is ready.
+                presentation.feedback.error_message = None;
                 next_state.set(GameState::Playing);
                 // The automated rendering/smoke harness deliberately uses the
                 // old God spawn hook. Do not put a mandatory modal in front of
@@ -177,7 +193,6 @@ pub(super) fn handle_name_submission_result(
                     && std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_none()
                     && std::env::var_os("FISTWORLD_FARM_CAPTURE_DIR").is_none()
                 {
-                    *creator_purpose = crate::ui::hero_creator::HeroCreatorPurpose::NewPlayerVoyage;
                     creator_open.0 = true;
                     if ux_fixture {
                         cinematic.cancel();
@@ -187,6 +202,7 @@ pub(super) fn handle_name_submission_result(
                 }
             }
             NameSubmissionResult::Rejected { reason } => {
+                sounds.emit(crate::audio::sfx::SfxCue::UiReject);
                 warn!("Name rejected: {:?}", reason);
 
                 // Clear the submitted marker so user can try again
@@ -199,22 +215,15 @@ pub(super) fn handle_name_submission_result(
                     NameRejectionReason::InvalidCharacters => {
                         "Name contains invalid characters".to_string()
                     }
-                    NameRejectionReason::TooShort => {
-                        "Name is too short (min 3 characters)".to_string()
-                    }
-                    NameRejectionReason::TooLong => {
-                        "Name is too long (max 16 characters)".to_string()
-                    }
+                    NameRejectionReason::TooShort => "Name is too short".to_string(),
+                    NameRejectionReason::TooLong => "Name is too long".to_string(),
                     NameRejectionReason::Reserved => "This name is reserved".to_string(),
                     NameRejectionReason::AlreadyOnline => "This name is already in use".to_string(),
                 };
 
-                feedback.error_message = Some(error_msg.clone());
-
-                // Update error text
-                for mut text in error_text_query.iter_mut() {
-                    text.0 = error_msg.clone();
-                }
+                presentation.input.submitted = false;
+                *presentation.phase = NameEntryPhase::Editing;
+                presentation.feedback.error_message = Some(error_msg);
             }
         }
     }

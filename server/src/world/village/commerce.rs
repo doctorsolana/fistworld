@@ -6,6 +6,9 @@
 use super::*;
 use shared::economy::BusinessStrategy;
 
+mod collection_failures;
+use collection_failures::MarketPickupFailures;
+
 pub(crate) fn automatic_owner_strategy(
     owner: Option<shared::components::PersonId>,
     attributes: Option<&CharacterAttributes>,
@@ -1405,6 +1408,7 @@ pub fn run_internal_deliveries(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn run_market_collections(
     mut commands: Commands,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     mut collection_cursors: Local<HashMap<shared::components::SettlementId, u64>>,
     mut procurement_cursors: Local<HashMap<shared::components::SettlementId, u64>>,
     world_time: Query<&WorldTime>,
@@ -1479,7 +1483,10 @@ pub fn run_market_collections(
             Option<&HouseholdShoppingRoutine>,
             Option<&MootQueueTicket>,
             Option<&MootMealRoutine>,
-            Option<&NavigationRouteFailed>,
+            (
+                Option<&NavigationRouteFailed>,
+                Option<&MarketPickupFailures>,
+            ),
         ),
         (
             With<CharacterKind>,
@@ -1664,7 +1671,7 @@ pub fn run_market_collections(
         shopping,
         queue_ticket,
         meal,
-        route_failed,
+        (route_failed, pickup_failures),
     ) in porters.iter_mut()
     {
         let employee_work = farmer
@@ -1745,8 +1752,23 @@ pub fn run_market_collections(
         if let Some(failed) = route_failed {
             match routine.as_deref_mut() {
                 Some(active) if active.phase == MarketCollectionPhase::GoingToBusiness => {
+                    if std::env::var_os("FISTWORLD_LAB_ROUTE_DIAGNOSTICS").is_some() {
+                        let business = businesses.get(active.business).ok().map(
+                            |(_, building, _, at, rotation, ..)| (building.kind, at.0, rotation.0),
+                        );
+                        eprintln!("MARKET_PICKUP_FAILED porter={porter_entity:?} from={:?} goal={:?} business={:?} plot={business:?}",
+                            position.0, failed.goal, active.business);
+                    }
+                    let mut failures = pickup_failures.cloned().unwrap_or_default();
+                    failures.record(
+                        active.business,
+                        failed.goal,
+                        simulation_time.elapsed_real_seconds_f64(),
+                        porter_entity,
+                    );
+                    commands.entity(porter_entity).insert(failures);
                     warn!(
-                        "Market porter could not reach business at {:.1},{:.1}; cancelling that collection so another offer can be tried",
+                        "Market porter could not reach business at {:.1},{:.1}; postponing that pickup so other reachable offers can be tried",
                         failed.goal.x, failed.goal.z
                     );
                     commands
@@ -2240,6 +2262,12 @@ pub fn run_market_collections(
                     || (!policy.collection_enabled
                         && building.kind != SettlementBuildingKind::StorageHall)
                 {
+                    continue;
+                }
+                let entrance = building.kind.entrance_position(at.0, rotation.0);
+                if pickup_failures.is_some_and(|failures| {
+                    failures.blocks(entity, entrance, simulation_time.elapsed_real_seconds_f64())
+                }) {
                     continue;
                 }
                 let state = condition.map_or(BusinessState::Operating, |condition| condition.state);

@@ -133,7 +133,7 @@ fn merchant_beacon_market_plot(
                 colliders,
                 derived,
                 None,
-            &[],
+                &[],
             ) {
                 return Some(approval);
             }
@@ -1679,7 +1679,7 @@ fn spawn_ux_fixture_building(
             colliders.as_deref(),
             derived,
             None,
-        &[],
+            &[],
         ) else {
             continue;
         };

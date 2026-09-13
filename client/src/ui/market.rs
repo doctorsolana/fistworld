@@ -1039,9 +1039,11 @@ fn receive_market_trade_results(
         (With<crate::GameClient>, With<Connected>),
     >,
     mut feedback: ResMut<MarketFeedback>,
+    mut sounds: crate::ui::sound::UiActionSounds,
 ) {
     for mut receiver in receivers.iter_mut() {
         for result in receiver.receive() {
+            sounds.result(result.success);
             feedback.market = feedback.pending.pop_front();
             feedback.message = result.message;
             feedback.success = result.success;

@@ -8,6 +8,44 @@ use bevy::prelude::*;
 use shared::components::{RoadClass, RoadSurface, SettlementBuildingKind as Kind, VillageRoad};
 use shared::terrain::WorldTerrain;
 
+mod economy;
+use economy::{opportunity_roll, FoodCapacity};
+
+/// Read-only audit of the same initial full-staffed business roster and
+/// investment standards used by the planner. The Hall's public jobs count too.
+#[derive(Debug)]
+#[cfg(test)]
+pub(super) struct EconomyAudit {
+    pub rated_rations: u32,
+    pub funded_positions: usize,
+    pub unsuitable_sites: usize,
+}
+
+#[cfg(test)]
+impl EconomyAudit {
+    pub fn supports(&self, population: usize) -> bool {
+        self.unsuitable_sites == 0
+            && self.funded_positions <= population
+            && u64::from(self.rated_rations) * 5 >= population as u64 * 6
+    }
+}
+
+#[cfg(test)]
+pub(super) fn audit_economy(sites: &[(Kind, f32)]) -> EconomyAudit {
+    EconomyAudit {
+        rated_rations: FoodCapacity::from_sites(sites.iter().copied()).rations(),
+        funded_positions: usize::from(Kind::Hall.positions())
+            + sites
+                .iter()
+                .map(|(kind, _)| usize::from(kind.positions()))
+                .sum::<usize>(),
+        unsuitable_sites: sites
+            .iter()
+            .filter(|(kind, quality)| !economy::qualifies(*kind, *quality))
+            .count(),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Plot {
     pub kind: Kind,
@@ -76,15 +114,39 @@ struct Planner<'a> {
     occupied: Vec<(Vec3, f32)>,
     blockers: Vec<village::RoadAccessBlocker>,
     sequence: u64,
+    population: usize,
     square: Option<shared::components::SettlementCivicSquare>,
 }
 
 impl Planner<'_> {
+    fn workers(&self) -> usize {
+        usize::from(Kind::Hall.positions())
+            + self
+                .plots
+                .iter()
+                .map(|plot| usize::from(plot.kind.positions()))
+                .sum::<usize>()
+    }
+
+    fn capacity(&self) -> FoodCapacity {
+        FoodCapacity::from_sites(self.plots.iter().map(|plot| (plot.kind, plot.quality)))
+    }
+
+    fn optional(&mut self, kind: Kind) -> bool {
+        // Food and the Hall's actual funded jobs take priority. Keep a small
+        // uncommitted workforce for portering and later autonomous ventures.
+        let budget = self.population.saturating_sub(self.population.div_ceil(8));
+        self.workers() + usize::from(kind.positions()) <= budget && self.place(kind)
+    }
+
     fn place(&mut self, kind: Kind) -> bool {
+        if self.workers() + usize::from(kind.positions()) > self.population {
+            return false;
+        }
         let roads: Vec<_> = self.plots.iter().map(|p| &p.road).collect();
         let squares: Vec<_> = self.square.iter().collect();
         let mut rng = shared::rng::XorShift64::new(
-            self.site.salt ^ (self.sequence + 1).wrapping_mul(0x9E37_79B9),
+            self.site.salt ^ self.sequence.wrapping_add(1).wrapping_mul(0x9E37_79B9),
         );
         self.sequence += 1;
         let (inner, outer) = match kind {
@@ -105,12 +167,18 @@ impl Planner<'_> {
             return false;
         }
         let fixed_site = fishing.is_some() || (kind == Kind::Market && self.square.is_some());
-        for attempt in 0..384 {
-            let (position, rotation) = if kind == Kind::Market && self.square.is_some() {
-                let square = self.square.as_ref().unwrap();
-                (square.market_position, square.market_rotation)
-            } else if let Some((position, rotation, _)) = fishing {
-                (position, rotation)
+        let fixed = if kind == Kind::Market {
+            self.square
+                .as_ref()
+                .map(|square| (square.market_position, square.market_rotation))
+        } else {
+            fishing.map(|(position, rotation, _)| (position, rotation))
+        };
+        let terrain = self.terrain;
+        let hall = self.site.hall;
+        let candidates = (0..if fixed_site { 1 } else { 384 }).map(move |attempt| {
+            if let Some(fixed) = fixed {
+                fixed
             } else {
                 // Small settlements favour short walks around a loose civic
                 // core. Later candidates open the fringe instead of forcing a
@@ -120,13 +188,62 @@ impl Planner<'_> {
                 let reach = (attempt as f32 / 96.0).clamp(0.25, 1.0);
                 let radius = inner + (outer - inner) * fraction.sqrt() * reach;
                 let angle = ((random >> 16) & 65535) as f32 / 65535.0 * std::f32::consts::TAU;
-                let at = self.site.hall.xz() + Vec2::new(angle.cos(), angle.sin()) * radius;
-                let toward = (self.site.hall.xz() - at).normalize_or_zero();
+                let at = hall.xz() + Vec2::new(angle.cos(), angle.sin()) * radius;
+                let toward = (hall.xz() - at).normalize_or_zero();
                 (
-                    Vec3::new(at.x, self.terrain.get_height(at.x, at.y), at.y),
+                    Vec3::new(at.x, terrain.get_height(at.x, at.y), at.y),
                     (-toward.x).atan2(-toward.y),
                 )
-            };
+            }
+        });
+        // Inspect the available land around this actual plot, not the Hall's
+        // biome. Cheap resource ranking runs before expensive route/earthwork
+        // certification and remains bounded by the old candidate budget.
+        let ranked = matches!(
+            kind,
+            Kind::Farmstead
+                | Kind::LivestockFarm
+                | Kind::LumberjackHut
+                | Kind::StoneQuarry
+                | Kind::Windmill
+        );
+        let candidates: Box<dyn Iterator<Item = (Vec3, f32)> + '_> = if ranked {
+            let mut ranked: Vec<_> = candidates
+                .filter_map(|(position, rotation)| {
+                    let quality = village::site_quality(terrain, kind, position);
+                    if !economy::qualifies(kind, quality) {
+                        return None;
+                    }
+                    let suitability = if kind == Kind::Windmill {
+                        terrain
+                            .generator
+                            .loaded_map()
+                            .biome_field
+                            .as_deref()
+                            .map_or(0.5, |field| {
+                                kind.placement_suitability(
+                                    &field.resources(position.x, position.z, position.y, 0.0),
+                                )
+                            })
+                    } else {
+                        quality
+                    };
+                    let distance = position.xz().distance(hall.xz()) / outer;
+                    Some((position, rotation, suitability - distance * 0.15))
+                })
+                .collect();
+            ranked.sort_by(|a, b| b.2.total_cmp(&a.2));
+            Box::new(
+                ranked
+                    .into_iter()
+                    .map(|(position, rotation, _)| (position, rotation)),
+            )
+        } else {
+            // Houses and services keep the cheap first-valid search. Do not
+            // sample hundreds of unused candidates after one already fits.
+            Box::new(candidates)
+        };
+        for (position, rotation) in candidates {
             let Ok(approval) = village::validate_manual_plot(
                 self.terrain,
                 self.site.hall,
@@ -147,7 +264,8 @@ impl Planner<'_> {
                 }
                 continue;
             };
-            if approval.road_access.len() < 2
+            if !economy::qualifies(kind, approval.quality)
+                || approval.road_access.len() < 2
                 || !village_roads::road_access_is_clear_of_permanent_props(
                     &approval.road_access,
                     RoadClass::Lane.initial_reserved_width(),
@@ -239,27 +357,43 @@ pub(super) fn plan(
             // Adding it as an ordinary plot blocker would seal that escape.
             blockers: Vec::new(),
             sequence: 0,
+            population: target,
             square: square.clone(),
         };
-        // Secure land for complete food chains before filling it with homes.
-        let chains = target.div_ceil(28);
-        let mut fed = true;
-        for _ in 0..chains {
-            if !planner.place(Kind::Farmstead)
-                || !planner.place(Kind::Windmill)
-                || !planner.place(Kind::Bakery)
-            {
+        // Shores and good pasture can contribute directly edible food. They
+        // still need real work geometry and an ordinary dry road to the Hall.
+        let water_nearby = [40.0, 80.0, 120.0].into_iter().any(|radius| {
+            (0..24).any(|i| {
+                let angle = i as f32 / 24.0 * std::f32::consts::TAU;
+                let point = site.hall.xz() + Vec2::new(angle.cos(), angle.sin()) * radius;
+                terrain.get_water_height(point.x, point.y).is_some()
+            })
+        });
+        if water_nearby {
+            planner.place(Kind::FishermansHut);
+        }
+        if target >= 16 && opportunity_roll(site.salt, Kind::LivestockFarm) < 0.55 {
+            planner.place(Kind::LivestockFarm);
+        }
+        // Size productive land and processors from actual approved yields.
+        // A poor farm cannot feed 28 people merely because its shell exists;
+        // extra farms can share a mill/bakery instead of repeating a full kit.
+        for _ in 0..18 {
+            let capacity = planner.capacity();
+            if capacity.sustains(target) {
+                break;
+            }
+            if !planner.place(capacity.next_grain_workplace()) {
                 debug!(
                     "Founding layout food chain failed at {:?}, target={}, placed={}",
                     site.hall,
                     target,
                     planner.plots.len()
                 );
-                fed = false;
                 break;
             }
         }
-        if !fed {
+        if !planner.capacity().sustains(target) {
             continue;
         }
         if target >= 24 && !planner.place(Kind::Market) {
@@ -271,31 +405,22 @@ pub(super) fn plan(
         }
         // Site-specific opportunities. Missing optional businesses remain
         // actual openings for later NPC or player investment.
-        if site.resources.wood >= 0.20 {
-            planner.place(Kind::LumberjackHut);
+        if opportunity_roll(site.salt, Kind::LumberjackHut) < 0.85 {
+            planner.optional(Kind::LumberjackHut);
         }
-        if site.resources.stone >= 0.25 {
-            planner.place(Kind::StoneQuarry);
+        if opportunity_roll(site.salt, Kind::StoneQuarry) < 0.8 {
+            planner.optional(Kind::StoneQuarry);
         }
         if target >= 28 {
-            planner.place(Kind::StorageHall);
-            planner.place(Kind::Tavern);
+            if opportunity_roll(site.salt, Kind::StorageHall) < 0.8 {
+                planner.optional(Kind::StorageHall);
+            }
+            if opportunity_roll(site.salt, Kind::Tavern) < 0.75 {
+                planner.optional(Kind::Tavern);
+            }
         }
         if target >= 48 {
-            planner.place(Kind::Church);
-        }
-        if site.resources.farmland >= 0.60 && target >= 32 {
-            planner.place(Kind::LivestockFarm);
-        }
-        // A coastal site can add fishing only if its real shore admits the
-        // authored hut/pier and a complete dry connection to the Hall.
-        let water_nearby = (0..16).any(|i| {
-            let angle = i as f32 / 16.0 * std::f32::consts::TAU;
-            let point = site.hall.xz() + Vec2::new(angle.cos(), angle.sin()) * 125.0;
-            terrain.get_water_height(point.x, point.y).is_some()
-        });
-        if water_nearby {
-            planner.place(Kind::FishermansHut);
+            planner.optional(Kind::Church);
         }
         return Some(Layout {
             plots: planner.plots,
