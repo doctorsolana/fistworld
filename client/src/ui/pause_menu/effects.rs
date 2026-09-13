@@ -1,21 +1,18 @@
 //! One persisted switch for the first effects pack, beside the music switch.
 
+use super::audio::AudioEnabledChoice;
 use super::*;
 use crate::audio::AudioSettings;
 use bevy::ui::{InteractionDisabled, RelativeCursorPosition};
 
-pub(super) const fn label(enabled: bool) -> &'static str {
-    if enabled {
-        "EFFECTS: ON"
-    } else {
-        "EFFECTS: OFF"
-    }
-}
-
 pub(super) fn handle_effects_toggle(
     mouse: Res<ButtonInput<MouseButton>>,
     buttons: Query<
-        (Ref<Interaction>, &RelativeCursorPosition),
+        (
+            Ref<Interaction>,
+            &RelativeCursorPosition,
+            &AudioEnabledChoice,
+        ),
         (With<EffectsToggle>, Without<InteractionDisabled>),
     >,
     mut settings: ResMut<AudioSettings>,
@@ -23,29 +20,26 @@ pub(super) fn handle_effects_toggle(
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    if buttons.iter().any(|(interaction, cursor)| {
-        interaction.is_changed()
+    for (interaction, cursor, choice) in &buttons {
+        if interaction.is_changed()
             && !interaction.is_added()
             && *interaction == Interaction::Pressed
             && cursor.cursor_over
-    }) {
-        settings.effects_enabled = !settings.effects_enabled;
+            && settings.effects_enabled != choice.0
+        {
+            settings.effects_enabled = choice.0;
+        }
     }
 }
 
 pub(super) fn sync_effects_toggle(
     settings: Res<AudioSettings>,
-    mut labels: Query<&mut Text, With<EffectsToggleLabel>>,
-    mut buttons: Query<&mut UiButtonStyle, With<EffectsToggle>>,
+    mut buttons: Query<(&AudioEnabledChoice, &mut UiButtonStyle), With<EffectsToggle>>,
 ) {
-    for mut text in &mut labels {
-        if text.0 != label(settings.effects_enabled) {
-            text.0 = label(settings.effects_enabled).into();
-        }
-    }
-    for mut style in &mut buttons {
-        if style.selected != settings.effects_enabled {
-            style.selected = settings.effects_enabled;
+    for (choice, mut style) in &mut buttons {
+        let selected = settings.effects_enabled == choice.0;
+        if style.selected != selected {
+            style.selected = selected;
         }
     }
 }
@@ -55,7 +49,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effects_toggle_uses_live_edges_and_leaves_music_alone() {
+    fn effects_choices_use_live_edges_and_preserve_music() {
         let mut app = App::new();
         app.init_resource::<AudioSettings>()
             .init_resource::<ButtonInput<MouseButton>>()
@@ -64,16 +58,14 @@ mod tests {
             .world_mut()
             .spawn((
                 EffectsToggle,
+                AudioEnabledChoice(false),
                 Interaction::None,
+                selected_button_chrome(UiButtonVariant::Inverse, true),
                 RelativeCursorPosition {
                     cursor_over: true,
                     ..default()
                 },
             ))
-            .id();
-        let text = app
-            .world_mut()
-            .spawn((EffectsToggleLabel, Text::new("EFFECTS: ON")))
             .id();
         app.update();
         app.world_mut()
@@ -83,7 +75,7 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<AudioSettings>().effects_enabled);
         assert!(app.world().resource::<AudioSettings>().music_enabled);
-        assert_eq!(app.world().get::<Text>(text).unwrap().0, "EFFECTS: OFF");
+        assert!(app.world().get::<UiButtonStyle>(button).unwrap().selected);
         app.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
             .clear();
@@ -99,7 +91,7 @@ mod tests {
         app.update();
         app.world_mut()
             .entity_mut(button)
-            .insert(InteractionDisabled);
+            .insert((InteractionDisabled, AudioEnabledChoice(true)));
         app.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Left);

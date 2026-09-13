@@ -3,7 +3,7 @@ use super::{artwork::LedgerArtwork, widgets::sliced_button};
 use crate::ui::{
     button_motion::ButtonMotion,
     encyclopedia::{EncyclopediaCloseButton, EncyclopediaPanel},
-    foundation::{UiButtonStyle, UiButtonVariant, UiTexturedButton},
+    foundation::{UiArtworkFocus, UiButtonStyle, UiButtonVariant, UiTexturedButton},
 };
 use bevy::{
     prelude::*,
@@ -11,6 +11,7 @@ use bevy::{
 };
 
 #[derive(Component)]
+#[require(UiArtworkFocus)]
 pub(super) struct LedgerButton;
 
 /// Optional artwork for an ordinary skinned button. The complete image recipe,
@@ -210,11 +211,7 @@ fn tint(style: UiButtonStyle, interaction: Interaction, disabled: bool, offset: 
     let light = if disabled {
         // Pale disabled faces need enough light for muted ink to stay legible;
         // dark disabled faces use foundation's inverse muted lettering.
-        if dark_face(style, true) {
-            0.70
-        } else {
-            0.88
-        }
+        if dark_face(style, true) { 0.70 } else { 0.88 }
     } else {
         let feedback = if style.variant == UiButtonVariant::Tab {
             // Compact filters deliberately have no spring displacement.
@@ -326,13 +323,23 @@ mod tests {
 
     #[test]
     fn explicit_face_survives_binding_and_interaction_then_restores_default_on_removal() {
+        use bevy::input_focus::{FocusCause, InputFocus};
         use bevy::sprite::{BorderRect, TextureSlicer};
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
             .init_asset::<Image>()
             .init_resource::<ImageChanges>()
+            .init_resource::<InputFocus>()
             .add_systems(Startup, super::super::artwork::load_artwork)
-            .add_systems(Update, (paint_buttons, record_image_changes).chain());
+            .add_systems(
+                Update,
+                (
+                    crate::ui::foundation::style_keyboard_focus,
+                    paint_buttons,
+                    record_image_changes,
+                )
+                    .chain(),
+            );
         app.update();
         let scope = app.world_mut().spawn(super::super::LedgerButtonScope).id();
         let custom_image = app
@@ -376,11 +383,23 @@ mod tests {
         assert_ne!(ordinary.image, custom_image);
 
         app.world_mut()
-            .get_mut::<UiButtonStyle>(custom)
-            .unwrap()
-            .focused = true;
+            .resource_mut::<InputFocus>()
+            .set(normal, FocusCause::Navigated);
+        app.update();
+        assert!(app.world().get::<UiButtonStyle>(normal).unwrap().focused);
+        assert!(app.world().get::<Outline>(normal).is_none());
+        assert_ne!(
+            app.world().get::<ImageNode>(normal).unwrap().color,
+            ordinary.color
+        );
+
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(custom, FocusCause::Navigated);
         *app.world_mut().get_mut::<Interaction>(custom).unwrap() = Interaction::Hovered;
         app.update();
+        assert!(app.world().get::<UiButtonStyle>(custom).unwrap().focused);
+        assert!(app.world().get::<Outline>(custom).is_none());
         let focused = app.world().get::<ImageNode>(custom).unwrap();
         assert_eq!(focused.image, recipe.image);
         assert_eq!(focused.rect, recipe.rect);

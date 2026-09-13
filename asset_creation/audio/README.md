@@ -17,6 +17,9 @@ User listening feedback, 2026-09-13:
 **Accepted:** the user chose **The Chronicler's Quill** for gameplay. Its six-minute
 source and exact short prompt are recorded as `chroniclers_quill` in `tracks.json`.
 The runtime Ogg is 4.06 MiB at -24 LUFS, with one-second entry/four-second exit fades.
+Playback applies a 0.8 track gain (20% lower), then the Master and Music sliders.
+Music defaults to 50%; existing saved levels are retained. This runtime balance
+does not re-encode or change the mastered Ogg.
 The user prefers to generate in ElevenLabs themselves: provide short prompts in
 chat and retrieve a named track only when asked. Do not generate further variants
 or take over their ElevenLabs session without a new request.
@@ -161,8 +164,9 @@ Implemented client behavior:
 
 - `client/src/audio/music.rs` owns one music player outside the spatial-footstep
   budget. Scenery rebuilds, camera movement and menu opening keep the same player.
-- The normal **Escape menu → MUSIC: ON/OFF** switch pauses/resumes the existing
-  background decoder. It is saved immediately to ignored `client_data/audio.ron`.
+- **Escape → Audio** provides Master, Music and Effects sliders, plus separate
+  Music/Effects switches. Music mute pauses/resumes the existing background decoder.
+  Preferences are saved to ignored `client_data/audio.ron` after a short drag debounce.
   Capture runs disable reading and writing that file using the same isolation flag
   as graphics settings. Effects remain audible when music is off.
 - The adventure opening takes priority. The background begins after the actual
@@ -176,7 +180,6 @@ Implemented client behavior:
 
 Future extensions:
 
-- Independent master/music/effects volume sliders beyond the current music switch.
 - One primary cue and at most one fading partner; retain only the current and
   next compressed assets. Do not preload a growing soundtrack library.
 - If a launcher cue is chosen later, fade it before the existing adventure cue.

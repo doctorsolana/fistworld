@@ -3,7 +3,11 @@
 
 use super::{CaptureConfig, CaptureState};
 use bevy::{
-    input::InputSystems,
+    input::{
+        ButtonState, InputSystems,
+        keyboard::{Key, KeyboardInput},
+    },
+    input_focus::{InputFocus, InputFocusSystems, tab_navigation::TabIndex},
     prelude::*,
     ui::{UiGlobalTransform, UiSystems},
     window::PrimaryWindow,
@@ -71,7 +75,13 @@ pub(super) fn install(app: &mut App) {
         maximum: [f32::NEG_INFINITY; 3],
         group_bounds: None,
     });
-    app.add_systems(PreUpdate, input.after(InputSystems).after(UiSystems::Focus));
+    app.add_systems(
+        PreUpdate,
+        input
+            .after(InputSystems)
+            .after(UiSystems::Focus)
+            .before(InputFocusSystems::Dispatch),
+    );
     app.add_systems(Last, inspect);
 }
 
@@ -91,7 +101,8 @@ fn input(world: &mut World) {
         return;
     };
     let action = world.resource::<CaptureConfig>().shots[shot].name.clone();
-    let interactive = action.ends_with("-hover") || action.contains("presets");
+    let keyboard_focus = action.ends_with("-focused");
+    let interactive = keyboard_focus || action.ends_with("-hover") || action.contains("presets");
     if world.resource::<StartupReview>().action_shot != Some(shot) {
         let mut review = world.resource_mut::<StartupReview>();
         review.action_shot = Some(shot);
@@ -111,6 +122,42 @@ fn input(world: &mut World) {
         None
     };
     let phase = world.resource::<StartupReview>().input_phase;
+    if keyboard_focus && phase < 2 {
+        if phase == 0 {
+            // Start from the field selected by the production startup screen.
+            // A real Tab must navigate to Join Game; never assign its focus here.
+            let Some((field, _)) = named(world, "startup-name-field") else {
+                return;
+            };
+            let Some((primary, _)) = named(world, "startup-primary") else {
+                return;
+            };
+            if world.resource::<InputFocus>().get() != Some(field)
+                || world.get::<TabIndex>(field).is_none()
+                || world.get::<TabIndex>(primary).is_none()
+            {
+                return;
+            }
+        }
+        let Ok(window) = world
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(world)
+        else {
+            return;
+        };
+        world.write_message(KeyboardInput {
+            key_code: KeyCode::Tab,
+            logical_key: Key::Tab,
+            state: if phase == 0 {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            },
+            text: None,
+            repeat: false,
+            window,
+        });
+    }
     let target = target.and_then(|name| named(world, name).map(|(entity, _)| entity));
     if target.is_none() && (action.ends_with("-hover") || action.contains("presets")) {
         return;
@@ -359,7 +406,62 @@ fn evidence(world: &mut World) -> Result<serde_json::Value, String> {
     }
     let mut popup = None;
     let mut hover = None;
+    let mut keyboard_focus = None;
     if let Some(action) = action.as_deref() {
+        if action.ends_with("-focused") {
+            let (entity, rect) =
+                named(world, "startup-primary").ok_or("keyboard focus button is absent")?;
+            if world.resource::<InputFocus>().get() != Some(entity) {
+                return Err("Tab did not focus the Join Game button".into());
+            }
+            if world
+                .get::<crate::ui::foundation::UiButtonStyle>(entity)
+                .is_none_or(|style| !style.focused)
+            {
+                return Err("Join Game artwork has not received keyboard focus styling".into());
+            }
+            if world.get::<Outline>(entity).is_some() {
+                return Err("Join Game keyboard focus still draws a rectangular outline".into());
+            }
+            if world.get::<Interaction>(entity) != Some(&Interaction::None) {
+                return Err("keyboard focus capture must not rely on mouse hover".into());
+            }
+            let expected = world
+                .resource::<crate::ui::startup::StartupArtwork>()
+                .gold();
+            let image = world
+                .get::<ImageNode>(entity)
+                .ok_or("focused Join Game button has no artwork")?;
+            if image.image != expected.image
+                || image.rect != expected.rect
+                || image.image_mode != expected.image_mode
+                || image.visual_box != expected.visual_box
+            {
+                return Err("keyboard focus changed the authored Join Game artwork recipe".into());
+            }
+            let assets = world.resource::<AssetServer>();
+            if !assets.is_loaded_with_dependencies(image.image.id()) {
+                return Err("focused Join Game artwork is still loading".into());
+            }
+            let tint = image.color.to_linear();
+            let base = expected.color.to_linear();
+            if tint.red <= base.red && tint.green <= base.green && tint.blue <= base.blue {
+                return Err("keyboard focus has no visible feedback on the brass face".into());
+            }
+            keyboard_focus = Some(serde_json::json!({
+                "input": "Tab press/release KeyboardInput through native focus dispatch",
+                "target": "startup-primary",
+                "pixels": bounds(rect),
+                "focused": true,
+                "style_focused": true,
+                "outline_present": false,
+                "interaction": "None",
+                "image_path": assets.get_path(image.image.id()).map(|path| path.to_string()),
+                "artwork_recipe_preserved": true,
+                "image_ready": true,
+                "face_tint_linear": tint.to_f32_array(),
+            }));
+        }
         if mode == "menu" {
             let expected = action.ends_with("-presets");
             let expanded = world
@@ -391,7 +493,9 @@ fn evidence(world: &mut World) -> Result<serde_json::Value, String> {
                     .max()
                     .ok_or("Connect stack order missing")?;
                 if popup_order <= primary_order {
-                    return Err(format!("preset popup draws behind Connect: popup={popup_order}, Connect={primary_order}"));
+                    return Err(format!(
+                        "preset popup draws behind Connect: popup={popup_order}, Connect={primary_order}"
+                    ));
                 }
                 for index in 0..2 {
                     let (option, option_rect) = named(world, &format!("startup-preset-{index}"))
@@ -538,8 +642,8 @@ fn evidence(world: &mut World) -> Result<serde_json::Value, String> {
     }
     Ok(
         serde_json::json!({"mode": mode, "window_title": title, "window_title_scope": "capture harness diagnostic title; native game branding is verified separately", "viewport": resolution,
-        "preset_popup_pixels": popup, "hover": hover, "paper_join": paper_join,
-        "input": "offline named button targets; hover and press/release edges through production UI handlers",
+        "preset_popup_pixels": popup, "hover": hover, "keyboard_focus": keyboard_focus, "paper_join": paper_join,
+        "input": "offline named button targets; mouse gestures through production UI handlers and focused shots through native Tab keyboard dispatch",
         "game_state": format!("{:?}", world.resource::<State<crate::states::GameState>>().get()),
         "name_phase": format!("{:?}", world.resource::<crate::ui::name_entry::NameEntryPhase>()),
         "visible_diamond_count": visible_diamonds,

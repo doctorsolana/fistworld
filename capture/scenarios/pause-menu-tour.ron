@@ -1,0 +1,37 @@
+// Uses real button/keyboard actions; inspect each PNG, .capture.json and .menu.json.
+// Scene scale, sound preferences and mouse sensitivity return to their initial values.
+(
+    version: 1,
+    name: "pause-menu-tour",
+    map: "big_world",
+    output_dir: "logs/captures/pause-menu-tour",
+    resolution: (1600, 1000),
+    fixed_delta_seconds: 0.016666667,
+    target: window,
+    show_window: false,
+    warmup_frames: 180,
+    readiness: (minimum_frames: 60, maximum_frames: 1200,
+                minimum_loaded_chunks: 64, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_PAUSE": "escape",
+        "FISTWORLD_CAPTURE_PAUSE_TOUR": "1",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "01-escape", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "02-graphics", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "03-scale-lower", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "04-scale-restored", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "05-audio", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "06-master-lower", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "07-master-restored", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "08-music-off", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "09-music-restored", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "10-controls", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "11-sensitivity-higher", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "12-sensitivity-restored", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "13-back", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "14-resumed", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+        (name: "15-reopened", focus: (-3000.0, 0.0, -260.0), yaw: -0.45, zoom: 90.0, time_of_day: 0.5),
+    ],
+)

@@ -30,6 +30,18 @@ composed PNG probe every 15 frames. No terrain is required, and no arbitrary sle
 is used to infer readiness: the harness inspects real visible control geometry,
 fonts and image dependencies.
 
+The join form and name-rejection scenarios each add a focused shot. A native Tab
+press/release moves from the name field to Join Game; readiness requires the
+original brass face to brighten without a rectangular outline or mouse hover.
+The `.startup.json` `keyboard_focus` section records the focused target, artwork
+recipe, tint and outline checks.
+
+Verified 2026-09-13 in `logs/button-focus-2026-09-13/`: `join-normal-fixed`
+(1600×900) and `join-error-small` (1280×720) each completed both shots. Inspected
+PNGs and metadata show the same brass face with a 1.12 focus tint and no rectangular
+outline after native Tab navigation. Workspace all-target checks and all 200 client
+UI tests passed. This verifies offline focus and appearance, not a network join.
+
 Inspect each PNG together with `.capture.json` and `.startup.json`. The latter
 records the capture harness diagnostic title, text/colors, panel/control bounds
 and loaded artwork. Name views also require opaque wood backing and real

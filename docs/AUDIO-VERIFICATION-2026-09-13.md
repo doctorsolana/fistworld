@@ -156,3 +156,27 @@ Far zoom and mute released the filtered voices/assets; the mute recording's fina
 half-second was silent, and saved preferences stayed byte-identical. The real
 minimum-zoom PNG and capture metadata were inspected at 1280×720. Perceptual
 acceptance remains for the user's listening; numerical checks do not establish it.
+
+## Quieter default music
+
+The user's volume adjustment lowers the Chronicler background cue's authored
+playback gain from 1.0 to 0.8 and the Music preference default from 100% to 50%.
+Existing saved levels are retained. The opening keeps its 0.82 cue gain; Master
+and Effects defaults remain 100%. Original and runtime audio files are unchanged.
+
+Workspace all-target checks, the playtest client build and all 35 audio-related
+tests passed, including saved-default migration and music mute/resume gain checks.
+
+The real-sink rehearsal in `logs/music-balance-2026-09-13/run/` produced all seven
+PNG/capture/music artifact sets. Fresh Music is 50% in the inspected Audio page;
+the playing and resumed background sink measures 0.40, the opening 0.41, and mute 0.
+The retained background advances from 12.02 seconds to 13.00 seconds across mute and
+resume without changing entity. The actual decoder completes into the quiet gap.
+Saved `client_data/audio.ron` remained byte-identical at the user's 40% Music level.
+
+The owned-application recorder captured 26.46 seconds of stereo output with no
+microphone or other application audio. Peak amplitude was 0.07373 with no clipping;
+the first ten seconds are available as `music-preview.mp3` for audition. Audio
+input is unavailable to the assistant in this session, so subjective listening
+approval remains pending. This is verified playback/gain evidence, not a claim
+that the new balance has been personally auditioned.

@@ -5,8 +5,8 @@
 //! typography, button states, and rebuild safety for live simulation panels.
 
 use bevy::input_focus::{
-    tab_navigation::{TabIndex, TabNavigationPlugin},
     InputFocus,
+    tab_navigation::{TabIndex, TabNavigationPlugin},
 };
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
@@ -126,6 +126,11 @@ pub(crate) struct UiButtonLabelTint(pub Color);
 /// focus/label/spring behavior while leaving its imperfect transparent edges clear.
 #[derive(Component)]
 pub(crate) struct UiTexturedButton;
+
+/// The authored face supplies keyboard feedback through its existing focused
+/// tint, preserving irregular edges instead of drawing a rectangular outline.
+#[derive(Component, Default)]
+pub(crate) struct UiArtworkFocus;
 
 impl UiButtonStyle {
     pub const fn new(variant: UiButtonVariant) -> Self {
@@ -308,16 +313,25 @@ fn sync_button_focusability(
     }
 }
 
-fn style_keyboard_focus(
+pub(super) fn style_keyboard_focus(
     mut commands: Commands,
     focus: Res<InputFocus>,
-    buttons: Query<Entity, With<UiButtonStyle>>,
+    newly_skinned: Query<(), (With<UiButtonStyle>, Added<UiArtworkFocus>)>,
+    mut buttons: Query<(Entity, Has<UiArtworkFocus>, &mut UiButtonStyle)>,
 ) {
-    if !focus.is_changed() {
+    // A retained control may acquire artwork while focus stays on that entity.
+    // Reconcile its presentation too, removing any previous rectangular outline.
+    if !focus.is_changed() && newly_skinned.is_empty() {
         return;
     }
-    for entity in buttons.iter() {
-        if focus.get() == Some(entity) {
+    for (entity, artwork, mut style) in &mut buttons {
+        let focused = focus.get() == Some(entity);
+        if artwork {
+            if style.focused != focused {
+                style.focused = focused;
+            }
+            commands.entity(entity).remove::<Outline>();
+        } else if focused {
             commands.entity(entity).insert(Outline {
                 color: EMBER,
                 width: Val::Px(2.0),
@@ -401,10 +415,10 @@ impl Plugin for UiFoundationPlugin {
         app.add_systems(
             PostUpdate,
             (
-                super::button_motion::animate_buttons,
-                style_ui_button_labels,
                 sync_button_focusability,
                 style_keyboard_focus,
+                super::button_motion::animate_buttons,
+                style_ui_button_labels,
                 audit_button_contract,
                 super::modal::sync_modal_state,
             )
@@ -422,6 +436,63 @@ impl Plugin for UiFoundationPlugin {
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn authored_faces_use_focus_tint_and_keep_plain_button_outlines() {
+        let mut app = App::new();
+        app.init_resource::<InputFocus>()
+            .add_systems(Update, style_keyboard_focus);
+        let face = app
+            .world_mut()
+            .spawn((
+                Button,
+                UiArtworkFocus,
+                button_chrome(UiButtonVariant::Primary),
+            ))
+            .id();
+        let plain = app
+            .world_mut()
+            .spawn((Button, button_chrome(UiButtonVariant::Secondary)))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(face, bevy::input_focus::FocusCause::Navigated);
+        app.update();
+        assert!(app.world().get::<UiButtonStyle>(face).unwrap().focused);
+        assert!(app.world().get::<Outline>(face).is_none());
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(plain, bevy::input_focus::FocusCause::Navigated);
+        app.update();
+        assert!(!app.world().get::<UiButtonStyle>(face).unwrap().focused);
+        assert!(app.world().get::<Outline>(plain).is_some());
+        app.world_mut().resource_mut::<InputFocus>().clear();
+        app.update();
+        assert!(app.world().get::<Outline>(plain).is_none());
+    }
+
+    #[test]
+    fn adding_artwork_to_a_focused_control_removes_its_existing_outline() {
+        let mut app = App::new();
+        app.init_resource::<InputFocus>()
+            .add_systems(Update, style_keyboard_focus);
+        let button = app
+            .world_mut()
+            .spawn((Button, button_chrome(UiButtonVariant::Primary)))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(button, bevy::input_focus::FocusCause::Navigated);
+        app.update();
+        assert!(app.world().get::<Outline>(button).is_some());
+
+        // The skin changes; InputFocus deliberately does not.
+        app.world_mut().entity_mut(button).insert(UiArtworkFocus);
+        app.update();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(button));
+        assert!(app.world().get::<UiButtonStyle>(button).unwrap().focused);
+        assert!(app.world().get::<Outline>(button).is_none());
+    }
 
     #[test]
     fn disabled_button_has_a_distinct_stable_style() {

@@ -7,6 +7,7 @@ mod motion;
 pub(crate) mod widgets;
 
 pub(crate) use artwork::StartupArtwork;
+pub(crate) use backdrop::StartupBackdropMaterial;
 pub(crate) use motion::LoadingDiamond;
 
 use crate::states::GameState;

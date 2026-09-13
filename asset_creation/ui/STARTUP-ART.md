@@ -9,6 +9,16 @@ size/state matrix and connected join-flow checks have passed and been inspected.
 Generated concepts remain design
 references, distinct from screenshots of the implementation.
 
+## Escape and settings reuse
+
+The 2026-09-13 Escape, Graphics, Audio and Controls menus reuse these same handles
+and the existing ledger wood. They add **zero runtime image files or compressed
+image bytes**. Navigation icons, heading symbols, arrows and keycap labels are
+native UI; the live menu backdrop filters the existing scene target with the
+shared startup material, without another world camera or full-size image asset.
+Generated concepts and actual review captures stay in ignored `logs/`; the
+maintained acceptance recipe is `capture/scenarios/pause-menu-tour.ron`.
+
 ## Runtime artwork and budget
 
 `client/src/ui/startup/artwork.rs` owns one shared set of handles for all startup

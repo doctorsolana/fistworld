@@ -20,7 +20,7 @@ impl Default for AudioSettings {
             music_enabled: true,
             effects_enabled: true,
             master_volume: 1.0,
-            music_volume: 1.0,
+            music_volume: 0.5,
             effects_volume: 1.0,
         }
     }
@@ -161,14 +161,17 @@ mod tests {
             .save(&AudioSettings {
                 music_enabled: false,
                 effects_enabled: false,
+                music_volume: 0.3,
                 ..Default::default()
             })
             .unwrap();
         assert!(!store.load().music_enabled);
         assert!(!store.load().effects_enabled);
+        assert_eq!(store.load().music_volume, 0.3);
         let saved = std::fs::read(&path).unwrap();
         store.enabled = false;
         assert!(store.load().music_enabled);
+        assert_eq!(store.load().music_volume, 0.5);
         store.save(&AudioSettings::default()).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), saved);
         std::fs::remove_file(&path).unwrap();
@@ -180,9 +183,19 @@ mod tests {
     #[test]
     fn missing_fields_keep_music_on() {
         assert!(ron::from_str::<AudioSettings>("()").unwrap().music_enabled);
+        assert_eq!(
+            ron::from_str::<AudioSettings>("()").unwrap().music_volume,
+            0.5
+        );
         let old: AudioSettings = ron::from_str("(music_enabled: false)").unwrap();
         assert!(!old.music_enabled);
         assert!(old.effects_enabled);
+        assert_eq!(old.music_volume, 0.5);
+        let saved: AudioSettings = ron::from_str("(music_volume: 1.0)").unwrap();
+        assert_eq!(
+            saved.music_volume, 1.0,
+            "an existing chosen level is preserved"
+        );
     }
 }
 

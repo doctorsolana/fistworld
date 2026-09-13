@@ -275,6 +275,9 @@ defaults for its original music switch. Effects controls the six UI cues and car
 rolling in this slice. Toggle state is independent of the saved slider level;
 muting and re-enabling must preserve that level. Apply master/category gain once
 to active sinks and newly started voices, including retained music.
+Music defaults to 50%, while Master and Effects default to 100%. The default
+gameplay track has an additional 0.8 authored playback gain; the opening retains
+its 0.82 track gain. Existing saved slider choices take precedence over defaults.
 
 Separate UI/Ambience categories are a later design option alongside broader
 locomotion and battle banks; they are not controls already supplied by this pack.

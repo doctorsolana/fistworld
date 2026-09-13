@@ -19,6 +19,16 @@ pub(crate) enum MusicCue {
     Background,
 }
 
+impl MusicCue {
+    /// Track balance before the player's master and music preferences.
+    pub(crate) fn base_gain(self) -> f32 {
+        match self {
+            Self::Opening => 0.82,
+            Self::Background => 0.8,
+        }
+    }
+}
+
 /// One finite transition per changed preference. Settled playback is left alone,
 /// including explicit playback overrides in the real-sink capture rehearsal.
 #[derive(Component)]
@@ -116,12 +126,13 @@ pub(super) fn update_music(
             commands.entity(entity).despawn();
         }
         if gain > 0.0 {
+            let opening_gain = MusicCue::Opening.base_gain() * gain;
             commands.spawn((
                 Name::new("Opening voyage music"),
                 MusicCue::Opening,
-                MusicGainRamp::new(0.82 * gain),
+                MusicGainRamp::new(opening_gain),
                 AudioPlayer::new(assets.load(paths::GAME_INTRO)),
-                PlaybackSettings::ONCE.with_volume(Volume::Linear(0.82 * gain)),
+                PlaybackSettings::ONCE.with_volume(Volume::Linear(opening_gain)),
             ));
         }
         return;
@@ -158,7 +169,7 @@ pub(super) fn update_music(
             continue;
         }
         let paused = gain <= 0.0 || (*cue == MusicCue::Background && cinematic_active);
-        let intended_gain = gain * if *cue == MusicCue::Opening { 0.82 } else { 1.0 };
+        let intended_gain = gain * cue.base_gain();
         let volume = Volume::Linear(intended_gain);
         // Cover both a running sink and an asset still loading when the toggle changes.
         if initial.paused != paused {
@@ -204,12 +215,13 @@ pub(super) fn update_music(
         .background
         .get_or_insert_with(|| assets.load(paths::BACKGROUND_MUSIC))
         .clone();
+    let background_gain = MusicCue::Background.base_gain() * gain;
     commands.spawn((
         Name::new("Background music: The Chronicler's Quill"),
         MusicCue::Background,
-        MusicGainRamp::new(gain),
+        MusicGainRamp::new(background_gain),
         AudioPlayer::new(source),
-        PlaybackSettings::ONCE.with_volume(Volume::Linear(gain)),
+        PlaybackSettings::ONCE.with_volume(Volume::Linear(background_gain)),
     ));
 }
 

@@ -1,4 +1,5 @@
-// Actual music sinks and the normal Escape-menu toggle; no alternate UI.
+// Actual music sinks and the normal Escape-menu choices; no alternate UI.
+// The first shot waits for 12 seconds of actual playback for a recorded audition.
 (
     version: 1, name: "music-and-pause-menu", map: "battle_lab",
     output_dir: "logs/captures/ui-music",

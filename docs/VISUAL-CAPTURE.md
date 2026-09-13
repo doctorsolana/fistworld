@@ -965,6 +965,41 @@ Verification completed with `cargo check --workspace --all-targets`,
 `cargo build --workspace --profile playtest`, formatting and whitespace checks.
 
 
+## Escape and settings menu tour
+
+[`capture/scenarios/pause-menu-tour.ron`](../capture/scenarios/pause-menu-tour.ron)
+is the maintained 15-shot composed-UI review. It opens Graphics, lowers/restores
+scene resolution, opens Audio, lowers/restores master volume, toggles/restores
+music, opens Controls, raises/restores mouse sensitivity, then uses Back, Resume
+and a keyboard Escape reopen. Only the initial open menu and offline world are
+fixtures; navigation and value changes use production button/input handlers.
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario capture/scenarios/pause-menu-tour.ron \
+  --out logs/pause-menu-review/normal
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario capture/scenarios/pause-menu-tour.ron --resolution 1280x720 \
+  --out logs/pause-menu-review/small
+```
+
+The default output is 1600×1000. `FISTWORLD_CAPTURE_PAUSE_TOUR=1` installs the
+opt-in driver; the ordinary capture settings-isolation policy prevents reads or
+writes of player preferences. Capture waits for the requested local result,
+visible layout, loaded artwork and settled `UiReveal` springs. Hidden retained
+duplicates cannot receive the tour's button input. Each PNG has `.capture.json`
+plus `.menu.json`, recording the actual active pane, current settings, visible
+control/text bounds, enabled states and containment/clip checks. The Controls
+page also rejects the removed Find your hero and Close menu reference entries.
+Inspect the PNG and both sidecars; geometric fit does not prove good typography,
+button materials or contrast. Keep all review output under ignored `logs/`.
+
+This checks offline retained UI and local input, not native pointer hit testing,
+connected gameplay, fullscreen transitions or audio playback/mix. The native
+display driver below covers actual mode changes; audio acceptance still requires
+the separate playback/listening evidence. Menu volume changes alone do not prove
+that music or effects were audible.
+
 ## Graphics controls and native display modes
 
 `capture/scenarios/ui-graphics.ron` captures the real graphics panel at 1600x1000;
@@ -972,6 +1007,11 @@ override `--resolution 1280x720` to check the smaller layout. The companion
 `ui-graphics-confirmation.ron` checks the real Keep/Revert panel at 720p. Its offline
 fixture holds the confirmation timer at 15 seconds without changing the native
 window or graphics preferences. Both use `target: window` for the composed UI.
+`ui-graphics-confirmation-bottom.ron` is the 720p companion at the end of the same
+scroll viewport. Its opt-in `FISTWORLD_CAPTURE_PAUSE_SCROLL_END=1` fixture derives
+`ScrollPosition` from actual laid-out content/viewport sizes; it does not simulate
+wheel input. Inspect both top and bottom PNG/JSON pairs to verify that scrolling
+stays inside the parchment gutter and that the final controls remain reachable.
 
 For native fullscreen verification, keep the computer unlocked, start an ordinary
 local server, then run the connected client from the repo root with:
@@ -1073,7 +1113,11 @@ that opening, returning to background, and quiet after completion. The final ste
 silently accelerates the actual Vorbis decoder to 100× until it finishes (seeking
 is unsupported). Each PNG and `.capture.json`
 has a `.music.json` with the visible button bounds/text, current music entity and
-actual sink position/paused state. Read those alongside the images: screenshots
+actual sink position/paused state, Master/Music preferences and measured/expected
+sink volume. The first shot waits for twelve seconds of actual background playback,
+providing a useful audition interval for the application-audio recorder. Subsequent
+shots wait for the cue's authored gain multiplied by the preferences to settle.
+Read those alongside the images: screenshots
 alone cannot prove playback. `FISTFORCE_NO_SETTINGS_FILE=1` also protects saved audio
 preferences. The opening request is a fixture, not a connected-voyage claim.
 
@@ -1115,6 +1159,11 @@ window sizes. The launcher also records native Connect hover, opening the saved
 server popup and closing it through real UI handlers. Its two preset entries are
 explicitly staged offline. The existing `ui-preparing-world.ron` remains a
 single-view entry.
+The join form and name-rejection scenarios also press and release Tab through
+Bevy's native keyboard dispatch. Their focused shots require Join Game to retain
+its original loaded brass artwork, brighten its face, and have no rectangular
+`Outline`, with no mouse hover. The `.startup.json` `keyboard_focus` evidence
+records these checks alongside the button bounds.
 Fixtures set presentation resources only; the offline `CaptureConfig` suppresses
 real connection startup, and no generated-world progress is invented.
 

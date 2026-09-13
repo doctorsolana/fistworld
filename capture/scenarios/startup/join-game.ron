@@ -10,8 +10,14 @@
     warmup_frames: 1,
     readiness: (minimum_frames: 1, maximum_frames: 1200, minimum_loaded_chunks: 0, stable_loaded_chunk_frames: 1),
     environment: {"FISTFORCE_CAPTURE_FRONTEND": "name"},
-    shots: [(
-        name: "join-game",
-        focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 160.0, time_of_day: 0.5,
-    )],
+    shots: [
+        (
+            name: "join-game",
+            focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 160.0, time_of_day: 0.5,
+        ),
+        (
+            name: "join-game-focused",
+            focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 160.0, time_of_day: 0.5,
+        ),
+    ],
 )

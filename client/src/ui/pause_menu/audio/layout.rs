@@ -1,55 +1,62 @@
 use super::*;
-use crate::ui::sound::UiSoundHandled;
+use crate::ui::{
+    pause_menu::skin::{self, ControlFace},
+    sound::UiSoundHandled,
+    startup::{widgets::INK, StartupArtwork},
+    typography,
+};
 
 pub(in crate::ui::pause_menu) fn spawn_audio_panel(
     parent: &mut ChildSpawnerCommands<'_>,
     settings: &AudioSettings,
+    art: &StartupArtwork,
 ) {
-    parent.spawn((
-        AudioSettingsPanel,
-        Name::new("pause-audio-panel"),
-        crate::ui::motion::UiReveal::page(),
-        Node {
-            display: Display::None,
-            width: Val::Px(420.0),
-            max_height: Val::Vh(88.0),
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(24.0)),
-            border: UiRect::all(Val::Px(3.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
-            row_gap: Val::Px(18.0),
-            overflow: Overflow::scroll_y(),
-            scrollbar_width: 8.0,
-            ..default()
-        },
-        BackgroundColor(FRONT_PANEL),
-        BorderColor::all(BRASS_DARK),
-        crate::ui::styles::plate_shadow(),
-    )).with_children(|panel| {
-        crate::ui::frame::corners(panel);
-        panel.spawn((Text::new("AUDIO"), crate::ui::typography::heading(26.0), TextColor(INK_INVERSE_HEADING)));
-        panel.spawn((Text::new("Set the balance of music, world and interface sounds."), crate::ui::typography::text(14.0), TextColor(INK_INVERSE_MUTED)));
-        for control in AudioControl::ALL {
-            spawn_slider(panel, control, settings);
-        }
-        panel.spawn((
-            Text::new("Drag a slider or use the - / + buttons.\nTab to a slider: Left / Right adjusts; Home / End sets 0 / 100%."),
-            crate::ui::typography::text(12.0), TextColor(INK_INVERSE_MUTED),
-        ));
-    });
+    parent
+        .spawn((
+            AudioSettingsPanel,
+            Name::new("pause-audio-panel"),
+            crate::ui::motion::UiReveal::page(),
+            Node {
+                row_gap: Val::Px(10.0),
+                ..crate::ui::pause_menu::widgets::page()
+            },
+        ))
+        .with_children(|panel| {
+            crate::ui::pause_menu::widgets::title(panel, "AUDIO");
+            skin::label(panel, "Music, world and interface sounds.", 17.0);
+            skin::rule(panel);
+            for control in AudioControl::ALL {
+                spawn_slider(panel, control, settings, art);
+                skin::rule(panel);
+            }
+            panel.spawn((
+                Text::new("Drag to adjust  ·  - / + for small steps\nTab select  ·  Left / Right adjust  ·  Home / End min / max"),
+                typography::reading(14.0),
+                TextColor(INK),
+                TextLayout::justify(Justify::Center),
+                Node {
+                    width: Val::Percent(100.0),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
+        });
 }
 
 fn spawn_slider(
     parent: &mut ChildSpawnerCommands<'_>,
     control: AudioControl,
     settings: &AudioSettings,
+    art: &StartupArtwork,
 ) {
     let value = control.get(settings);
     parent
         .spawn(Node {
             flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(9.0),
+            row_gap: Val::Px(11.0),
             width: Val::Percent(100.0),
+            min_width: Val::Px(0.0),
             flex_shrink: 0.0,
             ..default()
         })
@@ -57,27 +64,37 @@ fn spawn_slider(
             group
                 .spawn(Node {
                     width: Val::Percent(100.0),
+                    height: Val::Px(40.0),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::SpaceBetween,
                     ..default()
                 })
                 .with_children(|row| {
                     row.spawn((
-                        Text::new(control.label()),
-                        crate::ui::typography::text(16.0),
-                        TextColor(INK_INVERSE_HEADING),
+                        Text::new(if control == AudioControl::Master {
+                            "MASTER VOLUME"
+                        } else {
+                            control.label()
+                        }),
+                        typography::reading_strong(20.0),
+                        TextColor(INK),
+                        Pickable::IGNORE,
                     ));
                     match control {
                         AudioControl::Master => {}
-                        AudioControl::Music => spawn_toggle(row, true, settings.music_enabled),
-                        AudioControl::Effects => spawn_toggle(row, false, settings.effects_enabled),
+                        AudioControl::Music => spawn_toggle(row, control, settings.music_enabled),
+                        AudioControl::Effects => {
+                            spawn_toggle(row, control, settings.effects_enabled)
+                        }
                     }
                 });
             group
                 .spawn(Node {
                     width: Val::Percent(100.0),
+                    min_width: Val::Px(0.0),
+                    height: Val::Px(42.0),
                     align_items: AlignItems::Center,
-                    column_gap: Val::Px(14.0),
+                    column_gap: Val::Px(20.0),
                     ..default()
                 })
                 .with_children(|row| {
@@ -88,11 +105,11 @@ fn spawn_slider(
                         UiSoundHandled,
                         Name::new(format!("audio-{}-slider", control.name())),
                         RelativeCursorPosition::default(),
-                        button_chrome(UiButtonVariant::Inverse),
+                        button_chrome(UiButtonVariant::Ghost),
                         Node {
-                            height: Val::Px(34.0),
+                            height: Val::Px(40.0),
                             flex_grow: 1.0,
-                            min_width: Val::Px(150.0),
+                            min_width: Val::Px(100.0),
                             align_items: AlignItems::Center,
                             ..default()
                         },
@@ -102,13 +119,13 @@ fn spawn_slider(
                             .spawn((
                                 Node {
                                     width: Val::Percent(100.0),
-                                    height: Val::Px(8.0),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                                    height: Val::Px(16.0),
+                                    border: UiRect::all(Val::Px(3.0)),
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
                                     ..default()
                                 },
-                                BackgroundColor(BRASS_DARK),
-                                BorderColor::all(BRASS.with_alpha(0.55)),
+                                BackgroundColor(FRONT_PANEL),
+                                BorderColor::all(BRASS_DARK),
                                 Pickable::IGNORE,
                             ))
                             .with_children(|rail| {
@@ -117,27 +134,42 @@ fn spawn_slider(
                                     Node {
                                         width: Val::Percent(value * 100.0),
                                         height: Val::Percent(100.0),
-                                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                                        border: UiRect::vertical(Val::Px(1.0)),
                                         ..default()
                                     },
-                                    BackgroundColor(EMBER),
+                                    BackgroundColor(crate::ui::startup::widgets::GOLD),
+                                    BorderColor::all(INK_INVERSE_HEADING),
                                     Pickable::IGNORE,
                                 ));
                             });
+                        for tick in 0..=10 {
+                            track.spawn((
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: Val::Percent(tick as f32 * 10.0),
+                                    bottom: Val::Px(0.0),
+                                    width: Val::Px(1.0),
+                                    height: Val::Px(if tick % 5 == 0 { 6.0 } else { 4.0 }),
+                                    ..default()
+                                },
+                                BackgroundColor(BRASS_DARK),
+                                Pickable::IGNORE,
+                            ));
+                        }
                         track.spawn((
                             AudioThumb(control),
                             Node {
                                 position_type: PositionType::Absolute,
                                 left: Val::Percent(value * 100.0),
-                                margin: UiRect::left(Val::Px(-7.0)),
-                                width: Val::Px(14.0),
+                                top: Val::Px(7.0),
+                                margin: UiRect::left(Val::Px(-13.0)),
+                                width: Val::Px(26.0),
                                 height: Val::Px(26.0),
-                                border: UiRect::all(Val::Px(2.0)),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
                                 ..default()
                             },
-                            BackgroundColor(INK_INVERSE_HEADING),
-                            BorderColor::all(BRASS_DARK),
+                            art.brass(),
+                            UiTransform::from_rotation(Rot2::degrees(45.0)),
+                            ZIndex(1),
                             Pickable::IGNORE,
                         ));
                     });
@@ -146,13 +178,15 @@ fn spawn_slider(
                         AudioValue(control),
                         Name::new(format!("audio-{}-value", control.name())),
                         Text::new(format!("{:.0}%", value * 100.0)),
-                        crate::ui::typography::text(16.0),
-                        TextColor(INK_INVERSE),
+                        typography::reading_strong(18.0),
+                        TextColor(INK),
                         Node {
-                            width: Val::Px(48.0),
+                            width: Val::Px(57.0),
+                            flex_shrink: 0.0,
                             ..default()
                         },
                         TextLayout::justify(Justify::Right),
+                        Pickable::IGNORE,
                     ));
                 });
         });
@@ -164,6 +198,7 @@ fn step_button(parent: &mut ChildSpawnerCommands<'_>, control: AudioControl, del
             Button,
             AudioStep { control, delta },
             UiSoundHandled,
+            ControlFace::Brass,
             Name::new(format!(
                 "audio-{}-{}",
                 control.name(),
@@ -171,13 +206,11 @@ fn step_button(parent: &mut ChildSpawnerCommands<'_>, control: AudioControl, del
             )),
             RelativeCursorPosition::default(),
             Node {
-                width: Val::Px(32.0),
-                height: Val::Px(34.0),
+                width: Val::Px(42.0),
+                height: Val::Px(42.0),
                 flex_shrink: 0.0,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(2.0)),
-                border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
             button_chrome(UiButtonVariant::Inverse),
@@ -185,51 +218,53 @@ fn step_button(parent: &mut ChildSpawnerCommands<'_>, control: AudioControl, del
         .with_child((
             UiButtonLabel,
             Text::new(if delta < 0 { "-" } else { "+" }),
-            crate::ui::typography::text(20.0),
+            typography::reading_strong(25.0),
             TextColor(INK_INVERSE),
+            Pickable::IGNORE,
         ));
 }
 
-fn spawn_toggle(parent: &mut ChildSpawnerCommands<'_>, music: bool, enabled: bool) {
-    let mut button = parent.spawn((
-        Button,
-        Name::new(if music {
-            "pause-music"
-        } else {
-            "pause-effects"
-        }),
-        RelativeCursorPosition::default(),
-        Node {
-            width: Val::Px(132.0),
-            height: Val::Px(32.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(Val::Px(2.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+fn spawn_toggle(parent: &mut ChildSpawnerCommands<'_>, control: AudioControl, enabled: bool) {
+    parent
+        .spawn(Node {
+            width: Val::Px(196.0),
+            height: Val::Px(40.0),
+            flex_shrink: 0.0,
             ..default()
-        },
-        selected_button_chrome(UiButtonVariant::Inverse, enabled),
-    ));
-    if music {
-        button.insert(MusicToggle);
-    } else {
-        button.insert(EffectsToggle);
-    }
-    button.with_children(|button| {
-        let mut label = button.spawn((
-            UiButtonLabel,
-            Text::new(if music {
-                super::super::music::label(enabled)
-            } else {
-                effects::label(enabled)
-            }),
-            crate::ui::typography::text(14.0),
-            TextColor(INK_INVERSE),
-        ));
-        if music {
-            label.insert(MusicToggleLabel);
-        } else {
-            label.insert(EffectsToggleLabel);
-        }
-    });
+        })
+        .with_children(|choices| {
+            for choice in [true, false] {
+                let mut button = choices.spawn((
+                    Button,
+                    AudioEnabledChoice(choice),
+                    Name::new(format!(
+                        "pause-{}-{}",
+                        control.name(),
+                        if choice { "on" } else { "off" }
+                    )),
+                    ControlFace::Choice,
+                    RelativeCursorPosition::default(),
+                    Node {
+                        width: Val::Percent(50.0),
+                        height: Val::Percent(100.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    selected_button_chrome(UiButtonVariant::Inverse, enabled == choice),
+                ));
+                if control == AudioControl::Music {
+                    button.insert(MusicToggle);
+                } else {
+                    button.insert(EffectsToggle);
+                }
+                button.with_child((
+                    UiButtonLabel,
+                    Text::new(if choice { "ON" } else { "OFF" }),
+                    typography::reading_strong(16.0),
+                    TextColor(crate::ui::startup::widgets::IVORY),
+                    Pickable::IGNORE,
+                ));
+            }
+        });
 }

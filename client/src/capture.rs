@@ -202,7 +202,7 @@ pub struct CaptureConfig {
 
 /// Where we are in the capture sequence.
 #[derive(Resource, Debug)]
-enum CaptureState {
+pub(crate) enum CaptureState {
     /// Letting the world stream in before the first shot.
     Warmup {
         progress: ReadinessProgress,
@@ -455,6 +455,7 @@ pub fn run(mut config: CaptureConfig) {
             // the pose this system applied in frame N — a continuous flight
             // must not trail its own screenshots by a frame.
             drive_capture
+                .run_if(crate::ui::pause_menu::review_capture::ready)
                 .before(crate::camera_rts::update_commander_camera)
                 .run_if(asset_fixtures::ready)
                 .run_if(building_lods::ready)

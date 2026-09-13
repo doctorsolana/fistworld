@@ -1,6 +1,6 @@
 # Client UI architecture
 
-Last reconciled with Bevy 0.19 on 2026-09-12. This is the contract for new UI and for
+Last reconciled with Bevy 0.19 on 2026-09-13. This is the contract for new UI and for
 touching an existing screen. The goal is a coherent medieval ledger interface without
 screen-specific hover logic, accidental world input, or full-tree churn at simulation speed.
 
@@ -22,6 +22,9 @@ inspected layouts, connected behavior, compressed art budget and portrait timing
 | `client/src/ui/scroll.rs` | Wheel bubbling and nested scroll behavior |
 | Screen modules | Data model, layout and actions specific to that screen |
 | `client/src/app_wiring/window.rs` | Resolution-aware UI scale; 3D render scale never makes UI blurry |
+| `client/src/ui/pause_menu/layout.rs`, `skin.rs` and `widgets/` | Retained Escape/settings frame, shared launcher/ledger artwork and grouped native controls |
+| `client/src/ui/pause_menu/input.rs` | Visible-page keyboard focus, hidden-control exclusion and graphics-key activation |
+| `client/src/ui/pause_menu/backdrop.rs` | Bounded live-world filter using the existing scene render target; resize/release ownership |
 | `client/src/ui/pause_menu/display.rs` | Explicit display-mode choices, supported output sizes, actual scene-pixel labels and retained confirmation/resize state |
 | `client/src/ui/hud/shell.rs` | Place/purse, owned-hero/Home selection, map/encyclopedia navigation and compass |
 | `client/src/ui/hud/selection_card.rs` | Selected-person card and full-record expansion |
@@ -194,6 +197,53 @@ verified at normal and small sizes, together with the God HUD's remaining contro
 current and historical evidence are recorded separately in the capture guide.
 Connected creation is checked separately.
 
+## Escape and settings
+
+The compact GAME MENU opens into a single settings frame with dark navigation and
+a light parchment page. `pause_menu` reuses compressed `StartupArtwork` and ledger
+paper, wood, button faces and corner hardware; generated full-screen concepts are
+review references, not runtime menu textures. Text, arrows, keycaps and slider
+interaction remain native UI. Its backdrop samples the existing pre-UI scene target
+through the shared bounded startup filter, refreshes its binding after target
+replacement/resizing, and releases the material when the menu closes. It adds no
+second world camera.
+
+Standalone navigation and the Graphics, Audio and Controls pages remain mounted
+while the menu is open. Page changes toggle display and selected navigation state;
+shared `UiReveal` springs own motion without rebuilding controls. Hidden retained
+controls leave keyboard navigation and cannot accept actions. Focus must stay on a
+visible, enabled control; disabled step endpoints retain their setting-specific
+meaning independently of page visibility.
+
+The stationary parchment owns its safe edge gutter; inner page viewports clip
+and scroll inside it, including when display confirmation expands. Authored
+menu buttons opt into `UiArtworkFocus`: keyboard focus lights their existing
+face instead of adding a rectangular outline across their irregular edges.
+The settings header shares the body's navigation-column width, so the wordmark
+and SETTINGS heading remain centered over their own panels. Page headings,
+section headings and field labels use a distinct size hierarchy; display values
+share the display-mode controls' center rather than the page's far-right edge.
+
+Escape returns from settings to the standalone menu; a second Escape resumes.
+Back also returns to the standalone menu, while Resume or the frame's X dismisses
+the whole menu. A transparent shared outside-click target also dismisses it; the
+filtered scene material supplies the only visual scrim. A held click during menu
+creation or a drag beginning inside the panel must not trigger outside dismissal.
+Another modal, including mandatory character creation, retains its
+existing input guard. GAME MENU does not pause the authoritative world.
+
+Graphics separates Display, Quality & Distance and Lighting, with explicit ON/OFF
+choices and the existing Keep/Revert display safety flow. Audio retains immediate
+Master/Music/Effects levels, independent Music/Effects switches and keyboard/drag
+input. Controls combines mouse sensitivity with a grouped shortcut reference; its
+ornamental keycaps are not rebinding controls. The requested Find your hero and
+Close menu shortcut rows are omitted without removing the underlying shortcuts.
+
+The maintained [pause-menu tour](../capture/scenarios/pause-menu-tour.ron) checks
+production navigation and local setting changes at normal and small resolutions.
+See [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md#escape-and-settings-menu-tour) for readiness,
+artifact evidence and the separate native-display/audio acceptance boundaries.
+
 ## Encyclopedia materials and portraits
 
 The five spreads and nested pages use the same `ledger` catalogue. `paper()`,
@@ -228,7 +278,12 @@ recipes, budgets and licenses are documented in `asset_creation/ui/LEDGER-ART.md
 Major section rules use a small native diamond ornament. Outer triangular brass
 caps cover the panel's outside border; inner viewports own clipping. Ledger button
 faces retain native rectangular targets, focus and spring feedback while sharing
-worn paper/dark-leather/amber artwork. Selected-row borders are separate, non-picking
+worn paper/dark-leather/amber artwork. The shared `LedgerButton` skin requires
+`UiArtworkFocus`, including startup, character creation and custom face recipes:
+keyboard focus brightens the authored face without outlining its rectangular hit
+target. Skin binding precedes focus styling; newly styled retained controls also
+reconcile their focus without requiring another Tab press. Selected-row borders
+are separate, non-picking
 children: `Outline` remains owned exclusively by keyboard focus. Troop checkbox
 decoration follows the existing selection action instead of embedding brackets in
 the person's name.
@@ -279,8 +334,9 @@ hover/press/focus state. A textured button is never exempt from input or disable
 
 Unavailable controls remain visible and add Bevy's `InteractionDisabled`; do not leave an
 active button in the tree and merely ignore its click. The foundation removes disabled
-controls from tab order. Standard controls receive tab navigation, a visible keyboard focus
-ring and Bevy's automatic button accessibility role/label.
+controls from tab order. Standard controls receive tab navigation, visible keyboard focus
+feedback and Bevy's automatic button accessibility role/label. Plain controls use a
+focus ring; authored faces use their material tint. Text fields retain their caret.
 
 An interaction query containing optional action markers must also have a required filter:
 
@@ -307,12 +363,16 @@ override it explicitly; developer and debug screens do not receive a separate pr
 
 Never color both the root and backdrop: their alpha compounds. `InputState::modal_open` is
 derived from `ModalRoot`; do not borrow an unrelated flag such as inventory state. The hero
-creator is the one transparent-backdrop exception because its 3D diorama is intentionally
-seen through the panel, but it still carries the shared modal root, layer and tab group.
+creator uses a transparent backdrop because its 3D diorama is intentionally seen through
+the panel. The Game Menu also uses a transparent input backdrop, with its sole visual
+scrim supplied by the filtered scene material. Both retain the shared modal root,
+outside target, layer and tab group.
 
 Use `X` to dismiss a top-level window and `BACK TO …` when returning to an owning record.
 Escape and clicking the backdrop dismiss the same top-level target. A Back action must restore
-the prior selection instead of opening an unrelated copy of the screen.
+the prior selection instead of opening an unrelated copy of the screen. The Game Menu's
+owned settings pages explicitly use Escape as Back; from its standalone menu, Escape
+dismisses it.
 
 Button state is computed after screen state in `PostUpdate`, so plugin registration order cannot
 introduce a one-frame selected/hover mismatch. Layer assignments are centralized: presentation

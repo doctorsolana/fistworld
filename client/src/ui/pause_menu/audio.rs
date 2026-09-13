@@ -67,6 +67,9 @@ pub(super) struct AudioValue(AudioControl);
 pub(super) struct AudioFill(AudioControl);
 #[derive(Component)]
 pub(super) struct AudioThumb(AudioControl);
+/// Explicit value for one ON/OFF choice; activation never inverts the other choice.
+#[derive(Component, Clone, Copy)]
+pub(super) struct AudioEnabledChoice(pub bool);
 
 #[derive(Resource, Default)]
 pub(super) struct AudioDrag {
@@ -109,7 +112,12 @@ pub(super) fn handle_audio_controls(
         Without<InteractionDisabled>,
     >,
     toggles: Query<
-        (Entity, Has<MusicToggle>, Has<EffectsToggle>),
+        (
+            Entity,
+            Has<MusicToggle>,
+            Has<EffectsToggle>,
+            &AudioEnabledChoice,
+        ),
         (
             Or<(With<MusicToggle>, With<EffectsToggle>)>,
             Without<InteractionDisabled>,
@@ -131,17 +139,17 @@ pub(super) fn handle_audio_controls(
     let activate =
         keyboard.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]);
     // The dedicated mouse handlers own clicks; a simultaneous activation key
-    // must not invert the same preference a second time.
+    // does not need to activate the same choice a second time.
     if activate && !mouse.just_pressed(MouseButton::Left) {
-        for (entity, music, effects) in &toggles {
+        for (entity, music, effects, choice) in &toggles {
             if focused != Some(entity) {
                 continue;
             }
-            if music {
-                settings.music_enabled = !settings.music_enabled;
+            if music && settings.music_enabled != choice.0 {
+                settings.music_enabled = choice.0;
             }
-            if effects {
-                settings.effects_enabled = !settings.effects_enabled;
+            if effects && settings.effects_enabled != choice.0 {
+                settings.effects_enabled = choice.0;
             }
             sounds.emit(SfxCue::UiClick);
         }
@@ -211,7 +219,12 @@ pub(super) fn sync_audio_controls(
     mut labels: Query<(&AudioValue, &mut Text)>,
     mut fills: Query<(&AudioFill, &mut Node), Without<AudioThumb>>,
     mut thumbs: Query<(&AudioThumb, &mut Node), Without<AudioFill>>,
-    buttons: Query<(Entity, &AudioStep, Has<InteractionDisabled>)>,
+    buttons: Query<(
+        Entity,
+        &AudioStep,
+        Has<input::SettingUnavailable>,
+        Has<input::HiddenMenuControl>,
+    )>,
     mut commands: Commands,
 ) {
     for (control, mut text) in &mut labels {
@@ -232,13 +245,9 @@ pub(super) fn sync_audio_controls(
             node.left = left;
         }
     }
-    for (entity, control, disabled) in &buttons {
+    for (entity, control, disabled, hidden) in &buttons {
         let current = control.control.get(&settings);
         let at_limit = current == step(current, control.delta);
-        if at_limit && !disabled {
-            commands.entity(entity).insert(InteractionDisabled);
-        } else if !at_limit && disabled {
-            commands.entity(entity).remove::<InteractionDisabled>();
-        }
+        input::sync_unavailable(&mut commands, entity, at_limit, disabled, hidden);
     }
 }

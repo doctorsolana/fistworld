@@ -12,53 +12,80 @@ pub(super) struct SelectDisplayMode(pub(super) DisplayMode);
 pub(super) struct DisplayModeHint;
 
 pub(super) fn spawn_display_modes(parent: &mut ChildSpawnerCommands<'_>, selected: DisplayMode) {
-    parent.spawn((
-        Text::new("DISPLAY MODE"),
-        crate::ui::typography::text(14.0),
-        TextColor(INK_INVERSE_HEADING),
-    ));
     parent
         .spawn(Node {
             width: Val::Percent(100.0),
-            column_gap: Val::Px(8.0),
-            margin: UiRect::vertical(Val::Px(12.0)),
+            min_width: Val::Px(0.0),
+            min_height: Val::Px(44.0),
+            flex_shrink: 0.0,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            column_gap: Val::Px(12.0),
+            margin: UiRect::bottom(Val::Px(6.0)),
             ..default()
         })
         .with_children(|row| {
-            for (label, mode) in [
-                ("Windowed", DisplayMode::Windowed),
-                ("Borderless", DisplayMode::Borderless),
-                ("Exclusive", DisplayMode::ExclusiveFullscreen),
-            ] {
-                row.spawn((
-                    Button,
-                    SelectDisplayMode(mode),
-                    selected_button_chrome(UiButtonVariant::Inverse, mode == selected),
-                    Node {
-                        flex_grow: 1.0,
-                        height: Val::Px(36.0),
-                        padding: UiRect::horizontal(Val::Px(12.0)),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border: UiRect::all(Val::Px(2.0)),
-                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                        ..default()
-                    },
-                ))
-                .with_children(|button| {
-                    button.spawn((
-                        Text::new(label),
-                        UiButtonLabel,
-                        crate::ui::typography::text(15.0),
-                        TextColor(INK_INVERSE),
-                    ));
-                });
-            }
+            row.spawn((
+                Text::new("Display Mode"),
+                crate::ui::typography::reading_strong(20.0),
+                TextColor(crate::ui::startup::widgets::INK),
+                Node {
+                    flex_grow: 1.0,
+                    min_width: Val::Px(0.0),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
+            row.spawn(Node {
+                width: Val::Percent(72.0),
+                min_width: Val::Px(290.0),
+                flex_shrink: 0.0,
+                column_gap: Val::Px(4.0),
+                ..default()
+            })
+            .with_children(|modes| {
+                for (label, mode) in [
+                    ("Windowed", DisplayMode::Windowed),
+                    ("Borderless", DisplayMode::Borderless),
+                    ("Exclusive", DisplayMode::ExclusiveFullscreen),
+                ] {
+                    modes
+                        .spawn((
+                            Button,
+                            Name::new(format!("settings-display-{label}")),
+                            SelectDisplayMode(mode),
+                            skin::ControlFace::Choice,
+                            selected_button_chrome(UiButtonVariant::Inverse, mode == selected),
+                            Node {
+                                flex_grow: 1.0,
+                                flex_basis: Val::Px(0.0),
+                                min_width: Val::Px(0.0),
+                                height: Val::Px(40.0),
+                                padding: UiRect::horizontal(Val::Px(8.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|button| {
+                            button.spawn((
+                                Text::new(label),
+                                UiButtonLabel,
+                                crate::ui::typography::reading(16.0),
+                                TextColor(crate::ui::startup::widgets::IVORY),
+                                Pickable::IGNORE,
+                            ));
+                        });
+                }
+            });
         });
 }
 
 pub(super) fn handle_display_modes(
-    buttons: Query<(&Interaction, &SelectDisplayMode), Changed<Interaction>>,
+    buttons: Query<
+        (&Interaction, &SelectDisplayMode),
+        (Changed<Interaction>, Without<InteractionDisabled>),
+    >,
     mut settings: ResMut<GraphicsSettings>,
     monitors: Query<&Monitor, With<PrimaryMonitor>>,
     mut pending: Option<ResMut<PendingDisplayChange>>,
@@ -185,7 +212,12 @@ pub(super) fn sync_display_controls(
         Or<(With<SliderValueText>, With<DisplayModeHint>)>,
     >,
     mut modes: Query<(&SelectDisplayMode, &mut UiButtonStyle)>,
-    steps: Query<(Entity, &SliderStep, Has<InteractionDisabled>)>,
+    steps: Query<(
+        Entity,
+        &SliderStep,
+        Has<input::SettingUnavailable>,
+        Has<input::HiddenMenuControl>,
+    )>,
     mut commands: Commands,
     mut applied: Local<Option<(DisplayMode, DisplayResolution, u32, UVec2)>>,
 ) {
@@ -215,7 +247,7 @@ pub(super) fn sync_display_controls(
             Some(match mode {
                 DisplayMode::Borderless => "Borderless uses the desktop output. Lower 3D Resolution for better performance; menus stay sharp.".to_string(),
                 DisplayMode::ExclusiveFullscreen => "Exclusive changes the monitor video mode. Lower 3D Resolution reduces scene detail further. On Mac, Command-Tab and Spaces are unavailable in this mode.".to_string(),
-                DisplayMode::Windowed => "Output Resolution sets the window size. Lower 3D Resolution improves performance while keeping menus sharp.".to_string(),
+                DisplayMode::Windowed => "Lower 3D resolution keeps menus sharp.".to_string(),
             })
         } else {
             match control.map(|control| control.0) {
@@ -242,7 +274,7 @@ pub(super) fn sync_display_controls(
             style.selected = selected;
         }
     }
-    for (entity, step, was_disabled) in &steps {
+    for (entity, step, was_disabled, hidden) in &steps {
         let disabled = match step.control {
             SliderControl::Resolution => {
                 mode == DisplayMode::Borderless
@@ -255,11 +287,7 @@ pub(super) fn sync_display_controls(
             }
             _ => continue,
         };
-        if disabled && !was_disabled {
-            commands.entity(entity).insert(InteractionDisabled);
-        } else if !disabled && was_disabled {
-            commands.entity(entity).remove::<InteractionDisabled>();
-        }
+        input::sync_unavailable(&mut commands, entity, disabled, was_disabled, hidden);
     }
 }
 

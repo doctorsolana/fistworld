@@ -1,17 +1,22 @@
 //! Pause menu UI (in-game escape menu)
 //!
-//! Now includes graphics settings panel for troubleshooting flickering/performance.
-//! Menu smoothly slides when opening/closing the graphics panel.
+//! Shared worn artwork, retained settings pages and native input.
+//! This menu never pauses the authoritative world.
 
 pub mod actions;
 pub mod animation;
 mod audio;
+mod backdrop;
 mod capture_fixture;
 mod display;
 mod display_capture;
 mod effects;
+mod icons;
+mod input;
 pub mod layout;
 mod music;
+pub(crate) mod review_capture;
+mod skin;
 mod sliders;
 pub mod widgets;
 
@@ -24,7 +29,7 @@ use animation::animate_menu_transition;
 use display::{handle_display_modes, handle_display_steps, sync_display_controls};
 use layout::{despawn_pause_menu, spawn_pause_menu};
 use sliders::{handle_input_slider_steps, handle_slider_steps, sync_slider_controls};
-use widgets::{spawn_button, spawn_controls_panel, spawn_graphics_panel};
+use widgets::{spawn_controls_panel, spawn_graphics_panel};
 
 use bevy::app::AppExit;
 use bevy::prelude::*;
@@ -56,11 +61,6 @@ pub(crate) fn open_for_capture(commands: &mut Commands, panel: &str) {
         graphics_open,
         controls_open,
         audio_open: panel == "audio",
-        transition: if graphics_open || controls_open || panel == "audio" {
-            1.0
-        } else {
-            0.0
-        },
     });
 }
 
@@ -68,6 +68,9 @@ pub struct PauseMenuPlugin;
 
 impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
+        input::install(app);
+        backdrop::install(app);
+        review_capture::install(app);
         display_capture::install(app);
         capture_fixture::install(app);
         app.init_resource::<PauseMenuState>();
@@ -80,7 +83,12 @@ impl Plugin for PauseMenuPlugin {
                 .after(handle_escape_key),
         );
         app.add_systems(Update, sync_pause_menu_cursor.run_if(pause_menu_open));
-        app.add_systems(Update, spawn_pause_menu.run_if(pause_menu_open));
+        app.add_systems(
+            Update,
+            spawn_pause_menu
+                .before(animate_menu_transition)
+                .run_if(pause_menu_open),
+        );
         app.add_systems(
             Update,
             (despawn_pause_menu, reset_menu_state).run_if(pause_menu_closed),
@@ -98,7 +106,9 @@ impl Plugin for PauseMenuPlugin {
                 handle_display_confirmation,
                 sync_display_confirmation,
                 handle_input_slider_steps,
-                animate_menu_transition,
+                animate_menu_transition
+                    .after(handle_pause_actions)
+                    .after(handle_escape_key),
             )
                 .run_if(pause_menu_open),
         );
@@ -110,7 +120,9 @@ impl Plugin for PauseMenuPlugin {
                 music::sync_music_toggle,
                 effects::sync_effects_toggle,
                 audio::sync_audio_controls,
+                skin::bind_control_faces,
             )
+                .chain()
                 .before(super::button_motion::animate_buttons)
                 .run_if(pause_menu_open),
         );
@@ -121,14 +133,12 @@ impl Plugin for PauseMenuPlugin {
     }
 }
 
-/// Tracks the pause menu animation state
+/// The active retained settings page.
 #[derive(Resource, Default)]
 struct PauseMenuState {
     graphics_open: bool,
     controls_open: bool,
     audio_open: bool,
-    /// Animation progress: 0.0 = closed (centered), 1.0 = open (shifted left)
-    transition: f32,
 }
 
 /// Tracks if the pause menu is open (without pausing the game).
@@ -138,14 +148,6 @@ struct PauseMenuOpen(pub bool);
 /// Marker for the pause menu root
 #[derive(Component)]
 struct PauseMenuRoot;
-
-/// Marker for the content container that gets shifted
-#[derive(Component)]
-struct MenuContentContainer;
-
-/// Marker for the main menu column (buttons)
-#[derive(Component)]
-struct MainMenuColumn;
 
 /// Marker for the graphics settings panel
 #[derive(Component)]
@@ -162,6 +164,7 @@ struct AudioSettingsPanel;
 #[derive(Component, Clone, Copy)]
 enum PauseButton {
     Resume,
+    Back,
     Graphics,
     Controls,
     Audio,
@@ -173,13 +176,7 @@ enum PauseButton {
 pub(crate) struct MusicToggle;
 
 #[derive(Component)]
-struct MusicToggleLabel;
-
-#[derive(Component)]
 pub(crate) struct EffectsToggle;
-
-#[derive(Component)]
-struct EffectsToggleLabel;
 
 /// Graphics toggle buttons
 #[derive(Component, Clone, Copy, Debug)]
@@ -201,10 +198,6 @@ enum SliderControl {
     ViewDistance,
     PropDistance,
 }
-
-/// Marker for toggle button text (so we can update it)
-#[derive(Component)]
-struct ToggleText(GraphicsToggle);
 
 /// Marker for slider value text (so we can update it)
 #[derive(Component)]

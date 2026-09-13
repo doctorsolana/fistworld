@@ -11,6 +11,40 @@ pub(super) fn install(app: &mut App) {
         PreUpdate,
         hold_confirmation.run_if(resource_exists::<crate::capture::CaptureConfig>),
     );
+    if let Ok(flag) = std::env::var("FISTWORLD_CAPTURE_PAUSE_SCROLL_END") {
+        assert_eq!(flag, "1", "FISTWORLD_CAPTURE_PAUSE_SCROLL_END must be 1");
+        app.add_systems(
+            PostUpdate,
+            scroll_confirmation_to_end
+                .after(bevy::ui::UiSystems::Layout)
+                .run_if(resource_exists::<crate::capture::CaptureConfig>),
+        );
+    }
+}
+
+/// A layout fixture, not simulated wheel input: derive the exact bottom from
+/// the live scroll viewport after layout, including the confirmation's height.
+fn scroll_confirmation_to_end(
+    mut panels: Query<(&Node, &ComputedNode, &mut ScrollPosition), With<GraphicsSettingsPanel>>,
+) {
+    assert!(
+        std::env::var_os("FISTFORCE_NO_SETTINGS_FILE").is_some(),
+        "offline UI fixtures must not persist settings"
+    );
+    for (node, computed, mut scroll) in &mut panels {
+        if node.display == Display::None
+            || computed.size().min_element() <= 0.0
+            || !computed.content_size().is_finite()
+        {
+            continue;
+        }
+        let maximum = ((computed.content_size().y - computed.size().y)
+            * computed.inverse_scale_factor())
+        .max(0.0);
+        if maximum.is_finite() && scroll.y != maximum {
+            scroll.y = maximum;
+        }
+    }
 }
 
 fn hold_confirmation(

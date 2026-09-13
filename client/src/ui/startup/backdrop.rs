@@ -19,6 +19,16 @@ impl UiMaterial for StartupBackdropMaterial {
     }
 }
 
+impl StartupBackdropMaterial {
+    /// Samples the existing pre-UI scene target; no second world render or copy.
+    pub(crate) fn live_scene(image: Handle<Image>) -> Self {
+        Self {
+            finish: Vec4::new(0.30, 1.6, 0.0, 0.0),
+            image,
+        }
+    }
+}
+
 #[derive(Component)]
 struct StartupBackdrop;
 

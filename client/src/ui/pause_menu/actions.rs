@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) fn pause_menu_open(open: Res<PauseMenuOpen>) -> bool {
     open.0
 }
@@ -26,7 +29,6 @@ pub(super) fn reset_menu_state(mut state: ResMut<PauseMenuState>) {
     state.graphics_open = false;
     state.controls_open = false;
     state.audio_open = false;
-    state.transition = 0.0;
 }
 
 pub(super) fn handle_pause_actions(
@@ -64,30 +66,15 @@ pub(super) fn handle_pause_actions(
                     input_state.pause_menu_open = false;
                     sync_modal_cursor(false, &input_state, &windows, &mut cursor_opts);
                 }
-                PauseButton::Graphics => {
-                    // Toggle the graphics panel (close controls if open)
-                    if menu_state.graphics_open {
-                        menu_state.graphics_open = false;
-                    } else {
-                        menu_state.controls_open = false;
-                        menu_state.audio_open = false;
-                        menu_state.graphics_open = true;
-                    }
-                }
-                PauseButton::Controls => {
-                    // Toggle the controls panel (close graphics if open)
-                    if menu_state.controls_open {
-                        menu_state.controls_open = false;
-                    } else {
-                        menu_state.graphics_open = false;
-                        menu_state.audio_open = false;
-                        menu_state.controls_open = true;
-                    }
-                }
-                PauseButton::Audio => {
-                    menu_state.audio_open = !menu_state.audio_open;
+                PauseButton::Back => {
                     menu_state.graphics_open = false;
+                    menu_state.audio_open = false;
                     menu_state.controls_open = false;
+                }
+                PauseButton::Graphics | PauseButton::Controls | PauseButton::Audio => {
+                    menu_state.graphics_open = matches!(action, PauseButton::Graphics);
+                    menu_state.controls_open = matches!(action, PauseButton::Controls);
+                    menu_state.audio_open = matches!(action, PauseButton::Audio);
                 }
                 PauseButton::Disconnect => {
                     info!("Disconnecting from server...");
@@ -112,53 +99,65 @@ pub(super) fn handle_pause_actions(
 }
 
 pub(super) fn handle_graphics_toggles(
-    buttons: Query<(&Interaction, &GraphicsToggle), Changed<Interaction>>,
+    buttons: Query<
+        (
+            &Interaction,
+            &GraphicsToggle,
+            &widgets::GraphicsToggleChoice,
+        ),
+        (Changed<Interaction>, Without<bevy::ui::InteractionDisabled>),
+    >,
     mut settings: ResMut<GraphicsSettings>,
-    mut toggle_texts: Query<(&ToggleText, &mut Text)>,
-    mut toggle_buttons: Query<(&GraphicsToggle, &mut UiButtonStyle), With<Button>>,
+    mut toggle_buttons: Query<
+        (
+            &GraphicsToggle,
+            &widgets::GraphicsToggleChoice,
+            &mut UiButtonStyle,
+        ),
+        With<Button>,
+    >,
 ) {
-    for (interaction, toggle) in buttons.iter() {
+    for (interaction, toggle, choice) in buttons.iter() {
         if *interaction == Interaction::Pressed {
-            // Toggle the setting
+            // Apply the explicit choice; clicking selected ON/OFF is idempotent.
+            let current = match toggle {
+                GraphicsToggle::Bloom => settings.bloom_enabled,
+                GraphicsToggle::Shadows => settings.shadows_enabled,
+                GraphicsToggle::Atmosphere => settings.atmosphere_enabled,
+                GraphicsToggle::Clouds => settings.clouds_enabled,
+                GraphicsToggle::Vsync => settings.vsync_enabled,
+            };
+            if current == choice.0 {
+                continue;
+            }
             let new_value = match toggle {
                 GraphicsToggle::Bloom => {
-                    settings.bloom_enabled = !settings.bloom_enabled;
+                    settings.bloom_enabled = choice.0;
                     settings.bloom_enabled
                 }
                 GraphicsToggle::Shadows => {
-                    settings.shadows_enabled = !settings.shadows_enabled;
+                    settings.shadows_enabled = choice.0;
                     settings.shadows_enabled
                 }
                 GraphicsToggle::Atmosphere => {
-                    settings.atmosphere_enabled = !settings.atmosphere_enabled;
+                    settings.atmosphere_enabled = choice.0;
                     settings.atmosphere_enabled
                 }
                 GraphicsToggle::Clouds => {
-                    settings.clouds_enabled = !settings.clouds_enabled;
+                    settings.clouds_enabled = choice.0;
                     settings.clouds_enabled
                 }
                 GraphicsToggle::Vsync => {
-                    settings.vsync_enabled = !settings.vsync_enabled;
+                    settings.vsync_enabled = choice.0;
                     settings.vsync_enabled
                 }
             };
 
             info!("Graphics toggle {:?} = {}", toggle, new_value);
 
-            // Update the text
-            for (toggle_text, mut text) in toggle_texts.iter_mut() {
-                if std::mem::discriminant(&toggle_text.0) == std::mem::discriminant(toggle) {
-                    text.0 = if new_value {
-                        "ON".to_string()
-                    } else {
-                        "OFF".to_string()
-                    };
-                }
-            }
-
-            for (btn_toggle, mut style) in toggle_buttons.iter_mut() {
+            for (btn_toggle, choice, mut style) in toggle_buttons.iter_mut() {
                 if std::mem::discriminant(btn_toggle) == std::mem::discriminant(toggle) {
-                    style.selected = new_value;
+                    style.selected = choice.0 == new_value;
                 }
             }
         }
@@ -192,7 +191,10 @@ pub(super) fn nearest_resolution(
 }
 
 pub(super) fn handle_display_confirmation(
-    buttons: Query<(&Interaction, &DisplayConfirmationAction), Changed<Interaction>>,
+    buttons: Query<
+        (&Interaction, &DisplayConfirmationAction),
+        (Changed<Interaction>, Without<bevy::ui::InteractionDisabled>),
+    >,
     pending: Option<Res<PendingDisplayChange>>,
     mut settings: ResMut<GraphicsSettings>,
     mut commands: Commands,
@@ -250,12 +252,19 @@ pub(super) fn sync_display_confirmation(
 pub(super) fn handle_escape_key(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut input_state: ResMut<InputState>,
+    mut menu: ResMut<PauseMenuState>,
     mut pause_open: ResMut<PauseMenuOpen>,
     windows: Query<Entity, With<PrimaryWindow>>,
     mut cursor_opts: Query<&mut CursorOptions>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
         if !pause_open.0 && input_state.ui_blocking() {
+            return;
+        }
+        if pause_open.0 && (menu.graphics_open || menu.controls_open || menu.audio_open) {
+            menu.graphics_open = false;
+            menu.controls_open = false;
+            menu.audio_open = false;
             return;
         }
         pause_open.0 = !pause_open.0;

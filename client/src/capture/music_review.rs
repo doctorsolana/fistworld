@@ -4,8 +4,8 @@
 use super::{CaptureConfig, CaptureState};
 use crate::{
     audio::{
-        music::{MusicCue, MusicPlayback},
         AudioSettings,
+        music::{MusicCue, MusicPlayback},
     },
     ui::pause_menu::MusicToggle,
 };
@@ -50,14 +50,25 @@ fn input(
     state: Res<CaptureState>,
     mut review: ResMut<MusicReview>,
     mut music: ResMut<MusicPlayback>,
-    mut buttons: Query<&mut Interaction, With<MusicToggle>>,
+    mut buttons: Query<
+        (
+            &Name,
+            &mut Interaction,
+            &mut bevy::ui::RelativeCursorPosition,
+        ),
+        With<MusicToggle>,
+    >,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut players: Query<(&MusicCue, &mut AudioSink)>,
 ) {
     let CaptureState::Settling { shot, .. } = *state else {
         return;
     };
-    for mut interaction in &mut buttons {
+    mouse.release(MouseButton::Left);
+    for (_, mut interaction, mut cursor) in &mut buttons {
         interaction.set_if_neq(Interaction::None);
+        cursor.cursor_over = false;
+        cursor.normalized = None;
     }
     if review.shot != Some(shot) {
         review.shot = Some(shot);
@@ -74,10 +85,21 @@ fn input(
     }
     match shot {
         1 | 2 | 4 | 5 => {
-            let Ok(mut interaction) = buttons.single_mut() else {
+            let name = if matches!(shot, 1 | 4) {
+                "pause-music-off"
+            } else {
+                "pause-music-on"
+            };
+            let Some((_, mut interaction, mut cursor)) = buttons
+                .iter_mut()
+                .find(|(actual, _, _)| actual.as_str() == name)
+            else {
                 return;
             };
             *interaction = Interaction::Pressed;
+            cursor.cursor_over = true;
+            cursor.normalized = Some(Vec2::ZERO);
+            mouse.press(MouseButton::Left);
         }
         3 => music.request_opening(),
         6 => {
@@ -103,8 +125,15 @@ fn inspect(
     mut review: ResMut<MusicReview>,
     settings: Res<AudioSettings>,
     players: Query<(Entity, &MusicCue, Option<&AudioSink>)>,
-    buttons: Query<(&ComputedNode, &UiGlobalTransform, &Children), With<MusicToggle>>,
-    texts: Query<&Text>,
+    buttons: Query<
+        (
+            &ComputedNode,
+            &UiGlobalTransform,
+            &crate::ui::foundation::UiButtonStyle,
+            &Name,
+        ),
+        With<MusicToggle>,
+    >,
 ) {
     let CaptureState::Settling { shot, .. } = *state else {
         return;
@@ -117,20 +146,22 @@ fn inspect(
         active.len() <= 1,
         "opening and background music must not overlap"
     );
-    let Some((node, transform, children)) = buttons.iter().next() else {
+    let enabled = !matches!(shot, 1 | 4);
+    let name = if enabled {
+        "pause-music-on"
+    } else {
+        "pause-music-off"
+    };
+    let Some((node, transform, style, _)) = buttons
+        .iter()
+        .find(|(_, _, _, actual)| actual.as_str() == name)
+    else {
         return;
     };
-    let label = children
-        .iter()
-        .find_map(|entity| texts.get(entity).ok())
-        .map(|text| text.0.as_str())
-        .unwrap_or("");
-    let enabled = !matches!(shot, 1 | 4);
-    if settings.music_enabled != enabled
-        || label != if enabled { "MUSIC: ON" } else { "MUSIC: OFF" }
-    {
+    if settings.music_enabled != enabled || !style.selected {
         return;
     }
+    let label = if enabled { "ON" } else { "OFF" };
     let centre = transform.transform_point2(Vec2::ZERO);
     let half = node.size() * 0.5;
     assert!(node.size().min_element() > 0.0);
@@ -160,11 +191,22 @@ fn inspect(
         if **cue != expected_cue || sink.empty() || sink.is_paused() != (shot == 1) {
             return;
         }
+        let expected_gain = cue.base_gain() * settings.music_gain();
+        if (sink.volume().to_linear() - expected_gain).abs() > 0.001 {
+            // A screenshot taken during the gain ramp does not establish the
+            // settled mix. Completion's deliberate silent override is excluded.
+            return;
+        }
         if shot == 0 {
-            if sink.position().as_secs_f64() < 0.1 {
+            if review.background.is_none() {
+                review.background = Some(*entity);
+                info!("music review: background playback ready for audition");
+            }
+            // Leave an audible sample for an application-audio recorder before
+            // the mute rehearsal advances, using actual decoder progress.
+            if sink.position().as_secs_f64() < 12.0 {
                 return;
             }
-            review.background = Some(*entity);
         }
         if shot == 1 {
             assert_eq!(review.background, Some(*entity));
@@ -183,11 +225,14 @@ fn inspect(
     }
     let evidence = serde_json::json!({
         "shot": shot, "music_enabled": settings.music_enabled, "label": label,
+        "master_volume": settings.master_volume, "music_volume": settings.music_volume,
         "button_center": centre.to_array(), "button_size": node.size().to_array(),
         "players": active.iter().map(|(entity, cue, sink)| serde_json::json!({
             "entity": format!("{entity:?}"), "cue": format!("{cue:?}"),
             "sink_ready": sink.is_some(), "paused": sink.map(|sink| sink.is_paused()),
             "position_seconds": sink.map(|sink| sink.position().as_secs_f64()),
+            "volume": sink.map(|sink| sink.volume().to_linear()),
+            "expected_volume": cue.base_gain() * settings.music_gain(),
         })).collect::<Vec<_>>(),
         "input": "production Music button Interaction; opening request and silent 100x playback are explicit fixtures",
     });

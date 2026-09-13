@@ -41,7 +41,7 @@ def music_matches(state, master, music):
     voices = [voice for voice in audio(state).get("music", []) if voice.get("sink")]
     return bool(voices) and all(
         voice.get("paused") is False and isinstance(voice.get("volume"), (float, int))
-        and abs(voice["volume"] - master * music * (0.82 if voice["cue"] == "Opening" else 1.0)) <= 0.01
+        and abs(voice["volume"] - master * music * (0.82 if voice["cue"] == "Opening" else 0.8)) <= 0.01
         for voice in voices)
 
 
@@ -328,7 +328,7 @@ def run(args):
         session.wait(lambda state: music_matches(state, 0.6, 0.3), "live music sink reflects both sliders")
         snapshot(session, out, "01-live-levels")
         capture(session, report, "01-audio-levels")
-        session.command("button", name="pause-music")
+        session.command("button", name="pause-music-off")
         session.wait(lambda state: settings_match(state, music_enabled=False, music_volume=0.3)
                      and all(not voice.get("sink") or voice.get("paused")
                              or voice.get("volume", 0) <= 0.001
@@ -421,7 +421,7 @@ def run(args):
         sampler.phase = "effects_live_mute"
         recording = record_start(session, out, processes, "cart-live-mute", recorder)
         open_audio(session)
-        session.command("button", name="pause-effects")
+        session.command("button", name="pause-effects-off")
         session.wait(lambda state: settings_match(state, effects_enabled=False, effects_volume=1)
                      and no_effect_voices(state), "Effects toggle clears live UI/cart voices", timeout=20)
         snapshot(session, out, "08-effects-muted")

@@ -50,6 +50,14 @@ fn pending_background_is_single_and_retained_when_toggled() {
     tick(&mut app, 5);
     let initial = cues(&mut app);
     assert_eq!(initial.len(), 1);
+    assert_eq!(
+        app.world()
+            .get::<PlaybackSettings>(initial[0].0)
+            .unwrap()
+            .volume,
+        Volume::Linear(0.4),
+        "background cue combines its 80% authored gain with the 50% music default"
+    );
     tick(&mut app, 50);
     assert_eq!(cues(&mut app), initial);
     app.world_mut()
@@ -77,6 +85,12 @@ fn opening_replaces_background_and_disabled_opening_never_resumes_late() {
     tick(&mut app, 1);
     assert_eq!(cues(&mut app).len(), 1);
     assert_eq!(cues(&mut app)[0].1, MusicCue::Opening);
+    let opening = cues(&mut app)[0].0;
+    assert_eq!(
+        app.world().get::<PlaybackSettings>(opening).unwrap().volume,
+        Volume::Linear(0.41),
+        "opening retains its own authored gain while respecting the music default"
+    );
     app.world_mut()
         .resource_mut::<AudioSettings>()
         .music_enabled = false;
@@ -119,9 +133,16 @@ fn live_levels_update_pending_music_and_zero_pauses_without_restarting() {
         settings.music_volume = 0.4;
     }
     tick(&mut app, 1);
-    assert_eq!(
-        app.world().get::<PlaybackSettings>(entity).unwrap().volume,
-        Volume::Linear(0.2)
+    assert!(
+        (app.world()
+            .get::<PlaybackSettings>(entity)
+            .unwrap()
+            .volume
+            .to_linear()
+            - 0.16)
+            .abs()
+            < 1e-6,
+        "live preferences also apply the background cue's authored gain"
     );
     app.world_mut()
         .resource_mut::<AudioSettings>()
@@ -133,6 +154,16 @@ fn live_levels_update_pending_music_and_zero_pauses_without_restarting() {
         .master_volume = 0.5;
     tick(&mut app, 1);
     assert_eq!(cues(&mut app), vec![(entity, MusicCue::Background, false)]);
+    assert!(
+        (app.world()
+            .get::<PlaybackSettings>(entity)
+            .unwrap()
+            .volume
+            .to_linear()
+            - 0.16)
+            .abs()
+            < 1e-6
+    );
 }
 
 #[test]

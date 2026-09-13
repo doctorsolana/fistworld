@@ -38,7 +38,7 @@ pub(crate) fn install(app: &mut App) {
                 artwork::bind_portrait_frames,
                 illustrations::bind_illustrations,
                 scrollbars::bind_scrollbars,
-                skin::bind_buttons,
+                skin::bind_buttons.before(crate::ui::foundation::style_keyboard_focus),
             )
                 .before(UiSystems::Prepare),
         )

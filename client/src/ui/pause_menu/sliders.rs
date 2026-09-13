@@ -134,7 +134,8 @@ pub(super) fn sync_slider_controls(
             Entity,
             Option<&SliderStep>,
             Option<&InputSliderStep>,
-            Has<InteractionDisabled>,
+            Has<input::SettingUnavailable>,
+            Has<input::HiddenMenuControl>,
         ),
         Or<(With<SliderStep>, With<InputSliderStep>)>,
     >,
@@ -162,7 +163,7 @@ pub(super) fn sync_slider_controls(
             text.0 = label;
         }
     }
-    for (entity, graphics, controls, disabled) in &buttons {
+    for (entity, graphics, controls, disabled, hidden) in &buttons {
         let at_limit = if let Some(step) = graphics {
             let Some(current) = value(&settings, step.control, 0) else {
                 continue;
@@ -173,11 +174,7 @@ pub(super) fn sync_slider_controls(
         } else {
             continue;
         };
-        if at_limit && !disabled {
-            commands.entity(entity).insert(InteractionDisabled);
-        } else if !at_limit && disabled {
-            commands.entity(entity).remove::<InteractionDisabled>();
-        }
+        input::sync_unavailable(&mut commands, entity, at_limit, disabled, hidden);
     }
 }
 
