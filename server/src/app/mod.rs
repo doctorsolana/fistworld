@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use lightyear::prelude::server::ServerPlugins;
 use lightyear::prelude::ReplicationMetadata;
 
-use shared::protocol::{tick_duration, ProtocolPlugin, SERVER_PORT};
+use shared::protocol::{tick_duration, ProtocolPlugin};
 
 pub(crate) fn run() {
     let mut app = App::new();
@@ -37,6 +37,9 @@ pub(crate) fn run() {
     schedule::configure_fixed_schedule(&mut app);
     crate::telemetry::movement::install(&mut app);
 
-    info!("Starting server on port {}", SERVER_PORT);
+    info!(
+        "Starting server on port {}",
+        bootstrap::configured_server_port()
+    );
     app.run();
 }

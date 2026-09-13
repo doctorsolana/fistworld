@@ -158,6 +158,18 @@ checks actual submission, rejection, creation and reconnect behavior.
 - Authored HUD frames use nine-sliced `ImageNode`s. They replace chrome,
   never become baked text or screen-sized bitmaps.
 
+God-mode entry requires the current server capability. The persistent clock chip
+and G use the same local mode transition; entering through either control cancels
+the opening camera. The J developer console hides the ordinary HUD, so it provides
+its own **RETURN TO PLAY** button and permits G to leave God mode and close the
+console together. Another modal or the permit tray still owns its keyboard input;
+typing G there cannot close developer tools behind it. Returning to Play also stops
+the developer boat camera watch, and hidden HUD controls cannot toggle the mode or
+send warp changes. Exiting tools does not wait for a server reply or alter the shared
+server time factor; the clock continues to show the selected factor until an
+authorized player changes it. See the connected God-mode regression in
+[VISUAL-CAPTURE.md](VISUAL-CAPTURE.md#connected-god-mode-exit).
+
 The hero creator reuses ledger typography and button behavior, with four dedicated
 worn material sprites in `ui/creator/`. `LedgerButtonFace` supplies explicit image
 recipes without losing shared hover, focus, disabled or spring feedback. Its larger

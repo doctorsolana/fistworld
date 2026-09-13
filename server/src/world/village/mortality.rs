@@ -679,7 +679,16 @@ pub fn process_character_deaths(
                 {
                     profile.hero = None;
                 }
+                let account = account.to_owned();
+                commands.queue(move |world: &mut World| {
+                    crate::player::boat::release_dead_hero_boats(world, &account);
+                });
             }
+            // A retained fatal pose must not reattach to a replacement hero's
+            // boat while its short death animation is still visible.
+            commands
+                .entity(dead.entity)
+                .remove::<shared::components::AboardBoat>();
         }
 
         info!("{} died on day {} ({})", dead.name, day, dead.cause.label());
@@ -1047,6 +1056,76 @@ pub fn recover_orphaned_construction(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hero_death_releases_its_boat_before_a_replacement_can_claim_the_account() {
+        use shared::components::{AboardBoat, CombatReaction, PlayerBoat, Vessel, WreckedVessel};
+        let mut app = App::new();
+        app.init_resource::<MortalityLedger>()
+            .init_resource::<BusinessEventQueue>()
+            .init_resource::<CompanyEscrowRefundQueue>()
+            .init_resource::<crate::player::hero::HeroIndex>()
+            .add_systems(Update, process_character_deaths);
+        let dead = app
+            .world_mut()
+            .spawn((
+                PersonId(901),
+                CharacterName("Fallen hero".into()),
+                CharacterKind::Hero,
+                CharacterAffiliation::default(),
+                CharacterAttributes::default(),
+                Health {
+                    current: 0.0,
+                    ..default()
+                },
+                Hero {
+                    owner: lightyear::prelude::PeerId::Netcode(1),
+                },
+                CommandedBy("fallen".into()),
+                AboardBoat,
+                CombatReaction {
+                    at: 0.0,
+                    fatal: true,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<crate::player::hero::HeroIndex>()
+            .by_name
+            .insert("fallen".into(), dead);
+        let dead_boat = app
+            .world_mut()
+            .spawn((PlayerBoat, Vessel, CommandedBy("fallen".into())))
+            .id();
+        let other_boat = app
+            .world_mut()
+            .spawn((PlayerBoat, Vessel, CommandedBy("survivor".into())))
+            .id();
+        app.update();
+
+        assert!(!app
+            .world()
+            .resource::<crate::player::hero::HeroIndex>()
+            .by_name
+            .contains_key("fallen"));
+        assert!(app
+            .world()
+            .get::<crate::player::combat::SettledCombatDeath>(dead)
+            .is_some());
+        assert!(app.world().get::<AboardBoat>(dead).is_none());
+        assert!(app.world().get::<CommandedBy>(dead_boat).is_none());
+        assert!(app.world().get::<Vessel>(dead_boat).is_none());
+        assert!(app.world().get::<WreckedVessel>(dead_boat).is_some());
+        assert!(app
+            .world()
+            .get::<crate::player::boat::WreckExpiry>(dead_boat)
+            .is_some());
+        assert_eq!(
+            app.world().get::<CommandedBy>(other_boat).unwrap().0,
+            "survivor"
+        );
+        assert!(app.world().get::<Vessel>(other_boat).is_some());
+    }
 
     #[test]
     fn fatal_combat_settles_once_while_the_fall_finishes() {

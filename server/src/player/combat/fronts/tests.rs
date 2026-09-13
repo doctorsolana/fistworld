@@ -61,6 +61,13 @@ fn block(app: &mut App, account: &str, anchor: Vec2, facing: Vec2, n: usize) -> 
         app.world_mut()
             .entity_mut(*entity)
             .insert(PersonId(entity.to_bits()));
+        // Battle fixtures opt into hostility instead of treating an account
+        // different from the test player's account as a declaration of war.
+        if account == "bob" {
+            app.world_mut()
+                .entity_mut(*entity)
+                .insert(crate::player::combat::WarParty { banner: 1 });
+        }
     }
     apply_army_order(
         app.world_mut(),
@@ -116,6 +123,42 @@ fn a_front_rank_screens_the_rank_behind_it() {
     assert!(b[10..]
         .iter()
         .all(|e| app.world().get::<AttackOrder>(*e).is_none()));
+}
+
+#[test]
+fn peaceful_player_formations_do_not_activate_or_assign_melee_contacts() {
+    let mut app = lab();
+    let a = block(&mut app, "alice", Vec2::ZERO, Vec2::Y, 10);
+    let b = block(&mut app, "bob", Vec2::Y * 1.55, -Vec2::Y, 10);
+    for e in &b {
+        app.world_mut()
+            .entity_mut(*e)
+            .remove::<crate::player::combat::WarParty>();
+    }
+    tick(&mut app, 120);
+    for e in a.iter().chain(&b) {
+        assert!(app.world().get::<AttackOrder>(*e).is_none());
+        assert_eq!(app.world().get::<Health>(*e).unwrap().current, 100.0);
+        let member = app.world().get::<FormationMember>(*e).unwrap();
+        assert!(!app.world().resource::<CombatFormations>().fronts[&member.group].active);
+    }
+    // A normal validated battalion attack establishes hostility before any
+    // individual contact exists, and the defending formation can retaliate.
+    order(
+        &mut app,
+        "alice",
+        &a,
+        UnitCommand::Attack {
+            target: b[0],
+            mode: shared::protocol::AttackMode::Focus,
+        },
+    );
+    tick(&mut app, 60);
+    for force in [&a, &b] {
+        assert!(force
+            .iter()
+            .any(|e| app.world().get::<Health>(*e).unwrap().current < 100.0));
+    }
 }
 #[test]
 fn a_casualty_advances_only_its_own_file() {

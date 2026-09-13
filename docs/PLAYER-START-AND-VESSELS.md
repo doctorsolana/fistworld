@@ -1,6 +1,6 @@
 # Player start and vessels
 
-Audited against the executable state on 2026-09-11. This document describes the normal
+Audited against the executable state on 2026-09-13. This document describes the normal
 player arrival and the reusable water-navigation seam. The server remains authoritative;
 the client only presents the vessel and sends destinations.
 
@@ -17,10 +17,14 @@ the client only presents the vessel and sends destinations.
    water leading to reachable dry shore, then start the
    Dinghy roughly 48–56 metres offshore: close enough for a short opening voyage, while
    leaving enough water for sailing to feel like an arrival rather than starting on the beach.
+   At admission the server checks nearby boats, wrecks, people and horses, then reserves a
+   vacant start before accepting another simultaneous join. A crowded preferred start tries
+   at most 32 additional water-connected positions within 32 metres, then the other certified
+   coasts. It never places a new hull on an occupied fallback point.
    A fresh server begins at 08:00 on the display clock, with the sun already above the
    horizon, so the first arrival is a readable warm morning rather than darkness.
 4. The server creates exactly one Hero and one starter Dinghy. The Hero is seated at the
-   authored `Anchor_Helm` position. Presentation waits for the replicated authoritative
+   authored `Anchor_Helm` position from its first authoritative snapshot. Presentation waits for the replicated authoritative
    heading before instantiating the hull, so the boat cannot begin at a fallback rotation
    and visibly turn around during the opening shot. Boat translation also keeps the Hero's
    `sit_idle` pose; vessel speed is never interpreted as walking speed.
@@ -53,6 +57,12 @@ flow does not claim durable cross-restart world persistence. Development God Mod
 available: a God-capable client can press `G` even while the new-player creator is open.
 The automated `FISTWORLD_AUTOSPAWN_HERO=1` smoke path also bypasses the mandatory modal.
 
+Disconnecting during a voyage pauses that account's hull and sailor together. The server
+retains both entities, the route cursor, any pending navigation request and the landing
+intent; re-adopting the living Hero resumes the same voyage. Other accounts keep sailing.
+If a Hero dies, its starter hull becomes an unowned wreck with a bounded remaining lifetime,
+so the old boat cannot block creation or attach the replacement Hero to its helm.
+
 ## Natural NPC arrivals
 
 Natural immigrants reuse the same physical water and land contracts without sharing the
@@ -67,7 +77,9 @@ update. Both successful landfalls and terrain-wide failures are cached. A Hall e
 invalidates its entry, while a known-unreachable settlement is excluded so the immigrant can
 consider another town. Once a landfall is proven, the immigrant sails there in an ephemeral
 Dinghy, disembarks on certified dry ground and joins the ordinary land route and visible Moot
-registration queue.
+registration queue. NPC admission uses the same live start clearance as player arrivals and
+certifies its water route from the selected vacant point. If its bounded entry neighborhood
+is full, recurring immigration waits for a later attempt instead of stacking another boat.
 
 ## Navigation contract
 

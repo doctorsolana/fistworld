@@ -5,6 +5,7 @@
 //! replicated state. Screenshots use the real renderer's completion observer.
 
 mod audio;
+mod multiplayer;
 
 use super::{live_capture_request, CaptureInspection};
 use crate::{camera_rts::CommanderCamera, capture_artifact::*, states::GameState};
@@ -142,6 +143,20 @@ fn write_json(path: &Path, value: &Value) {
 
 fn snapshot(world: &mut World) -> Value {
     let audio = audio::snapshot(world);
+    let multiplayer = multiplayer::snapshot(world);
+    let sampled_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    let hud_mode = world
+        .get_resource::<crate::ui::hud::HudMode>()
+        .map(|mode| format!("{mode:?}"));
+    let god_capability = world
+        .get_resource::<crate::ui::hud::GodCapability>()
+        .is_some_and(|capability| capability.0);
+    let debug_menu_open = world
+        .get_resource::<crate::ui::debug_time_menu::DebugTimeMenuOpen>()
+        .is_some_and(|menu| menu.0);
+    let time_warp = world.query::<&TimeWarp>().iter(world).next().map(|warp| warp.0);
     let local = world
         .get_resource::<crate::camera_rts::LocalPeerId>()
         .map(|id| id.0);
@@ -248,7 +263,7 @@ fn snapshot(world: &mut World) -> Value {
     let presets_expanded = world
         .get_resource::<crate::ui::main_menu::DropdownState>()
         .is_some_and(|state| state.expanded);
-    json!({"audio":audio,"game_state":game_state,"name_phase":name_phase,"submitted":submitted,"name_error":name_error,"connection_error":connection_error,"startup_art_ready":startup_art_ready,
+    json!({"sampled_unix_ms":sampled_unix_ms,"multiplayer":multiplayer,"hud_mode":hud_mode,"god_capability":god_capability,"debug_menu_open":debug_menu_open,"time_warp":time_warp,"audio":audio,"game_state":game_state,"name_phase":name_phase,"submitted":submitted,"name_error":name_error,"connection_error":connection_error,"startup_art_ready":startup_art_ready,
         "focused_control":focused_control,"window_title":window_title,"server_address":server_address,"presets_expanded":presets_expanded,
         "account":account,"hero":own.map(|(_,_,hero)|hero),"markets":markets,"towns":towns,"yards":yards,"clock":clock,"camera":camera,"buttons":buttons,"selection":selected,"notice":notice,
         "ui_blocking":world.get_resource::<crate::input::InputState>().is_some_and(|s|s.ui_blocking()),
@@ -307,6 +322,8 @@ fn key_code(key: &str) -> Result<KeyCode, String> {
     match key {
         "Home" => Ok(KeyCode::Home),
         "E" => Ok(KeyCode::KeyE),
+        "G" => Ok(KeyCode::KeyG),
+        "J" => Ok(KeyCode::KeyJ),
         "N" => Ok(KeyCode::KeyN),
         "M" => Ok(KeyCode::KeyM),
         "Escape" => Ok(KeyCode::Escape),
@@ -327,6 +344,8 @@ fn logical_key(code: KeyCode) -> Key {
         KeyCode::ControlLeft => Key::Control,
         KeyCode::KeyA => Key::Character("a".into()),
         KeyCode::KeyE => Key::Character("e".into()),
+        KeyCode::KeyG => Key::Character("g".into()),
+        KeyCode::KeyJ => Key::Character("j".into()),
         KeyCode::KeyN => Key::Character("n".into()),
         KeyCode::KeyM => Key::Character("m".into()),
         _ => Key::Unidentified(bevy::input::keyboard::NativeKey::Unidentified),

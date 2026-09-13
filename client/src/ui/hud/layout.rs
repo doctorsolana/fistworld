@@ -127,6 +127,7 @@ fn clock_plate() -> impl Bundle {
 /// surface. Hidden entirely until the server grants god capability.
 fn mode_toggle() -> impl Bundle {
     (
+        Name::new("hud-mode-toggle"),
         ModeChipButton,
         Button,
         Node {
@@ -211,6 +212,7 @@ fn hairline() -> impl Bundle {
 
 fn warp_button(text: &str, factor: f32) -> impl Bundle {
     (
+        Name::new(format!("god-warp-{factor}")),
         Button,
         WarpButton(factor),
         Node {

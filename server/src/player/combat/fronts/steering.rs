@@ -42,6 +42,11 @@ mod tests {
         let soldier = spawn("alice", Vec2::ZERO);
         let enemy = spawn("bob", Vec2::new(0.0, 4.0));
         let other = spawn("bob", Vec2::new(3.0, 4.0));
+        for e in [enemy, other] {
+            app.world_mut()
+                .entity_mut(e)
+                .insert(crate::player::combat::WarParty { banner: 1 });
+        }
         app.update();
         let mut steering = Steering::default();
         let goal = steering
@@ -89,7 +94,7 @@ impl Steering {
             .target
             .and_then(|target| space.body(target))
             .filter(|enemy| {
-                enemy.side != body.side && enemy.point.distance_squared(body.point) < 144.0
+                space.hostile(body, enemy) && enemy.point.distance_squared(body.point) < 144.0
             });
         // Follow a chosen contact point for a short interval instead of picking
         // a different side every time a neighbouring body moves. A dead or
@@ -106,7 +111,7 @@ impl Steering {
         let mut nearest = [None::<(&super::contacts::Body, f32)>; 8];
         for enemy in space.within(body.point, 12.0) {
             let distance = enemy.point.distance_squared(body.point);
-            if enemy.side == body.side || distance >= 144.0 {
+            if !space.hostile(body, enemy) || distance >= 144.0 {
                 continue;
             }
             if let Some(index) = nearest.iter().position(|entry| {

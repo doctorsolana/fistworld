@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./
+COPY vendor/bevy_ui ./vendor/bevy_ui
 COPY shared ./shared
 COPY server ./server
 

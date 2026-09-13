@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 /// Open the selected person's full encyclopedia record. The compact plate
 /// remains an at-a-glance selection readout; durable life details belong in
 /// the scrollable People page.
@@ -48,11 +51,29 @@ pub(super) fn handle_mode_toggle_key(
     capability: Res<GodCapability>,
     mut mode: ResMut<HudMode>,
     mut opening: ResMut<crate::boat::OpeningCinematic>,
+    mut debug_menu: ResMut<crate::ui::debug_time_menu::DebugTimeMenuOpen>,
+    other_modals: Query<
+        (),
+        (
+            With<crate::ui::modal::ModalRoot>,
+            Without<crate::ui::debug_time_menu::DebugMenuRoot>,
+        ),
+    >,
 ) {
-    if !capability.0 || input_state.ui_blocking() {
+    if !keyboard.just_pressed(KeyCode::KeyG) {
         return;
     }
-    if keyboard.just_pressed(KeyCode::KeyG) {
+    // The developer console hides the HUD switch and owns the modal input
+    // mutex. It must still allow leaving God mode, even while the server is
+    // busy advancing accelerated time. Other screens retain their input.
+    if *mode == HudMode::God
+        && debug_menu.0
+        && other_modals.is_empty()
+        && !input_state.permit_tray_open
+    {
+        *mode = HudMode::Play;
+        debug_menu.0 = false;
+    } else if !input_state.ui_blocking() && (*mode == HudMode::God || capability.0) {
         *mode = mode.toggled();
         if *mode == HudMode::God {
             opening.cancel();
@@ -62,23 +83,48 @@ pub(super) fn handle_mode_toggle_key(
 
 pub(super) fn handle_mode_chip_button(
     capability: Res<GodCapability>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<InputState>,
     mut mode: ResMut<HudMode>,
-    buttons: Query<&Interaction, (With<ModeChipButton>, Changed<Interaction>)>,
+    mut opening: ResMut<crate::boat::OpeningCinematic>,
+    buttons: Query<
+        &Interaction,
+        (
+            With<ModeChipButton>,
+            Changed<Interaction>,
+            Without<bevy::ui::InteractionDisabled>,
+        ),
+    >,
 ) {
+    // A key and mouse edge can arrive together after a long frame. Apply one
+    // transition; an invisible HUD control cannot undo the console's exit.
+    if input.ui_blocking() || keyboard.just_pressed(KeyCode::KeyG) {
+        return;
+    }
     for interaction in buttons.iter() {
-        if *interaction == Interaction::Pressed && capability.0 {
+        if *interaction == Interaction::Pressed && (*mode == HudMode::God || capability.0) {
             *mode = mode.toggled();
+            if *mode == HudMode::God {
+                opening.cancel();
+            }
+            break;
         }
     }
 }
 
 pub(super) fn handle_warp_buttons(
+    mode: Res<HudMode>,
+    capability: Res<GodCapability>,
+    input: Res<InputState>,
     mut dev_sender: Query<
         &mut MessageSender<DevCommand>,
         (With<crate::GameClient>, With<Connected>),
     >,
     buttons: Query<(&Interaction, &WarpButton), Changed<Interaction>>,
 ) {
+    if *mode != HudMode::God || !capability.0 || input.ui_blocking() {
+        return;
+    }
     for (interaction, WarpButton(factor)) in buttons.iter() {
         if *interaction == Interaction::Pressed {
             if let Ok(mut sender) = dev_sender.single_mut() {
@@ -142,6 +188,7 @@ pub(super) fn handle_immigrant_boat_button(
 pub(super) fn watch_immigrant_boat(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mode: Res<HudMode>,
     mut watch: ResMut<ImmigrantBoatWatch>,
     boats: Query<
         (Entity, &shared::components::PlayerPosition),
@@ -153,7 +200,7 @@ pub(super) fn watch_immigrant_boat(
     const WATCH_ZOOM: f32 = 82.0;
     const WAIT_TIMEOUT_SECONDS: f32 = 30.0;
 
-    if watch.active() && keyboard.just_pressed(KeyCode::Escape) {
+    if watch.active() && (*mode != HudMode::God || keyboard.just_pressed(KeyCode::Escape)) {
         watch.clear();
         notice.show("Stopped following the immigrant voyage");
     }

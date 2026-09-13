@@ -1,6 +1,7 @@
 //! A fresh post-movement spatial index of combat-capable bodies. Idle armies
 //! participate, but an army on another side of the map is never scanned locally.
 
+use super::hostility::{Allegiance, CombatIntents, HostilityIndex};
 use super::{AttackOrder, WarParty, ACQUISITION_RANGE, MELEE_REACH};
 use crate::player::hero::{MoveTarget, OfflineHero};
 use crate::player::orders::CommandStance;
@@ -8,22 +9,17 @@ use bevy::prelude::*;
 use shared::components::*;
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Side {
-    Account(usize),
-    Banner(u8),
-}
 struct Candidate {
     entity: Entity,
     point: Vec2,
-    side: Side,
+    side: Allegiance,
     range: f32,
     radius: f32,
 }
 
 #[derive(Default)]
 pub struct AcquisitionScratch {
-    accounts: HashMap<String, usize>,
+    hostility: HostilityIndex,
     candidates: Vec<Candidate>,
     cells: HashMap<(i32, i32), Vec<usize>>,
 }
@@ -58,7 +54,7 @@ impl AcquisitionScratch {
                 for &i in indices {
                     checked += 1;
                     let other = &self.candidates[i];
-                    if other.side == candidate.side {
+                    if !self.hostility.hostile(candidate.side, other.side) {
                         continue;
                     }
                     let distance = candidate.point.distance_squared(other.point);
@@ -99,33 +95,33 @@ pub fn acquire_targets(
         ),
         (
             With<CharacterKind>,
+            Or<(With<CommandedBy>, With<WarParty>)>,
             Without<OfflineHero>,
             Without<AboardBoat>,
+            Without<crate::world::village::strategic::StrategicPerson>,
         ),
     >,
     identities: Query<&PersonId>,
     policies: Query<&BattalionStance>,
     bows: Query<(), With<BowEquipped>>,
     mounts: Query<(), With<Mounted>>,
+    battalions: Query<&MemberOfBattalion>,
+    intents: CombatIntents,
     mut scratch: Local<AcquisitionScratch>,
 ) {
     scratch.candidates.clear();
+    scratch.hostility.clear();
     for (entity, position, party, owner, engaged, moving, formed, stance, health) in &combatants {
         if health.is_some_and(|h| h.is_dead()) {
             continue;
         }
-        let side = if let Some(owner) = owner {
-            let next = scratch.accounts.len();
-            let key = if let Some(key) = scratch.accounts.get(&owner.0) {
-                *key
-            } else {
-                scratch.accounts.insert(owner.0.clone(), next);
-                next
-            };
-            Side::Account(key)
-        } else if let Some(party) = party {
-            Side::Banner(party.banner)
-        } else {
+        let Some(side) = scratch.hostility.insert(
+            entity,
+            owner,
+            party,
+            battalions.get(entity).ok(),
+            intents.attack_move(entity, stance),
+        ) else {
             continue;
         };
         let hold_reach = if mounts.contains(entity) {
@@ -165,6 +161,7 @@ pub fn acquire_targets(
     if scratch.candidates.len() < 2 {
         return;
     }
+    scratch.hostility.record_intents(&intents);
     scratch.index();
     for candidate in &scratch.candidates {
         if candidate.range == 0.0 {
@@ -188,10 +185,23 @@ mod tests {
     fn distant_armies_do_not_scan_each_other() {
         let mut scratch = AcquisitionScratch::default();
         for i in 0..2000 {
+            let entity = Entity::from_raw_u32(i + 1).unwrap();
+            let side = scratch
+                .hostility
+                .insert(
+                    entity,
+                    None,
+                    Some(&WarParty {
+                        banner: (i % 2) as u8,
+                    }),
+                    None,
+                    false,
+                )
+                .unwrap();
             scratch.candidates.push(Candidate {
-                entity: Entity::from_raw_u32(i + 1).unwrap(),
+                entity,
                 point: Vec2::new(i as f32 * 40.0, 0.0),
-                side: Side::Account(i as usize % 2),
+                side,
                 range: ACQUISITION_RANGE,
                 radius: super::super::BODY_RADIUS,
             });
@@ -213,10 +223,21 @@ mod tests {
     fn acquisition_covers_nine_metres_across_negative_cell_boundaries() {
         let mut scratch = AcquisitionScratch::default();
         for (i, x) in [-0.1, 8.8, 9.1].into_iter().enumerate() {
+            let entity = Entity::from_raw_u32(i as u32 + 1).unwrap();
+            let side = scratch
+                .hostility
+                .insert(
+                    entity,
+                    None,
+                    Some(&WarParty { banner: i as u8 }),
+                    None,
+                    false,
+                )
+                .unwrap();
             scratch.candidates.push(Candidate {
-                entity: Entity::from_raw_u32(i as u32 + 1).unwrap(),
+                entity,
                 point: Vec2::new(x, 0.0),
-                side: Side::Account(i),
+                side,
                 range: ACQUISITION_RANGE,
                 radius: super::super::BODY_RADIUS,
             });

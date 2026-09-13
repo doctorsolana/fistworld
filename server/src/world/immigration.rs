@@ -20,6 +20,7 @@ use shared::region::RegionCoord;
 use shared::terrain::WorldTerrain;
 
 use crate::player::boat::{
+    arrival::{ArrivalBodies, ArrivalOccupancy},
     coastal_voyages, water_route, CoastalVoyage, VesselNavigation, VesselRoute,
     BOAT_ARRIVE_EPSILON, HELM_LOCAL,
 };
@@ -372,6 +373,7 @@ pub fn plan_natural_immigration(
     )>,
     active: Query<(), With<NpcArrivalBoat>>,
     people: Query<&CharacterKind>,
+    arrival_bodies: ArrivalBodies,
     mut director: ResMut<NaturalImmigrationDirector>,
     mut villager_seed: ResMut<crate::world::dev::VillagerSeed>,
 ) {
@@ -598,6 +600,18 @@ pub fn plan_natural_immigration(
             manual,
             &director.coastal_approaches,
         ));
+        return;
+    };
+    // Player starts, earlier NPC boats, wrecks and people all occupy real
+    // space. Keep the chosen coast but use a water-connected vacant berth;
+    // then certify the voyage from that actual start, not the cached centre.
+    let occupancy = ArrivalOccupancy::from_bodies(&arrival_bodies);
+    let Some(entry) = occupancy.vacant_voyage(&terrain, entry, decision_seed) else {
+        if manual {
+            director.finish_manual_arrival();
+        } else {
+            director.next_arrival_world_seconds = Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
+        }
         return;
     };
     let Some(route) = water_route(&terrain, entry.start.xz(), voyage.mooring) else {
@@ -908,6 +922,100 @@ mod tests {
     #[test]
     fn three_immigrants_per_day_maps_to_a_third_day_base_interval() {
         assert!((interval_days_for_rate(3.0) - (1.0 / 3.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn natural_arrivals_avoid_player_and_earlier_immigrant_boats() {
+        use crate::player::boat::arrival::ARRIVAL_HULL_RADIUS;
+
+        let terrain = WorldTerrain::default();
+        let coast = coastal_voyages(&terrain, 0)[0];
+        let mut app = App::new();
+        app.insert_resource(terrain)
+            .insert_resource(NaturalImmigrationDirector {
+                enabled: false,
+                interval_days: interval_days_for_rate(DEFAULT_IMMIGRANTS_PER_DAY),
+                next_arrival_world_seconds: None,
+                sequence: 0,
+                world_npc_cap: DEFAULT_WORLD_NPC_CAP,
+                population_cap_announced: false,
+                coastal_approaches: vec![coast],
+                settlement_landfalls: default(),
+                pending_landfall: None,
+                manual_arrivals: 2,
+            })
+            .insert_resource(crate::world::dev::VillagerSeed::default())
+            .add_systems(Update, plan_natural_immigration);
+        app.world_mut().spawn(WorldTime::new_default());
+        app.world_mut().spawn((
+            PlayerBoat,
+            Vessel,
+            shared::components::CommandedBy("waitingplayer".into()),
+            PlayerPosition(coast.start),
+        ));
+        let hall = coast.landing;
+        let settlement = app
+            .world_mut()
+            .spawn((
+                settlement("Arrival Spacing", 0),
+                PlayerPosition(hall),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        // This fixture isolates physical admission after landfall proof;
+        // the end-to-end voyage test below certifies the actual Hall route.
+        app.world_mut()
+            .resource_mut::<NaturalImmigrationDirector>()
+            .settlement_landfalls
+            .insert(
+                settlement,
+                CachedSettlementLandfall::Reachable {
+                    entrance: SettlementBuildingKind::Hall.entrance_position(hall, 0.0),
+                    voyage: coast,
+                },
+            );
+        app.update();
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<NaturalImmigrationDirector>()
+                .manual_arrivals,
+            0
+        );
+        let arrivals: Vec<_> = app
+            .world_mut()
+            .query_filtered::<(
+                &NpcArrivalBoat,
+                &PlayerPosition,
+                &PlayerRotation,
+                &VesselRoute,
+            ), With<NpcArrivalBoat>>()
+            .iter(app.world())
+            .map(|(boat, position, rotation, route)| {
+                (*boat, position.0, rotation.0, route.waypoints.clone())
+            })
+            .collect();
+        assert_eq!(arrivals.len(), 2);
+        let minimum = ARRIVAL_HULL_RADIUS * 2.0;
+        assert!(arrivals[0].1.distance(arrivals[1].1) >= minimum);
+        for (boat, position, yaw, route) in arrivals {
+            assert!(position.distance(coast.start) >= minimum);
+            assert_eq!(
+                app.world().get::<PlayerPosition>(boat.passenger).unwrap().0,
+                position + Quat::from_rotation_y(yaw) * HELM_LOCAL
+            );
+            let terrain = app.world().resource::<WorldTerrain>();
+            let mut from = position.xz();
+            for waypoint in route {
+                let samples = (from.distance(waypoint) / 1.5).ceil().max(1.0) as usize;
+                assert!((0..=samples).all(|step| {
+                    let point = from.lerp(waypoint, step as f32 / samples as f32);
+                    terrain.get_water_height(point.x, point.y).is_some()
+                }));
+                from = waypoint;
+            }
+        }
     }
 
     #[test]

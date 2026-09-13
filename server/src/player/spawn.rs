@@ -142,6 +142,10 @@ pub fn handle_player_name_submission(
                         commands
                             .entity(hero_entity)
                             .remove::<crate::player::hero::OfflineHero>();
+                        let voyage_account = name_lower.clone();
+                        commands.queue(move |world: &mut World| {
+                            crate::player::boat::resume_account_voyage(world, &voyage_account);
+                        });
                         info!("Re-adopted hero {hero_entity:?} for '{}'", name_lower);
                         true
                     }

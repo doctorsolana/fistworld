@@ -79,7 +79,7 @@ pub fn steer_skirmishers(
         }
         candidates.clear();
         for enemy in space.enemy_members(order.target) {
-            if enemy.side != body.side {
+            if space.hostile(body, enemy) {
                 candidates.push((
                     enemy.entity,
                     enemy.point.distance_squared(body.point)

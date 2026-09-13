@@ -309,6 +309,9 @@ fn hold_line_resists_close_enemies_and_body_pushes_but_obeys_an_explicit_move() 
         },
     );
     let enemy = soldier(app.world_mut(), "bob", start + Vec3::X * 0.55);
+    app.world_mut()
+        .entity_mut(enemy)
+        .insert(crate::player::combat::WarParty { banner: 1 });
     ticks(&mut app, 60);
     assert_eq!(app.world().get::<PlayerPosition>(a).unwrap().0, start);
     assert!(

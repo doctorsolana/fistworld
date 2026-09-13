@@ -4,6 +4,9 @@ The repository ships a Dockerfile and `fly.toml` for one authoritative, always-o
 playtest server in Fly.io's Amsterdam region. The public game protocol is UDP 5000;
 it is not an HTTP service.
 
+`CITYSIM_MAP_ID=world` selects the ordinary server-seeded inhabited world. The old
+`big_world` setting selects an authored map and bypasses the current founding pass.
+
 ## Cost and lifecycle
 
 - One `performance-1x` Machine with one dedicated performance vCPU and 2 GB RAM.
@@ -71,6 +74,10 @@ fly machine stop <machine-id>     # pause compute billing; also loses the live w
 fly machine start <machine-id>    # start a new world on the same Machine and IP
 fly deploy                        # also starts a fresh world today
 ```
+
+When resuming a stopped Machine, deploy the latest image first, then check its
+state. Deployment can leave it stopped; use `fly machine start <machine-id>` to
+bring the updated server online.
 
 Natural immigration is enabled on ordinary hosted worlds. New people enter from a
 real map-edge coast in one-use Dinghies, choose among existing settlements using

@@ -97,7 +97,7 @@ pub fn update_weapons(
         let close = space
             .within(body.point, if bow { 5. } else { 9. })
             .any(|b| {
-                b.side != body.side
+                space.hostile(body, b)
                     && b.point.distance_squared(body.point) < if bow { 25. } else { 81. }
             });
         if close {

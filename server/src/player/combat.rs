@@ -41,14 +41,16 @@ pub struct AttackOrder {
     pub target: Entity,
 }
 
-/// Server-only opt-in hostility (COMBAT-DESIGN.md). Nothing is hostile by
-/// accident: a character fights only if it carries a war party banner or is
-/// commanded by a player, and only against a DIFFERENT allegiance. Ordinary
-/// villagers have neither and are never auto-targeted by anyone.
+/// Server-only opt-in hostility (COMBAT-DESIGN.md). A war party is an explicit
+/// enemy of other allegiances. Command ownership alone does not create hostility;
+/// player combat requires an attack, attack-move or retaliation. Ordinary
+/// villagers without a banner or commander remain outside automatic acquisition.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WarParty {
     pub banner: u8,
 }
+
+pub(super) mod hostility;
 
 /// How close a hostile must come before a combatant engages on its own.
 /// Short on purpose: soldiers defend themselves and hold a melee together,

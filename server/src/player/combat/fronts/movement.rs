@@ -113,7 +113,7 @@ pub fn advance_battle_fronts(
                     space
                         .within(b.point, if ranged { BOW_RANGE } else { 3. })
                         .any(|other| {
-                            other.side != b.side
+                            space.hostile(b, other)
                                 && other.point.distance_squared(b.point)
                                     < if ranged { BOW_RANGE * BOW_RANGE } else { 9. }
                         })
@@ -140,7 +140,7 @@ pub fn advance_battle_fronts(
                     space
                         .within(b.point, if ranged { BOW_ADVANCE_RANGE } else { 3. })
                         .any(|other| {
-                            other.side != b.side
+                            space.hostile(b, other)
                                 && b.point.distance_squared(other.point)
                                     < if ranged {
                                         BOW_ADVANCE_RANGE * BOW_ADVANCE_RANGE
@@ -174,7 +174,7 @@ pub fn advance_battle_fronts(
             .any(|b| {
                 space
                     .within(b.point, 6.0)
-                    .any(|o| o.side != b.side && o.point.distance_squared(b.point) < 36.0)
+                    .any(|o| space.hostile(b, o) && o.point.distance_squared(b.point) < 36.0)
             });
         if threatened {
             front.last_threat = now;

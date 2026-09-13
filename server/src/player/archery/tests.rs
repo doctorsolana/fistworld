@@ -38,6 +38,11 @@ fn person(app: &mut App, owner: &str, p: Vec3) -> Entity {
         ))
         .id();
     app.world_mut().entity_mut(e).insert(PersonId(e.to_bits()));
+    if owner == "bob" {
+        app.world_mut()
+            .entity_mut(e)
+            .insert(crate::player::combat::WarParty { banner: 1 });
+    }
     e
 }
 fn archer(app: &mut App) -> Entity {
@@ -78,6 +83,51 @@ fn draw_releases_once_and_a_real_arrow_deals_damage() {
         step(&mut app, 0.1);
     }
     assert_eq!(app.world().get::<Health>(b).unwrap().current, 68.);
+}
+
+#[test]
+fn peaceful_players_neither_draw_bows_nor_trigger_sidearm_switches() {
+    let mut app = lab();
+    let a = archer(&mut app);
+    let b = person(&mut app, "bob", Vec3::Z * 30.);
+    app.world_mut()
+        .entity_mut(b)
+        .remove::<crate::player::combat::WarParty>();
+    for _ in 0..30 {
+        step(&mut app, 0.1);
+    }
+    assert!(app.world().get::<BowShot>(a).is_none());
+    assert_eq!(app.world().get::<Quiver>(a).unwrap().arrows, 24);
+    app.world_mut().get_mut::<PlayerPosition>(b).unwrap().0 = Vec3::Z * 2.;
+    step(&mut app, 0.1);
+    assert!(app.world().get::<BowEquipped>(a).is_some());
+    assert_eq!(app.world().get::<Health>(b).unwrap().current, 100.);
+    app.world_mut().get_mut::<PlayerPosition>(b).unwrap().0 = Vec3::Z * 30.;
+    assert_eq!(
+        crate::player::orders::apply_unit_order(
+            app.world_mut(),
+            "alice",
+            shared::protocol::UnitOrder {
+                selection: shared::protocol::UnitSelection {
+                    units: vec![a],
+                    battalions: vec![]
+                },
+                command: shared::protocol::UnitCommand::Attack {
+                    target: b,
+                    mode: shared::protocol::AttackMode::Focus
+                },
+            }
+        )
+        .0,
+        1
+    );
+    for _ in 0..10 {
+        step(&mut app, 0.1);
+    }
+    assert!(
+        app.world().get::<BowShot>(a).is_some(),
+        "explicit player attacks still draw against an unmarked opponent"
+    );
 }
 #[test]
 fn moving_during_draw_cancels_without_spending_arrows() {

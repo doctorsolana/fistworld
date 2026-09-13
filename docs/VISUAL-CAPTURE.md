@@ -201,6 +201,66 @@ the PNG and `.capture.json`; `.session.json` adds the replicated gameplay state.
 live-world evidence, not deterministic pixel baselines: the actual market and NPCs continue
 to run. All outputs belong under ignored `logs/`, never in the asset tree or Git.
 
+## Connected multiplayer regression
+
+`capture/multiplayer_session.py` owns one local server and two real clients. It
+uses the small coastal `village_lab` secure fixture (seed 3, eight founders, 1x)
+with ordinary player creation, boat navigation, combat and connection systems.
+The fixture supplies the town and terrain; the runner never supplies hero
+positions, health, money, inventory or combat outcomes. Natural immigration is
+enabled and any observed NPC boats are recorded. The mandatory arrival case is
+two players whose ordinary account hashes prefer the same coastal start.
+
+```bash
+cargo build --workspace --profile playtest
+python3 capture/multiplayer_session.py --out logs/multiplayer-session/review
+```
+
+The default 1024×576 windows keep the two-client rendering cost bounded. Use
+`--resolution 1280x720` for a larger review. `--port 0` chooses an unused local
+UDP port; an explicit occupied port is refused. The server consumes
+`FISTWORLD_SERVER_PORT`, and both clients enter that exact address through the
+production launcher. Hosted sessions and unrelated local processes are never
+stopped. The output directory must be fresh; cleanup terminates only the process
+handles created by this invocation. On macOS the run holds an owned AC-power
+sleep assertion, with no saved power-setting changes.
+
+The maintained live scenario is described in
+[`capture/scenarios/multiplayer-session.md`](../capture/scenarios/multiplayer-session.md).
+It requires at least 6m between the two newly admitted hull centres. Before
+landing, B starts a real sailing route, disconnects and rejoins; the offline
+hull must stop, remain parked, readopt the same aboard hero at its helm and
+resume the retained route without another movement order.
+It then records actual sailing and disembarking, then keeps the two landed heroes within 2.5m
+for twenty additional seconds after a continuous capture. Both heroes must
+retain their original health and have no engagement, readied weapon or swing.
+Two normal pause-menu disconnect/rejoin cycles must preserve the survivor's
+connection/peer and both stable PersonIds, ownership, health, cargo and wallet.
+The survivor visibly walks during these cycles and accepts another movement
+order after the final rejoin.
+
+`report.json` records before/after associations, each gate, requested resolution
+and actual captured dimensions. `samples.jsonl`
+retains fresh replicated state throughout commands, captures and reconnects;
+`audit-failure.json` identifies the first background assertion failure.
+`status.json` and each `.session.json` now include a timestamp and read-only
+`multiplayer` evidence: the local connected peer, every observed hero's stable
+identity, owning account, health and combat state, and vessel positions,
+velocities, NPC/wreck markers and a terrain-derived forward landing probe.
+Local entity labels must not be compared between clients; join by `PersonId`
+and `CommandedBy` account. The landing probe only chooses an ordinary click;
+the server still validates and executes the complete voyage.
+
+Inspect the PNGs, `.capture.json` and `.session.json` together, especially the
+numbered `02-sailing-*` and `04-survivor-*-*` motion frames. The runner requires
+at least 2m of actual replicated displacement in each motion sequence, but that
+numeric check does not replace visual inspection. Initial hull admission
+clearance is the automated collision gate; later minimum sailing distance is
+reported separately because general vessel-to-vessel navigation avoidance is
+not implemented. An observed NPC counter alone is not proof that a player/NPC
+spawn conflict occurred. This connected fixture verifies the multiplayer
+regressions and does not claim a normal-world founding or economic soak.
+
 ## Town art and planted land
 
 ### Ordinary world distribution
@@ -1546,3 +1606,36 @@ The session command `record` accepts a name, 2–180 frames and an `interval_ms`
 50–1,000, for at most 60 seconds. Screenshot completion can make the actual cadence
 slower than requested; inspect capture metadata and recording timestamps, and do
 not treat these readback/instrumentation runs as frame-rate benchmarks.
+
+## Connected God-mode exit
+
+`capture/god_mode.py` verifies local tool-mode exit while a real server advances
+at 100x. It launches its own generated world on an unused UDP port, grants local
+developer capability through server configuration, and joins through ordinary
+launcher/name/creator controls. It then uses the production HUD warp buttons, G,
+J and the console's **RETURN TO PLAY** button. It never injects mode, clock or
+capability resources.
+
+```bash
+cargo build --workspace --all-targets --profile playtest
+python3 capture/god_mode.py --out logs/god-exit-review --resolution 1600x1000
+```
+
+Readiness requires the replicated time factor, visible named controls, the actual
+mode and modal-input state. The report checks both exits return to Play with the
+same hero/account, no reconnect, continuing authoritative time and a restored HUD.
+Returning to Play retains the shared 100x factor; the runner subsequently restores
+1x with an explicit ordinary warp-button command. Each composed PNG carries
+`.capture.json` and `.session.json` evidence, including `hud_mode`,
+`god_capability`, `debug_menu_open` and replicated `time_warp`. Inspect the console
+footer, the accelerated continuous sequence and both restored Play views; numerical
+assertions alone do not prove visible controls fit. Generated evidence stays under
+the ignored output directory. The runner terminates only its own child processes.
+
+Verified 2026-09-13 at 1600×1000 in `logs/god-exit-review-20260913`: 12 composed
+PNG/capture/session sets passed, including the eight-frame 100x console sequence.
+Inspected the complete footer and both restored Play views. The keyboard exit
+returned in 0.63 real seconds and the button exit in 0.21 seconds, retaining the
+same connected hero/account while the authoritative clock advanced. Both exits
+retained 100x; the subsequent explicit return to 1x passed. These are this run's
+input/replication latencies, not a frame-rate benchmark or a hosted-server load test.

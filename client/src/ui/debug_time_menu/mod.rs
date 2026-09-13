@@ -131,7 +131,7 @@ impl Default for DebugPerfSettings {
 }
 
 #[derive(Component)]
-struct DebugMenuRoot;
+pub(crate) struct DebugMenuRoot;
 #[derive(Component)]
 struct DebugMenuBackdrop;
 #[derive(Component)]
@@ -145,6 +145,9 @@ struct TimeButton(TimeOfDayPreset);
 
 #[derive(Component)]
 struct CloseButton;
+
+#[derive(Component)]
+struct ReturnToPlayButton;
 
 #[derive(Component, Clone, Copy)]
 struct CloudCoverButton(CloudCoverMode);

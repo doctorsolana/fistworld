@@ -17,9 +17,22 @@ use crate::world;
 #[derive(Component)]
 pub(crate) struct GameServer;
 
+/// A separate port lets connected regression labs coexist with a local game.
+pub(crate) fn configured_server_port() -> u16 {
+    match std::env::var("FISTWORLD_SERVER_PORT") {
+        Ok(raw) => raw
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .expect("FISTWORLD_SERVER_PORT must be a port between 1 and 65535"),
+        Err(std::env::VarError::NotPresent) => SERVER_PORT,
+        Err(error) => panic!("Invalid FISTWORLD_SERVER_PORT: {error}"),
+    }
+}
+
 pub(crate) fn spawn_server(mut commands: Commands) {
     let bind_addr = get_server_bind_addr();
-    let server_addr: SocketAddr = (bind_addr, SERVER_PORT)
+    let server_addr: SocketAddr = (bind_addr, configured_server_port())
         .to_socket_addrs()
         .ok()
         .and_then(|mut it| it.next())

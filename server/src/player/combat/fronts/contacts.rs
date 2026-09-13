@@ -2,8 +2,12 @@
 //! soldier cannot hit through the rank in front, or share an enemy with a pile.
 use super::*;
 use crate::player::{
-    combat::{AttackOrder, WarParty, MELEE_REACH},
+    combat::{
+        hostility::{Allegiance, CombatIntents, HostilityIndex},
+        AttackOrder, WarParty, MELEE_REACH,
+    },
     hero::{MoveTarget, OfflineHero},
+    orders::CommandStance,
 };
 use std::collections::HashMap;
 const CELL: f32 = 3.0;
@@ -11,7 +15,7 @@ const CELL: f32 = 3.0;
 pub struct Body {
     pub entity: Entity,
     pub point: Vec2,
-    pub side: usize,
+    pub side: Allegiance,
     pub battalion: Option<BattalionId>,
     pub formation: Option<u64>,
     pub facing: Vec2,
@@ -23,7 +27,7 @@ pub struct CombatSpace {
     pub by_entity: HashMap<Entity, usize>,
     by_battalion: HashMap<BattalionId, Vec<usize>>,
     cells: HashMap<(i32, i32), Vec<usize>>,
-    accounts: HashMap<String, usize>,
+    hostility: HostilityIndex,
     ranged_cells: HashMap<(i32, i32), Vec<usize>>,
 }
 fn cell(p: Vec2) -> (i32, i32) {
@@ -38,6 +42,9 @@ impl Body {
     }
 }
 impl CombatSpace {
+    pub fn hostile(&self, a: &Body, b: &Body) -> bool {
+        self.hostility.hostile(a.side, b.side)
+    }
     pub fn body(&self, e: Entity) -> Option<&Body> {
         self.by_entity.get(&e).map(|i| &self.bodies[*i])
     }
@@ -174,6 +181,7 @@ pub fn rebuild_combat_space(
             Option<&FormationMember>,
             Option<&Health>,
             Has<Mounted>,
+            Option<&CommandStance>,
         ),
         (
             With<CharacterKind>,
@@ -183,8 +191,10 @@ pub fn rebuild_combat_space(
             Without<crate::world::village::strategic::StrategicPerson>,
         ),
     >,
+    intents: CombatIntents,
 ) {
     space.bodies.clear();
+    space.hostility.clear();
     space.by_entity.clear();
     for entries in space.ranged_cells.values_mut() {
         entries.clear();
@@ -195,22 +205,19 @@ pub fn rebuild_combat_space(
     for entries in space.by_battalion.values_mut() {
         entries.clear();
     }
-    for (entity, position, rotation, owner, party, battalion, formation, health, mounted) in &people
+    for (entity, position, rotation, owner, party, battalion, formation, health, mounted, stance) in
+        &people
     {
         if health.is_some_and(|h| h.is_dead()) {
             continue;
         }
-        let side = if let Some(owner) = owner {
-            let next = space.accounts.len() + 256;
-            if let Some(side) = space.accounts.get(&owner.0) {
-                *side
-            } else {
-                space.accounts.insert(owner.0.clone(), next);
-                next
-            }
-        } else if let Some(party) = party {
-            usize::from(party.banner)
-        } else {
+        let Some(side) = space.hostility.insert(
+            entity,
+            owner,
+            party,
+            battalion,
+            intents.attack_move(entity, stance),
+        ) else {
             continue;
         };
         let body = Body {
@@ -242,6 +249,7 @@ pub fn rebuild_combat_space(
         }
         space.bodies.push(body);
     }
+    space.hostility.record_intents(&intents);
     space.cells.retain(|_, v| !v.is_empty());
     space.ranged_cells.retain(|_, v| !v.is_empty());
     space.by_battalion.retain(|_, v| !v.is_empty());
@@ -275,7 +283,7 @@ pub fn assign_formation_contacts(
         }
         commands.entity(entity).insert_if_new(CombatReady);
         if order.is_some_and(|o| {
-            space.body(o.target).is_some_and(|b| b.side != body.side)
+            space.body(o.target).is_some_and(|b| space.hostile(body, b))
                 && space.clear_strike(entity, o.target)
         }) {
             continue;
@@ -286,7 +294,7 @@ pub fn assign_formation_contacts(
                 (body.radius + HORSE_BODY_RADIUS + 0.5).max(MELEE_REACH),
             )
             .filter(|other| {
-                other.side != body.side && loads.get(&other.entity).copied().unwrap_or(0) < 2
+                space.hostile(body, other) && loads.get(&other.entity).copied().unwrap_or(0) < 2
             })
             .filter(|other| space.clear_strike(entity, other.entity))
             .min_by(|a, b| {

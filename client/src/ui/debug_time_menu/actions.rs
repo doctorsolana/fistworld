@@ -5,6 +5,7 @@ use super::*;
 type DebugMenuControl = Or<(
     With<TimeButton>,
     With<CloseButton>,
+    With<ReturnToPlayButton>,
     With<CloudCoverButton>,
     With<PerfWeightmapToggleButton>,
     With<PerfRenderDiagToggleButton>,
@@ -178,6 +179,7 @@ pub(super) fn handle_backdrop_click(
 
 pub(super) fn handle_debug_menu_interactions(
     mut open: ResMut<DebugTimeMenuOpen>,
+    mut hud_mode: ResMut<HudMode>,
     _input_state: ResMut<InputState>,
     mut cover: ResMut<CloudCover>,
     mut cover_override: ResMut<CloudCoverOverride>,
@@ -200,10 +202,14 @@ pub(super) fn handle_debug_menu_interactions(
             Option<&PerfWeightmapToggleButton>,
             Option<&PerfRenderDiagToggleButton>,
             Option<&GodAccessSubmitButton>,
+            Option<&ReturnToPlayButton>,
         ),
         (Changed<Interaction>, DebugMenuControl),
     >,
 ) {
+    if !open.0 {
+        return;
+    }
     for (
         interaction,
         time_button,
@@ -212,10 +218,16 @@ pub(super) fn handle_debug_menu_interactions(
         weightmap_button,
         render_diag_button,
         god_access_button,
+        return_to_play,
     ) in buttons.iter_mut()
     {
         match *interaction {
             Interaction::Pressed => {
+                if return_to_play.is_some() {
+                    *hud_mode = HudMode::Play;
+                    open.0 = false;
+                    return;
+                }
                 if close_button.is_some() {
                     open.0 = false;
                     continue;
@@ -274,6 +286,25 @@ pub(super) fn close_debug_menu_on_main_menu(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn return_to_play_button_closes_the_console_without_a_server_reply() {
+        let mut world = World::new();
+        world.insert_resource(DebugTimeMenuOpen(true));
+        world.insert_resource(HudMode::God);
+        world.init_resource::<InputState>();
+        world.init_resource::<CloudCover>();
+        world.init_resource::<CloudCoverOverride>();
+        world.init_resource::<DebugPerfSettings>();
+        world.init_resource::<GodAccessInput>();
+        world.spawn((ReturnToPlayButton, Interaction::Pressed));
+        world
+            .run_system_once(handle_debug_menu_interactions)
+            .unwrap();
+        assert_eq!(*world.resource::<HudMode>(), HudMode::Play);
+        assert!(!world.resource::<DebugTimeMenuOpen>().0);
+    }
 
     #[test]
     fn debug_button_styling_cannot_capture_the_modal_backdrop() {

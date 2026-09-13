@@ -71,7 +71,7 @@ impl FiringWorld<'_, '_> {
             // actual arrow normally, so dense enemy ranks do not block firing.
             if self.space.within(a.xz(), body_search_radius).any(|other| {
                 other.entity != e
-                    && other.side == body.side
+                    && other.side.same_side(body.side)
                     && self
                         .bodies
                         .get(other.entity)
@@ -213,7 +213,9 @@ pub fn shoot_bows(
         candidates.clear();
         for other in field.space.within(body.point, BOW_RANGE) {
             let distance = body.point.distance_squared(other.point);
-            if other.side == body.side || !(36.0..=BOW_RANGE * BOW_RANGE).contains(&distance) {
+            if !field.space.hostile(body, other)
+                || !(36.0..=BOW_RANGE * BOW_RANGE).contains(&distance)
+            {
                 continue;
             }
             if explicit.is_some_and(|goal| match goal {

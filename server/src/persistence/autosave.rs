@@ -52,7 +52,7 @@ pub fn update_periodic_player_save(
         // profile current; the live body retains exact inventory and wallet.
         let hero_snapshot = heroes
             .iter()
-            .find(|(hero, ..)| hero.owner == player.client_id);
+            .find(|(hero, _, _, _, _, health)| hero.owner == player.client_id && !health.is_dead());
         let hero_state = hero_snapshot.map(|(_, position, rotation, outfit, _, health)| {
             crate::player::hero::hero_save(position, rotation, outfit, health)
         });

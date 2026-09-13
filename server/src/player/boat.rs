@@ -22,6 +22,12 @@ use shared::terrain::WorldTerrain;
 
 use crate::player::hero::{HeroIndex, MoveTarget, OfflineHero};
 
+pub(crate) mod arrival;
+use arrival::{ArrivalBodies, ArrivalOccupancy};
+mod session;
+use session::PausedPlayerVoyage;
+pub(crate) use session::{pause_account_voyage, release_dead_hero_boats, resume_account_voyage};
+
 const BOAT_SPEED: f32 = 7.0;
 pub(crate) const BOAT_ARRIVE_EPSILON: f32 = 0.2;
 const NAV_CELL: f32 = 6.0;
@@ -89,6 +95,14 @@ impl VesselNavigationQueue {
     pub(crate) fn request(&mut self, vessel: Entity, goal: VesselGoal) {
         self.pending.retain(|(queued, _)| *queued != vessel);
         self.pending.push_back((vessel, goal));
+    }
+
+    fn take(&mut self, vessel: Entity) -> Option<VesselGoal> {
+        let index = self
+            .pending
+            .iter()
+            .position(|(queued, _)| *queued == vessel)?;
+        self.pending.remove(index).map(|(_, goal)| goal)
     }
 }
 
@@ -298,6 +312,7 @@ pub(crate) fn coastal_voyages(terrain: &WorldTerrain, seed: u64) -> Vec<CoastalV
 /// Pick a deterministic-looking edge start without trusting the client. The
 /// account hash changes the first side and sample, while a complete fallback
 /// scan guarantees that an unlucky first choice does not reject a valid map.
+#[cfg(test)]
 fn starting_voyage(terrain: &WorldTerrain, account: &str) -> Option<(Vec3, f32)> {
     let seed = stable_account_seed(account);
     coastal_voyages(terrain, seed)
@@ -562,8 +577,9 @@ pub fn handle_create_hero_requests(
     terrain: Res<WorldTerrain>,
     profiles: Res<crate::persistence::profiles::PlayerProfiles>,
     mut hero_index: ResMut<HeroIndex>,
-    heroes: Query<&shared::components::Hero>,
+    heroes: Query<(&shared::components::Hero, &shared::components::Health)>,
     boats: Query<&CommandedBy, With<PlayerBoat>>,
+    arrival_bodies: ArrivalBodies,
     settlements: Query<(
         &shared::components::Settlement,
         &PlayerPosition,
@@ -572,13 +588,18 @@ pub fn handle_create_hero_requests(
     mut clients: Query<(&RemoteId, &mut MessageReceiver<CreateHero>), With<ClientOf>>,
     opening: Option<Res<crate::world::new_world::WorldOpening>>,
 ) {
+    // Keep pending starts in the same index as live occupants until all
+    // messages in this pass have committed their deferred entity spawns.
+    let mut arrival_occupancy = None;
     for (remote, mut receiver) in clients.iter_mut() {
         for request in receiver.receive() {
             let Some(account) = profiles.peer_to_name.get(&remote.0).cloned() else {
                 continue;
             };
             if hero_index.by_name.contains_key(&account)
-                || heroes.iter().any(|hero| hero.owner == remote.0)
+                || heroes
+                    .iter()
+                    .any(|(hero, health)| hero.owner == remote.0 && !health.is_dead())
                 || boats.iter().any(|owner| owner.0 == account)
             {
                 continue;
@@ -606,17 +627,19 @@ pub fn handle_create_hero_requests(
                 .flatten();
             let opening_voyage = ux_start.is_none();
             let Some((position, yaw)) = ux_start.or_else(|| {
-                if let Some(opening) = opening.as_ref() {
-                    let voyage = opening
-                        .arrivals
-                        .get(stable_account_seed(&account) as usize % opening.arrivals.len())?;
-                    Some((voyage.start, voyage.yaw))
+                let occupancy = arrival_occupancy
+                    .get_or_insert_with(|| ArrivalOccupancy::from_bodies(&arrival_bodies));
+                let seed = stable_account_seed(&account);
+                let voyage = if let Some(opening) = opening.as_ref() {
+                    occupancy.reserve_player_voyage(&terrain, &opening.arrivals, seed)
                 } else {
-                    starting_voyage(&terrain, &account)
-                }
+                    // The authored-map sampler is already ordered by account.
+                    occupancy.reserve_player_voyage(&terrain, &coastal_voyages(&terrain, seed), 0)
+                }?;
+                Some((voyage.start, voyage.yaw))
             }) else {
                 warn!(
-                    "Cannot create hero for '{account}': active map has no reachable edge voyage"
+                    "Cannot create hero for '{account}': active map has no vacant reachable edge voyage"
                 );
                 continue;
             };
@@ -647,31 +670,42 @@ pub fn handle_create_hero_requests(
                 );
                 continue;
             }
-            // `spawn_hero` terrain-snaps ordinary land starts. Override that
-            // here with the exact waterline/helm position in the same command
-            // queue; the latter insert is authoritative.
-            commands.entity(hero).insert((
-                AboardBoat,
-                CharacterActivity::Sitting,
-                PlayerPosition(position),
-                RegionCoord::from_world_pos(position),
-            ));
-            let boat = commands
-                .spawn((
-                    PlayerBoat,
-                    Vessel,
-                    VesselNavigation::DINGHY,
-                    CommandedBy(account.clone()),
-                    PlayerPosition(position),
-                    PlayerRotation(yaw),
-                    CharacterMotion::STATIONARY,
-                    RegionCoord::from_world_pos(position),
-                    Replicate::to_clients(NetworkTarget::All),
-                ))
-                .id();
+            let boat = spawn_opening_boat(&mut commands, hero, &account, position, yaw);
             info!("Opening voyage created for '{account}': hero={hero:?} boat={boat:?} at={position:?}");
         }
     }
+}
+
+fn spawn_opening_boat(
+    commands: &mut Commands,
+    hero: Entity,
+    account: &str,
+    position: Vec3,
+    yaw: f32,
+) -> Entity {
+    // `spawn_hero` terrain-snaps ordinary land starts. The very first snapshot
+    // must already carry the helm position: creation and the later sync system
+    // are independently scheduled, so a hull-centre placeholder can replicate.
+    let helm = position + Quat::from_rotation_y(yaw) * HELM_LOCAL;
+    commands.entity(hero).insert((
+        AboardBoat,
+        CharacterActivity::Sitting,
+        PlayerPosition(helm),
+        RegionCoord::from_world_pos(helm),
+    ));
+    commands
+        .spawn((
+            PlayerBoat,
+            Vessel,
+            VesselNavigation::DINGHY,
+            CommandedBy(account.to_owned()),
+            PlayerPosition(position),
+            PlayerRotation(yaw),
+            CharacterMotion::STATIONARY,
+            RegionCoord::from_world_pos(position),
+            Replicate::to_clients(NetworkTarget::All),
+        ))
+        .id()
 }
 
 /// Advance every active boat along its certified water route.
@@ -691,7 +725,7 @@ pub fn step_boats(
             &mut RegionCoord,
             &mut CharacterMotion,
         ),
-        With<Vessel>,
+        (With<Vessel>, Without<PausedPlayerVoyage>),
     >,
 ) {
     let dt = simulation_time.world_seconds();
@@ -973,6 +1007,7 @@ pub fn finish_player_landings(
         (
             With<PlayerBoat>,
             Without<VesselRoute>,
+            Without<PausedPlayerVoyage>,
             Without<shared::components::Hero>,
         ),
     >,
@@ -1088,6 +1123,76 @@ mod tests {
     fn account_start_seed_is_stable_and_name_sensitive() {
         assert_eq!(stable_account_seed("hilda"), stable_account_seed("hilda"));
         assert_ne!(stable_account_seed("hilda"), stable_account_seed("alwin"));
+    }
+
+    #[test]
+    fn simultaneous_new_heroes_avoid_an_immigrant_boat_and_start_at_their_own_helms() {
+        use bevy::ecs::system::RunSystemOnce;
+        use lightyear::prelude::PeerId;
+        use shared::components::{CharacterAttributes, Health, HeroOutfit, ImmigrantArrivalBoat};
+
+        let terrain = WorldTerrain::default();
+        let coast = coastal_voyages(&terrain, 0)[0];
+        let mut world = World::new();
+        world.insert_resource(terrain);
+        world.init_resource::<HeroIndex>();
+        // Natural arrivals are deliberately unowned: an owner-only boat
+        // query must not make them invisible to opening-voyage admission.
+        world.spawn((
+            PlayerBoat,
+            ImmigrantArrivalBoat,
+            PlayerPosition(coast.start),
+        ));
+        world
+            .run_system_once(
+                move |mut commands: Commands,
+                      terrain: Res<WorldTerrain>,
+                      mut heroes: ResMut<HeroIndex>,
+                      bodies: ArrivalBodies| {
+                    let mut occupancy = ArrivalOccupancy::from_bodies(&bodies);
+                    for (id, account) in [(1, "firstjoin"), (2, "secondjoin")] {
+                        let voyage = occupancy
+                            .reserve_player_voyage(&terrain, &[coast], stable_account_seed(account))
+                            .unwrap();
+                        let hero = crate::player::hero::spawn_hero(
+                            &mut commands,
+                            &mut heroes,
+                            &terrain,
+                            PeerId::Netcode(id),
+                            account,
+                            account,
+                            voyage.start,
+                            voyage.yaw,
+                            HeroOutfit::default(),
+                            CharacterAttributes::default(),
+                            Health::default(),
+                        );
+                        spawn_opening_boat(&mut commands, hero, account, voyage.start, voyage.yaw);
+                    }
+                },
+            )
+            .unwrap();
+        let boats: Vec<_> = world
+            .query_filtered::<(&CommandedBy, &PlayerPosition, &PlayerRotation), With<PlayerBoat>>()
+            .iter(&world)
+            .map(|(owner, position, rotation)| (owner.0.clone(), position.0, rotation.0))
+            .collect();
+        assert_eq!(boats.len(), 2);
+        let minimum = arrival::ARRIVAL_HULL_RADIUS * 2.0;
+        assert!(boats[0].1.distance(boats[1].1) >= minimum);
+        for (account, position, yaw) in boats {
+            assert!(position.distance(coast.start) >= minimum);
+            let hero = world.resource::<HeroIndex>().by_name[&account];
+            assert_eq!(
+                world.get::<PlayerPosition>(hero).unwrap().0,
+                position + Quat::from_rotation_y(yaw) * HELM_LOCAL,
+                "the first snapshot must already put each hero at its own helm"
+            );
+            assert_eq!(
+                world.get::<CharacterActivity>(hero),
+                Some(&CharacterActivity::Sitting)
+            );
+        }
     }
 
     #[test]

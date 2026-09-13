@@ -7,6 +7,9 @@ Battles happen on the existing map. There is no separate battle scene.
 ## Current controls
 
 - **C** changes how the client interprets clicks. It is not a server ceasefire.
+  Different players are peaceful by default: meeting or stopping beside another
+  player's hero or army does not issue an attack. An accepted attack or attack-move
+  order starts combat; nearby opponents can then defend themselves.
 - Left-click any battalion member to select the whole battalion. Box selection
   expands every touched battalion too. **Shift** adds to a box selection or toggles
   a clicked battalion. Remove a member in Army management before controlling them
@@ -82,6 +85,7 @@ health, stance and checkbox updates preserve the controls under the pointer.
 | Independent unassigned troop approaches | `server/src/player/combat/skirmish.rs` |
 | Clock-sampled combat clips and weapon presentation | `client/src/hero/{combat_animation,attachments}.rs` |
 | Local acquisition and body separation | `server/src/player/combat/{targeting,separation}.rs` |
+| Authoritative automatic hostility | `server/src/player/combat/hostility.rs` |
 | Derived client roster | `client/src/army_roster.rs` |
 | Gestures, control groups and formation preview | `client/src/selection/` |
 
@@ -203,7 +207,17 @@ decisions run at 10 Hz and independent steering at roughly 8 Hz in world time; t
 ordinary mover and contact checks remain on the fixed tick. Only local neighbouring
 cells are inspected for strikes, with 2 m reach. Movement/retreat suppress acquisition. Account-controlled people and explicit `WarParty` banners are combat
 participants. Ordinary uncommanded villagers are not automatically targeted.
-Different accounts are currently different allegiances; diplomacy is not implemented.
+Different accounts are distinct allegiances, but ownership alone does not make them
+hostile. Automatic melee, formation and archer acquisition share one policy:
+explicit `WarParty` enemies and attack-move intent permit engagement; active
+authoritative attack, skirmish and formation objectives permit retaliation and
+nearby support between their opposing accounts. Unrelated players remain neutral.
+The existing spatial indices rebuild these compact relationships from live orders,
+with reused scratch storage and constant-time comparisons in local searches.
+No client combat-mode flag is trusted, and rejected orders cannot start hostility.
+If both sides stop their attacks, proximity alone cannot restart combat. This is
+transient tactical combat intent; persistent wars, alliances and diplomacy are not
+implemented.
 
 Damage uses `Health::take_damage`, with a 0.8 world-second swing interval and
 `14 * (0.7 + physique / 100 * 0.6)` damage. A killing blow immediately prevents
@@ -249,6 +263,10 @@ alongside PNG and capture metadata. See [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md).
 Regression tests cover ordering, authority, membership batches, pursuit cooldowns,
 post-mortem swings, selection semantics, roster invalidation, mapped entity IDs,
 formation geometry and shared obstacle routing through the real mover.
+Peaceful-player regressions cover heroes meeting and stopping, idle formations,
+archer acquisition and weapon switching, rejected attacks, authorized retaliation,
+third-player bystanders and clearing both sides' combat intent. Enemy-only fixtures
+explicitly opt into hostility with `WarParty` rather than relying on account names.
 
 Connected `battle-1v1`, `battle-2v1`, `battle-3v1` and `battle-skirmish` scenarios
 exercise ordinary enemy-click input, then record continuous PNG, capture metadata

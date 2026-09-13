@@ -148,7 +148,11 @@ pub fn handle_disconnections(
     // Snapshot the commander-facing profile for this running session. The live
     // hero entity itself survives an ordinary disconnect with its exact goods,
     // wallet, position and durable relationships intact.
-    let hero_snapshot = heroes.iter().find(|(_, hero, ..)| hero.owner == peer_id);
+    // The death animation retains the corpse briefly after mortality clears
+    // the account slot. Never put that dead body back into its reconnect save.
+    let hero_snapshot = heroes
+        .iter()
+        .find(|(_, hero, _, _, _, _, health)| hero.owner == peer_id && !health.is_dead());
     let hero_state = hero_snapshot.map(|(_, _, position, rotation, outfit, _, health)| {
         crate::player::hero::hero_save(position, rotation, outfit, health)
     });
@@ -165,6 +169,10 @@ pub fn handle_disconnections(
             .remove::<crate::world::village_roads::TravelRoute>()
             .remove::<crate::world::village_roads::NavigationRoutePending>()
             .remove::<crate::world::village_roads::NavigationRouteFailed>();
+        let voyage_account = name_lower.clone();
+        commands.queue(move |world: &mut World| {
+            crate::player::boat::pause_account_voyage(world, &voyage_account);
+        });
     }
 
     let previous = profiles.profiles.get(&name_lower);
@@ -222,3 +230,6 @@ pub fn handle_disconnections(
 
     inputs.latest.remove(&peer_id);
 }
+
+#[cfg(test)]
+mod tests;

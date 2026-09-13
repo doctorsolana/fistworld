@@ -118,7 +118,7 @@ pub(super) fn spawn_debug_time_menu(
                     spawn_render_diag_button(row, perf.render_diag_logging);
                 });
             });
-        spawn_debug_footer(panel, "J or ESC close");
+        spawn_god_footer(panel);
     });
 }
 
@@ -242,6 +242,52 @@ fn spawn_debug_footer(panel: &mut ChildSpawnerCommands<'_>, hint: &str) {
         },
         BorderColor::all(PLATE_RULE_SOFT),
     ));
+}
+
+fn spawn_god_footer(panel: &mut ChildSpawnerCommands<'_>) {
+    panel
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                flex_shrink: 0.0,
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(12.0),
+                padding: UiRect::axes(Val::Px(22.0), Val::Px(10.0)),
+                border: UiRect::top(Val::Px(1.0)),
+                ..default()
+            },
+            BorderColor::all(PLATE_RULE_SOFT),
+        ))
+        .with_children(|footer| {
+            footer.spawn((
+                Text::new("J / ESC close console"),
+                crate::ui::typography::text(type_scale::CAPTION),
+                TextColor(INK_MUTED),
+            ));
+            footer
+                .spawn((
+                    Name::new("god-return-to-play"),
+                    Button,
+                    ReturnToPlayButton,
+                    Node {
+                        min_height: Val::Px(36.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                        ..default()
+                    },
+                    button_chrome(UiButtonVariant::Secondary),
+                ))
+                .with_child((
+                    Text::new("RETURN TO PLAY  G"),
+                    UiButtonLabel,
+                    crate::ui::typography::text(type_scale::CAPTION),
+                    TextColor(INK),
+                ));
+        });
 }
 
 fn spawn_god_access_panel(panel: &mut ChildSpawnerCommands<'_>) {
