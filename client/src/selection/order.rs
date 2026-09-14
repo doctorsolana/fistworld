@@ -146,15 +146,21 @@ pub(super) fn issue_order_on_right_click(
                 && !alt
                 && !selection.is_empty()
                 && !over_ui
-                && !input_state.ui_blocking(),
+                && !input_state.gameplay_blocking(),
             press_at: gesture_cursor,
             motion: 0.0,
             held_secs: 0.0,
-            became_drag: over_ui || input_state.ui_blocking() || alt,
+            became_drag: over_ui || input_state.gameplay_blocking() || alt,
         };
     }
 
     if mouse.pressed(MouseButton::Right) {
+        // A text composer or modal can take ownership after the press. Once
+        // interrupted, even a formation drag cannot become an order on release.
+        if input_state.gameplay_blocking() {
+            drag.became_drag = true;
+            drag.formation = false;
+        }
         drag.motion += motion;
         drag.held_secs += time.delta_secs();
         let radial = match (drag.press_at, cursor) {
@@ -185,7 +191,7 @@ pub(super) fn issue_order_on_right_click(
     }
     // ...and clean at release too, so a press in the world cannot deliver an
     // order by releasing over the HUD.
-    if input_state.ui_blocking() || crate::ui::pointer_over_ui(&ui_blockers) {
+    if input_state.gameplay_blocking() || crate::ui::pointer_over_ui(&ui_blockers) {
         return;
     }
 

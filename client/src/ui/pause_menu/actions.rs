@@ -49,6 +49,9 @@ pub(super) fn handle_pause_actions(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut sounds: crate::ui::sound::UiActionSounds,
 ) {
+    if input_state.text_input_blocking() {
+        return;
+    }
     let activate =
         keyboard.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]);
     for (entity, interaction, action) in buttons.iter() {
@@ -257,6 +260,9 @@ pub(super) fn handle_escape_key(
     windows: Query<Entity, With<PrimaryWindow>>,
     mut cursor_opts: Query<&mut CursorOptions>,
 ) {
+    if input_state.text_input_blocking() {
+        return;
+    }
     if keyboard.just_pressed(KeyCode::Escape) {
         if !pause_open.0 && input_state.ui_blocking() {
             return;

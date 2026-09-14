@@ -1527,12 +1527,16 @@ fn update_property_guard(
 
 fn handle_property_close(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     mouse: Res<ButtonInput<MouseButton>>,
     guard: Res<PropertyClickGuard>,
     backdrop: Query<&Interaction, (With<PropertyBackdrop>, Changed<Interaction>)>,
     close: Query<&Interaction, (With<PropertyCloseButton>, Changed<Interaction>)>,
     mut target: ResMut<PropertyMarketTarget>,
 ) {
+    if input.text_input_blocking() {
+        return;
+    }
     let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
     let clicked_out = clicked && handle_backdrop_pressed(&backdrop);
     let clicked_close = clicked

@@ -400,7 +400,7 @@ fn handle_card_clicks(
     roster: Res<ArmyRoster>,
     mut selection: ResMut<crate::selection::Selection>,
 ) {
-    if !mode.0 || input.ui_blocking() || !mouse.just_pressed(MouseButton::Left) {
+    if !mode.0 || input.gameplay_blocking() || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
     for (interaction, card) in &cards {
@@ -464,7 +464,7 @@ fn handle_muster_card_clicks(
         (With<crate::GameClient>, With<lightyear::prelude::Connected>),
     >,
 ) {
-    if !mode.0 || input.ui_blocking() || !mouse.just_pressed(MouseButton::Left) {
+    if !mode.0 || input.gameplay_blocking() || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
     let pressed = cards

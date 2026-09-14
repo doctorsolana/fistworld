@@ -135,6 +135,12 @@ already does. Budget authoritative simulation and replication separately from cl
 frame time: lower-end hardware still needs bounded animation, streaming and GPU work.
 Neither a server tick measurement nor a draw-call count proves the other budget is healthy.
 
+Ephemeral [server chat](CHAT.md) uses a separate ordered reliable channel. The
+server supplies the accepted account identity and applies bounded real-time rate
+limits; it broadcasts across regions without querying simulated people. The
+client owns only editing, a 100-message local history and retained HUD rendering.
+Chat does not create replicated world components or persistent history.
+
 ### Never dirty a replicated component you did not change
 
 Replication sends on Bevy's **change flag**, not on a value difference: lightyear (via

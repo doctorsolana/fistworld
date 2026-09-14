@@ -81,7 +81,7 @@ fn toggle_combat_mode(
     mut mode: ResMut<CombatMode>,
     mut targets: ResMut<CombatTargets>,
 ) {
-    if !keyboard.just_pressed(KeyCode::KeyC) {
+    if input_state.text_input_blocking() || !keyboard.just_pressed(KeyCode::KeyC) {
         return;
     }
     if mode.0 {
@@ -298,7 +298,7 @@ fn handle_combat_help(
     buttons: Query<&Interaction, (With<CombatHelpButton>, Changed<Interaction>)>,
     mut state: ResMut<CombatHelpState>,
 ) {
-    if !mode.0 || input.ui_blocking() {
+    if !mode.0 || input.gameplay_blocking() {
         if state.expanded {
             state.expanded = false;
         }
@@ -387,4 +387,42 @@ fn despawn_combat_ui(
     mode.0 = false;
     targets.ordered.clear();
     targets.hovered = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::InputState;
+
+    #[test]
+    fn text_input_cannot_enter_or_leave_combat_mode() {
+        for enabled in [false, true] {
+            for active in [false, true] {
+                let mut app = App::new();
+                app.insert_resource(CombatMode(enabled))
+                    .init_resource::<CombatTargets>()
+                    .insert_resource(InputState {
+                        text_input_active: active,
+                        text_input_captured: true,
+                        ..default()
+                    })
+                    .init_resource::<ButtonInput<KeyCode>>()
+                    .add_systems(Update, toggle_combat_mode);
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::KeyC);
+                app.update();
+                assert_eq!(app.world().resource::<CombatMode>().0, enabled);
+                assert!(!app.world().resource::<InputState>().ui_blocking());
+
+                *app.world_mut().resource_mut::<InputState>() = InputState::default();
+                let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                keys.reset(KeyCode::KeyC);
+                keys.press(KeyCode::KeyC);
+                drop(keys);
+                app.update();
+                assert_eq!(app.world().resource::<CombatMode>().0, !enabled);
+            }
+        }
+    }
 }

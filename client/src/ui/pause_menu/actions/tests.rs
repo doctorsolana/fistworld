@@ -83,6 +83,30 @@ fn escape_does_not_open_game_menu_over_another_modal() {
 }
 
 #[test]
+fn chat_closing_escape_does_not_open_the_game_menu() {
+    let mut app = app();
+    app.add_systems(Update, handle_escape_key);
+    app.world_mut().resource_mut::<PauseMenuOpen>().0 = false;
+    *app.world_mut().resource_mut::<InputState>() = InputState {
+        text_input_active: false,
+        text_input_captured: true,
+        ..default()
+    };
+    press_key(&mut app, KeyCode::Escape);
+    app.update();
+    assert!(!app.world().resource::<PauseMenuOpen>().0);
+    assert!(!app.world().resource::<InputState>().ui_blocking());
+
+    app.world_mut().resource_mut::<InputState>().text_input_captured = false;
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+    app.update();
+    assert!(!app.world().resource::<PauseMenuOpen>().0);
+    press_key(&mut app, KeyCode::Escape);
+    app.update();
+    assert!(app.world().resource::<PauseMenuOpen>().0);
+}
+
+#[test]
 fn back_keeps_the_menu_open_and_resume_releases_its_input_block() {
     let mut app = app();
     app.add_systems(Update, handle_pause_actions);

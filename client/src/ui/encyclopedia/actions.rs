@@ -22,7 +22,7 @@ pub(super) fn toggle_encyclopedia(
     input_state: Res<InputState>,
     mut open: ResMut<EncyclopediaOpen>,
 ) {
-    if !keyboard.just_pressed(KeyCode::KeyN) {
+    if input_state.text_input_blocking() || !keyboard.just_pressed(KeyCode::KeyN) {
         return;
     }
     if open.0 {
@@ -116,6 +116,7 @@ pub(super) fn handle_person_rows(
 
 pub(super) fn close_on_escape_or_backdrop(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<InputState>,
     guard: Res<ClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
     backdrop: Query<&Interaction, (With<EncyclopediaBackdrop>, Changed<Interaction>)>,
@@ -126,6 +127,9 @@ pub(super) fn close_on_escape_or_backdrop(
     market: Option<Res<crate::ui::market::MarketPageTarget>>,
     mut open: ResMut<EncyclopediaOpen>,
 ) {
+    if input.text_input_blocking() {
+        return;
+    }
     let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
     let clicked_out = clicked && handle_backdrop_pressed(&backdrop);
     let clicked_close = clicked
@@ -244,6 +248,7 @@ mod tests {
         mouse.press(MouseButton::Left);
         world.insert_resource(mouse);
         world.insert_resource(ButtonInput::<KeyCode>::default());
+        world.insert_resource(InputState::default());
         world.insert_resource(ClickGuard(true));
         world.insert_resource(EncyclopediaOpen(true));
         world.spawn((EncyclopediaBackdrop, Interaction::None));

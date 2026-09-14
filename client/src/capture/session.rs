@@ -9,20 +9,20 @@ mod construction;
 mod households;
 mod multiplayer;
 
-use super::{live_capture_request, CaptureInspection};
+use super::{CaptureInspection, live_capture_request};
 use crate::{camera_rts::CommanderCamera, capture_artifact::*, states::GameState};
 use bevy::{
     ecs::system::SystemState,
     input::{
-        keyboard::{Key, KeyboardInput, NativeKeyCode},
         ButtonState, InputSystems,
+        keyboard::{Key, KeyboardInput, NativeKeyCode},
     },
     prelude::*,
     render::view::screenshot::Screenshot,
     ui::{InteractionDisabled, RelativeCursorPosition, UiSystems},
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shared::{
     components::*,
     economy::{Good, GoodsInventory, MarketSeller, MootMarket, Wallet},
@@ -42,8 +42,15 @@ struct Request {
 #[derive(Clone, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    /// Request native OS focus before driving one of several real clients.
+    FocusWindow,
     Key {
         key: String,
+    },
+    /// Hold native input across frames to verify that an editor owns gameplay keys.
+    HoldKey {
+        key: String,
+        frames: u8,
     },
     Text {
         text: String,
@@ -143,6 +150,7 @@ pub(crate) fn install(app: &mut App) {
         drive
             .after(InputSystems)
             .after(UiSystems::Focus)
+            .before(crate::ui::chat::ChatInput)
             .before(crate::ui::sound::collect_button_press),
     );
 }
@@ -277,6 +285,13 @@ fn snapshot(world: &mut World) -> Value {
         .iter(world)
         .next()
         .map(|window| window.title.clone());
+    let window_focused = world
+        .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
+        .iter(world)
+        .any(|window| window.focused);
+    let chat = world
+        .get_resource::<crate::ui::chat::ChatState>()
+        .map(crate::ui::chat::ChatState::diagnostics);
     let server_address = world
         .get_resource::<crate::ui::main_menu::ServerAddress>()
         .map(|address| json!({"host":address.ip,"port":address.port}));
@@ -284,9 +299,11 @@ fn snapshot(world: &mut World) -> Value {
         .get_resource::<crate::ui::main_menu::DropdownState>()
         .is_some_and(|state| state.expanded);
     json!({"construction":construction,"sampled_unix_ms":sampled_unix_ms,"multiplayer":multiplayer,"hud_mode":hud_mode,"god_capability":god_capability,"debug_menu_open":debug_menu_open,"time_warp":time_warp,"audio":audio,"game_state":game_state,"name_phase":name_phase,"submitted":submitted,"name_error":name_error,"connection_error":connection_error,"startup_art_ready":startup_art_ready,
-        "focused_control":focused_control,"window_title":window_title,"server_address":server_address,"presets_expanded":presets_expanded,
+        "focused_control":focused_control,"window_title":window_title,"window_focused":window_focused,"chat":chat,"server_address":server_address,"presets_expanded":presets_expanded,
         "account":account,"hero":own.map(|(_,_,hero)|hero),"markets":markets,"towns":towns,"households":households,"yards":yards,"clock":clock,"camera":camera,"buttons":buttons,"selection":selected,"notice":notice,
         "ui_blocking":world.get_resource::<crate::input::InputState>().is_some_and(|s|s.ui_blocking()),
+        "gameplay_blocking":world.get_resource::<crate::input::InputState>().is_some_and(|s|s.gameplay_blocking()),
+        "combat":world.get_resource::<crate::combat_mode::CombatMode>().is_some_and(|s|s.0),
         "playing":world.get_resource::<State<GameState>>().is_some_and(|s|*s.get()==GameState::Playing),
         "creator":world.get_resource::<crate::ui::hero_creator::HeroCreatorOpen>().is_some_and(|s|s.0),
         "cinematic":world.get_resource::<crate::boat::OpeningCinematic>().is_some_and(|s|s.is_active()),
@@ -341,11 +358,25 @@ fn drive(world: &mut World) {
 fn key_code(key: &str) -> Result<KeyCode, String> {
     match key {
         "Home" => Ok(KeyCode::Home),
+        "A" => Ok(KeyCode::KeyA),
+        "C" => Ok(KeyCode::KeyC),
+        "D" => Ok(KeyCode::KeyD),
         "E" => Ok(KeyCode::KeyE),
         "G" => Ok(KeyCode::KeyG),
+        "H" => Ok(KeyCode::KeyH),
         "J" => Ok(KeyCode::KeyJ),
         "N" => Ok(KeyCode::KeyN),
         "M" => Ok(KeyCode::KeyM),
+        "R" => Ok(KeyCode::KeyR),
+        "S" => Ok(KeyCode::KeyS),
+        "T" => Ok(KeyCode::KeyT),
+        "W" => Ok(KeyCode::KeyW),
+        "X" => Ok(KeyCode::KeyX),
+        "1" => Ok(KeyCode::Digit1),
+        "2" => Ok(KeyCode::Digit2),
+        "ArrowLeft" => Ok(KeyCode::ArrowLeft),
+        "ArrowRight" => Ok(KeyCode::ArrowRight),
+        "Delete" => Ok(KeyCode::Delete),
         "Escape" => Ok(KeyCode::Escape),
         "Enter" => Ok(KeyCode::Enter),
         "Backspace" => Ok(KeyCode::Backspace),
@@ -363,11 +394,24 @@ fn logical_key(code: KeyCode) -> Key {
         KeyCode::Tab => Key::Tab,
         KeyCode::ControlLeft => Key::Control,
         KeyCode::KeyA => Key::Character("a".into()),
+        KeyCode::KeyC => Key::Character("c".into()),
+        KeyCode::KeyD => Key::Character("d".into()),
         KeyCode::KeyE => Key::Character("e".into()),
         KeyCode::KeyG => Key::Character("g".into()),
+        KeyCode::KeyH => Key::Character("h".into()),
         KeyCode::KeyJ => Key::Character("j".into()),
         KeyCode::KeyN => Key::Character("n".into()),
         KeyCode::KeyM => Key::Character("m".into()),
+        KeyCode::KeyR => Key::Character("r".into()),
+        KeyCode::KeyS => Key::Character("s".into()),
+        KeyCode::KeyT => Key::Character("t".into()),
+        KeyCode::KeyW => Key::Character("w".into()),
+        KeyCode::KeyX => Key::Character("x".into()),
+        KeyCode::Digit1 => Key::Character("1".into()),
+        KeyCode::Digit2 => Key::Character("2".into()),
+        KeyCode::ArrowLeft => Key::ArrowLeft,
+        KeyCode::ArrowRight => Key::ArrowRight,
+        KeyCode::Delete => Key::Delete,
         _ => Key::Unidentified(bevy::input::keyboard::NativeKey::Unidentified),
     }
 }
@@ -416,6 +460,36 @@ fn advance(
     command: &Command,
 ) -> Result<bool, String> {
     match command {
+        Command::FocusWindow => {
+            let mut windows =
+                world.query_filtered::<&mut Window, With<bevy::window::PrimaryWindow>>();
+            let mut window = windows.single_mut(world).map_err(|_| "no primary window")?;
+            if state.phase == 0 {
+                // Bevy/Winit forwards this supported Window setter to the OS.
+                window.focused = true;
+            } else if state.phase >= 2 {
+                return if window.focused {
+                    Ok(true)
+                } else {
+                    Err("native window focus was denied".into())
+                };
+            }
+        }
+        Command::HoldKey { key, frames } => {
+            if *frames == 0 || *frames > 120 {
+                return Err("hold_key requires 1..=120 frames".into());
+            }
+            let code = key_code(key)?;
+            if state.phase == 0 {
+                world.resource_mut::<ButtonInput<KeyCode>>().press(code);
+                keyboard_event(world, code, logical_key(code), None, true)?;
+            } else if state.phase == *frames {
+                world.resource_mut::<ButtonInput<KeyCode>>().release(code);
+                keyboard_event(world, code, logical_key(code), None, false)?;
+            } else if state.phase > *frames {
+                return Ok(true);
+            }
+        }
         Command::Key { key } => {
             let code = key_code(key)?;
             match state.phase {
@@ -636,7 +710,7 @@ fn advance(
                     return Err(
                         "record requires 2–180 frames, 50–1000 ms spacing, at most 60 seconds"
                             .into(),
-                    )
+                    );
                 }
                 _ => (1, Duration::ZERO),
             };

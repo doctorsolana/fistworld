@@ -28,6 +28,7 @@ use crate::economy::{
 };
 use crate::terrain::TerrainDeltaChunk;
 
+use super::chat::{ChatChannel, ChatEvent, ChatSend};
 use super::messages::*;
 
 pub struct ProtocolPlugin;
@@ -137,7 +138,8 @@ impl Plugin for ProtocolPlugin {
         app.component::<CivicHallUpgradeWorksite>().replicate();
         app.component::<MarketLevel>().replicate();
         app.component::<HouseAppearance>().replicate();
-        app.component::<crate::components::HouseUpgradeWorksite>().replicate();
+        app.component::<crate::components::HouseUpgradeWorksite>()
+            .replicate();
         app.component::<crate::components::HouseholdYard>()
             .replicate();
         app.component::<SettlementDevelopment>().replicate();
@@ -262,6 +264,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HouseUpgradeRequest>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ChatSend>()
+            .add_direction(NetworkDirection::ClientToServer);
 
         // Server -> Client
         app.register_message::<NameSubmissionResult>()
@@ -295,6 +299,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroCompanyFoundingResult>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ChatEvent>()
+            .add_direction(NetworkDirection::ServerToClient);
 
         // === CHANNELS ===
         app.add_channel::<ReliableChannel>(ChannelSettings {
@@ -310,5 +316,11 @@ impl Plugin for ProtocolPlugin {
         })
         // High-frequency input: client -> server only
         .add_direction(NetworkDirection::ClientToServer);
+
+        app.add_channel::<ChatChannel>(ChannelSettings {
+            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::Bidirectional);
     }
 }

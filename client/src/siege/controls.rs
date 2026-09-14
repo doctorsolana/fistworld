@@ -40,13 +40,14 @@ pub(super) fn aim_keys(
     if !combat.0
         || !available
         || placement.is_armed()
-        || keys.any_just_pressed([KeyCode::Escape, KeyCode::KeyH, KeyCode::KeyX, KeyCode::KeyR])
+        || (!input.text_input_blocking()
+            && keys.any_just_pressed([KeyCode::Escape, KeyCode::KeyH, KeyCode::KeyX, KeyCode::KeyR]))
     {
         aim.0 = false;
     }
     if combat.0
         && available
-        && !input.ui_blocking()
+        && !input.gameplay_blocking()
         && !placement.is_armed()
         && keys.just_pressed(KeyCode::KeyF)
     {
@@ -110,7 +111,7 @@ pub(super) fn buttons(
     mut mode: ResMut<crate::selection::commands::CommandMode>,
     mut sender: Query<&mut MessageSender<UnitOrder>, (With<crate::GameClient>, With<Connected>)>,
 ) {
-    if input.ui_blocking() {
+    if input.gameplay_blocking() {
         return;
     }
     for (action, interaction) in &buttons {
@@ -266,7 +267,7 @@ pub(super) fn preview(
     account: Res<crate::ui::name_entry::PlayerNameInput>,
     mut gizmos: Gizmos,
 ) {
-    if !aim.0 || input.ui_blocking() || crate::ui::pointer_over_ui(&ui) {
+    if !aim.0 || input.gameplay_blocking() || crate::ui::pointer_over_ui(&ui) {
         return;
     }
     let Some(at) = hit.0 else { return };

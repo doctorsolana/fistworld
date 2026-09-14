@@ -25,6 +25,7 @@ transfers out of client presentation systems.
 |---|---|
 | Message/component registration and network IDs | `shared/src/protocol/plugin.rs` |
 | Command and response shapes | `shared/src/protocol/messages.rs` |
+| Chat messages, limits and validation | `shared/src/protocol/chat.rs` |
 | Character identity, appearance and motion | `shared/src/components/actors.rs` |
 | Settlement identity, layouts and progression | `shared/src/components/settlements.rs` |
 | Building kinds, entrances and placement definitions | `shared/src/components/building_kinds.rs` |
@@ -103,6 +104,7 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Camera and streaming anchor | `client/src/camera_rts.rs` |
 | Selection and command input | `client/src/selection/`, `client/src/hero/control.rs` |
 | Exploration notices and hero/town camera controls | `client/src/ui/hud/journey.rs` |
+| In-game chat editor, history and retained panel | `client/src/ui/chat/` |
 | Market presentation, eligibility and retained bindings | `client/src/ui/market.rs` and `market/model.rs` |
 | Character plugin ordering | `client/src/hero/mod.rs` |
 | Character rigs, wardrobe and skin | `client/src/hero/appearance.rs` |

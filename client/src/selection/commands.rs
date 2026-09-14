@@ -41,7 +41,7 @@ pub fn handle_command_keys(
         }
         return;
     }
-    if input.ui_blocking() || crate::hero::control::placement_armed(&placement) {
+    if input.gameplay_blocking() || crate::hero::control::placement_armed(&placement) {
         return;
     }
     if keys.just_pressed(KeyCode::KeyV) {
@@ -141,6 +141,44 @@ pub fn receive_order_feedback(
     for mut receiver in &mut receivers {
         for result in receiver.receive() {
             notice.show(&result.message);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::InputState;
+
+    #[test]
+    fn text_input_preserves_command_mode_and_saved_control_groups() {
+        for active in [false, true] {
+            let mut app = App::new();
+            app.insert_resource(InputState {
+                    text_input_active: active,
+                    text_input_captured: true,
+                    ..default()
+                })
+                .insert_resource(crate::combat_mode::CombatMode(true))
+                .init_resource::<crate::hero::control::WorldPlacementMode>()
+                .init_resource::<ArmyRoster>()
+                .init_resource::<ControlGroups>()
+                .init_resource::<Selection>()
+                .init_resource::<crate::ui::hud::GodNotice>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .insert_resource(CommandMode(MovementMode::Retreat))
+                .add_systems(Update, handle_command_keys);
+            let saved = app.world_mut().spawn_empty().id();
+            let selected = app.world_mut().spawn_empty().id();
+            app.world_mut().resource_mut::<ControlGroups>().0[1].units = vec![saved];
+            app.world_mut().resource_mut::<Selection>().set(vec![selected]);
+            for key in [KeyCode::KeyX, KeyCode::Escape, KeyCode::Digit1, KeyCode::ControlLeft] {
+                app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            }
+            app.update();
+            assert_eq!(app.world().resource::<CommandMode>().0, MovementMode::Retreat);
+            assert_eq!(app.world().resource::<ControlGroups>().0[1].units, vec![saved]);
+            assert_eq!(app.world().resource::<Selection>().primary(), Some(selected));
         }
     }
 }

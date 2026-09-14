@@ -32,7 +32,7 @@ pub(super) fn toggle_debug_time_menu(
     if game_state.get() != &GameState::Playing {
         return;
     }
-    if !open.0 && input_state.ui_blocking() {
+    if input_state.text_input_blocking() || (!open.0 && input_state.ui_blocking()) {
         return;
     }
     if !keyboard.just_pressed(KeyCode::KeyJ) {
@@ -58,6 +58,7 @@ pub(super) fn toggle_debug_time_menu(
 }
 
 pub(super) fn handle_god_access_input(
+    input: Res<InputState>,
     mut access: ResMut<GodAccessInput>,
     god: Res<GodCapability>,
     mut key_events: MessageReader<KeyboardInput>,
@@ -69,6 +70,10 @@ pub(super) fn handle_god_access_input(
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
+    if input.text_input_blocking() {
+        key_events.clear();
+        return;
+    }
     if god.0 {
         return;
     }
@@ -158,9 +163,10 @@ pub(super) fn receive_god_access_result(
 
 pub(super) fn close_debug_time_menu_on_escape(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<InputState>,
     mut open: ResMut<DebugTimeMenuOpen>,
 ) {
-    if open.0 && keyboard.just_pressed(KeyCode::Escape) {
+    if !input.text_input_blocking() && open.0 && keyboard.just_pressed(KeyCode::Escape) {
         open.0 = false;
     }
 }

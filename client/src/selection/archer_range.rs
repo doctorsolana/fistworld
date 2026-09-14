@@ -128,7 +128,7 @@ pub(super) fn collect(
         state.ranges.clear();
         return;
     };
-    if input.ui_blocking()
+    if input.gameplay_blocking()
         || camera
             .iter()
             .next()

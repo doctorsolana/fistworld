@@ -350,7 +350,7 @@ pub(crate) fn commander_tilt_for_zoom(zoom: f32, zoom_min: f32, zoom_max: f32) -
 }
 
 fn commander_accepts_world_input(input_state: &crate::input::InputState) -> bool {
-    !input_state.ui_blocking() && !camera_locked_for_measurement()
+    !input_state.gameplay_blocking() && !camera_locked_for_measurement()
 }
 
 /// `FISTFORCE_CAMERA_LOCK=1` freezes the commander camera against all input
@@ -574,6 +574,56 @@ pub fn send_commander_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::InputState;
+
+    #[test]
+    fn text_input_blocks_pan_and_preserves_key_releases_through_close() {
+        for released_while_typing in [false, true] {
+            let mut app = App::new();
+            app.init_resource::<Time>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .init_resource::<ButtonInput<MouseButton>>()
+                .init_resource::<crate::render::systems::InputSettings>()
+                .insert_resource(crate::input::InputState {
+                    text_input_active: true,
+                    text_input_captured: true,
+                    ..default()
+                })
+                .add_message::<MouseMotion>()
+                .add_message::<MouseWheel>()
+                .add_systems(Update, update_commander_camera);
+            let camera = app.world_mut().spawn((
+                Camera3d::default(),
+                Transform::default(),
+                CommanderCamera {
+                    focus: Vec3::ZERO,
+                    focus_target: Vec3::ZERO,
+                    ..default()
+                },
+            )).id();
+            app.world_mut().resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+            app.update();
+            assert_eq!(app.world().get::<CommanderCamera>(camera).unwrap().focus_target, Vec3::ZERO);
+
+            if released_while_typing {
+                app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyW);
+            }
+            app.world_mut().resource_mut::<InputState>().text_input_active = false;
+            app.update();
+            assert_eq!(app.world().get::<CommanderCamera>(camera).unwrap().focus_target, Vec3::ZERO);
+
+            app.world_mut().resource_mut::<InputState>().text_input_captured = false;
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+            app.update();
+            assert_eq!(
+                app.world().get::<CommanderCamera>(camera).unwrap().focus_target == Vec3::ZERO,
+                released_while_typing,
+                "a released key stays released; a still-held key resumes after chat relinquishes input"
+            );
+        }
+    }
 
     #[test]
     fn an_open_encyclopedia_blocks_commander_pan_or_zoom_input() {

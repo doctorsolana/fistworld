@@ -79,6 +79,7 @@ pub(in crate::ui::pause_menu) fn spawn_controls_panel(
                         ("World map", "M"),
                         ("Trade nearby", "E"),
                         ("Encyclopedia", "N"),
+                        ("Server chat", "T"),
                     ] {
                         menus.spawn(shortcut_row()).with_children(|row| {
                             field_label(row, label);

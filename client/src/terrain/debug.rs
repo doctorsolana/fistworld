@@ -85,9 +85,10 @@ const DEBUG_TERRAIN_KEY: KeyCode = KeyCode::F9;
 
 pub(super) fn handle_terrain_debug_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     mut debug_settings: ResMut<TerrainDebugSettings>,
 ) {
-    if keyboard.just_pressed(DEBUG_TERRAIN_KEY) {
+    if !input.text_input_blocking() && keyboard.just_pressed(DEBUG_TERRAIN_KEY) {
         debug_settings.mode = (debug_settings.mode + 1) % 4;
         info!(
             "Terrain debug mode: {}",

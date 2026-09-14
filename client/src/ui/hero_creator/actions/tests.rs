@@ -30,6 +30,7 @@ fn app() -> App {
         .init_resource::<CreatorFeedback>()
         .init_resource::<GodCapability>()
         .init_resource::<HudMode>()
+        .init_resource::<crate::input::InputState>()
         .init_resource::<crate::boat::OpeningCinematic>()
         .init_resource::<InputFocus>()
         .init_resource::<ButtonInput<KeyCode>>()

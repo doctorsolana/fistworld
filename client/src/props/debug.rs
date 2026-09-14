@@ -20,9 +20,10 @@ pub enum PropLodDebugMode {
 /// Cycle prop LOD debug modes with F5.
 pub(super) fn toggle_prop_lod_debug(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     mut mode: ResMut<PropLodDebugMode>,
 ) {
-    if !keyboard.just_pressed(KeyCode::F5) {
+    if input.text_input_blocking() || !keyboard.just_pressed(KeyCode::F5) {
         return;
     }
 
@@ -43,10 +44,11 @@ pub(super) fn toggle_prop_lod_debug(
 /// Log prop density/duplication stats with F6.
 pub(super) fn log_prop_density_snapshot(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     props: Query<(&EnvironmentProp, &Transform, &PropKindTag)>,
 ) {
-    if !keyboard.just_pressed(KeyCode::F6) {
+    if input.text_input_blocking() || !keyboard.just_pressed(KeyCode::F6) {
         return;
     }
 

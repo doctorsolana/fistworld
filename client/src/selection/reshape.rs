@@ -21,7 +21,7 @@ pub fn reshape_selected(
         - i32::from(keys.just_pressed(KeyCode::Comma));
     if (width == 0 && turn == 0)
         || !combat.0
-        || input.ui_blocking()
+        || input.gameplay_blocking()
         || drag.formation
         || crate::hero::control::placement_armed(&placement)
     {

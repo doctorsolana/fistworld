@@ -57,7 +57,7 @@ pub(super) fn handle_navigation(
     >,
     mut viewports: Query<(&ComputedNode, &mut ScrollPosition), With<CardViewport>>,
 ) {
-    if !mode.0 || input.ui_blocking() {
+    if !mode.0 || input.gameplay_blocking() {
         return;
     }
     for (interaction, direction) in &buttons {

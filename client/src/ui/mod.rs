@@ -42,6 +42,7 @@ pub fn pointer_over_ui(blockers: &Query<&Interaction>) -> bool {
 }
 
 pub mod business_management;
+pub(crate) mod chat;
 mod button_motion;
 pub mod company_founding;
 pub mod debug_time_menu;
@@ -74,6 +75,7 @@ pub mod typography;
 pub mod world_map;
 
 pub use business_management::BusinessManagementPlugin;
+pub use chat::ChatPlugin;
 pub use company_founding::CompanyFoundingPlugin;
 pub use debug_time_menu::{DebugPerfSettings, DebugTimeMenuPlugin};
 pub use encyclopedia::EncyclopediaPlugin;

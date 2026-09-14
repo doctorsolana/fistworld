@@ -430,7 +430,7 @@ fn handle_actions(
     mut ledger: ResMut<EncyclopediaOpen>,
     mut ledger_guard: ResMut<ClickGuard>,
 ) {
-    if input.ui_blocking()
+    if input.gameplay_blocking()
         || opening.is_some_and(|opening| opening.is_active())
         || *mode != HudMode::Play
     {
@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn home_keeps_local_ownership_and_modal_gate() {
+    fn home_keeps_local_ownership_and_respects_modal_and_text_input() {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
@@ -541,6 +541,21 @@ mod tests {
         app.world_mut()
             .resource_mut::<InputState>()
             .hero_creator_open = false;
+        app.world_mut()
+            .resource_mut::<InputState>()
+            .text_input_captured = true;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset(KeyCode::Home);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Home);
+        app.update();
+        assert!(app.world().resource::<Selection>().is_empty());
+        assert!(!app.world().resource::<InputState>().ui_blocking());
+        app.world_mut()
+            .resource_mut::<InputState>()
+            .text_input_captured = false;
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .reset(KeyCode::Home);

@@ -41,6 +41,7 @@ inspected layouts, connected behavior, compressed art budget and portrait timing
 | `client/src/ui/hero_creator/preview.rs` | Main-view idle character diorama, framing from the actual preview pane and fixed facing |
 | `client/src/ui/hud/chrome.rs` | Small authored wood/brass frames and icon handles, with native text and input |
 | `client/src/ui/hud/journey.rs` | Shared exploration/combat bell and bounded recent notice drawer |
+| `client/src/ui/chat/` | Native T/Enter/Escape composer, bounded server chat history and fading previews |
 | `client/src/battalion_bar.rs` and `battalion_bar/navigation.rs` | Retained battalion cards, bounded paging and selection reveal |
 | `client/src/combat_mode.rs` | Compact combat status and optional Orders help |
 | `client/src/siege/controls.rs` | Selected siege controls and placement above mixed-army cards |
@@ -56,6 +57,13 @@ town when clicked, preserving the selected hero or army for the next order. The 
 is selected. Top-right contains the replicated clock and notice bell. Bottom-left shows
 the selected person or group; bottom-right opens the map and encyclopedia. Modal screens
 and the opening cinematic hide the HUD and its input rectangles.
+
+Server [chat](CHAT.md) opens with T, sends and closes with Enter, and preserves an
+unsent draft with Escape. It reuses the HUD wood panel above the selection card.
+`InputState::text_input_blocking()` owns typing and the closing frame;
+`gameplay_blocking()` combines that with modal ownership. Keep `ui_blocking()` for
+presentation visibility so typing does not hide the ordinary HUD. Gameplay and
+shortcut handlers must consult the combined guard without clearing physical keys.
 
 `selection_card.rs` displays actual health and one expansion control for the selected
 person's durable encyclopedia record. Detailed character and inventory information stays

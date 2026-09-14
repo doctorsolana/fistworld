@@ -69,7 +69,7 @@ fn handle_actions(
     >,
     mut notices: ResMut<Notices>,
 ) {
-    if !available(&input, opening.as_deref()) {
+    if input.text_input_blocking() || !available(&input, opening.as_deref()) {
         return;
     }
     for (interaction, action) in &buttons {

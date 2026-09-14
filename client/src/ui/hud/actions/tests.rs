@@ -129,3 +129,24 @@ fn leaving_god_stops_the_developer_boat_camera_watch() {
     app.update();
     assert!(!app.world().resource::<ImmigrantBoatWatch>().active());
 }
+
+#[test]
+fn text_input_keeps_god_mode_and_escape_keeps_the_boat_watch() {
+    let mut app = app();
+    app.init_resource::<Time>()
+        .init_resource::<GodNotice>()
+        .init_resource::<ImmigrantBoatWatch>()
+        .add_systems(Update, watch_immigrant_boat);
+    *app.world_mut().resource_mut::<HudMode>() = HudMode::God;
+    app.world_mut().resource_mut::<GodCapability>().0 = true;
+    app.world_mut().resource_mut::<ImmigrantBoatWatch>().waiting = true;
+    app.world_mut().resource_mut::<InputState>().text_input_captured = true;
+    press_g(&mut app);
+    assert_eq!(*app.world().resource::<HudMode>(), HudMode::God);
+    assert!(app.world().resource::<ImmigrantBoatWatch>().active());
+
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+    app.update();
+    assert!(app.world().resource::<ImmigrantBoatWatch>().active());
+    assert!(!app.world().resource::<InputState>().ui_blocking());
+}

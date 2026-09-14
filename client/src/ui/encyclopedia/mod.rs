@@ -23,6 +23,7 @@ pub mod state_sync;
 
 use bevy::prelude::*;
 
+use crate::input::InputState;
 use crate::states::GameState;
 use crate::ui::styles::{LIMEWASH, PLATE_RULE_SOFT};
 
@@ -281,6 +282,7 @@ fn sync_page_host(
 #[allow(clippy::too_many_arguments)]
 fn handle_page_back(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<InputState>,
     mouse: Res<ButtonInput<MouseButton>>,
     guard: Res<ClickGuard>,
     buttons: Query<&Interaction, (With<EncyclopediaPageBack>, Changed<Interaction>)>,
@@ -292,6 +294,9 @@ fn handle_page_back(
     mut selected_company: ResMut<companies::SelectedCompany>,
     mut tab: ResMut<EncyclopediaTab>,
 ) {
+    if input.text_input_blocking() {
+        return;
+    }
     let clicked = guard.0
         && mouse.just_pressed(MouseButton::Left)
         && buttons
@@ -780,6 +785,7 @@ mod page_tests {
         let mut keyboard = ButtonInput::<KeyCode>::default();
         keyboard.press(KeyCode::Escape);
         world.insert_resource(keyboard);
+        world.insert_resource(InputState::default());
         world.insert_resource(ButtonInput::<MouseButton>::default());
         world.insert_resource(ClickGuard(false));
         world.insert_resource(crate::ui::history::HistoryPanelTarget(Some(

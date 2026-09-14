@@ -532,9 +532,10 @@ fn handle_founding_buttons(
 
 fn handle_founding_name_input(
     mut events: MessageReader<KeyboardInput>,
+    input: Res<crate::input::InputState>,
     mut draft: ResMut<CompanyFoundingDraft>,
 ) {
-    if !draft.editing_name || draft.pending {
+    if input.text_input_blocking() || !draft.editing_name || draft.pending {
         // Drain so a stale buffer never types into the next edit.
         events.clear();
         return;

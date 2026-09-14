@@ -173,6 +173,7 @@ pub(super) fn update_click_guard(
 /// focus chrome own. Keyboard activation does not simulate a mouse press.
 #[derive(SystemParam)]
 pub(super) struct CreatorActivation<'w> {
+    input: Res<'w, InputState>,
     guard: Res<'w, CreatorClickGuard>,
     focus: Res<'w, InputFocus>,
     keyboard: Res<'w, ButtonInput<KeyCode>>,
@@ -180,6 +181,9 @@ pub(super) struct CreatorActivation<'w> {
 
 impl CreatorActivation<'_> {
     fn activated(&self, entity: Entity, cursor: &RelativeCursorPosition) -> bool {
+        if self.input.text_input_blocking() {
+            return false;
+        }
         let keyboard = [KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]
             .into_iter()
             .any(|key| self.keyboard.just_pressed(key));
@@ -298,12 +302,17 @@ pub(super) fn handle_confirm_buttons(
 /// It cannot reopen the creator; normal players must finish character creation.
 pub(super) fn handle_developer_skip(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     mut open: ResMut<HeroCreatorOpen>,
     capability: Res<GodCapability>,
     mut hud_mode: ResMut<HudMode>,
     mut cinematic: ResMut<crate::boat::OpeningCinematic>,
 ) {
-    if open.0 && capability.0 && keyboard.just_pressed(KeyCode::KeyG) {
+    if !input.text_input_blocking()
+        && open.0
+        && capability.0
+        && keyboard.just_pressed(KeyCode::KeyG)
+    {
         *hud_mode = HudMode::God;
         cinematic.cancel();
         open.0 = false;

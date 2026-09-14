@@ -9,6 +9,7 @@
 //! - May depend on `shared`.
 //! - Should not depend on gameplay domains.
 
+pub mod chat;
 pub mod connection;
 pub mod input;
 pub mod peer;

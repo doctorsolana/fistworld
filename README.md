@@ -35,6 +35,9 @@ arrival and reusable ship-navigation contract are documented in
   `TradeRouteId` relationships. A disconnected player
   can rejoin the same running server and re-adopt their live hero, cargo, coin and retinue;
   restarting the server intentionally begins a fresh world.
+- In-game server chat: **T** opens the composer, **Enter** sends and closes it,
+  **Escape** keeps the draft. Recent messages fade; reopen to read the connection's
+  last 100 messages. See [chat behavior and limits](docs/CHAT.md).
 - Battalion selection and frontage orders, flexible melee, mounted cavalry in the
   battle lab, archers with finite quivers,
   and animated catapults with authoritative splash damage. Army management handles

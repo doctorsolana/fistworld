@@ -24,7 +24,7 @@ pub(super) fn handle_selection_expand_button(
         ),
     >,
 ) {
-    if input.ui_blocking() {
+    if input.gameplay_blocking() {
         return;
     }
     for interaction in buttons.iter() {
@@ -60,7 +60,7 @@ pub(super) fn handle_mode_toggle_key(
         ),
     >,
 ) {
-    if !keyboard.just_pressed(KeyCode::KeyG) {
+    if input_state.text_input_blocking() || !keyboard.just_pressed(KeyCode::KeyG) {
         return;
     }
     // The developer console hides the HUD switch and owns the modal input
@@ -73,7 +73,7 @@ pub(super) fn handle_mode_toggle_key(
     {
         *mode = HudMode::Play;
         debug_menu.0 = false;
-    } else if !input_state.ui_blocking() && (*mode == HudMode::God || capability.0) {
+    } else if !input_state.gameplay_blocking() && (*mode == HudMode::God || capability.0) {
         *mode = mode.toggled();
         if *mode == HudMode::God {
             opening.cancel();
@@ -98,7 +98,7 @@ pub(super) fn handle_mode_chip_button(
 ) {
     // A key and mouse edge can arrive together after a long frame. Apply one
     // transition; an invisible HUD control cannot undo the console's exit.
-    if input.ui_blocking() || keyboard.just_pressed(KeyCode::KeyG) {
+    if input.gameplay_blocking() || keyboard.just_pressed(KeyCode::KeyG) {
         return;
     }
     for interaction in buttons.iter() {
@@ -122,7 +122,7 @@ pub(super) fn handle_warp_buttons(
     >,
     buttons: Query<(&Interaction, &WarpButton), Changed<Interaction>>,
 ) {
-    if *mode != HudMode::God || !capability.0 || input.ui_blocking() {
+    if *mode != HudMode::God || !capability.0 || input.gameplay_blocking() {
         return;
     }
     for (interaction, WarpButton(factor)) in buttons.iter() {
@@ -137,9 +137,13 @@ pub(super) fn handle_warp_buttons(
 /// Arm villager placement. Stays armed across clicks so a crowd can be dropped
 /// in one go; Escape or leaving god mode clears it.
 pub(super) fn handle_spawn_npc_button(
+    input: Res<InputState>,
     mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     buttons: Query<&Interaction, (With<SpawnNpcButton>, Changed<Interaction>)>,
 ) {
+    if input.gameplay_blocking() {
+        return;
+    }
     for interaction in buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
@@ -157,11 +161,15 @@ pub(super) fn handle_spawn_npc_button(
 /// Ask the server for one production-path immigrant voyage without disturbing
 /// the simulation speed the player deliberately selected.
 pub(super) fn handle_immigrant_boat_button(
+    input: Res<InputState>,
     mut watch: ResMut<ImmigrantBoatWatch>,
     mut notice: ResMut<GodNotice>,
     mut senders: Query<&mut MessageSender<DevCommand>, (With<crate::GameClient>, With<Connected>)>,
     buttons: Query<&Interaction, (With<SpawnImmigrantBoatButton>, Changed<Interaction>)>,
 ) {
+    if input.gameplay_blocking() {
+        return;
+    }
     for interaction in buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
@@ -188,6 +196,7 @@ pub(super) fn handle_immigrant_boat_button(
 pub(super) fn watch_immigrant_boat(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<InputState>,
     mode: Res<HudMode>,
     mut watch: ResMut<ImmigrantBoatWatch>,
     boats: Query<
@@ -200,7 +209,10 @@ pub(super) fn watch_immigrant_boat(
     const WATCH_ZOOM: f32 = 82.0;
     const WAIT_TIMEOUT_SECONDS: f32 = 30.0;
 
-    if watch.active() && (*mode != HudMode::God || keyboard.just_pressed(KeyCode::Escape)) {
+    if watch.active()
+        && (*mode != HudMode::God
+            || (!input.text_input_blocking() && keyboard.just_pressed(KeyCode::Escape)))
+    {
         watch.clear();
         notice.show("Stopped following the immigrant voyage");
     }
@@ -244,9 +256,13 @@ pub(super) fn watch_immigrant_boat(
 /// Arm settlement founding. Disarms the other placements: only one thing can be
 /// waiting on the next click.
 pub(super) fn handle_found_village_button(
+    input: Res<InputState>,
     mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     buttons: Query<&Interaction, (With<FoundVillageButton>, Changed<Interaction>)>,
 ) {
+    if input.gameplay_blocking() {
+        return;
+    }
     for interaction in buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
@@ -260,9 +276,13 @@ pub(super) fn handle_found_village_button(
 }
 
 pub(super) fn handle_spawn_catapult_button(
+    input: Res<InputState>,
     mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     buttons: Query<&Interaction, (With<SpawnCatapultButton>, Changed<Interaction>)>,
 ) {
+    if input.gameplay_blocking() {
+        return;
+    }
     for interaction in buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;

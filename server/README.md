@@ -32,6 +32,16 @@ retain their public region-scoped contract. Unclassified storage remains private
 `GoodsInventory`. Packet tests cover first spawn, later joins, authority loss and
 public storage. Changes to company/civic account privacy are a separate policy.
 
+`net/chat.rs` sends ephemeral server-wide plaintext messages only between accepted,
+currently connected accounts. Sender names come from the session registry. Each
+connection may send a burst of three messages, then one every two real seconds;
+simulation pause and speed changes do not refill this allowance. Requests are
+limited to 280 Unicode characters and 1,024 UTF-8 bytes, with controls rejected.
+Only four requests per connection are inspected per update; excess messages are
+discarded. A separate ordered reliable channel carries messages and private
+rejection feedback. Disconnect/account replacement clears chat state; the server
+keeps no history and never logs message bodies.
+
 ## World and village ownership
 
 `world/mod.rs` is an orchestration surface. Its principal modules are:

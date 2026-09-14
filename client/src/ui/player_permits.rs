@@ -673,6 +673,7 @@ fn ensure_permit_tray(
 
 fn update_permit_placement_controls(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     hit: Res<CursorTerrainHit>,
     mut placement: ResMut<WorldPlacementMode>,
     mut controls: ResMut<PermitPlacementControls>,
@@ -682,6 +683,9 @@ fn update_permit_placement_controls(
         controls.last_cursor = None;
         return;
     };
+    if input.gameplay_blocking() {
+        return;
+    }
     let cursor = hit.0.map(|hit| Vec2::new(hit.x, hit.z));
     if controls
         .last_cursor
@@ -966,6 +970,7 @@ fn plot_overlap_reason(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn predict_permit_placement(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     hit: Res<CursorTerrainHit>,
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
     placement: Res<WorldPlacementMode>,
@@ -995,6 +1000,9 @@ fn predict_permit_placement(
         preview.value = None;
         return;
     };
+    if input.gameplay_blocking() {
+        return;
+    }
     let (Some(cursor_hit), Some(terrain)) = (hit.0, terrain.as_deref()) else {
         preview.value = None;
         return;
@@ -1152,7 +1160,7 @@ fn submit_permit_placement(
     mut notice: ResMut<PermitNotice>,
 ) {
     if !mouse.just_pressed(MouseButton::Left)
-        || input.ui_blocking()
+        || input.gameplay_blocking()
         || crate::ui::pointer_over_ui(&blockers)
         || controls.submission_pending
     {
@@ -1756,6 +1764,48 @@ fn cleanup_permit_ui(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_input_does_not_rotate_or_cycle_an_armed_permit() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(crate::input::InputState {
+                text_input_captured: true,
+                ..default()
+            })
+            .init_resource::<CursorTerrainHit>()
+            .init_resource::<PermitPlacementControls>()
+            .insert_resource(WorldPlacementMode::Permit {
+                permit: PlayerPermit {
+                    id: shared::components::PermitId(1),
+                    settlement: SettlementId(1),
+                    kind: SettlementBuildingKind::House,
+                    fee_escrow: 0,
+                    purchased_day: 1,
+                    company: None,
+                },
+                settlement_name: "Brackwater".into(),
+                rotation: 0.0,
+            })
+            .add_systems(Update, update_permit_placement_controls);
+        for key in [KeyCode::Tab, KeyCode::KeyR] {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        }
+        app.update();
+        let WorldPlacementMode::Permit { rotation, .. } = app.world().resource::<WorldPlacementMode>() else {
+            panic!("typing must preserve the permit");
+        };
+        assert_eq!(*rotation, 0.0);
+        assert_eq!(app.world().resource::<PermitPlacementControls>().snap_choice, 0);
+
+        app.world_mut().resource_mut::<crate::input::InputState>().text_input_captured = false;
+        app.update();
+        let WorldPlacementMode::Permit { rotation, .. } = app.world().resource::<WorldPlacementMode>() else {
+            panic!("rotation must preserve the permit");
+        };
+        assert_eq!(*rotation, std::f32::consts::FRAC_PI_2);
+        assert_eq!(app.world().resource::<PermitPlacementControls>().snap_choice, 1);
+    }
 
     #[test]
     fn resource_dependent_plots_show_their_land_quality() {

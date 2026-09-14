@@ -62,6 +62,38 @@ pub fn placement_armed(mode: &WorldPlacementMode) -> bool {
     mode.is_armed()
 }
 
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[test]
+    fn chat_closing_escape_preserves_armed_world_placement() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(InputState {
+                text_input_captured: true,
+                ..default()
+            })
+            .init_resource::<CursorTerrainHit>()
+            .insert_resource(HudMode::God)
+            .insert_resource(GodCapability(true))
+            .insert_resource(WorldPlacementMode::FoundSettlement)
+            .init_resource::<crate::ui::hud::GodNotice>()
+            .add_systems(Update, handle_world_clicks);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(app.world().resource::<WorldPlacementMode>().is_found_settlement());
+        app.world_mut().resource_mut::<InputState>().text_input_captured = false;
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset(KeyCode::Escape);
+        keys.press(KeyCode::Escape);
+        drop(keys);
+        app.update();
+        assert!(!app.world().resource::<WorldPlacementMode>().is_armed());
+    }
+}
+
 /// The local player's hero entity, if it has replicated in.
 pub fn local_hero_entity(heroes: &Query<(Entity, &Hero)>, local: &LocalPeerId) -> Option<Entity> {
     heroes
@@ -95,7 +127,10 @@ pub(super) fn handle_world_clicks(
     // Escape cancels an armed placement. (NOT right-click: RMB-drag is the
     // camera orbit, and cancelling on it silently killed every placement
     // that involved looking around first.)
-    if placement.is_armed() && keyboard.just_pressed(KeyCode::Escape) {
+    if placement.is_armed()
+        && !input_state.text_input_blocking()
+        && keyboard.just_pressed(KeyCode::Escape)
+    {
         if matches!(*placement, WorldPlacementMode::Permit { .. }) {
             notice.show("Placement closed — your permit is saved");
         }
@@ -113,7 +148,7 @@ pub(super) fn handle_world_clicks(
     if dev_placement && (!capability.0 || *mode != HudMode::God) {
         *placement = WorldPlacementMode::None;
     }
-    if !mouse.just_pressed(MouseButton::Left) || input_state.ui_blocking() {
+    if !mouse.just_pressed(MouseButton::Left) || input_state.gameplay_blocking() {
         return;
     }
     // A click on a HUD surface must never fall through to the world.

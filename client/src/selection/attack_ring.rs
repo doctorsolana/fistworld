@@ -146,7 +146,7 @@ pub(crate) fn find_enemy_under_cursor(
     if !mode.0 {
         return None;
     }
-    if input_state.ui_blocking() || crate::ui::pointer_over_ui(ui_blockers) {
+    if input_state.gameplay_blocking() || crate::ui::pointer_over_ui(ui_blockers) {
         return None;
     }
     let ray = ray.0?;

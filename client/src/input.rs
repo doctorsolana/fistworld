@@ -1,15 +1,23 @@
-//! UI modal state.
+//! UI modal and gameplay input ownership.
 //!
 //! The FPS movement/look input pipeline died with the player body — camera control now
 //! lives in [`crate::camera_rts`]. What survives is the modal mutex: several KEEP-list UI
-//! panels set their own flag here, and anything that reacts to input checks
-//! [`InputState::ui_blocking`] so the commander camera does not pan while a menu is open.
+//! panels set their own flag here. Gameplay checks [`InputState::gameplay_blocking`]
+//! so the commander camera cannot pan while a menu or text composer owns input.
+//! HUD visibility keeps using [`InputState::ui_blocking`], allowing chat and the HUD
+//! to remain visible together.
 
 use bevy::prelude::*;
 
 /// Which UI surfaces are currently capturing input.
 #[derive(Resource, Default)]
 pub struct InputState {
+    /// True while the in-game text composer owns keyboard focus.
+    pub text_input_active: bool,
+    /// The text composer owned input during this frame, including the frame in
+    /// which Enter or Escape closed it. Reset by the text-input owner in PreUpdate,
+    /// never by an individual gameplay consumer.
+    pub text_input_captured: bool,
     /// True while any surface created by the shared modal foundation exists.
     pub modal_open: bool,
     /// True when pause menu is open.
@@ -32,6 +40,16 @@ pub struct InputState {
 }
 
 impl InputState {
+    /// Text ownership is independent of modal visibility. Keep the closing frame
+    /// captured so its key and pointer edges cannot also become gameplay actions.
+    pub(crate) fn text_input_blocking(&self) -> bool {
+        self.text_input_active || self.text_input_captured
+    }
+
+    pub(crate) fn gameplay_blocking(&self) -> bool {
+        self.ui_blocking() || self.text_input_blocking()
+    }
+
     pub(crate) fn ui_blocking(&self) -> bool {
         self.modal_open
             || self.pause_menu_open

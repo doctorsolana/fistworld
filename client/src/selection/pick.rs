@@ -568,7 +568,7 @@ pub(super) fn pick_on_left_click(
         // A press that starts on the UI, or during an armed placement, can never
         // become a selection. Latched AT PRESS rather than re-tested at release,
         // so press-on-HUD then drag into the world cannot marquee the world.
-        let blocked = input_state.ui_blocking()
+        let blocked = input_state.gameplay_blocking()
             || placement_armed(&placement)
             || crate::ui::pointer_over_ui(&ui_blockers);
         *drag = DragBox {
@@ -579,6 +579,10 @@ pub(super) fn pick_on_left_click(
     }
 
     if mouse.pressed(MouseButton::Left) {
+        if input_state.gameplay_blocking() {
+            drag.start = None;
+            drag.active = false;
+        }
         if let (Some(start), Some(now)) = (drag.start, cursor) {
             drag.current = now;
             if start.distance(now) > BOX_MIN_PX {
@@ -596,7 +600,7 @@ pub(super) fn pick_on_left_click(
     *drag = DragBox::default();
 
     if !had_press
-        || input_state.ui_blocking()
+        || input_state.gameplay_blocking()
         || placement_armed(&placement)
         || crate::ui::pointer_over_ui(&ui_blockers)
     {

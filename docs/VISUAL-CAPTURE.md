@@ -1700,6 +1700,47 @@ handlers, inspect local draft edits across a changed company snapshot, and retur
 through real Back/Cancel controls. Inspect each PNG, `.capture.json` and `.nested.json`;
 these offline fixtures do not validate successful server transactions.
 
+## Connected chat
+
+`capture/chat_session.py` runs two real clients against a fresh local Village Lab
+server on an available UDP port. Both players join through the ordinary launcher
+and creator. It uses native keyboard/text events and the production reliable
+channel; the driver never inserts chat messages directly into a UI fixture.
+
+```sh
+cargo build -p server
+cargo build -p client --profile playtest --bin client
+python3 capture/chat_session.py --out logs/chat-review
+```
+
+The output directory must be new. The driver stops only its own processes. It
+verifies T opening without an extra letter, Enter sending/closing, Escape draft
+retention, Unicode editing, identical ordered delivery to both clients, gameplay
+shortcut suppression, faded previews with retained history, and recased-account
+reconnect without history replay. `FocusWindow` requests actual native window
+focus through Bevy/Winit before operating either client; chat still applies its
+normal window-focus rules. `HoldKey` exercises movement input over multiple frames.
+
+Inspect the composed PNGs and `.capture.json` sidecars at 1600×1000 and 1280×720,
+including open/closed chat, wrapped text and combat mode. `report.json` records
+semantic assertions, and `.session.json` includes read-only chat diagnostics.
+The driver also captures a 236-character draft at its beginning and end, and a
+240-character unbroken word in both the received preview and full scrollback.
+Verify each preview clips its own text; clipping only the panel root can still
+allow adjacent messages to overlap. Idle and fully faded captures must have no
+chat panel or T hint.
+Server rendering/readbacks make this a functional/visual check, not an FPS test.
+
+The 2026-09-15 review is in ignored `logs/chat-session-20260914/pass-3/`:
+89 seconds, two accepted accounts, 13 composed captures and a passing report.
+Actual captured sizes are 1280×720, 1398×866 and 1600×1000 (the first client's
+native window size changed during the run). Inspected previews have separate
+complete lines; long drafts stay within their field, unbroken history wraps,
+idle/faded views have no chat hint, and recased reconnect acknowledges new sends.
+The final workspace all-target check and 12 focused chat tests passed; the full
+client suite passed 541 tests before the final preview-only clipping correction.
+Shared validation/wire tests passed 4 and real server packet tests passed 9.
+
 ## Connected NPC movement and porter regression
 
 `capture/construction_delivery_session.py` observes ordinary self-supplied

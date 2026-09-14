@@ -11,16 +11,20 @@ pub(super) fn toggle_map(
     if game_state.get() != &GameState::Playing {
         return;
     }
-    if keyboard.just_pressed(KeyCode::KeyM) && (map_open.0 || !input_state.ui_blocking()) {
+    if !input_state.text_input_blocking()
+        && keyboard.just_pressed(KeyCode::KeyM)
+        && (map_open.0 || !input_state.ui_blocking())
+    {
         map_open.0 = !map_open.0;
     }
 }
 
 pub(super) fn close_map_on_escape(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<InputState>,
     mut map_open: ResMut<MapOpen>,
 ) {
-    if map_open.0 && keyboard.just_pressed(KeyCode::Escape) {
+    if !input.text_input_blocking() && map_open.0 && keyboard.just_pressed(KeyCode::Escape) {
         map_open.0 = false;
     }
 }

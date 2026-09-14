@@ -81,7 +81,7 @@ pub fn draw_formation_preview(
         .zip(hit.0)
         .and_then(|(a, b)| frontage_from_drag(a, b));
     let visible = drag.formation
-        && !input.ui_blocking()
+        && !input.gameplay_blocking()
         && placement.is_some()
         && selection
             .entities

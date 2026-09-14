@@ -351,7 +351,7 @@ fn open_nearby_market_on_interact(
     mut selected: ResMut<SelectedPlace>,
     mut entry: ResMut<SelectedPlaceEntry>,
 ) {
-    if !keyboard.just_pressed(KeyCode::KeyE) || input.ui_blocking() {
+    if !keyboard.just_pressed(KeyCode::KeyE) || input.gameplay_blocking() {
         return;
     }
     let Some(local) = local else { return };

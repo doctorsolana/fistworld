@@ -102,9 +102,10 @@ pub struct PerfDropMonitor {
 /// Toggle debug gizmos / trajectory drawing with F4.
 pub fn handle_toggle_debug_mode(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     mut debug_mode: ResMut<DebugGizmoMode>,
 ) {
-    if keyboard.just_pressed(KeyCode::F4) {
+    if !input.text_input_blocking() && keyboard.just_pressed(KeyCode::F4) {
         debug_mode.0 = !debug_mode.0;
         info!("Debug gizmos: {}", if debug_mode.0 { "ON" } else { "OFF" });
     }
@@ -112,9 +113,10 @@ pub fn handle_toggle_debug_mode(
 
 pub fn handle_toggle_perf_overlay(
     keyboard: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::input::InputState>,
     mut overlay: ResMut<PerfOverlayEnabled>,
 ) {
-    if keyboard.just_pressed(KeyCode::F3) {
+    if !input.text_input_blocking() && keyboard.just_pressed(KeyCode::F3) {
         overlay.0 = !overlay.0;
         info!("Perf overlay: {}", if overlay.0 { "ON" } else { "OFF" });
     }
