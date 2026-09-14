@@ -412,6 +412,14 @@ pub(super) fn desired_body_animation(
             !moving,
         );
     }
+    if !moving && super::attachments::is_manual_work(activity) {
+        let clip = match activity {
+            Some(CharacterActivity::Chopping) => anim.chop,
+            Some(CharacterActivity::Farming) => anim.harvest,
+            _ => anim.build,
+        };
+        return (clip.or(anim.idle), 1.0, false);
+    }
     if carrying {
         return (
             anim.carry.or(anim.idle),

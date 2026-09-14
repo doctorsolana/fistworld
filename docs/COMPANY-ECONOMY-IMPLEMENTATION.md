@@ -269,6 +269,41 @@ than destroying money or guessing a recipient.
   on the purchase day. Owners raise prices while scarce and selling through, and make
   strategy-bounded markdowns when stock grows much faster than sales. These are private
   decisions rather than municipal price controls.
+- Price competition uses actual stocked rival listings. A historical clearance
+  remains a last-sale observation, but cannot cancel scarcity increases after
+  that stock is gone. An empty autonomous site can quote a small restart batch
+  from its real requested volume, recipe inputs, site capacity and one worker's
+  payroll; it only makes that cost-based correction when recorded buyer budgets
+  cover the offer. This prevents a six-unit order being priced as though a full
+  factory's hypothetical output could pay the wage.
+- The market records funded unfilled quantities with their conservative shared
+  price ceiling. The lowest funded ceiling wins within a day's aggregate, so
+  rich buyers cannot make cheap rejected orders appear more valuable. Current
+  and previous-day observations expire normally; they are signals, not escrow
+  or guaranteed future purchases. Local operating plans value them at the
+  producer's published ask and retain the existing gradual staffing, physical
+  production and ordinary payments. No demand, unaffordable demand or enough
+  unsold stock still permits contraction. Explicit regional tenders keep their
+  separate funded contract ceilings.
+  Retrying household buyers replace their own outstanding claims rather than
+  repeatedly adding them. A market ledger epoch invalidates those handles when
+  history closes the day, independently of the simulation-clock update order.
+- Staffed suppliers share shortage forecasts with exact stable remainders, so
+  the sum of their claims cannot multiply the observed order. If their rated
+  capacity at affordable bids and actual assigned-worker count
+  cannot cover the funded order, one additional idle supplier with the cheapest
+  viable restart offer may respond; stable building identity breaks equal-price
+  ties independently of entity iteration order. Unstaffed competitors do not
+  fragment one order into five unprofitable pieces. Price review and staffing
+  use the same bounded daily allocation; each firm still decides its own
+  profitable output and payroll, and actual buyers choose physical listings.
+  Empty advertised jobs and unaffordable fixed asks do not block entry. A
+  profitable owner-set fixed price remains eligible for automatic staffing
+  without allowing the manager to change that price.
+- Business review skips its settlement/company/workforce index construction on
+  ticks where all sites have already reviewed the current day. A newly created
+  site still receives its first review that day; the guard does not require a
+  per-person economic routine or a wall-clock timer.
 - Company Master attributes influence automatic strategic posture. Once a company exists,
   its reviewed posture controls permit investment; founder attributes and deterministic
   bias still distinguish first-time entrepreneurs and otherwise comparable opportunities.

@@ -531,10 +531,15 @@ fn failed_household_shop_routes_release_or_retry_without_losing_food() {
             PlayerPosition(home_position),
             PlayerRotation(0.0),
             Household::default(),
-            HouseholdEconomy::default(),
+            shared::components::BuildingId(70),
             GoodsInventory::new(shared::economy::capacity::HOUSE),
         ))
         .id();
+
+    let household = shared::components::HouseholdId(71);
+    let account = app.world_mut().spawn((household, shared::components::HouseholdMembers {
+        resident_ids: Vec::new(), settlement: settlement_id, dwelling: Some(shared::components::BuildingId(70)),
+    }, HouseholdEconomy::default())).id();
 
     let hall_entrance = SettlementBuildingKind::Hall.entrance_position(hall_position, 0.0);
     let outbound = app
@@ -545,6 +550,9 @@ fn failed_household_shop_routes_release_or_retry_without_losing_food() {
             CharacterActivity::Idle,
             GoodsInventory::new(shared::economy::capacity::VILLAGER),
             HouseholdShoppingRoutine {
+                account,
+                household,
+                cargo: [0; Good::COUNT],
                 home,
                 hall,
                 counter: hall_entrance,
@@ -567,6 +575,9 @@ fn failed_household_shop_routes_release_or_retry_without_losing_food() {
             CharacterActivity::Idle,
             paid_food,
             HouseholdShoppingRoutine {
+                account,
+                household,
+                cargo: [0; Good::COUNT],
                 home,
                 hall,
                 counter: hall_entrance,

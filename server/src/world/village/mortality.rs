@@ -10,8 +10,9 @@ use std::collections::{HashMap, VecDeque};
 use super::*;
 
 use shared::components::{
-    CharacterAffiliation, CommandedBy, DeathCause, Health, Hero, LivesAt, OwnedBy, PersonId,
-    ResidentOf, STARVATION_DAMAGE_PER_DAY,
+    CharacterAffiliation, CommandedBy, DeathCause, Health, Hero, HouseholdId, HouseholdMember,
+    HouseholdMembers, LivesAt, OccupiedByHousehold, OwnedBy, PersonId, ResidentOf,
+    STARVATION_DAMAGE_PER_DAY,
 };
 use shared::economy::{
     permit_price, BusinessForSale, BusinessLiquidation, BusinessSaleReason, BusinessState,
@@ -284,7 +285,7 @@ struct DyingCharacter {
     affiliation: CharacterAffiliation,
     attributes: CharacterAttributes,
     commanded_by: Option<String>,
-    home: Option<shared::components::BuildingId>,
+    household: Option<HouseholdId>,
     settlement: Option<shared::components::SettlementId>,
     civic_job: Option<shared::components::CivicEmployment>,
     wallet: u64,
@@ -321,7 +322,7 @@ pub fn process_character_deaths(
             &Health,
             Option<&Nutrition>,
             Option<&CommandedBy>,
-            Option<&LivesAt>,
+            Option<&HouseholdMember>,
             Option<&ResidentOf>,
             Option<&shared::components::CivicEmployment>,
             Option<&Wallet>,
@@ -340,13 +341,22 @@ pub fn process_character_deaths(
         &shared::components::CompanyOwnership,
         Option<&shared::components::CompanyShareMarket>,
     )>,
-    permit_ledgers: Query<&shared::components::PlayerPermitLedger>,
+    mut estates: (
+        Query<&shared::components::PlayerPermitLedger>,
+        Query<(
+            Entity,
+            &HouseholdId,
+            &mut HouseholdMembers,
+            &mut HouseholdEconomy,
+        )>,
+    ),
     mut houses: Query<
         (
+            Entity,
             &shared::components::BuildingId,
             &mut Household,
-            &mut HouseholdEconomy,
             &mut GoodsInventory,
+            Option<&OccupiedByHousehold>,
         ),
         (With<SettlementBuilding>, Without<CharacterKind>),
     >,
@@ -377,6 +387,7 @@ pub fn process_character_deaths(
     mut hero_index: Option<ResMut<crate::player::hero::HeroIndex>>,
 ) {
     let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    let (permit_ledgers, households) = &mut estates;
     let living_people: HashMap<PersonId, String> = living_characters
         .iter()
         .filter(|(_, _, health)| !health.is_dead())
@@ -396,7 +407,7 @@ pub fn process_character_deaths(
                 _,
                 nutrition,
                 commanded_by,
-                home,
+                household,
                 resident_of,
                 civic_job,
                 wallet,
@@ -417,7 +428,7 @@ pub fn process_character_deaths(
                     affiliation: *affiliation,
                     attributes: *attributes,
                     commanded_by: commanded_by.map(|account| account.0.clone()),
-                    home: home.map(|home| home.0),
+                    household: household.map(|household| household.0),
                     settlement: resident_of.map(|resident| resident.0),
                     civic_job: civic_job.copied(),
                     wallet: wallet.map_or(0, |wallet| wallet.balance()),
@@ -539,45 +550,70 @@ pub fn process_character_deaths(
             }
         }
 
-        // The home receives the liquid estate and as much carried property as
-        // its bounded store accepts. Any overflow falls through to the hall.
+        // Household identity owns the liquid estate even while its members
+        // have no dwelling. Physical property can enter only its current pantry;
+        // an absent/full pantry leaves the remainder for the settlement estate.
         let mut remaining_goods = dead.goods;
         let mut inherited_at_home = false;
-        if let Some(home_id) = dead.home {
-            if let Some((_, mut household, mut economy, mut pantry)) = houses
+        let mut estate_settlement = dead.settlement;
+        if let Some(household_id) = dead.household {
+            if let Some((household_entity, _, mut members, mut economy)) = households
                 .iter_mut()
-                .find(|(building_id, ..)| **building_id == home_id)
+                .find(|(_, candidate, ..)| **candidate == household_id)
             {
-                household.resident_ids.retain(|person| *person != dead.id);
-                household.residents.retain(|name| name != &dead.name);
+                members.resident_ids.retain(|person| *person != dead.id);
+                estate_settlement = Some(members.settlement);
                 if economy.shopper == Some(dead.id) {
                     economy.shopper = None;
                 }
-                if household.resident_ids.is_empty() {
-                    // An empty cabin is not a legal person. Keeping its shared
-                    // purse and pantry indefinitely trapped most circulating
-                    // coin and food after a starvation cascade. Fold the final
-                    // household estate into the same local treasury/hall path
-                    // used for an unhoused resident instead.
-                    estate_cash = estate_cash.saturating_add(std::mem::take(&mut economy.pennies));
-                    economy.shopper = None;
-                    for good in Good::ALL {
-                        remaining_goods[good.index()] = remaining_goods[good.index()]
-                            .saturating_add(pantry.remove(good, u32::MAX));
+                let final_member = members.resident_ids.is_empty();
+                if final_member {
+                    business_events
+                        .reroute_retired_household_sales(household_id, members.settlement);
+                    for (_, _, _, _, mut market) in halls.iter_mut() {
+                        market.transfer_seller(
+                            MarketSeller::Household(household_id),
+                            MarketSeller::Treasury(members.settlement),
+                        );
                     }
+                    estate_cash = estate_cash.saturating_add(std::mem::take(&mut economy.pennies));
                 } else {
                     economy.pennies = economy.pennies.saturating_add(estate_cash);
                     estate_cash = 0;
-                    for good in Good::ALL {
-                        let accepted = pantry.add(good, remaining_goods[good.index()]);
-                        remaining_goods[good.index()] -= accepted;
-                    }
                     inherited_at_home = true;
+                }
+                if let Some((house, _, mut roster, mut pantry, _)) =
+                    houses.iter_mut().find(|(_, building_id, _, _, occupant)| {
+                        members.dwelling == Some(**building_id)
+                            && occupant.is_some_and(|occupant| occupant.0 == household_id)
+                    })
+                {
+                    roster.resident_ids.retain(|person| *person != dead.id);
+                    roster.residents = roster
+                        .resident_ids
+                        .iter()
+                        .filter_map(|person| living_people.get(person).cloned())
+                        .collect();
+                    for good in Good::ALL {
+                        if final_member {
+                            remaining_goods[good.index()] = remaining_goods[good.index()]
+                                .saturating_add(pantry.remove(good, u32::MAX));
+                        } else {
+                            let accepted = pantry.add(good, remaining_goods[good.index()]);
+                            remaining_goods[good.index()] -= accepted;
+                        }
+                    }
+                    if final_member {
+                        commands.entity(house).remove::<OccupiedByHousehold>();
+                    }
+                }
+                if final_member {
+                    commands.entity(household_entity).despawn();
                 }
             }
         }
 
-        if let Some(settlement_id) = dead.settlement {
+        if let Some(settlement_id) = estate_settlement {
             if let Some((_, mut settlement, mut hall, _, mut market)) = halls
                 .iter_mut()
                 .find(|(candidate, ..)| **candidate == settlement_id)
@@ -1365,6 +1401,71 @@ mod tests {
     }
 
     #[test]
+    fn a_household_without_a_dwelling_keeps_its_survivors_liquid_estate() {
+        let mut app = App::new();
+        app.init_resource::<MortalityLedger>()
+            .init_resource::<BusinessEventQueue>()
+            .init_resource::<CompanyEscrowRefundQueue>()
+            .add_systems(Update, process_character_deaths);
+        app.world_mut().spawn(WorldTime::new_default());
+        let settlement_id = shared::components::SettlementId(80);
+        let household_id = HouseholdId(81);
+        let dead_id = PersonId(82);
+        let survivor_id = PersonId(83);
+        let household = app
+            .world_mut()
+            .spawn((
+                household_id,
+                HouseholdMembers {
+                    resident_ids: vec![dead_id, survivor_id],
+                    settlement: settlement_id,
+                    dwelling: None,
+                },
+                HouseholdEconomy {
+                    pennies: 5 * PENNIES_PER_COIN,
+                    shopper: Some(dead_id),
+                    ..default()
+                },
+            ))
+            .id();
+        let dead = app
+            .world_mut()
+            .spawn((
+                dead_id,
+                HouseholdMember(household_id),
+                CharacterName("Alda".into()),
+                CharacterKind::Villager,
+                CharacterAffiliation::default(),
+                CharacterAttributes::default(),
+                Health {
+                    current: 0.0,
+                    ..default()
+                },
+                ResidentOf(settlement_id),
+                Wallet::new(3 * PENNIES_PER_COIN),
+            ))
+            .id();
+        app.world_mut().spawn((
+            survivor_id,
+            HouseholdMember(household_id),
+            CharacterName("Borin".into()),
+            CharacterKind::Villager,
+            Health::default(),
+        ));
+
+        app.update();
+        app.update();
+
+        assert!(app.world().get_entity(dead).is_err());
+        let members = app.world().get::<HouseholdMembers>(household).unwrap();
+        assert_eq!(members.resident_ids, vec![survivor_id]);
+        assert_eq!(members.dwelling, None);
+        let economy = app.world().get::<HouseholdEconomy>(household).unwrap();
+        assert_eq!(economy.pennies, 8 * PENNIES_PER_COIN);
+        assert_eq!(economy.shopper, None);
+    }
+
+    #[test]
     fn final_household_death_returns_the_shared_estate_to_the_settlement() {
         let mut app = App::new();
         app.init_resource::<MortalityLedger>()
@@ -1392,6 +1493,30 @@ mod tests {
             .id();
         let mut pantry = GoodsInventory::new(100);
         pantry.add(Good::Bread, 2);
+        let household_id = HouseholdId(11);
+        app.world_mut()
+            .get_mut::<GoodsInventory>(hall)
+            .unwrap()
+            .add(Good::Bread, 1);
+        app.world_mut()
+            .get_mut::<MootMarket>(hall)
+            .unwrap()
+            .consign(MarketSeller::Household(household_id), Good::Bread, 1, 10);
+        let household_entity = app
+            .world_mut()
+            .spawn((
+                household_id,
+                HouseholdMembers {
+                    resident_ids: vec![dead_id],
+                    settlement: settlement_id,
+                    dwelling: Some(house_id),
+                },
+                HouseholdEconomy {
+                    pennies: 5 * PENNIES_PER_COIN,
+                    ..default()
+                },
+            ))
+            .id();
         let house = app
             .world_mut()
             .spawn((
@@ -1408,10 +1533,7 @@ mod tests {
                     resident_ids: vec![dead_id],
                     residents: vec!["Last Ada".into()],
                 },
-                HouseholdEconomy {
-                    pennies: 5 * PENNIES_PER_COIN,
-                    ..default()
-                },
+                OccupiedByHousehold(household_id),
                 pantry,
             ))
             .id();
@@ -1433,6 +1555,7 @@ mod tests {
                 ..default()
             },
             LivesAt(house_id),
+            HouseholdMember(household_id),
             ResidentOf(settlement_id),
             Wallet::new(3 * PENNIES_PER_COIN),
             carried,
@@ -1446,10 +1569,8 @@ mod tests {
             .unwrap()
             .resident_ids
             .is_empty());
-        assert_eq!(
-            app.world().get::<HouseholdEconomy>(house).unwrap().pennies,
-            0,
-        );
+        assert!(app.world().get_entity(household_entity).is_err());
+        assert!(app.world().get::<OccupiedByHousehold>(house).is_none());
         assert_eq!(
             app.world()
                 .get::<GoodsInventory>(house)
@@ -1462,8 +1583,17 @@ mod tests {
             9 * PENNIES_PER_COIN,
         );
         let hall_store = app.world().get::<GoodsInventory>(hall).unwrap();
-        assert_eq!(hall_store.amount(Good::Bread), 2);
+        assert_eq!(hall_store.amount(Good::Bread), 3);
         assert_eq!(hall_store.amount(Good::Flour), 1);
+        let market = app.world().get::<MootMarket>(hall).unwrap();
+        assert_eq!(
+            market.seller_total_listed_units(MarketSeller::Household(household_id)),
+            0
+        );
+        assert_eq!(
+            market.seller_listed_units(MarketSeller::Treasury(settlement_id), Good::Bread),
+            1
+        );
     }
 
     #[test]
@@ -1510,6 +1640,22 @@ mod tests {
 
         let mut carried = GoodsInventory::new(8);
         assert_eq!(carried.add(Good::Wood, 2), 2);
+        let household_id = HouseholdId(house_id.0);
+        let household_entity = app
+            .world_mut()
+            .spawn((
+                household_id,
+                HouseholdMembers {
+                    resident_ids: vec![dead_id, buyer_id],
+                    settlement: settlement_id,
+                    dwelling: Some(house_id),
+                },
+                HouseholdEconomy {
+                    pennies: PENNIES_PER_COIN,
+                    ..default()
+                },
+            ))
+            .id();
         let dead = app
             .world_mut()
             .spawn((
@@ -1529,6 +1675,7 @@ mod tests {
                     total_missed_meals: 10,
                 },
                 LivesAt(house_id),
+                HouseholdMember(household_id),
                 ResidentOf(settlement_id),
                 shared::components::EmployedAt(business_id),
                 Wallet::new(7 * PENNIES_PER_COIN),
@@ -1553,10 +1700,7 @@ mod tests {
                     resident_ids: vec![dead_id, buyer_id],
                     residents: vec!["Alda".to_string(), "Borin".to_string()],
                 },
-                HouseholdEconomy {
-                    pennies: PENNIES_PER_COIN,
-                    ..default()
-                },
+                OccupiedByHousehold(household_id),
                 GoodsInventory::new(100),
             ))
             .id();
@@ -1586,7 +1730,9 @@ mod tests {
             .world_mut()
             .spawn((
                 buyer_id,
+                HouseholdMember(household_id),
                 CharacterName("Borin".to_string()),
+                CharacterKind::Villager,
                 ResidentOf(settlement_id),
                 VillagerIntent::Resident { settlement },
                 Wallet::new(buyer_starting_money),
@@ -1613,7 +1759,10 @@ mod tests {
         assert_eq!(household.resident_ids, vec![buyer_id]);
         assert_eq!(household.residents, vec!["Borin"]);
         assert_eq!(
-            app.world().get::<HouseholdEconomy>(house).unwrap().pennies,
+            app.world()
+                .get::<HouseholdEconomy>(household_entity)
+                .unwrap()
+                .pennies,
             8 * PENNIES_PER_COIN
         );
         assert_eq!(

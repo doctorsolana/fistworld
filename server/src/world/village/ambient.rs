@@ -578,7 +578,10 @@ pub fn run_ambient_routines(
             With<MootMealRoutine>,
             With<TradeRouteRoutine>,
             Or<(With<TavernVisitRoutine>, With<TavernWorkerRoutine>)>,
-            With<crate::world::settlement_development::CivicHallBuilderRoutine>,
+            Or<(
+                With<crate::world::settlement_development::CivicHallBuilderRoutine>,
+                With<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
+            )>,
             // The combined Moot Steward waits inside the hall between
             // collections. An unhoused founding steward is still on duty and
             // must not receive an ambient roadside order that fights the

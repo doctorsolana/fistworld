@@ -552,6 +552,7 @@ pub fn update_person_simulation_lod(
             (
                 Has<ConstructionMaterialRoutine>,
                 Has<crate::world::settlement_development::CivicHallBuilderRoutine>,
+                Has<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
                 Has<RoadBuilderRoutine>,
                 Has<MarketCollectionRoutine>,
                 Has<InternalDeliveryRoutine>,
@@ -580,6 +581,7 @@ pub fn update_person_simulation_lod(
             (
                 Has<ConstructionMaterialRoutine>,
                 Has<crate::world::settlement_development::CivicHallBuilderRoutine>,
+                Has<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
                 Has<RoadBuilderRoutine>,
                 Has<MarketCollectionRoutine>,
                 Has<InternalDeliveryRoutine>,
@@ -611,6 +613,7 @@ pub fn update_person_simulation_lod(
             (
                 Has<ConstructionMaterialRoutine>,
                 Has<crate::world::settlement_development::CivicHallBuilderRoutine>,
+                Has<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
                 Has<RoadBuilderRoutine>,
                 Has<MarketCollectionRoutine>,
                 Has<InternalDeliveryRoutine>,
@@ -648,6 +651,7 @@ pub fn update_person_simulation_lod(
             (
                 construction,
                 civic_construction,
+                house_construction,
                 road,
                 market,
                 internal,
@@ -677,6 +681,7 @@ pub fn update_person_simulation_lod(
                 strategic.is_some(),
                 construction
                     || civic_construction
+                    || house_construction
                     || road
                     || market
                     || internal
@@ -706,6 +711,7 @@ pub fn update_person_simulation_lod(
             (
                 construction,
                 civic_construction,
+                house_construction,
                 road,
                 market,
                 internal,
@@ -735,6 +741,7 @@ pub fn update_person_simulation_lod(
                 strategic.is_some(),
                 construction
                     || civic_construction
+                    || house_construction
                     || road
                     || market
                     || internal
@@ -764,6 +771,7 @@ pub fn update_person_simulation_lod(
         (
             construction,
             civic_construction,
+            house_construction,
             road,
             market,
             internal,
@@ -782,6 +790,7 @@ pub fn update_person_simulation_lod(
             has_loaded_trade_handoff(&inventories, entity, farmer, fisher, lumberjack);
         let critical = construction
             || civic_construction
+            || house_construction
             || road
             || market
             || internal

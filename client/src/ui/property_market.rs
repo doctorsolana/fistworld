@@ -1236,8 +1236,8 @@ fn spawn_permit_card(
                     PermitDemandText(kind),
                 );
                 spawn_inline_fact(facts, "WOOD", kind.construction_wood_required().to_string());
-                let capacity = if kind.housing_capacity() > 0 {
-                    format!("{} beds", kind.housing_capacity())
+                let capacity = if kind.housing_capacity_with_house(None) > 0 {
+                    format!("{} beds", kind.housing_capacity_with_house(None))
                 } else {
                     format!("{} jobs", kind.positions())
                 };
@@ -1311,6 +1311,7 @@ fn spawn_permit_action(
     values: &PermitCardValues,
 ) {
     let mut button = card.spawn((
+        Name::new(format!("property-permit-{kind:?}")),
         PermitActionButton(kind),
         Button,
         Node {

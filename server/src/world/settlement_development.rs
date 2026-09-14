@@ -15,12 +15,10 @@ use shared::components::{
     SettlementBuilding, SettlementBuildingKind, SettlementDevelopment, SettlementId,
     SettlementPolicies, SettlementProgressGate, SettlementTier, VillageRoad, WorldTime,
 };
-use shared::economy::{
-    CivicAccount, Good, GoodsInventory, MarketSeller, MootMarket, SettlementEconomy,
-    TOWN_HALL_STONE_REQUIRED, TOWN_MIN_MARKET_VOLUME, TOWN_MIN_PROSPERITY, TOWN_MIN_RESIDENTS,
-    TOWN_REQUIRED_DAYS, VILLAGE_HALL_WOOD_REQUIRED, VILLAGE_MIN_PROSPERITY, VILLAGE_MIN_RESIDENTS,
-    VILLAGE_REQUIRED_SECURE_DAYS,
-};
+use shared::economy::{CivicAccount, Good, GoodsInventory, MarketSeller, MootMarket};
+
+mod progression;
+pub use progression::update_settlement_developments;
 
 pub fn ensure_settlement_developments(
     mut commands: Commands,
@@ -460,7 +458,9 @@ pub fn run_civic_hall_upgrade_projects(
             };
             if destination_tier > settlement.tier {
                 settlement.tier = destination_tier;
-                development.progress_days = 0;
+                development.reset_qualification(day);
+                development.material_staged = 0;
+                development.material_required = 0;
                 development.next_gate = match destination_tier {
                     SettlementTier::Village => SettlementProgressGate::Marketplace,
                     SettlementTier::Town => SettlementProgressGate::Complete,
@@ -537,16 +537,6 @@ pub fn sync_market_levels(
     }
 }
 
-fn has_building(
-    buildings: &Query<(&SettlementBuilding, &shared::components::BuildingOf)>,
-    settlement: shared::components::SettlementId,
-    kind: SettlementBuildingKind,
-) -> bool {
-    buildings
-        .iter()
-        .any(|(building, building_of)| building_of.0 == settlement && building.kind == kind)
-}
-
 fn spawn_civic_hall_worksite(
     commands: &mut Commands,
     settlement_id: SettlementId,
@@ -585,227 +575,6 @@ fn spawn_civic_hall_worksite(
         PlayerRotation(rotation),
         Replicate::to_clients(NetworkTarget::All),
     ));
-}
-
-/// Keep the promotion ledger current and open Hall projects only after all
-/// requirements remain true for the advertised number of whole days.
-pub fn update_settlement_developments(
-    mut commands: Commands,
-    clock: Query<&WorldTime>,
-    mut settlements: Query<(
-        Entity,
-        &shared::components::SettlementId,
-        &Settlement,
-        &SettlementEconomy,
-        &MootMarket,
-        &mut SettlementDevelopment,
-        &PlayerPosition,
-        Option<&PlayerRotation>,
-    )>,
-    buildings: Query<(&SettlementBuilding, &shared::components::BuildingOf)>,
-    roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
-    hall_projects: Query<(
-        &CivicHallUpgradeWorksite,
-        &BuildingOf,
-        &ConstructionSite,
-        &GoodsInventory,
-    )>,
-) {
-    let Some(day) = clock.iter().next().map(|clock| clock.day) else {
-        return;
-    };
-
-    for (
-        _settlement_entity,
-        settlement_id,
-        settlement,
-        economy,
-        market,
-        mut development,
-        hall_position,
-        hall_rotation,
-    ) in settlements.iter_mut()
-    {
-        let mut dirt = 0u16;
-        let mut stone = 0u16;
-        let mut committed = 0u32;
-        let mut stone_needed = 0u32;
-        for (road, _) in roads
-            .iter()
-            .filter(|(road, road_of)| road_of.0 == *settlement_id && road.is_complete())
-        {
-            committed = committed.saturating_add(road.stone_committed);
-            match road.surface {
-                RoadSurface::Dirt => {
-                    dirt = dirt.saturating_add(1);
-                    if settlement.tier >= SettlementTier::Town
-                        && road.class == RoadClass::Main
-                        && stone_needed == 0
-                    {
-                        stone_needed = road.stone_required().saturating_sub(road.stone_committed);
-                    }
-                }
-                RoadSurface::Stone => stone = stone.saturating_add(1),
-            }
-        }
-        if development.dirt_roads != dirt {
-            development.dirt_roads = dirt;
-        }
-        if development.stone_roads != stone {
-            development.stone_roads = stone;
-        }
-        if development.stone_committed != committed {
-            development.stone_committed = committed;
-        }
-        if development.stone_needed != stone_needed {
-            development.stone_needed = stone_needed;
-        }
-
-        let elapsed_days = day.saturating_sub(development.last_progress_day);
-        if development.last_progress_day != day {
-            development.last_progress_day = day;
-        }
-
-        if matches!(
-            settlement.tier,
-            SettlementTier::Hamlet | SettlementTier::Village
-        ) {
-            if let Some((project, _, site, inventory)) = hall_projects
-                .iter()
-                .find(|(_, building_of, ..)| building_of.0 == *settlement_id)
-            {
-                development.next_gate = if site.raising {
-                    SettlementProgressGate::CivicHallConstruction
-                } else {
-                    SettlementProgressGate::CivicHallMaterials
-                };
-                development.progress_days =
-                    inventory.amount(project.material).min(u32::from(u16::MAX)) as u16;
-                development.required_days =
-                    project.material_required.min(u32::from(u16::MAX)) as u16;
-                continue;
-            }
-        }
-
-        let (gate, all_met, required_days) = match settlement.tier {
-            SettlementTier::Ruins => (SettlementProgressGate::FoodSecurity, false, 0),
-            SettlementTier::Hamlet => {
-                let progress_days = economy.food_secure_days;
-                let required_days = VILLAGE_REQUIRED_SECURE_DAYS;
-                let next_gate = if settlement.residents < VILLAGE_MIN_RESIDENTS {
-                    SettlementProgressGate::Population
-                } else if economy.prosperity < VILLAGE_MIN_PROSPERITY {
-                    SettlementProgressGate::Prosperity
-                } else {
-                    SettlementProgressGate::FoodSecurity
-                };
-                if development.progress_days != progress_days {
-                    development.progress_days = progress_days;
-                }
-                if development.required_days != required_days {
-                    development.required_days = required_days;
-                }
-                if development.next_gate != next_gate {
-                    development.next_gate = next_gate;
-                }
-                if settlement.residents >= VILLAGE_MIN_RESIDENTS
-                    && economy.prosperity >= VILLAGE_MIN_PROSPERITY
-                    && economy.food_secure_days >= VILLAGE_REQUIRED_SECURE_DAYS
-                {
-                    spawn_civic_hall_worksite(
-                        &mut commands,
-                        *settlement_id,
-                        &settlement.name,
-                        hall_position.0,
-                        hall_rotation.map_or(0.0, |rotation| rotation.0),
-                        CivicHallLevel::Village,
-                        Good::Wood,
-                        VILLAGE_HALL_WOOD_REQUIRED,
-                        day,
-                    );
-                    development.progress_days = 0;
-                    development.required_days = VILLAGE_HALL_WOOD_REQUIRED as u16;
-                    development.next_gate = SettlementProgressGate::CivicHallMaterials;
-                    info!(
-                        "Settlement '{}' secured Hamlet requirements and opened a {}-Wood Village Hall worksite",
-                        settlement.name, VILLAGE_HALL_WOOD_REQUIRED
-                    );
-                }
-                continue;
-            }
-            SettlementTier::Village => {
-                let market_built =
-                    has_building(&buildings, *settlement_id, SettlementBuildingKind::Market);
-                let tavern_built =
-                    has_building(&buildings, *settlement_id, SettlementBuildingKind::Tavern);
-                let gate = if settlement.residents < TOWN_MIN_RESIDENTS {
-                    SettlementProgressGate::Population
-                } else if !market_built {
-                    SettlementProgressGate::Marketplace
-                } else if !tavern_built {
-                    SettlementProgressGate::Tavern
-                } else if market.total_volume() < TOWN_MIN_MARKET_VOLUME {
-                    SettlementProgressGate::Trade
-                } else if economy.prosperity < TOWN_MIN_PROSPERITY {
-                    SettlementProgressGate::Prosperity
-                } else {
-                    SettlementProgressGate::Sustaining
-                };
-                (
-                    gate,
-                    gate == SettlementProgressGate::Sustaining,
-                    TOWN_REQUIRED_DAYS,
-                )
-            }
-            // Town is the highest implemented rung. Preserve loaded City
-            // settlements, but do not award the reserved future tier from
-            // population and a Church alone.
-            SettlementTier::Town | SettlementTier::City => {
-                (SettlementProgressGate::Complete, false, 0)
-            }
-        };
-
-        if development.next_gate != gate {
-            development.next_gate = gate;
-        }
-        if development.required_days != required_days {
-            development.required_days = required_days;
-        }
-        let progress_days = if all_met {
-            development
-                .progress_days
-                .saturating_add(elapsed_days.min(u32::from(u16::MAX)) as u16)
-        } else {
-            0
-        };
-        if development.progress_days != progress_days {
-            development.progress_days = progress_days;
-        }
-
-        if settlement.tier == SettlementTier::Village
-            && required_days > 0
-            && development.progress_days >= required_days
-        {
-            spawn_civic_hall_worksite(
-                &mut commands,
-                *settlement_id,
-                &settlement.name,
-                hall_position.0,
-                hall_rotation.map_or(0.0, |rotation| rotation.0),
-                CivicHallLevel::Town,
-                Good::Stone,
-                TOWN_HALL_STONE_REQUIRED,
-                day,
-            );
-            development.progress_days = 0;
-            development.required_days = TOWN_HALL_STONE_REQUIRED as u16;
-            development.next_gate = SettlementProgressGate::CivicHallMaterials;
-            info!(
-                    "Settlement '{}' sustained the Town requirements and opened a {}-Stone Town Hall worksite",
-                    settlement.name, TOWN_HALL_STONE_REQUIRED
-                );
-        }
-    }
 }
 
 /// Upgrade one unit of a principal road per elapsed day. Stone is removed from
@@ -915,6 +684,7 @@ pub fn upgrade_town_roads(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shared::economy::{SettlementEconomy, TOWN_HALL_STONE_REQUIRED, TOWN_MIN_RESIDENTS};
 
     fn development_test_app() -> App {
         let mut app = App::new();
@@ -1153,136 +923,6 @@ mod tests {
                 .amount(Good::Stone),
             0
         );
-    }
-
-    #[test]
-    fn village_promotion_is_sustained_and_uses_real_market_volume() {
-        let mut app = development_test_app();
-        app.add_systems(Update, update_settlement_developments);
-        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
-        let mut market = MootMarket::founding();
-        let seller = shared::economy::MarketSeller::Business(shared::components::BuildingId(42));
-        while market.total_volume() < TOWN_MIN_MARKET_VOLUME {
-            market.consign(seller, Good::Wood, 1, Good::Wood.base_price());
-            let sold = market.purchase(Good::Wood, 1, u64::MAX, None, None);
-            assert_eq!(sold.trade.units, 1, "market must keep trading");
-        }
-        let economy = SettlementEconomy {
-            prosperity: TOWN_MIN_PROSPERITY,
-            ..Default::default()
-        };
-        let settlement = app
-            .world_mut()
-            .spawn((
-                SettlementId(71),
-                Settlement {
-                    name: "Tradeford".into(),
-                    tier: SettlementTier::Village,
-                    residents: TOWN_MIN_RESIDENTS - 1,
-                    treasury: 0,
-                },
-                economy,
-                market,
-                SettlementDevelopment::from_foundation("Tradeford", Vec3::ZERO, 0),
-                PlayerPosition(Vec3::ZERO),
-                PlayerRotation(0.0),
-            ))
-            .id();
-        for kind in [
-            SettlementBuildingKind::Market,
-            SettlementBuildingKind::Tavern,
-        ] {
-            app.world_mut().spawn((
-                SettlementBuilding {
-                    kind,
-                    settlement: "Tradeford".into(),
-                    owner: None,
-                    quality: 0.5,
-                    workers: vec!["Worker".into()],
-                },
-                BuildingOf(SettlementId(71)),
-            ));
-        }
-
-        for day in 1..=TOWN_REQUIRED_DAYS {
-            app.world_mut()
-                .entity_mut(clock)
-                .get_mut::<WorldTime>()
-                .unwrap()
-                .day = u32::from(day);
-            app.update();
-        }
-        assert_eq!(
-            app.world().get::<Settlement>(settlement).unwrap().tier,
-            SettlementTier::Village,
-            "prosperity and trade cannot bypass the 30-resident Town gate"
-        );
-        app.world_mut()
-            .get_mut::<Settlement>(settlement)
-            .unwrap()
-            .residents = TOWN_MIN_RESIDENTS;
-        for day in (TOWN_REQUIRED_DAYS + 1)..=(TOWN_REQUIRED_DAYS * 2) {
-            app.world_mut()
-                .entity_mut(clock)
-                .get_mut::<WorldTime>()
-                .unwrap()
-                .day = u32::from(day);
-            app.update();
-        }
-        assert_eq!(
-            app.world().get::<Settlement>(settlement).unwrap().tier,
-            SettlementTier::Village,
-            "sustained economic gates open a physical Hall project; they no longer mint a Town instantly"
-        );
-        let projects = app
-            .world_mut()
-            .query::<(&CivicHallUpgradeWorksite, &BuildingOf, &GoodsInventory)>()
-            .iter(app.world())
-            .filter(|(_, building_of, _)| building_of.0 == SettlementId(71))
-            .count();
-        assert_eq!(projects, 1);
-    }
-
-    #[test]
-    fn secure_hamlet_opens_a_wood_funded_village_hall_worksite() {
-        let mut app = development_test_app();
-        app.add_systems(Update, update_settlement_developments);
-        app.world_mut().spawn(WorldTime::new_default());
-        let economy = SettlementEconomy {
-            prosperity: VILLAGE_MIN_PROSPERITY,
-            food_secure_days: VILLAGE_REQUIRED_SECURE_DAYS,
-            ..Default::default()
-        };
-        app.world_mut().spawn((
-            SettlementId(74),
-            Settlement {
-                name: "Oakmoot".into(),
-                tier: SettlementTier::Hamlet,
-                residents: VILLAGE_MIN_RESIDENTS,
-                treasury: 2_000,
-            },
-            economy,
-            MootMarket::founding(),
-            SettlementDevelopment::from_foundation("Oakmoot", Vec3::ZERO, 0),
-            PlayerPosition(Vec3::ZERO),
-            PlayerRotation(0.0),
-        ));
-
-        app.update();
-        let (project, site, store) = app
-            .world_mut()
-            .query::<(
-                &CivicHallUpgradeWorksite,
-                &ConstructionSite,
-                &GoodsInventory,
-            )>()
-            .single(app.world())
-            .unwrap();
-        assert_eq!(project.target, CivicHallLevel::Village);
-        assert_eq!(project.material, Good::Wood);
-        assert_eq!(project.material_required, VILLAGE_HALL_WOOD_REQUIRED);
-        assert!(!site.raising);
-        assert_eq!(store.amount(Good::Wood), 0);
     }
 
     #[test]
@@ -1565,7 +1205,7 @@ mod tests {
             .iter(app.world())
             .find_map(|(id, market)| (*id == settlement_id).then_some(market))
             .unwrap();
-        assert_eq!(market.pool(Good::Wood).day.unavailable_units, 4);
+        assert_eq!(market.pool(Good::Wood).day.unavailable_units, 6);
     }
 
     #[test]

@@ -99,7 +99,7 @@ impl DailyProductionEstimate {
 
 const RATED_SHIFT_SECONDS: f32 = WorldTime::DEFAULT_ORDINARY_SHIFT_SECONDS;
 /// A staffed Lumberjack Hut has purpose-built tools and an established
-/// cutting workflow. Unaffiliated residents still use the slower, shared
+/// cutting workflow. Unaffiliated residents use the lower-yield, shared
 /// `CHOP_SECONDS` path when gathering emergency construction timber.
 const PROFESSIONAL_CHOP_SECONDS: f32 = 80.0 / 3.0;
 
@@ -560,7 +560,7 @@ mod tests {
 
     #[test]
     fn professional_tree_work_always_beats_emergency_self_supply() {
-        assert_eq!(CHOP_SECONDS, 40.0);
+        assert_eq!(CHOP_SECONDS, 24.0);
         assert_eq!(SELF_SUPPLY_TREE_YIELD, 2);
         assert_eq!(lumber_tree_yield(0.0), 3);
         assert_eq!(lumber_tree_yield(0.49), 3);

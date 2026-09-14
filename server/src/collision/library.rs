@@ -53,7 +53,35 @@ pub struct StaticColliders {
     pub cleared_road_trees: HashSet<(i32, i32)>,
 }
 
+pub(crate) const COLLIDER_CELL_SIZE: f32 = 16.0;
+
 impl StaticColliders {
+    /// None means not streamed yet. A loaded chunk is authoritative for trees
+    /// cleared by actual buildings, crop claims and road work.
+    pub(crate) fn tree_is_present(&self, point: Vec3) -> Option<bool> {
+        if self.road_tree_was_cleared(point.xz()) {
+            return Some(false);
+        }
+        if !self
+            .loaded_chunks
+            .contains(&ChunkCoord::from_world_pos(point))
+        {
+            return None;
+        }
+        let cell = (
+            (point.x / COLLIDER_CELL_SIZE).floor() as i32,
+            (point.z / COLLIDER_CELL_SIZE).floor() as i32,
+        );
+        Some(self.cells.get(&cell).is_some_and(|ids| {
+            ids.iter().any(|id| {
+                self.instances.get(id).is_some_and(|instance| {
+                    instance.kind.is_tree()
+                        && instance.position.xz().distance_squared(point.xz()) < 0.01
+                })
+            })
+        }))
+    }
+
     const CLEARED_TREE_KEY_SCALE: f32 = 10.0;
 
     fn cleared_tree_key(point: Vec2) -> (i32, i32) {
@@ -203,5 +231,42 @@ mod tests {
                 building.id()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tree_presence_tests {
+    use super::*;
+
+    #[test]
+    fn timber_search_distinguishes_unloaded_present_and_cleared_trees() {
+        let point = Vec3::new(-3.0, 7.0, 18.0);
+        let mut colliders = StaticColliders::default();
+        assert_eq!(colliders.tree_is_present(point), None);
+        colliders
+            .loaded_chunks
+            .insert(ChunkCoord::from_world_pos(point));
+        assert_eq!(colliders.tree_is_present(point), Some(false));
+        let cell = (-1, 1);
+        colliders.cells.insert(cell, vec![1]);
+        colliders.instances.insert(
+            1,
+            StaticColliderInstance {
+                kind: PropKind::OakA,
+                position: point,
+                scale: 1.0,
+                rotation: Quat::IDENTITY,
+                cell,
+            },
+        );
+        assert_eq!(colliders.tree_is_present(point), Some(true));
+        colliders.mark_road_tree_cleared(point.xz());
+        assert_eq!(colliders.tree_is_present(point), Some(false));
+        colliders.loaded_chunks.clear();
+        assert_eq!(
+            colliders.tree_is_present(point),
+            Some(false),
+            "road clearing survives streaming"
+        );
     }
 }

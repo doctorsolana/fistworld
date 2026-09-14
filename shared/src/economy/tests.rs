@@ -43,8 +43,8 @@ fn site_consolidation_never_erases_direct_company_capital() {
 }
 
 #[test]
-fn personal_inventory_holds_four_wood_bundles() {
-    assert_eq!(capacity::VILLAGER, Good::Wood.bulk_per_unit() * 4);
+fn personal_inventory_holds_six_wood_bundles() {
+    assert_eq!(capacity::VILLAGER, Good::Wood.bulk_per_unit() * 6);
 }
 
 #[test]
@@ -53,15 +53,15 @@ fn porter_cart_capacity_is_large_and_inventory_resizing_is_lossless() {
     assert_eq!(BusinessSalePolicy::default().max_units_per_collection, 64);
     assert_eq!(PorterCartState::for_used_bulk(0).load_slots, 0);
     assert_eq!(PorterCartState::for_used_bulk(1).load_slots, 1);
-    assert_eq!(PorterCartState::for_used_bulk(48).load_slots, 1);
-    assert_eq!(PorterCartState::for_used_bulk(49).load_slots, 2);
-    assert_eq!(PorterCartState::for_used_bulk(96).load_slots, 2);
+    assert_eq!(PorterCartState::for_used_bulk(72).load_slots, 1);
+    assert_eq!(PorterCartState::for_used_bulk(73).load_slots, 2);
+    assert_eq!(PorterCartState::for_used_bulk(144).load_slots, 2);
 
     let mut inventory = GoodsInventory::new(capacity::VILLAGER);
     inventory.resize_bulk_capacity(capacity::PORTER);
-    assert_eq!(inventory.add(Good::Wood, 24), 24);
+    assert_eq!(inventory.add(Good::Wood, 36), 36);
     inventory.resize_bulk_capacity(capacity::VILLAGER);
-    assert_eq!(inventory.amount(Good::Wood), 24);
+    assert_eq!(inventory.amount(Good::Wood), 36);
     assert_eq!(inventory.bulk_capacity(), capacity::PORTER);
 }
 
@@ -344,7 +344,122 @@ fn market_distinguishes_missing_stock_from_rejected_prices() {
     assert_eq!(flow.unavailable_units, 2);
     assert_eq!(flow.unaffordable_units, 3);
     assert_eq!(flow.funded_unmet_units, 4);
+    assert_eq!(flow.funded_unmet_unit_price, Good::Flour.base_price());
     assert_eq!(flow.requested_units(), 6);
+}
+
+#[test]
+fn funded_shortages_retain_a_conservative_price_and_expire_with_daily_flow() {
+    let mut market = MootMarket::founding();
+    market.purchase_recording_demand(Good::Wood, 6, 300, Some(50), None);
+    market.purchase_recording_demand(Good::Wood, 4, 20, Some(5), None);
+    let flow = market.pool(Good::Wood).day;
+    assert_eq!(flow.funded_unmet_units, 10);
+    assert_eq!(flow.funded_unmet_unit_price, 5);
+    assert_eq!(flow.funded_unmet_at(5), 10);
+    assert_eq!(flow.funded_unmet_at(6), 0);
+
+    market.begin_new_day();
+    assert_eq!(market.pool(Good::Wood).day.funded_unmet_at(5), 0);
+    assert_eq!(market.pool(Good::Wood).previous_day.funded_unmet_at(5), 10);
+    market.begin_new_day();
+    assert_eq!(market.pool(Good::Wood).previous_day.funded_unmet_at(5), 0);
+}
+
+#[test]
+fn unfunded_requests_do_not_lower_the_price_of_funded_demand() {
+    let mut market = MootMarket::founding();
+    market.purchase_recording_demand(Good::Wood, 6, 300, Some(50), None);
+    market.purchase_recording_demand(Good::Wood, 50, 0, Some(1), None);
+    assert_eq!(market.pool(Good::Wood).day.funded_unmet_at(50), 6);
+    assert_eq!(market.pool(Good::Wood).day.unavailable_units, 56);
+}
+
+#[test]
+fn separately_recorded_shortfalls_never_purchase_or_create_goods() {
+    let mut market = MootMarket::founding();
+    let seller = MarketSeller::Business(crate::components::BuildingId(81));
+    market.consign(seller, Good::Wood, 2, 20);
+    market.record_unmet_demand(Good::Wood, 3, 1, 99, 20);
+    let flow = market.pool(Good::Wood).day;
+    assert_eq!(flow.funded_unmet_at(20), 4);
+    assert_eq!(flow.consumer_units, 0);
+    assert_eq!(market.listed_units(Good::Wood), 2);
+    assert_eq!(market.total_volume(), 0);
+}
+
+#[test]
+fn later_income_can_fund_existing_shortage_without_repeating_missing_units() {
+    let mut market = MootMarket::founding();
+    market.record_unmet_demand(Good::Wood, 6, 0, 0, 50);
+    market.record_unmet_demand(Good::Wood, 0, 0, 4, 50);
+    let flow = market.pool(Good::Wood).day;
+    assert_eq!(flow.unavailable_units, 6);
+    assert_eq!(flow.funded_unmet_at(50), 4);
+    market.record_unmet_demand(Good::Wood, 0, 0, 99, 50);
+    assert_eq!(market.pool(Good::Wood).day.funded_unmet_at(50), 6);
+}
+
+#[test]
+fn replacing_a_missing_stock_claim_with_price_rejection_does_not_double_demand() {
+    let mut market = MootMarket::founding();
+    market.record_unmet_demand(Good::Bread, 3, 0, 2, 100);
+    market.withdraw_unmet_demand(Good::Bread, 3, 0, 2);
+    market.record_unmet_demand(Good::Bread, 0, 3, 2, 100);
+    let flow = market.pool(Good::Bread).day;
+    assert_eq!(flow.requested_units(), 3);
+    assert_eq!(flow.unavailable_units, 0);
+    assert_eq!(flow.unaffordable_units, 3);
+    assert_eq!(flow.funded_unmet_at(100), 2);
+}
+
+#[test]
+fn withdrawing_claims_preserves_other_buyers_and_clears_the_last_funded_price() {
+    let mut market = MootMarket::founding();
+    market.record_unmet_demand(Good::Wood, 3, 0, 3, 20);
+    market.record_unmet_demand(Good::Wood, 6, 0, 6, 50);
+    market.withdraw_unmet_demand(Good::Wood, 3, 0, 3);
+    let flow = market.pool(Good::Wood).day;
+    assert_eq!(flow.requested_units(), 6);
+    assert_eq!(flow.funded_unmet_at(20), 6);
+    assert_eq!(
+        flow.funded_unmet_at(50),
+        0,
+        "a surviving conservative bound must not overpromise"
+    );
+    market.withdraw_unmet_demand(Good::Wood, 6, 0, 6);
+    assert_eq!(market.pool(Good::Wood).day.funded_unmet_unit_price, 0);
+    assert_eq!(market.pool(Good::Wood).day.requested_units(), 0);
+}
+
+#[test]
+fn priced_market_demand_roundtrips_with_live_and_previous_days() {
+    let mut market = MootMarket::founding();
+    market.purchase_recording_demand(Good::Wood, 6, 300, Some(50), None);
+    market.begin_new_day();
+    market.purchase_recording_demand(Good::Wood, 1, u64::MAX, Some(u64::MAX), None);
+    let encoded = bincode::serialize(&market).unwrap();
+    let decoded: MootMarket = bincode::deserialize(&encoded).unwrap();
+    assert_eq!(decoded, market);
+    assert_eq!(decoded.demand_epoch(), 1);
+    assert_eq!(decoded.pool(Good::Wood).day.funded_unmet_at(u64::MAX), 1);
+    assert_eq!(decoded.pool(Good::Wood).previous_day.funded_unmet_at(50), 6);
+}
+
+#[test]
+fn market_rollover_invalidates_outstanding_claim_bookkeeping() {
+    let mut market = MootMarket::founding();
+    let recorded_epoch = market.demand_epoch();
+    market.record_unmet_demand(Good::Wood, 6, 0, 4, 50);
+    market.begin_new_day();
+    assert_ne!(market.demand_epoch(), recorded_epoch);
+    assert_eq!(market.pool(Good::Wood).day.unmet_units(), 0);
+    assert_eq!(market.pool(Good::Wood).previous_day.unmet_units(), 6);
+    // The old claim is now history, so its caller starts a new claim instead
+    // of withdrawing from the empty current ledger.
+    market.record_unmet_demand(Good::Wood, 3, 0, 2, 50);
+    assert_eq!(market.pool(Good::Wood).day.unmet_units(), 3);
+    assert_eq!(market.pool(Good::Wood).previous_day.unmet_units(), 6);
 }
 
 #[test]
@@ -727,4 +842,30 @@ fn carried_visual_summary_never_contains_or_updates_for_private_quantity() {
         Some(CarriedAppearance::WheatSheaf)
     );
     assert!(CarriedLoad::from_inventory(&GoodsInventory::new(100)).is_empty());
+}
+
+#[test]
+fn household_consignment_owner_roundtrips_without_changing_existing_seller_tags() {
+    use crate::components::{BuildingId, HouseholdId, PersonId, SettlementId};
+    for (tag, seller) in [
+        MarketSeller::Business(BuildingId(u64::MAX)),
+        MarketSeller::Person(PersonId(u64::MAX)),
+        MarketSeller::Treasury(SettlementId(u64::MAX)),
+        MarketSeller::Household(HouseholdId(u64::MAX)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let encoded = bincode::serialize(&seller).unwrap();
+        assert_eq!(&encoded[..4], &(tag as u32).to_le_bytes());
+        assert_eq!(
+            bincode::deserialize::<MarketSeller>(&encoded).unwrap(),
+            seller
+        );
+    }
+    let seller = MarketSeller::Household(HouseholdId(u64::MAX));
+    let mut market = MootMarket::founding();
+    market.consign(seller, Good::Bread, 3, 17);
+    let decoded: MootMarket = bincode::deserialize(&bincode::serialize(&market).unwrap()).unwrap();
+    assert_eq!(decoded.seller_listed_units(seller, Good::Bread), 3);
 }

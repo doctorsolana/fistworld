@@ -59,7 +59,7 @@ use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_PROP_RADIUS};
 use crate::world::village::{
     ambient::AmbientRoutine, FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine,
     InternalDeliveryRoutine, LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket,
-    MootSteward, PierTraversal, TradeRouteRoutine, UnderConstruction, VillagerIntent, CHOP_SECONDS,
+    MootSteward, PierTraversal, TradeRouteRoutine, UnderConstruction, VillagerIntent,
 };
 use crate::{
     collision::library::{DerivedColliderLibrary, StaticColliders},
@@ -172,6 +172,9 @@ const EXTENDED_LOCAL_SURVEY_MIN_DISTANCE: f32 = 48.0;
 // commutes as the cheap 400-node case.
 const EXTENDED_LOCAL_SURVEY_MAX_DISTANCE: f32 = 512.0;
 const ROAD_BUILD_SECONDS: f32 = 0.55;
+// Clearing a trunk from a lane is quicker than gathering and preparing
+// construction timber. It removes the obstruction, but creates no free Wood.
+const ROAD_CLEAR_TREE_SECONDS: f32 = 8.0;
 const ROAD_REACH: f32 = 0.45;
 /// Surveyed road points are spaced about two metres apart. Generic actor
 /// routing can reject an exact point on the inflated edge of a source
@@ -755,6 +758,7 @@ pub(crate) struct SurveyScratch {
     blocked: HashMap<SurveyPointKey, bool>,
     heights: HashMap<SurveyPointKey, f32>,
     lines: HashMap<SurveyLineKey, bool>,
+    candidate_lines: HashMap<SurveyLineKey, bool>,
     metrics: SurveyMetrics,
 }
 
@@ -767,6 +771,7 @@ impl SurveyScratch {
         self.blocked.clear();
         self.heights.clear();
         self.lines.clear();
+        self.candidate_lines.clear();
         self.metrics.searches = self.metrics.searches.saturating_add(1);
     }
 
@@ -786,6 +791,26 @@ impl SurveyScratch {
 }
 
 impl RoadSurvey<'_> {
+    /// A necessary, deliberately incomplete edge check for terrain-only
+    /// founding surveys. Sample a subset of the exact 20cm lattice, including
+    /// both ends, so rejecting a hint cannot reject an otherwise valid edge.
+    /// Never put hints in `lines`: only `line_clear` grants route authority.
+    fn candidate_line_clear(&self, start: Vec2, end: Vec2, scratch: &mut SurveyScratch) -> bool {
+        let key = SurveyScratch::line_key(start, end);
+        if let Some(clear) = scratch.candidate_lines.get(&key) {
+            return *clear;
+        }
+        let steps = (start.distance(end) / NAVIGATION_SAMPLE_STEP)
+            .ceil()
+            .max(1.0) as usize;
+        let clear = (0..steps)
+            .step_by(10)
+            .chain(std::iter::once(steps))
+            .all(|step| !self.blocked(start.lerp(end, step as f32 / steps as f32), scratch));
+        scratch.candidate_lines.insert(key, clear);
+        clear
+    }
+
     fn stride_at(&self, point: Vec2) -> i32 {
         if self.coarse_stride <= 1
             || point.distance_squared(self.start) <= self.fine_endpoint_radius.powi(2)
@@ -914,6 +939,9 @@ struct SurveyOpen {
 struct SurveySearchState {
     initialized: bool,
     expanded: usize,
+    /// Only the synchronous terrain proof opts in. Embodied and incremental
+    /// movement continue certifying every explored edge before accepting it.
+    candidate_edges: bool,
 }
 
 enum SurveySearchResult {
@@ -1064,7 +1092,12 @@ fn resume_survey_a_star(
                 // adjacent clear grid points can have an edge that clips a
                 // narrow corner. Movement checks the segment, so planning must
                 // certify that same segment before accepting it.
-                if !survey.line_clear(current_point, next_point, scratch) {
+                let clear = if state.candidate_edges {
+                    survey.candidate_line_clear(current_point, next_point, scratch)
+                } else {
+                    survey.line_clear(current_point, next_point, scratch)
+                };
+                if !clear {
                     continue;
                 }
                 if dx != 0 && dz != 0 {
@@ -1125,6 +1158,30 @@ fn survey_a_star(survey: &RoadSurvey<'_>, scratch: &mut SurveyScratch) -> Vec<Ve
     }
 }
 
+/// Search cheaply, certify the entire result, then fall back to the original
+/// exact search if the hint crossed a narrow obstruction. The node ceilings
+/// and deterministic ordering stay intact; no unchecked route can escape.
+fn certified_candidate_survey(survey: &RoadSurvey<'_>, scratch: &mut SurveyScratch) -> Vec<Vec2> {
+    let mut state = SurveySearchState {
+        candidate_edges: true,
+        ..default()
+    };
+    match resume_survey_a_star(survey, scratch, &mut state, None) {
+        SurveySearchResult::Found(points) => {
+            if points
+                .windows(2)
+                .all(|edge| survey.line_clear(edge[0], edge[1], scratch))
+            {
+                points
+            } else {
+                survey_a_star(survey, scratch)
+            }
+        }
+        SurveySearchResult::Failed => Vec::new(),
+        SurveySearchResult::Pending => unreachable!("a synchronous survey cannot yield"),
+    }
+}
+
 /// Cheap terrain-only proof used when a controlled scenario needs two towns
 /// that a wagon can actually connect. Buildings and generated props remain
 /// the embodied planner's responsibility; this rejects different landmasses
@@ -1134,6 +1191,7 @@ pub(crate) fn overland_trade_corridor_exists(
     start: Vec2,
     goal: Vec2,
 ) -> bool {
+    let started = Instant::now();
     let props = PropBlockers::default();
     let survey = RoadSurvey {
         terrain,
@@ -1152,12 +1210,25 @@ pub(crate) fn overland_trade_corridor_exists(
         fine_endpoint_radius: 0.0,
     };
     let mut scratch = SurveyScratch::default();
+    if survey.blocked(start, &mut scratch) || survey.blocked(goal, &mut scratch) {
+        return false;
+    }
     // Founding and trade surveys often cross open, dry meadow. Certify the
     // direct segment first instead of exploring thousands of equivalent cells.
     if survey.line_clear(start, goal, &mut scratch) {
         return true;
     }
-    !survey_a_star(&survey, &mut scratch).is_empty()
+    let reachable = !certified_candidate_survey(&survey, &mut scratch).is_empty();
+    debug!(
+        ?start,
+        ?goal,
+        reachable,
+        expanded = scratch.metrics.expanded_nodes,
+        exact_lines = scratch.metrics.line_checks,
+        elapsed_ms = started.elapsed().as_millis(),
+        "Terrain corridor proof"
+    );
+    reachable
 }
 
 /// Retained terrain-only corridor proof for callers which must never run the

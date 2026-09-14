@@ -383,6 +383,7 @@ pub fn update_settlement_economies(
         Option<&BusinessWagePolicy>,
         Option<&BusinessCondition>,
         Option<&BusinessAccount>,
+        Option<&shared::components::HouseAppearance>,
     )>,
     employment: Query<
         (
@@ -425,12 +426,13 @@ pub fn update_settlement_economies(
     let mut pantries: HashMap<shared::components::SettlementId, Vec<Entity>> = HashMap::new();
     let mut housing: HashMap<shared::components::SettlementId, u32> = HashMap::new();
     let mut employed: HashMap<shared::components::SettlementId, u32> = HashMap::new();
-    for (entity, building, building_of, ..) in buildings.iter() {
+    for (entity, building, building_of, _, _, _, _, _, appearance) in buildings.iter() {
         stores.entry(building_of.0).or_default().push(entity);
         if building.kind == SettlementBuildingKind::House {
             pantries.entry(building_of.0).or_default().push(entity);
         }
-        *housing.entry(building_of.0).or_default() += u32::from(building.kind.housing_capacity());
+        *housing.entry(building_of.0).or_default() +=
+            u32::from(building.kind.housing_capacity_with_house(appearance));
     }
     let mut filled_by_building = HashMap::<shared::components::BuildingId, u16>::new();
     let mut civic_filled = HashMap::<shared::components::SettlementId, u16>::new();
@@ -465,7 +467,7 @@ pub fn update_settlement_economies(
     let mut private_vacancies = HashMap::<shared::components::SettlementId, u16>::new();
     let mut best_open_wage = HashMap::<shared::components::SettlementId, u64>::new();
     let mut unpaid_private_workers = HashMap::<shared::components::SettlementId, u16>::new();
-    for (_, building, building_of, building_id, staffing, wage, condition, account) in
+    for (_, building, building_of, building_id, staffing, wage, condition, account, _) in
         buildings.iter()
     {
         if !is_private_business(building.kind) {
@@ -935,6 +937,94 @@ pub fn update_settlement_economies(
 #[cfg(test)]
 mod unrest_tests {
     use super::*;
+
+    #[test]
+    fn housing_summary_counts_completed_levels_without_counting_worksites() {
+        use shared::components::{
+            BuildingId, BuildingOf, HouseAppearance, HouseLevel, SettlementId, SettlementTier,
+        };
+        let mut app = App::new();
+        app.init_resource::<SettlementEconomyRuntime>()
+            .init_resource::<BusinessEventQueue>()
+            .add_systems(Update, update_settlement_economies);
+        app.world_mut().spawn(WorldTime::new_default());
+        let hall = app
+            .world_mut()
+            .spawn((
+                SettlementId(1),
+                Settlement {
+                    name: "Eight Beds".into(),
+                    tier: SettlementTier::Village,
+                    residents: 0,
+                    treasury: 0,
+                },
+                SettlementEconomy::default(),
+                GoodsInventory::new(200),
+            ))
+            .id();
+        let mut homes = Vec::new();
+        for id in 1..=3 {
+            homes.push(
+                app.world_mut()
+                    .spawn((
+                        BuildingId(id),
+                        BuildingOf(SettlementId(1)),
+                        SettlementBuilding {
+                            kind: SettlementBuildingKind::House,
+                            settlement: "Eight Beds".into(),
+                            owner: None,
+                            quality: 1.0,
+                            workers: Vec::new(),
+                        },
+                        GoodsInventory::new(80),
+                    ))
+                    .id(),
+            );
+        }
+        app.world_mut()
+            .entity_mut(homes[0])
+            .insert(HouseAppearance::default());
+        app.world_mut()
+            .entity_mut(homes[1])
+            .insert(HouseAppearance {
+                level: HouseLevel::UpperStorey,
+                ..default()
+            });
+        app.world_mut().spawn((
+            BuildingOf(SettlementId(1)),
+            shared::components::ConstructionSite {
+                kind: SettlementBuildingKind::House,
+                settlement: "Eight Beds".into(),
+                raising: true,
+                stand: Vec3::ZERO,
+                rotation: 0.0,
+            },
+            HouseAppearance {
+                level: HouseLevel::UpperStorey,
+                ..default()
+            },
+        ));
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<SettlementEconomy>(hall)
+                .unwrap()
+                .housing_capacity,
+            16
+        );
+        app.world_mut()
+            .get_mut::<HouseAppearance>(homes[0])
+            .unwrap()
+            .level = HouseLevel::UpperStorey;
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<SettlementEconomy>(hall)
+                .unwrap()
+                .housing_capacity,
+            20
+        );
+    }
 
     #[test]
     fn unrest_uses_only_the_three_visible_hardships() {

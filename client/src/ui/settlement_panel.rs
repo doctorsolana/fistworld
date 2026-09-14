@@ -12,10 +12,10 @@ use bevy::ui::FocusPolicy;
 
 use shared::components::{
     BuildingId, BuildingOf, CivicHallLevel, CivicHallUpgradeWorksite, CivicTradeContract,
-    CompanyId, CompanyLeadership, ConstructionSite, Household, MootAdministration, OperatedBy,
-    OwnedBy, PersonId, PlayerPosition, Settlement, SettlementBuilding, SettlementBuildingKind,
-    SettlementDevelopment, SettlementId, SettlementOpportunityBoard, SettlementPolicies,
-    TradeContractId,
+    CompanyId, CompanyLeadership, ConstructionSite, HouseAppearance, HouseUpgradeWorksite,
+    Household, MootAdministration, OperatedBy, OwnedBy, PersonId, PlayerPosition, Settlement,
+    SettlementBuilding, SettlementBuildingKind, SettlementDevelopment, SettlementId,
+    SettlementOpportunityBoard, SettlementPolicies, TradeContractId,
 };
 use shared::economy::{
     format_money, BusinessAccount, BusinessCondition, BusinessForSale, BusinessManagementPolicy,
@@ -75,10 +75,11 @@ enum CompactBound {
     Subtitle,
     Tile(usize),
     Row(usize),
+    Development(usize),
 }
 
 #[derive(Component)]
-struct InspectExpandButton;
+pub(crate) struct InspectExpandButton;
 
 #[derive(Component)]
 struct InspectTradeButton;
@@ -175,19 +176,22 @@ fn spawn_compact_panel(mut commands: Commands) {
         BackgroundColor(LIMEWASH),
         BorderColor::all(PLATE_RULE),
         plate_shadow(),
-        children![(
-            SettlementPanelBody,
-            Node {
-                width: Val::Percent(100.0),
-                min_height: Val::Px(0.0),
-                flex_shrink: 1.0,
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                overflow: Overflow::scroll_y(),
-                scrollbar_width: 8.0,
-                ..default()
-            },
-        )],
+        children![
+            (
+                SettlementPanelBody,
+                Node {
+                    width: Val::Percent(100.0),
+                    min_height: Val::Px(0.0),
+                    flex_shrink: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    overflow: Overflow::scroll_y(),
+                    scrollbar_width: 8.0,
+                    ..default()
+                },
+            ),
+            super::house_upgrades::mount()
+        ],
     ));
 }
 
@@ -266,7 +270,21 @@ fn spawn_tiles(commands: &mut Commands, tiles: &[(String, String)]) -> Entity {
     grid
 }
 
-fn spawn_line(commands: &mut Commands, index: usize, label: &str, value: &str) -> Entity {
+fn spawn_section(commands: &mut Commands, title: &str) -> Entity {
+    commands
+        .spawn((
+            Text::new(title),
+            crate::ui::typography::text(14.0),
+            TextColor(INK),
+            Node {
+                margin: UiRect::top(Val::Px(6.0)),
+                ..default()
+            },
+        ))
+        .id()
+}
+
+fn spawn_line(commands: &mut Commands, bound: CompactBound, label: &str, value: &str) -> Entity {
     commands
         .spawn((
             Node {
@@ -287,7 +305,7 @@ fn spawn_line(commands: &mut Commands, index: usize, label: &str, value: &str) -
                     },
                 ),
                 (
-                    CompactBound::Row(index),
+                    bound,
                     Text::new(value.to_string()),
                     crate::ui::typography::text(14.0),
                     TextColor(INK),
@@ -424,40 +442,6 @@ fn opportunity_summary(board: Option<&SettlementOpportunityBoard>) -> String {
         .join(" / ")
 }
 
-fn progression_summary(
-    settlement: &Settlement,
-    development: Option<&SettlementDevelopment>,
-) -> String {
-    let Some(development) = development else {
-        return settlement
-            .tier
-            .next_requirement()
-            .unwrap_or("Highest tier reached")
-            .to_string();
-    };
-    if development.required_days == 0 {
-        return development.next_gate.label().to_string();
-    }
-    if matches!(
-        development.next_gate,
-        shared::components::SettlementProgressGate::CivicHallMaterials
-            | shared::components::SettlementProgressGate::CivicHallConstruction
-    ) {
-        return format!(
-            "{} — {} / {} units",
-            development.next_gate.label(),
-            development.progress_days,
-            development.required_days
-        );
-    }
-    format!(
-        "{} / {} of {} days",
-        development.next_gate.label(),
-        development.progress_days,
-        development.required_days
-    )
-}
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn sync_compact_panel(
     mut commands: Commands,
@@ -472,7 +456,7 @@ fn sync_compact_panel(
         Option<&SettlementPolicies>,
         Option<&SettlementOpportunityBoard>,
     )>,
-    buildings: Query<&SettlementBuilding>,
+    buildings: Query<(&SettlementBuilding, Option<&HouseAppearance>)>,
     ownership: LocalBusinessOwnership,
     building_ids: Query<&BuildingId>,
     building_of: Query<&BuildingOf>,
@@ -482,6 +466,7 @@ fn sync_compact_panel(
         Option<&BusinessForSale>,
         Option<&OwnedBy>,
         Option<&CivicHallUpgradeWorksite>,
+        Option<&HouseUpgradeWorksite>,
     )>,
     positions: Query<&PlayerPosition>,
     inventories: Query<&GoodsInventory>,
@@ -591,10 +576,6 @@ fn sync_compact_panel(
                     "PERMIT MARKET".to_string(),
                     opportunity_summary(opportunities),
                 ),
-                (
-                    "TO ADVANCE".to_string(),
-                    progression_summary(settlement, development),
-                ),
             ];
             if let Some(economy) = economy.filter(|economy| economy.unmet_food > 0) {
                 rows.push((
@@ -638,6 +619,10 @@ fn sync_compact_panel(
             }
             return Some(CompactModel {
                 kind: "hall",
+                development: Some(crate::ui::settlement_development::checklist(
+                    settlement.tier,
+                    development,
+                )),
                 title: settlement.name.to_uppercase(),
                 subtitle: format!(
                     "{} / {}",
@@ -652,7 +637,7 @@ fn sync_compact_panel(
                 business_history: None,
             });
         }
-        if let Ok(building) = buildings.get(entity) {
+        if let Ok((building, house)) = buildings.get(entity) {
             let public_hall = (building.kind == SettlementBuildingKind::Market)
                 .then(|| {
                     building_of.get(entity).ok().and_then(|owner| {
@@ -706,13 +691,13 @@ fn sync_compact_panel(
                 })
             });
             let mut tiles = Vec::new();
-            if building.kind.housing_capacity() > 0 {
+            if building.kind.housing_capacity_with_house(house) > 0 {
                 tiles.push((
                     "BEDS".to_string(),
                     format!(
                         "{} / {}",
                         household.map_or(0, |home| home.residents.len()),
-                        building.kind.housing_capacity()
+                        building.kind.housing_capacity_with_house(house)
                     ),
                 ));
             } else {
@@ -834,6 +819,7 @@ fn sync_compact_panel(
             }
             return Some(CompactModel {
                 kind: "building",
+                development: None,
                 title: building.kind.label().to_uppercase(),
                 subtitle: building.settlement.to_uppercase(),
                 tiles,
@@ -844,9 +830,15 @@ fn sync_compact_panel(
                 business_history,
             });
         }
-        if let Ok((site, for_sale, site_owner, hall_upgrade)) = sites.get(entity) {
+        if let Ok((site, for_sale, site_owner, hall_upgrade, house_upgrade)) = sites.get(entity) {
             let (good, required) = hall_upgrade.map_or(
-                (Good::Wood, site.kind.construction_wood_required()),
+                (
+                    Good::Wood,
+                    house_upgrade.map_or_else(
+                        || site.kind.construction_wood_required(),
+                        |upgrade| upgrade.wood_required,
+                    ),
+                ),
                 |upgrade| (upgrade.material, upgrade.material_required),
             );
             let delivered = inventories
@@ -898,9 +890,16 @@ fn sync_compact_panel(
                     ),
                 ));
             }
-            if site_owner
-                .zip(local_person)
-                .is_some_and(|(owner, person)| owner.0 == person)
+            if house_upgrade.is_some() {
+                rows.push((
+                    "HOME".to_string(),
+                    "Upper storey extension · 4 beds remain usable until completion".to_string(),
+                ));
+            }
+            if house_upgrade.is_none()
+                && site_owner
+                    .zip(local_person)
+                    .is_some_and(|(owner, person)| owner.0 == person)
             {
                 rows.push((
                     "YOUR ORDER".to_string(),
@@ -909,7 +908,12 @@ fn sync_compact_panel(
             }
             return Some(CompactModel {
                 kind: "site",
-                title: format!("{} WORKSITE", site.kind.label().to_uppercase()),
+                development: None,
+                title: if house_upgrade.is_some() {
+                    "HOUSE EXTENSION".to_string()
+                } else {
+                    format!("{} WORKSITE", site.kind.label().to_uppercase())
+                },
                 subtitle: site.settlement.to_uppercase(),
                 tiles,
                 rows,
@@ -937,6 +941,7 @@ fn sync_compact_panel(
                 CompactBound::Subtitle => &model.subtitle,
                 CompactBound::Tile(index) => &model.tiles[*index].1,
                 CompactBound::Row(index) => &model.rows[*index].1,
+                CompactBound::Development(index) => &model.development.as_ref().unwrap()[*index].1,
             };
             if text.0 != *value {
                 text.0 = value.clone();
@@ -957,9 +962,27 @@ fn sync_compact_panel(
     commands.entity(body).despawn_related::<Children>();
     let header = spawn_header(&mut commands, &model);
     let tiles = spawn_tiles(&mut commands, &model.tiles);
-    let mut children = vec![header, tiles];
+    let mut children = vec![header];
+    if let Some(development) = &model.development {
+        children.push(spawn_section(&mut commands, "DEVELOPMENT"));
+        for (index, (label, value)) in development.iter().enumerate() {
+            children.push(spawn_line(
+                &mut commands,
+                CompactBound::Development(index),
+                label,
+                value,
+            ));
+        }
+        children.push(spawn_section(&mut commands, "LIVING CONDITIONS"));
+    }
+    children.push(tiles);
     for (index, (label, value)) in model.rows.iter().enumerate() {
-        children.push(spawn_line(&mut commands, index, label, value));
+        children.push(spawn_line(
+            &mut commands,
+            CompactBound::Row(index),
+            label,
+            value,
+        ));
     }
     children.push(action_row(
         &mut commands,
@@ -988,6 +1011,7 @@ fn food_security_state(economy: &SettlementEconomy) -> &'static str {
 /// [`CompactModel::structure_key`] decides a respawn.
 struct CompactModel {
     kind: &'static str,
+    development: Option<Vec<(String, String)>>,
     title: String,
     subtitle: String,
     tiles: Vec<(String, String)>,
@@ -1001,6 +1025,13 @@ struct CompactModel {
 impl CompactModel {
     fn structure_key(&self, target: Option<Entity>) -> String {
         let mut key = format!("{}|{target:?}|", self.kind);
+        if let Some(rows) = &self.development {
+            for (label, _) in rows {
+                key.push_str(label);
+                key.push(',');
+            }
+        }
+        key.push('|');
         for (label, _) in &self.tiles {
             key.push_str(label);
             key.push(',');
@@ -1076,7 +1107,7 @@ fn handle_compact_actions(
         let (place_id, entry) = if let Ok((_, _, id)) = settlements.get(entity) {
             (
                 *id,
-                crate::ui::encyclopedia::places::SelectedPlaceEntry::Hall,
+                crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview,
             )
         } else if let Ok((building, position, _)) = buildings.get(entity) {
             // Buildings link their settlement BY NAME in the data model; the

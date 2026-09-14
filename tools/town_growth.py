@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SMALL_PROFILES = ("low", "steady", "burst")
 CITY_PROFILES = tuple(f"city-{population}-{pace}" for population in (100, 250, 500)
                       for pace in ("gradual", "surge"))
-PROFILES = SMALL_PROFILES + CITY_PROFILES
+PROFILES = SMALL_PROFILES + ("inland-boats",) + CITY_PROFILES
 DATA_MARKER = "__TOWN_GROWTH_DATA__"
 
 
@@ -201,7 +201,7 @@ def summarize_growth(snapshots: list[dict], profile: str) -> dict:
         return {}
     last = snapshots[-1]
     target = int(profile.split("-")[1]) if profile in CITY_PROFILES else {
-        "low": 14, "steady": 29, "burst": 32,
+        "low": 14, "steady": 29, "burst": 32, "inland-boats": 65,
     }.get(profile)
     residents = [frame["metrics"].get("residents", 0) for frame in snapshots]
     complete = [frame["metrics"].get("completed_buildings", 0) for frame in snapshots]
@@ -318,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seeds", type=seed_list, default=[23, 41, 77])
     parser.add_argument("--profiles", type=profile_list, default=list(SMALL_PROFILES))
     parser.add_argument("--minutes", type=positive_number,
-                        help="simulated minutes per case (default 240; 1440 when any city profile is selected)")
+                        help="simulated minutes per case (default 240; 720 for inland-boats; 1440 when any city profile is selected)")
     parser.add_argument("--snapshot-minutes", type=positive_number, default=20.0)
     parser.add_argument("--warp", type=positive_number, default=25.0)
     parser.add_argument("--timeout", type=positive_number,
@@ -330,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     large_profiles = any(profile in CITY_PROFILES for profile in args.profiles)
     if args.minutes is None:
-        args.minutes = 1440.0 if large_profiles else 240.0
+        args.minutes = 1440.0 if large_profiles else (720.0 if "inland-boats" in args.profiles else 240.0)
     if args.timeout is None:
         args.timeout = 3600.0 if large_profiles else 1800.0
     if args.minutes > 2880:

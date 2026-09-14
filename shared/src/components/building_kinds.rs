@@ -1,6 +1,6 @@
 //! Settlement building taxonomy and shared gameplay/asset definitions.
 
-use super::{HouseAppearance, SettlementTier, FARM_FIELD_LATERAL_OFFSET};
+use super::{HouseAppearance, HouseLevel, SettlementTier, FARM_FIELD_LATERAL_OFFSET};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -329,7 +329,7 @@ impl SettlementBuildingKind {
     /// founders, but it does not let a settlement claim to be properly housed.
     pub const fn housing_capacity(self) -> u8 {
         match self {
-            SettlementBuildingKind::House => 4,
+            SettlementBuildingKind::House => HouseLevel::Ground.housing_capacity(),
             SettlementBuildingKind::Hall
             | SettlementBuildingKind::Farmstead
             | SettlementBuildingKind::LumberjackHut
@@ -341,6 +341,15 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::Bakery
             | SettlementBuildingKind::StorageHall => 0,
             SettlementBuildingKind::StoneQuarry | SettlementBuildingKind::LivestockFarm => 0,
+        }
+    }
+
+    /// Completed housing capacity follows the physical house level. Missing
+    /// appearance data uses the ordinary four-bed ground-floor recipe.
+    pub const fn housing_capacity_with_house(self, house: Option<&HouseAppearance>) -> u8 {
+        match (self, house) {
+            (Self::House, Some(house)) => house.level.housing_capacity(),
+            _ => self.housing_capacity(),
         }
     }
 

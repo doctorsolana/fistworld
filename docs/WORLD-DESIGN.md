@@ -241,34 +241,28 @@ values. Neighbouring plots therefore remain similar without every meadow farm,
 forest lumber site, or highland quarry receiving an identical score. Nobody
 produces everything; that gap is the entire reason trade exists.
 
-**Prosperity and growth.** One scalar drives the tier ladder:
-
-```
-prosperity += k1 * food_surplus_per_capita
-            + k2 * trade_income_recent
-            - k3 * unrest (raids, war, famine)
-```
-
-**Each rung asks for something the rung below did not.** Growth is not one
-number getting bigger; every step introduces a NEW requirement, which is what
-forces settlements to diversify their buildings and gives each tier a distinct
-character:
+**Development and living conditions.** Tier describes established settlement
+structure; prosperity describes current wellbeing. Immigration, temporary hunger
+and job searches do not erase occupied homes or businesses. The implemented
+rules are maintained in [SETTLEMENT-DEVELOPMENT.md](SETTLEMENT-DEVELOPMENT.md).
+Each rung adds a concrete urban function:
 
 | Step | Requires | Expressed as |
 |---|---|---|
 | founded → **Hamlet** | a city hall | the founding act itself |
-| Hamlet → **Village** | food SECURITY + 12 Wood | reliable food, then a paid and physically built Village Hall |
-| Village → **Town** | external trade, administration + 8 Stone | real market volume, then a paid and physically built Town Hall |
+| Hamlet → **Village** | 12 residents, 8 housed across 2 homes + 12 Wood | established homes, then a paid and physically built Village Hall |
+| Village → **Town** | 30 residents, 20 housed, accessible Market, 2 operating business types and paid trade + 8 Stone | working commerce, then a paid and physically built Town Hall |
 | Town → **City** | regional pull and amenities | diverse employment, and services people travel to |
 
-Every requirement is a BUILDING plus a PERSON WORKING IT plus a sustained
-output. A market with no merchant does not count. Tier is therefore never a
-number you can farm — it is a shape the settlement has to actually take.
+Operating businesses need a living assigned worker and real dated production or
+revenue; an empty shell or internal stock transfer is insufficient. The Market
+requires completed access. City remains future work; its regional role has no
+implemented qualification recipe yet.
 
-**Food SECURITY, not local farming.** A mining settlement on bare highland that
-buys its grain in is fed, and should be allowed to grow. Requiring local
-production would make every settlement follow the same build order and would
-quietly forbid the specialisation that makes trade exist at all (pillar 2).
+**Food may be imported.** A mining settlement on bare highland can buy its grain
+and develop through mining, transport and commerce. Food adequacy remains a real
+economic concern, but neither local food production nor zero unmet meals is a
+promotion gate.
 
 **Military strength is NOT a tier requirement.** An undefended city is still a
 city; it is simply vulnerable — and a frontier hamlet should be able to raise a
@@ -281,9 +275,11 @@ strength does bite is in HOLDING what you have: it gates whether a settlement
 survives being contested (§7 war), which is a far more interesting place for it
 than a growth gate.
 
-Population above a tier threshold and prosperity above a bar for T sustained
-minutes remain necessary alongside the requirement above; each rung raises both
-bars, and hysteresis stops tiers flapping.
+Qualification requires two of the last three completed calendar days, with
+current structural requirements still valid before commissioning. A failed day
+does not clear the other observations. Missing dates never inherit today's state.
+Existing Hall projects survive later hardship. Automatic economic demotion is
+not implemented.
 
 **Services are not a City-only luxury.** Inns, shrines, healers, markets and
 gathering places should be buildable from the village rung onward, because what
@@ -717,10 +713,10 @@ with a player who does nothing but found the hall and put people on the map.
    supply the job — including empty stock or an owner short of coin — they walk
    to a real tree, face it, play the chop action, and carry a bounded load back.
    This emergency self-supply recovers two usable Wood bundles per completed tree
-   interaction. It prevents a founding deadlock, but is intentionally much less
-   productive than hiring a professional woodcutter or buying their stock. A
-   builder continues to the nearest safe, different second tree until their
-   four-Wood personal capacity is full, then normally delivers `4 + 4 + 2` for a
+   24-second interaction. It prevents a founding deadlock; professional woodcutters
+   recover three bundles per interaction and retain higher sustained output. A
+   builder continues to the nearest safe, unclaimed tree until their
+   six-Wood personal capacity is full, then normally delivers `6 + 4` for a
    ten-Wood cabin. The final load, a dusk load, or a load whose next tree is
    unavailable is delivered partially, so batching cannot strand useful Wood in
    sparse or obstructed woodland.
@@ -975,15 +971,11 @@ with a player who does nothing but found the hall and put people on the map.
     off-screen settlement retain the cheaper simulation paths.
 19. Prosperity is a visible 0–100 breakdown, not an unexplained counter: food
     reserve contributes 40, recent production 30, housing coverage 20 and
-    employment coverage 10, while hunger can subtract 30. A Hamlet with at
-    least 12 residents advances to Village after three consecutive days with
-    at least three reserve days, recent production covering its population, no
-    hunger, and prosperity of at least 65. Daily accounting runs immediately
-    after breakfast, so one physical Bakery batch (four rations) may still be
-    in delivery without resetting the streak; this allowance is fixed rather
-    than population-scaled. The Hamlet then purchases/stages 12 Wood and
-    completes an embodied Village Hall project. The following rules extend that
-    live ladder; decline remains design-only.
+    employment coverage 10, while hunger can subtract 30. This is a living-condition
+    reading. A Hamlet instead qualifies with 12 living residents and 8 housed across
+    2 completed homes on two of the last three completed days. It then purchases/stages
+    12 Wood and completes an embodied Village Hall project. Food history remains
+    inspectable but no longer determines promotion; decline remains design-only.
 20. Each foundation now receives a deterministic, replicated development
     charter derived from its name and position. The charter chooses one of five
     planning temperaments (organic, radial, grid, avenue or polycentric), a
@@ -997,8 +989,10 @@ with a player who does nothing but found the hall and put people on the map.
     and stone replacements from Town; closing gates and siege damage remain future work.
 21. Village and Town progression is authoritative and inspectable. A Village
     requests a Marketplace; its private opportunity board advertises a Tavern after survival shortages are
-    met, then becomes a Town with at least 30 residents, 50 coin of lifetime
-    Moot trade, prosperity 70 and all requirements sustained for three days. A
+    met. Town qualification requires 30 residents, 20 housed, an accessible Market,
+    two operating private business types and real paid trade on two of the last
+    three completed days. The Tavern is optional. A qualified settlement buys/stages
+    8 Stone and builds the Town Hall. A
     Town is the current progression ceiling. City-scale progression remains
     future work; legacy City values remain readable.
     These semantic buildings have real plots, wood supply, staffing, storage,
@@ -1256,7 +1250,7 @@ reuse, then runs both the original-builder handoff and multi-waypoint travel at
 100x. Focused economy tests lock one portion per resident per day, Food-before-
 Wheat consumption, exact buyer-to-business/treasury payment, profit accounting,
 generic input procurement, durable bankruptcy, coin conservation, unmet demand
-and the three-secure-day promotion. `cargo
+and dated development qualification independent of temporary hunger. `cargo
 village-lab` is the broader regression laboratory: it loads a dedicated 1km map
 with real baked prop colliders, founds one deterministic eight-person meadow
 settlement and soaks the complete world for 190 simulated minutes at 100x by
@@ -1340,7 +1334,8 @@ The exact transaction order, formulas, strategy targets, staffing table, review 
 and debugging surfaces live in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md). That document is the
 source of truth when implementation detail and this higher-level design summary differ.
 
-**Consumption.** Population eats food; construction (tier upgrades, businesses)
+**Consumption.** Population eats food; occupied household hearths consume a small
+Wood reserve for warmth. Food has first purchasing priority. Construction (tier upgrades, businesses)
 consumes Wood/Stone. Paid recruitment, equipment production and military resupply
 are intended future demand sinks; current role changes and quiver rearming do not
 consume Iron, money or supply stock.
@@ -1368,8 +1363,11 @@ acquisition and legacy-save funding into the company treasury on the next simula
 pass.
 `CivicAccount` records permits, market fees, profit levies, public sales, civic
 wages, relief and construction materials without replacing the treasury's cash;
-`HouseholdEconomy` holds the shared necessities purse while the cabin inventory
-is its pantry. `WorkStatus` is deliberately only `Employed`, `LookingForWork` or
+`HouseholdEconomy` lives on a stable household entity and holds its shared
+necessities purse; the current dwelling inventory is its physical pantry. Membership
+and funds survive a move, while goods require transport. Contributions follow
+spendable cash, with staggered provisioning retries and food-first hearth fuel
+purchases. See [HOUSEHOLD-ECONOMY.md](HOUSEHOLD-ECONOMY.md). `WorkStatus` is deliberately only `Employed`, `LookingForWork` or
 `Chilling`. Owner leisure uses a daily reservation wage based on personal cash runway,
 local meal cost, individual variation and company workload, with replacement and
 payroll checks. There is no universal 30-coin retirement threshold. Every firm retains a bounded,
@@ -1383,8 +1381,8 @@ identities, cap tables and share ownership are already
 authoritative.
 
 Without a suitable civic or company porter, an employee provides a deliberately weaker
-local fallback for their own workplace: sixteen bulk per trip instead of the cart's
-ninety-six, with the actual round trip taken out of production. This applies to public
+local fallback for their own workplace: twenty-four bulk per trip instead of the cart's
+144, with the actual round trip taken out of production. This applies to public
 market collection and processor purchasing; private same-company direct transfer remains
 the Storage Hall/Company Porter service.
 

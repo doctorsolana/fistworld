@@ -7,7 +7,7 @@ maintained `#AnimationN` table and no dependency on the removed legacy character
 
 ## Current shipped asset
 
-Checked against the shipped GLB and generated manifest on 2026-09-09.
+Checked against the shipped GLB and generated manifest on 2026-09-14.
 
 - 1.70 m bare body, facing Bevy forward (`-Z`), with no code-side yaw correction.
 - 21 skin joints, including articulated forearms, `attach.carry`, `attach.tool.R`
@@ -15,7 +15,7 @@ Checked against the shipped GLB and generated manifest on 2026-09-09.
 - 22 wardrobe entries across four slots: five bottoms, seven tops, seven hairstyles,
   and three headgear choices (including the intentional empty `Headgear_None`).
 - Six replicated skin tones.
-- 22 body clips and five face clips, 27 total.
+- 29 body clips and five face clips, 34 total.
 
 The body clips are:
 
@@ -33,6 +33,8 @@ The body clips are:
 | `harvest` | Wheat-field work |
 | `carry` | Moving or standing with a visible physical load |
 | `pull` | Employed porter hand-cart locomotion |
+| `ride_idle`, `ride_walk`, `ride_trot`, `ride_canter`, `ride_gallop` | Mounted posture matched to the horse gait |
+| `mount`, `dismount` | Horse entry and exit |
 | `combat_guard`, `combat_strike`, `combat_recoil` | Ready pose and server-timed melee/reaction |
 | `combat_fall`, `combat_fall_back` | Server-timed fatal falls, held at the last pose |
 | `bow_ready`, `bow_shoot` | Equipped bow and server-timed draw/release |
@@ -62,8 +64,15 @@ these adjustments in new assets. See `client/src/hero/attachments.rs` and the re
 The bow uses `attach.bow.L` and its own cached matching animation graph. Its draw/release
 samples the same world-clock timestamp as the body; the server owns arrow creation and hits.
 
-A carried load suppresses the tool. Tool and load visuals are derived client-side from
-replicated `CharacterActivity`/`CarriedLoad`; they are presentation, not simulation state.
+Stationary manual work takes precedence over the carried-load pose. Its tool remains
+visible and the load is stowed visually, so a builder chopping a second tree does not
+hold a bundle instead of swinging an axe. The load returns during travel; inventory
+does not change. These visuals derive from replicated `CharacterActivity`/`CarriedLoad`.
+
+The September 14 locomotion pass reduces walk shoulder swing, torso lean and head
+counter-rotation, and gives the run clip a gentler arm swing with bent elbows. Leg
+arcs, stride period and ground-contact correction are preserved. Both clips matter:
+normal 3.2 m/s travel can choose `run`, not just `walk`.
 
 ## Adding or changing a clip
 

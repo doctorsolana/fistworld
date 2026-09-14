@@ -5,6 +5,8 @@
 //! replicated state. Screenshots use the real renderer's completion observer.
 
 mod audio;
+mod construction;
+mod households;
 mod multiplayer;
 
 use super::{live_capture_request, CaptureInspection};
@@ -56,9 +58,20 @@ enum Command {
         name: String,
         value: f32,
     },
+    LeftClick {
+        x: f32,
+        z: f32,
+    },
+    Cursor {
+        x: f32,
+        z: f32,
+    },
     RightClick {
         x: f32,
         z: f32,
+        /// Use the projected pointer ray for a building/worksite interaction.
+        #[serde(default)]
+        pick: bool,
     },
     View {
         x: f32,
@@ -142,6 +155,7 @@ fn write_json(path: &Path, value: &Value) {
 }
 
 fn snapshot(world: &mut World) -> Value {
+    let construction = construction::snapshot(world);
     let audio = audio::snapshot(world);
     let multiplayer = multiplayer::snapshot(world);
     let sampled_unix_ms = std::time::SystemTime::now()
@@ -156,7 +170,11 @@ fn snapshot(world: &mut World) -> Value {
     let debug_menu_open = world
         .get_resource::<crate::ui::debug_time_menu::DebugTimeMenuOpen>()
         .is_some_and(|menu| menu.0);
-    let time_warp = world.query::<&TimeWarp>().iter(world).next().map(|warp| warp.0);
+    let time_warp = world
+        .query::<&TimeWarp>()
+        .iter(world)
+        .next()
+        .map(|warp| warp.0);
     let local = world
         .get_resource::<crate::camera_rts::LocalPeerId>()
         .map(|id| id.0);
@@ -172,14 +190,16 @@ fn snapshot(world: &mut World) -> Value {
             "aboard": aboard,
         })));
     let person = own.as_ref().map(|(_, person, _)| *person);
-    let markets: Vec<_> = world.query::<(&SettlementId, &Settlement, &PlayerPosition, &MootMarket, &GoodsInventory, Option<&PlayerRotation>)>()
-        .iter(world).map(|(id, town, position, market, store, rotation)| json!({
+    let markets: Vec<_> = world.query::<(&SettlementId, &Settlement, &PlayerPosition, &MootMarket, &GoodsInventory, Option<&PlayerRotation>, Option<&SettlementDevelopment>)>()
+        .iter(world).map(|(id, town, position, market, store, rotation, development)| json!({
             "id": id.0, "name": town.name, "position": position.0.to_array(),
+            "tier": town.tier, "development": development,
             "entrance": SettlementBuildingKind::Hall.entrance_position(position.0, rotation.map_or(0.0, |rotation| rotation.0)).to_array(),
             "fee_bps": market.market_fee_bps(),
             "my_offers": market.listings().iter().filter(|listing| person.is_some_and(|person| listing.seller == MarketSeller::Person(person))).collect::<Vec<_>>(),
             "goods": Good::ALL.into_iter().map(|good| (format!("{good:?}"), json!({"stock": store.amount(good), "listed": market.listed_units(good), "ask": market.pool(good).ask}))).collect::<serde_json::Map<_,_>>(),
         })).collect();
+    let households = households::snapshot(world);
     let towns: Vec<_> = world.query::<(&SettlementSummary, &PlayerPosition)>().iter(world)
         .map(|(town, position)| json!({"id":town.id.0,"name":town.name,"residents":town.residents,"position":position.0.to_array()})).collect();
     // Read-only replicated garden routes for the opt-in connected movement lab.
@@ -212,10 +232,10 @@ fn snapshot(world: &mut World) -> Value {
     let camera = world.query::<&CommanderCamera>().iter(world).next().map(|camera| json!({
         "focus":camera.focus.to_array(),"target":camera.focus_target.to_array(),"zoom":camera.zoom,"zoom_target":camera.zoom_target}));
     let buttons: Vec<_> = world
-        .query_filtered::<(&Name, &ComputedNode, Has<InteractionDisabled>), With<Button>>()
+        .query_filtered::<(Entity, &ComputedNode, Has<InteractionDisabled>), With<Button>>()
         .iter(world)
         .filter(|(_, node, _)| node.size().min_element() > 0.0)
-        .map(|(name, _, disabled)| json!({"name": name.as_str(),"enabled": !disabled}))
+        .map(|(entity, _, disabled)| json!({"name": button_label(world, entity),"enabled": !disabled}))
         .collect();
     let selected = world
         .get_resource::<crate::selection::Selection>()
@@ -263,9 +283,9 @@ fn snapshot(world: &mut World) -> Value {
     let presets_expanded = world
         .get_resource::<crate::ui::main_menu::DropdownState>()
         .is_some_and(|state| state.expanded);
-    json!({"sampled_unix_ms":sampled_unix_ms,"multiplayer":multiplayer,"hud_mode":hud_mode,"god_capability":god_capability,"debug_menu_open":debug_menu_open,"time_warp":time_warp,"audio":audio,"game_state":game_state,"name_phase":name_phase,"submitted":submitted,"name_error":name_error,"connection_error":connection_error,"startup_art_ready":startup_art_ready,
+    json!({"construction":construction,"sampled_unix_ms":sampled_unix_ms,"multiplayer":multiplayer,"hud_mode":hud_mode,"god_capability":god_capability,"debug_menu_open":debug_menu_open,"time_warp":time_warp,"audio":audio,"game_state":game_state,"name_phase":name_phase,"submitted":submitted,"name_error":name_error,"connection_error":connection_error,"startup_art_ready":startup_art_ready,
         "focused_control":focused_control,"window_title":window_title,"server_address":server_address,"presets_expanded":presets_expanded,
-        "account":account,"hero":own.map(|(_,_,hero)|hero),"markets":markets,"towns":towns,"yards":yards,"clock":clock,"camera":camera,"buttons":buttons,"selection":selected,"notice":notice,
+        "account":account,"hero":own.map(|(_,_,hero)|hero),"markets":markets,"towns":towns,"households":households,"yards":yards,"clock":clock,"camera":camera,"buttons":buttons,"selection":selected,"notice":notice,
         "ui_blocking":world.get_resource::<crate::input::InputState>().is_some_and(|s|s.ui_blocking()),
         "playing":world.get_resource::<State<GameState>>().is_some_and(|s|*s.get()==GameState::Playing),
         "creator":world.get_resource::<crate::ui::hero_creator::HeroCreatorOpen>().is_some_and(|s|s.0),
@@ -445,9 +465,9 @@ fn advance(
         }
         Command::Button { name } => {
             if state.phase == 0 {
-                let candidate = world.query_filtered::<(Entity, &Name, &ComputedNode, Has<InteractionDisabled>), With<Button>>()
-                    .iter(world).find(|(_, label, node, _)| label.as_str() == name && node.size().min_element() > 0.0)
-                    .map(|(entity, _, _, disabled)| (entity, disabled));
+                let candidate = world.query_filtered::<(Entity, &ComputedNode, Has<InteractionDisabled>), With<Button>>()
+                    .iter(world).find(|(entity, node, _)| button_label(world, *entity) == *name && node.size().min_element() > 0.0)
+                    .map(|(entity, _, disabled)| (entity, disabled));
                 let Some((entity, disabled)) = candidate else {
                     return Ok(false);
                 };
@@ -514,25 +534,75 @@ fn advance(
                 }
             }
         }
-        Command::RightClick { x, z } => {
+        Command::LeftClick { x, z }
+        | Command::RightClick { x, z, .. }
+        | Command::Cursor { x, z } => {
+            let button = match command {
+                Command::LeftClick { .. } => Some(MouseButton::Left),
+                Command::RightClick { .. } => Some(MouseButton::Right),
+                _ => None,
+            };
             if !x.is_finite() || !z.is_finite() {
                 return Err("invalid world point".into());
             }
             match state.phase {
                 0 => {
-                    world.insert_resource(crate::camera_rts::CursorTerrainOverride(Vec2::new(
-                        *x, *z,
-                    )));
+                    // Left-click selection uses the real projected pointer/ray,
+                    // unlike move and placement orders' terrain-only target.
+                    let pick = matches!(command, Command::RightClick { pick: true, .. });
+                    if pick || matches!(command, Command::LeftClick { .. }) {
+                        let height = world
+                            .resource::<shared::terrain::WorldTerrain>()
+                            .get_height(*x, *z);
+                        let size = world
+                            .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
+                            .single(world)
+                            .map_err(|_| "no primary window")?
+                            .size();
+                        let (camera, transform) = world
+                            .query_filtered::<(&Camera, &GlobalTransform), With<CommanderCamera>>()
+                            .single(world)
+                            .map_err(|_| "no commander camera")?;
+                        let cursor = crate::selection::pick::world_to_window(
+                            camera,
+                            transform,
+                            size,
+                            Vec3::new(*x, height + 1.0, *z),
+                        )
+                        .ok_or("world point is outside the camera")?;
+                        for mut window in world
+                            .query_filtered::<&mut Window, With<bevy::window::PrimaryWindow>>()
+                            .iter_mut(world)
+                        {
+                            window.set_cursor_position(Some(cursor));
+                        }
+                    }
+                    let selecting = pick
+                        || matches!(command, Command::LeftClick { .. })
+                            && world
+                                .get_resource::<crate::hero::control::WorldPlacementMode>()
+                                .is_none_or(|mode| {
+                                    matches!(mode, crate::hero::control::WorldPlacementMode::None)
+                                });
+                    if !selecting {
+                        world.insert_resource(crate::camera_rts::CursorTerrainOverride(Vec2::new(
+                            *x, *z,
+                        )));
+                    }
                 }
                 1 => {
-                    world
-                        .resource_mut::<ButtonInput<MouseButton>>()
-                        .press(MouseButton::Right);
+                    if let Some(button) = button {
+                        world
+                            .resource_mut::<ButtonInput<MouseButton>>()
+                            .press(button);
+                    }
                 }
                 2 => {
-                    world
-                        .resource_mut::<ButtonInput<MouseButton>>()
-                        .release(MouseButton::Right);
+                    if let Some(button) = button {
+                        world
+                            .resource_mut::<ButtonInput<MouseButton>>()
+                            .release(button);
+                    }
                 }
                 _ => return Ok(true),
             }
@@ -708,4 +778,23 @@ fn advance(
     }
     state.phase += 1;
     Ok(false)
+}
+
+fn button_label(world: &World, entity: Entity) -> String {
+    if let Some(name) = world.get::<Name>(entity) {
+        return name.as_str().to_owned();
+    }
+    fn gather(world: &World, entity: Entity, text: &mut Vec<String>) {
+        if let Some(value) = world.get::<Text>(entity) {
+            text.push(value.0.clone());
+        }
+        if let Some(children) = world.get::<Children>(entity) {
+            for child in children.iter() {
+                gather(world, child, text);
+            }
+        }
+    }
+    let mut text = Vec::new();
+    gather(world, entity, &mut text);
+    format!("text:{}", text.join(" "))
 }

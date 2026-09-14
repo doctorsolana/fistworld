@@ -47,6 +47,15 @@ or publishes half a plan. Each local group has terrain-validated overland connec
 but there are no prebuilt inter-town highways. Groups merge when an accepted town proves
 a connecting corridor. Growth and paid infrastructure continue normally.
 
+Startup corridor searches use sparse samples to shortlist a path, then certify
+every segment with the ordinary 20 cm terrain/road-width and slope checks. A
+candidate that fails that certification retries with the precise search. Hints
+never grant access, and both searches retain finite node budgets. This avoids
+dense terrain sampling along thousands of discarded branches on difficult seeds.
+Embodied movement and the incremental immigration planner retain their existing
+precise checks. Debug logging for `server::world::village_roads` reports corridor
+endpoints, expanded nodes, exact line checks and elapsed time when diagnosing startup.
+
 Founded Halls retain a server-only land-network tag. Civic tenders, automatic merchants
 and player caravan schedules reject commitments between different known groups before
 reserving cash or dispatching goods. This conservative gate is not route permission:
@@ -128,7 +137,8 @@ The second runs eight days of ordinary offscreen economy, checking money conserv
 per-town production and unmet food demand, food reserves, housing and survival.
 `FISTWORLD_WORLD_SOAK_DAYS` changes its length.
 
-The geography audit calls the production planner for four maintained seeds and checks
+The geography audit calls the production planner for four distribution seeds plus
+startup regression seed `1938040146946417273`, and checks
 complete plans, resource suitability, population/workforce capacity, spacing, non-overlap
 and a real arrival for every certified land group. Its coverage metric weights equal-area
 eligible survey sites, excluding unsuitable terrain. The four regression seeds require
@@ -144,6 +154,21 @@ python3 capture/world_overview.py compare --seed 4794248476676134349 \
   --baseline-log logs/performance-review/server-baseline/server.log \
   --out logs/world-distribution/comparison
 ```
+
+### Startup corridor regression, 2026-09-13
+
+Seed `1938040146946417273` exceeded a hosted five-minute readiness wait after six
+towns. Locally, the original server needed 63 seconds to open its socket; profiling
+identified dense terrain checks on discarded inter-town search edges. With candidate
+search followed by precise certification, the release server opened in 12 seconds
+on the development Mac, retaining the same ten-town, 168-resident founding summary.
+This is local evidence, not a hosted performance measurement.
+
+The five-seed production audit and the reported seed's full ownership/home/access
+acceptance passed. The four earlier worlds retained byte-identical town and plot CSVs.
+Two focused regressions check reduced exact-query work and safe rejection/detouring
+when sparse samples miss a thin obstacle. Workspace checks and all 1,480 regular
+tests passed. Evidence and server handoff: `logs/world-startup-incident/report.md`.
 
 ### Distribution and environment review, 2026-09-12
 

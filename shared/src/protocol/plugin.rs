@@ -137,6 +137,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<CivicHallUpgradeWorksite>().replicate();
         app.component::<MarketLevel>().replicate();
         app.component::<HouseAppearance>().replicate();
+        app.component::<crate::components::HouseUpgradeWorksite>().replicate();
         app.component::<crate::components::HouseholdYard>()
             .replicate();
         app.component::<SettlementDevelopment>().replicate();
@@ -153,6 +154,14 @@ impl Plugin for ProtocolPlugin {
         app.component::<LivestockPasture>().replicate();
         app.component::<Household>().replicate();
         app.component::<HouseholdEconomy>().replicate();
+        app.component::<crate::components::HouseholdId>()
+            .replicate();
+        app.component::<crate::components::HouseholdMembers>()
+            .replicate();
+        app.component::<crate::components::HouseholdMember>()
+            .replicate();
+        app.component::<crate::components::OccupiedByHousehold>()
+            .replicate();
         app.component::<BusinessAccount>().replicate();
         app.component::<BusinessCondition>().replicate();
         app.component::<BusinessForSale>().replicate();
@@ -251,6 +260,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<HeroPermitOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HouseUpgradeRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
 
         // Server -> Client
         app.register_message::<NameSubmissionResult>()
@@ -271,6 +282,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<HeroMarketResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroPermitResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HouseUpgradeResponse>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroConstructionResult>()
             .add_direction(NetworkDirection::ServerToClient);

@@ -44,7 +44,7 @@ public storage. Changes to company/civic account privacy are a separate policy.
   `new_world/trade_access.rs` owns the server-only founding land-group gate consumed by
   civic and player trade routes; it does not bypass ordinary caravan navigation.
 - `identity.rs`: allocates and indexes durable `PersonId`, `SettlementId`,
-  `BuildingId` and `CompanyId` values and migrates remaining readable legacy relationships.
+  `HouseholdId`, `BuildingId` and `CompanyId` values and migrates remaining readable legacy relationships.
 - `simulation_time.rs` and `time.rs`: the one real/world/warp clock and world-day state.
 - `regions.rs`: interest management, region visibility and tactical/strategic level.
 - `settlement_directory.rs`: tiny globally replicated settlement summaries.
@@ -75,7 +75,9 @@ public storage. Changes to company/civic account privacy are a separate policy.
     growth subsidies and bounded policy review
   - `settlement_economy`: Moot transactions, food security, prosperity and the daily
     hunger/homelessness/unpaid-work unrest reading
-  - `households`: homes, pantry funding, shopping, meals and daily schedules
+  - `households`: home schedules; `households/membership` owns stable domestic groups,
+    `provisioning` owns scheduled food/fuel purchasing and shared funding, `needs`
+    owns hearth use and exact contribution math, `shopping` owns physical cargo
   - `tavern`: compact per-person day plans, private meal pricing, embodied Tavern visits,
     Innkeeper shifts and equivalent cheap off-screen service
   - `trades` / `production`: physical and aggregate farming, fishing, livestock, lumber and Stone work,

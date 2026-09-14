@@ -13,10 +13,10 @@ use shared::components::{
     AttachedTo, BuildingId, BuildingOf, CharacterActivity, CharacterAffiliation,
     CharacterAttributes, CharacterKind, CharacterName, CivicEmployment, CivicRole, Company,
     CompanyId, CompanyLeadership, CompanyOwnership, EmployedAt, FarmField, Health, Household,
-    LivesAt, MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId,
-    PlayerPosition, PlayerRotation, Residence, ResidentOf, Settlement, SettlementBuilding,
-    SettlementBuildingKind, SettlementId, SettlementPolicies, SettlementTier, TimeWarp, WorkStatus,
-    WorldTime,
+    HouseholdId, HouseholdMember, HouseholdMembers, LivesAt, MootAdministration, Nutrition,
+    Occupation, OccupiedByHousehold, OperatedBy, OwnedBy, PersonId, PlayerPosition, PlayerRotation,
+    Residence, ResidentOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
+    SettlementPolicies, SettlementTier, TimeWarp, WorkStatus, WorldTime,
 };
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessProcurementPolicy,
@@ -154,6 +154,19 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                 hall_position + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
             let building_id = BuildingId(next_building_id);
             next_building_id += 1;
+            let household_id = HouseholdId(building_id.0);
+            let resident_ids: Vec<_> = (0..roster.len())
+                .map(|offset| PersonId(next_person_id + (house_index * 4 + offset) as u64))
+                .collect();
+            world.spawn((
+                household_id,
+                HouseholdMembers {
+                    resident_ids: resident_ids.clone(),
+                    settlement: SettlementId(town_index as u64 + 1),
+                    dwelling: Some(building_id),
+                },
+                HouseholdEconomy::default(),
+            ));
             let house = world
                 .spawn((
                     building_id,
@@ -166,20 +179,16 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                         workers: Vec::new(),
                     },
                     Household {
-                        resident_ids: (0..roster.len())
-                            .map(|offset| {
-                                PersonId(next_person_id + (house_index * 4 + offset) as u64)
-                            })
-                            .collect(),
+                        resident_ids,
                         residents: roster.to_vec(),
                     },
-                    HouseholdEconomy::default(),
+                    OccupiedByHousehold(household_id),
                     GoodsInventory::new(shared::economy::capacity::HOUSE),
                     PlayerPosition(position),
                     PlayerRotation(angle),
                 ))
                 .id();
-            houses.push((house, building_id));
+            houses.push((house, building_id, household_id));
         }
 
         let farm_workers = names.get(2..).unwrap_or_default();
@@ -257,7 +266,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
 
         for resident in 0..resident_count {
             let name = names[resident].clone();
-            let (home, home_id) = houses[resident / 4];
+            let (home, home_id, household_id) = houses[resident / 4];
             let farmer = resident.checked_sub(2).map(|worker_index| {
                 let (farmstead, farm_id, fields, farm_position) = farms[worker_index / 2];
                 let field = fields[worker_index % fields.len()];
@@ -288,6 +297,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                 PersonId(next_person_id),
                 ResidentOf(SettlementId(town_index as u64 + 1)),
                 LivesAt(home_id),
+                HouseholdMember(household_id),
             ));
             if let Some((farmstead, farm_id, field, _)) = farmer {
                 person.insert((

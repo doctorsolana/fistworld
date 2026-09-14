@@ -60,7 +60,7 @@ the settlement treasury. They bootstrap circulation; they are not recurring inco
 | Actor | Cash | Physical goods | Durable economic state |
 |---|---|---|---|
 | Person | `Wallet` | Personal `GoodsInventory` | Employment, home, nutrition and company shares |
-| Household | `HouseholdEconomy` | Cabin pantry | Shared necessities purse and household members |
+| Household | `HouseholdEconomy` on a stable `HouseholdId` | Current dwelling pantry | Shared necessities purse and household members |
 | Company | One authoritative `CompanyAccount` treasury | Goods remain at settlement-local sites/listings | 1,000-share cap table, Company Master, consolidated obligations, profit, capital and dividends |
 | Business site | No wallet | Workplace inventory plus seller-owned Moot listings | `BusinessAccount` cost-centre ledger: attributed revenue, expenses, labour, policy, production, liabilities and solvency |
 | Settlement | `Settlement::treasury` | Treasury-owned hall stock only | `CivicAccount`, enacted policy and public payroll |
@@ -212,15 +212,23 @@ sell-through, accumulating stock, the last clearing price, competing asks, unava
 demand and explicitly unaffordable demand every day. A weak seller moves toward a
 one-penny undercut when replacement cost permits it. Rejected buyers accelerate the
 markdown and temporarily remove the target profit margin, while real shortages and
-sell-outs support increases. Manual owners may still choose any positive price.
+sell-outs support increases. Only a live stocked offer is a competing price; an old
+clearance sale cannot suppress an empty market indefinitely. An empty producer can quote
+a viable batch from its actual wages, inputs and capacity when observed funded demand
+supports that price. Funded unmet demand retains a conservative buyer price ceiling;
+these observations expire with the daily window and are not escrowed orders. Manual
+owners may still choose any positive price.
 
 A household normally protects two personal discretionary coins per member while funding
 its three-day pantry target. That floor disappears when the pantry holds fewer than one
 ration per resident: preventing today's hunger outranks discretionary saving. Likewise,
 an autonomous founder protects three personal coins before contributing to a company;
 player contributions remain explicit. When a cabin loses its final member, it cannot
-remain a ghost owner: the empty household purse and pantry enter the local unclaimed
-estate and return to the treasury/hall.
+remain a ghost owner: the final member's death sends the empty household purse and current pantry
+into the local unclaimed estate. Losing or changing a dwelling preserves the household
+account; it does not transport goods. Contributions use spendable-cash proportions, and
+provisioning retries within the day with bounded shortage claims. Household hearths
+consume a modest Wood reserve after food purchasing. See [HOUSEHOLD-ECONOMY.md](HOUSEHOLD-ECONOMY.md).
 
 Company dividend protection values only missing processor inputs: inventory already at a
 site is working stock, not another future cash purchase. A multi-site company protects one
@@ -724,11 +732,12 @@ production, housing, employment and hunger. Paying relief can prevent hunger but
 treasury coin; requesting more food capacity can create businesses and jobs but requires
 owners, permits, materials and suitable plots.
 
-Policy does not directly grant prosperity or advance a tier. Hamlet → Village → Town →
-City progression still uses the live population, sustained food/prosperity, trade and
-civic-building requirements documented in [WORLD-DESIGN.md](WORLD-DESIGN.md) and
-[ROADMAP.md](ROADMAP.md). A settlement may continue housing residents below the next tier;
-tier is development state, not a hard population cap.
+Policy does not directly grant prosperity or advance a tier. Hamlet → Village → Town
+uses established residents, occupied housing and, for Town, an accessible Market and
+operating commerce. Two of the last three daily observations must qualify; hunger and
+prosperity are separate living-condition readings. City remains future work. The enacted
+rules are in [SETTLEMENT-DEVELOPMENT.md](SETTLEMENT-DEVELOPMENT.md). A settlement may
+continue housing residents below the next tier; tier is not a hard population cap.
 
 Promotion also has a real public-works bill. Once the social gates qualify, the Hall opens a
 bounded upgrade worksite: Moot → Village Hall requires 12 Wood and Village Hall → Town Hall

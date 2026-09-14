@@ -40,6 +40,9 @@ mod creator_tour;
 mod farming_live;
 mod history_fixtures;
 mod house_fixtures;
+mod house_upgrades;
+mod archer_range;
+mod settlement_development;
 mod inspection;
 mod live;
 pub(crate) use farming_live::install as install_live_farming_capture;
@@ -402,6 +405,9 @@ pub fn run(mut config: CaptureConfig) {
     asset_fixtures::install(&mut app);
     building_lods::install(&mut app);
     construction_refresh::install(&mut app);
+    house_upgrades::install(&mut app);
+    archer_range::install(&mut app);
+    settlement_development::install(&mut app);
     ui_tour::install(&mut app);
     creator_tour::install(&mut app);
     music_review::install(&mut app);
@@ -461,6 +467,9 @@ pub fn run(mut config: CaptureConfig) {
                 .run_if(building_lods::ready)
                 .run_if(character_fixtures::ready)
                 .run_if(construction_refresh::ready)
+                .run_if(house_upgrades::ready)
+                .run_if(archer_range::ready)
+                .run_if(settlement_development::ready)
                 .run_if(creator_tour::ready)
                 .run_if(music_review::ready)
                 .run_if(journey_tour::ready)

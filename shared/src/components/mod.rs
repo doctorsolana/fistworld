@@ -20,6 +20,8 @@ pub use civic_square::*;
 mod health;
 mod horse;
 pub use horse::*;
+mod house_upgrades;
+pub use house_upgrades::*;
 mod household_yards;
 pub use household_yards::*;
 mod identity;
@@ -62,8 +64,8 @@ pub use placement::{
     settlement_founding_refusal, MIN_SETTLEMENT_SPACING, SETTLEMENT_FREEBOARD,
 };
 pub use settlements::{
-    Settlement, SettlementCenterStyle, SettlementDevelopment, SettlementLayoutStyle,
-    SettlementProgressGate, SettlementTier, SettlementWallStyle,
+    Settlement, SettlementCenterStyle, SettlementDevelopment, SettlementDevelopmentEvidence,
+    SettlementLayoutStyle, SettlementProgressGate, SettlementTier, SettlementWallStyle,
 };
 pub use trade::*;
 pub use village_life::{

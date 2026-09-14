@@ -125,6 +125,7 @@ fn finish_shift(
 #[allow(clippy::type_complexity)]
 pub fn assign_quarry_routines(
     mut commands: Commands,
+    off_duty_workers: Query<&WorkerOffDuty>,
     world_time: Query<&WorldTime>,
     terrain: Option<Res<WorldTerrain>>,
     workplaces: Query<(
@@ -214,11 +215,13 @@ pub fn assign_quarry_routines(
             &roads,
             &road_requests,
         ) {
-            for worker in roster {
-                commands
-                    .entity(*worker)
-                    .insert(WorkerOffDuty { day: clock.day });
-            }
+            super::workplace_access::defer_shift(
+                &mut commands,
+                roster,
+                workplace,
+                clock.day,
+                &off_duty_workers,
+            );
             continue;
         }
 
@@ -546,6 +549,6 @@ mod tests {
         assert!(quarry_seconds_per_stone(1.0) < quarry_seconds_per_stone(0.0));
         assert_eq!(Good::Stone.bulk_per_unit(), 6);
         let inventory = GoodsInventory::new(shared::economy::capacity::VILLAGER);
-        assert_eq!(inventory.free_bulk() / Good::Stone.bulk_per_unit(), 2);
+        assert_eq!(inventory.free_bulk() / Good::Stone.bulk_per_unit(), 4);
     }
 }

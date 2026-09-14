@@ -1,0 +1,16 @@
+// Offline selection presentation using the real archer wardrobe, selection
+// expansion and shared 65 m firing range. No simulated firing or LOS claim.
+(version: 1, name: "archer-range", map: "village_lab",
+ output_dir: "logs/captures/archer-range", resolution: (1800, 1100),
+ fixed_delta_seconds: 0.016666667, target: window, show_window: false,
+ warmup_frames: 180,
+ readiness: (minimum_frames: 60, maximum_frames: 1800, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+ environment: { "FISTFORCE_CAPTURE_ARCHER_RANGE": "1", "FISTFORCE_CAPTURE_CLOUDS": "clear", "FISTFORCE_CAPTURE_HUD": "play" },
+ shots: [
+  (name: "00-unselected", focus: (-15.0, 0.0, -15.0), yaw: 0.55, zoom: 165.0, time_of_day: 0.43),
+  (name: "01-battalion-range", focus: (-15.0, 0.0, -15.0), yaw: 0.55, zoom: 165.0, time_of_day: 0.43),
+  (name: "02-detached-range", focus: (-1.0, 0.0, -15.0), yaw: 0.55, zoom: 165.0, time_of_day: 0.43),
+  (name: "03-moved-range", focus: (-25.0, 0.0, -3.0), yaw: 0.55, zoom: 165.0, time_of_day: 0.43),
+  (name: "04-sidearm-no-range", focus: (-25.0, 0.0, -3.0), yaw: 0.55, zoom: 165.0, time_of_day: 0.43),
+  (name: "05-deselected", focus: (-25.0, 0.0, -3.0), yaw: 0.55, zoom: 165.0, time_of_day: 0.43)
+ ])

@@ -467,11 +467,38 @@ The next contract should exercise a regional travelling party across observation
 with identical roster, cargo, money and elapsed travel. Do not mistake the existing
 resident round trip for a proven off-screen army or caravan simulation.
 
+## First construction and work presentation
+
+Personal inventories use 24 bulk (six Wood); porter inventories use 144 bulk
+(36 Wood). Stock, purchase reservations and money remain authoritative. Capacity
+is a bulk limit, not a guarantee of that many units of every good.
+
+Construction self-supply searches a bounded nearby tree pool from the carrier's
+current position. It excludes known cleared trees, failed approaches and trees
+claimed by other construction workers. Route failures retain bounded backoff;
+nearest-tree preference must not create an unbounded per-tick path search.
+Builders and woodcutters reach a collision-safe trunk stand within 0.35 m before
+chopping. Road crews have a separate eight-second clearance task; clearing an
+obstruction does not also manufacture saleable timber.
+The road routine starts known tree clearance before processing a failed road
+waypoint, including failures published in the same tick as the previous section.
+`village::workplace_access` releases waiting employees to ambient life and resumes
+ordinary assignment when their connector opens. That temporary wait must not
+consume their entire workday or reopen a genuinely completed shift.
+Freight service uses a completed Market entrance or the actual Hall entrance;
+a reserved Market plot is never a pickup counter.
+
+An assigned hero participates in construction objective/navigation replication.
+When any tactical character loses its movement target, its motion is settled;
+otherwise stale hero velocity can keep a work animation looking like walking.
+Stationary chopping/building/mining/farming/fishing takes precedence over a held
+cargo pose. The bundle is stowed visually while its authoritative inventory remains.
+
 ## 8. Living-world implementation rules
 
 The current village simulation uses these rules as hard boundaries:
 
-- **Identity is data, names are labels.** `PersonId`, `SettlementId`, `BuildingId` and `CompanyId` are
+- **Identity is data, names are labels.** `PersonId`, `HouseholdId`, `SettlementId`, `BuildingId` and `CompanyId` are
   authoritative across regions, payroll, ownership, employment, housing, UI commands and
   serialized relationships. Legacy name rosters remain for readable panels and old-state
   migration only; the versioned world-state file itself is still a roadmap item.
@@ -508,7 +535,10 @@ The current village simulation uses these rules as hard boundaries:
   owner strategy/solvency in `village/businesses/`, bounded firm/market/settlement
   archives in `village/history.rs`, legal firms, pooled treasuries, shares and consolidated
   ledgers in `village/companies.rs`, aggregate food/prosperity in
-  `village/settlement_economy.rs`, household provisioning in `village/households.rs`,
+  `village/settlement_economy.rs`, household membership in `village/households/membership.rs`,
+  procurement and scheduled household budgets in `households/provisioning.rs`,
+  hearth consumption and contribution math in `households/needs.rs`, physical
+  household cargo in `households/shopping.rs` and home schedules in `households.rs`,
   physical trades in `village/trades.rs`, production rates in `village/production.rs`,
   strategic LOD in `village/strategic.rs`, and shared ordering in `village/schedule.rs`.
   `village_roads.rs` owns the local survey primitives and public road state; connector
@@ -579,3 +609,41 @@ scratch indices. Issued horses share wildlife IDs but have separate population a
 rig budgets. `client::hero::mounted` owns socket attachment and masked riding/melee
 animation; the person root remains at ground level for selection. See
 [CAVALRY.md](CAVALRY.md) for the lab launch and current gameplay limits.
+
+### Stable household accounts
+
+A household is a separate regional entity with `HouseholdId`, `HouseholdMembers`
+and its one `HouseholdEconomy` purse. Person and dwelling links reference that ID;
+the house's `Household` roster is a derived occupancy view. Physical inventories
+and partial hearth energy stay at the building. Membership reconciliation is
+change-driven, and procurement has a once-per-world-minute entry gate with
+staggered per-household deadlines. Active shopping caches the account and home
+entities while validating stable ownership; it performs no global account lookup
+per shopper/frame. See [HOUSEHOLD-ECONOMY.md](HOUSEHOLD-ECONOMY.md).
+
+Owner-funded extensions in `world/house_upgrades/` retain this home and account
+identity. A separate replicated worksite describes material delivery and paid
+work, while private project escrow and transit goods remain authoritative server
+state and participate in economic audits. Completion changes `HouseAppearance`
+in place, raising physical capacity from four to eight and triggering the normal
+membership and yard reconciliation. Worker recruitment is globally bounded to
+one roster search per fixed tick; daily investment candidates are staggered.
+See [HOUSE-UPGRADES.md](HOUSE-UPGRADES.md).
+
+Ordinary self-supplied construction joins a plot's reserved access near the worksite
+instead of always taking freshly cut timber past the Hall. The approach uses at most
+four cheap geometry probes and the existing budgeted navigation queue; failure can
+retry the original public corridor. Private delivery state remembers the entry
+actually reached so empty return trips reuse the same corridor prefix. Purchased
+upgrade materials still require a real pickup from Hall stock.
+
+### Settlement development
+
+`village/development_evidence.rs` aggregates living residents, valid occupied homes,
+dated private business activity and completed Market access once per world day.
+`settlement_development/progression.rs` consumes those compact summaries, qualifies
+two of the last three completed dates and retains the funded Hall construction
+pipeline. A missing observation never inherits the present state. Population and
+occupied housing establish Village eligibility; Town adds operating commerce.
+Wellbeing remains separately visible in the economy summary. No per-person timers
+or new pathfinding are added. See [SETTLEMENT-DEVELOPMENT.md](SETTLEMENT-DEVELOPMENT.md).

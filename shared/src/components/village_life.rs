@@ -250,8 +250,8 @@ mod nutrition_tests {
 /// The residents assigned to one house.
 ///
 /// A household is attached only to completed [`SettlementBuildingKind::House`]
-/// entities. [`resident_ids`](Self::resident_ids) is authoritative. The
-/// readable `residents` list is a derived UI/old-save mirror only: duplicate
+/// entities as a dwelling occupancy projection of stable [`super::HouseholdMembers`]. The
+/// readable `residents` list is derived UI data only: duplicate
 /// or changed display names must never move a bed, a pantry contribution, or
 /// a shopper assignment between people.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

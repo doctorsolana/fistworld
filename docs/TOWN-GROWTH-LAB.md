@@ -1,8 +1,8 @@
 # Town growth and neighborhood review
 
 The town-growth lab runs the real server village schedule without networking or
-rendering. Its only interventions are eight founding people, a fixed settlement
-charter seed, and scheduled immigration. Residents still register, earn money,
+rendering. Its interventions are the profile's founding people and supplies, a fixed settlement
+charter seed, and scheduled immigration. Most profiles start with eight people and an empty store. Residents still register, earn money,
 obtain permits, carry materials, construct buildings and connect roads normally.
 This is a development experiment, not a saved game or a population-to-building
 generator.
@@ -21,11 +21,12 @@ self-contained `report.html`. Generated reports, snapshots and logs stay under
 actual accepted building footprints, doors, crop plots and completed/pending
 roads. Failed and incomplete runs remain visible; a pleasant plan is not a pass.
 
-| Profile | Immigration after the eight founders |
+| Profile | Founders and immigration (eight founders unless noted) |
 | --- | --- |
 | `low` | Two arrivals on each of scenario days 2, 4 and 6 |
 | `steady` | Three arrivals each day from scenario days 2 through 8 |
 | `burst` | Twenty-four arrivals together on scenario day 4 |
+| `inland-boats` | Five founders and 20 Bread; two physical boat arrivals on each of days 1–30 (65 people offered in total) |
 | `city-100-gradual` / `city-100-surge` | Offer a total of 100 people, including founders |
 | `city-250-gradual` / `city-250-surge` | Offer a total of 250 people, including founders |
 | `city-500-gradual` / `city-500-surge` | Offer a total of 500 people, including founders |
@@ -46,6 +47,42 @@ The report separates geometry/money integrity from population retention and
 reaching Town. A run can pass conservation checks while its economy struggles.
 Food inventory, production, consumption, hunger, prosperity and housing show why.
 Optional district and defense overlays show actual accepted server plans.
+
+Development now uses occupied housing and working commerce, with two qualifying
+dates among the last three completed days; food and prosperity remain separate
+living-condition readings. See [SETTLEMENT-DEVELOPMENT.md](SETTLEMENT-DEVELOPMENT.md).
+Each snapshot retains the dated evidence and qualification history. `TOWN development`
+logs report housed residents, occupied homes, operating business types, Market access,
+paid trade and Hall materials separately from qualifying days. Historical runs below
+retain the rules and dates under which they were measured.
+
+### Thirty-day inland village experiment
+
+```bash
+python3 tools/town_growth.py --seeds 23 --profiles inland-boats \
+  --minutes 720 --snapshot-minutes 24 --warp 10 --timeout 10800
+
+# Watch the same starting conditions in the connected game:
+FISTWORLD_TOWN_PROFILE=inland-boats FISTWORLD_LAB_WARP=10 ./run.sh testworld
+```
+
+This profile starts with five people beside the inland Moot and exactly 20 physical
+Bread in its store. It requests two boats on each scenario day, including day one;
+the first pair sails in after startup. The existing natural-immigration system
+chooses and validates real ocean routes and landfalls, then newcomers walk to the
+Moot and seek admission normally. Its demand threshold is bypassed for these
+explicit test arrivals, and ambient/seasonal extra arrivals are disabled. Failed
+voyages and people still travelling are outcomes, never replaced with land spawns.
+No food is replenished, and no buildings, workers or tiers are granted.
+
+The headless runner executes fixed 60 Hz steps with a 10× simulation delta without
+waiting for wall-clock time. Thirty full 24-minute cycles equal 720 world minutes;
+this is not a 10× client FPS measurement. Daily `snapshot-*.json` files record
+geometry/economy; `people-*.json` additionally record actual boat launches,
+landfalls, admission times, current routines, nutrition, inventory and mortality.
+The journal also exposes canonical household membership, shared balances and
+fuel satisfaction so unmet necessities can be distinguished from missing homes.
+The final day label can be 30 because the clock begins part-way into HUD day zero.
 
 Scenario day 1 is HUD day 0. Arrivals are people awaiting admission; the resident
 count does not increase until the normal immigration system accepts them.
@@ -83,7 +120,7 @@ FISTWORLD_LAB_WARP=25 ./run.sh testworld
 ```
 
 The default test world uses the `town-growth` inland fixture. Its founding site,
-charter seed, eight founders and immigration profile are shared with the headless
+charter seed, founding supplies, founder count and immigration profile are shared with the headless
 experiment. The launcher sets `CITYSIM_MAP_ID=village_lab` for both binaries and
 aims the camera at the inland town. Use the HUD to pause or change speed. The
 connected runtime has its own actor identities and timing; this compares the
@@ -253,3 +290,48 @@ These are layout observations from specific runs, not frame-rate benchmarks or
 proof that every seed will look the same. Source hashes and exact snapshots are
 kept with each ignored report; the final comparison also includes later collision
 integration changes, with no additional economic policy tuning.
+
+### Development progression comparison, 2026-09-14
+
+The same inland charter (seed 23) was run with the previous food/prosperity gates
+and the new [development rules](SETTLEMENT-DEVELOPMENT.md): five founders,
+20 Bread in the Hall, two ordinary boat arrivals per day for 30 days, 10×
+simulation time. No additional buildings, employment, materials or promotions
+were granted. Both binaries include the preceding household, house-extension
+and construction-delivery work; this comparison changes settlement progression.
+
+| Daily checkpoint | Previous rules | Development rules |
+| --- | ---: | ---: |
+| First Village snapshot | Day 17 | Day 10 |
+| First Town snapshot | Not reached by day 30 | Day 19 |
+| Residents at day 30 | 65 | 65 |
+| Housed at day 30 | 65 | 65 |
+| Completed buildings / connected roads | 42 / 42 | 46 / 46 |
+| Food stock at day 30 | 87 | 160 |
+| Unmet meals at final daily reading | 5 | 6 |
+
+Dates are the first **daily snapshots** showing the completed tier, not exact
+construction-completion timestamps. Earlier unlocks change subsequent economic
+decisions. This single matched run demonstrates more attainable development;
+it does not establish universal growth dates or solve food delivery. Both runs
+passed all existing conservation, housing and layout integrity checks, with no
+roadless or disconnected buildings at the final checkpoint. The new population
+retained all five founders and 60 arrivals.
+
+In the old run, day 13 had 32 residents, all housed, no unmet meals and prosperity
+95. The food-reserve ratio still fell to about 2.7 days as the settlement grew,
+resetting its food-security streak. That ratio remains useful wellbeing feedback
+but no longer erases civic development.
+
+Ignored evidence is under `logs/settlement-development-20260914/{before,after}`;
+`before-after.json` records the matched checkpoints and each `run.json` records
+the test-binary hash. These instrumented runs overlapped compilation and visual
+verification, so their timings are not a performance comparison.
+
+Two further seed-41 charter runs used the ordinary coastal `low` and `burst`
+arrival profiles for 12 days at 10×. Both first showed Village at day 9 and passed
+all integrity checks. They finished with 14/14 and 32/32 housed residents and
+18/18 and 24/24 completed buildings/connected roads respectively. The low case
+correctly remained below Town's population threshold; the burst case still had
+two ordinary construction projects pending. These are charter/arrival variations
+on the authored Village Lab terrain, not additional generated world seeds.

@@ -318,13 +318,12 @@ impl Default for GoodsInventory {
 /// owns the contents or what they are worth. `HALL` and `MARKET` are per-good
 /// compartment sizes; the remaining constants are ordinary combined stores.
 pub mod capacity {
-    /// Personal cargo carried by both villagers and player heroes. Sixteen
-    /// bulk fits four Wood bundles (up from three) while remaining far below
-    /// even the smallest workplace store.
-    pub const VILLAGER: u32 = 16;
-    /// Temporary work capacity for Moot Stewards and private company porters.
-    /// This is the future hand-cart allowance, not a larger personal backpack.
-    pub const PORTER: u32 = 96;
+    /// Personal cargo shared by villagers and heroes: six Wood bundles.
+    /// A ten-bundle house needs two full/partial deliveries instead of three.
+    pub const VILLAGER: u32 = 24;
+    /// Temporary handcart capacity for public and company porters: thirty-six
+    /// Wood bundles. Employment changes preserve already loaded cargo.
+    pub const PORTER: u32 = VILLAGER * 6;
     pub const HOUSE: u32 = 80;
     pub const FARMSTEAD: u32 = 240;
     pub const LIVESTOCK_FARM: u32 = 300;

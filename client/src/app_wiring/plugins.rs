@@ -136,6 +136,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     app.add_plugins(ui::BusinessManagementPlugin);
     app.add_plugins(ui::PropertyMarketPlugin);
     app.add_plugins(ui::PlayerPermitsPlugin);
+    app.add_plugins(ui::HouseUpgradesPlugin);
     app.add_plugins(ui::NameEntryPlugin);
     app.add_plugins(ui::DebugTimeMenuPlugin);
     app.add_plugins(ui::HudPlugin);

@@ -33,6 +33,11 @@ pub struct MarketDayFlow {
     /// not guaranteed merchant revenue.
     #[serde(default)]
     pub funded_unmet_units: u64,
+    /// Conservative price ceiling shared by every recorded funded shortfall.
+    /// Zero means no priced claim. This is observed purchasing capacity, not
+    /// escrow or a promise that a buyer will still be present tomorrow.
+    #[serde(default)]
+    pub funded_unmet_unit_price: u64,
 }
 
 impl MarketDayFlow {
@@ -51,6 +56,7 @@ impl MarketDayFlow {
             unavailable_units: 0,
             unaffordable_units: 0,
             funded_unmet_units: 0,
+            funded_unmet_unit_price: 0,
         }
     }
 
@@ -76,7 +82,13 @@ impl MarketDayFlow {
         }
     }
 
-    fn record_unmet_demand(&mut self, unavailable: u32, unaffordable: u32, funded_unmet: u32) {
+    fn record_unmet_demand(
+        &mut self,
+        unavailable: u32,
+        unaffordable: u32,
+        funded_unmet: u32,
+        reference_price: u64,
+    ) {
         self.unavailable_units = self
             .unavailable_units
             .saturating_add(u64::from(unavailable));
@@ -86,6 +98,25 @@ impl MarketDayFlow {
         self.funded_unmet_units = self
             .funded_unmet_units
             .saturating_add(u64::from(funded_unmet));
+        if funded_unmet > 0 {
+            let price = reference_price.max(1);
+            self.funded_unmet_unit_price = if self.funded_unmet_unit_price == 0 {
+                price
+            } else {
+                self.funded_unmet_unit_price.min(price)
+            };
+        }
+    }
+
+    /// Quantity whose observed buying capacity covers this actual offer.
+    /// Mixing a cheap rejected order with richer buyers deliberately keeps
+    /// the lower bound; no producer may price every claim at the richest bid.
+    pub const fn funded_unmet_at(self, unit_price: u64) -> u64 {
+        if unit_price > 0 && unit_price <= self.funded_unmet_unit_price {
+            self.funded_unmet_units
+        } else {
+            0
+        }
     }
 
     pub const fn unmet_units(self) -> u64 {
@@ -162,6 +193,8 @@ pub enum MarketSeller {
     Business(crate::components::BuildingId),
     Person(crate::components::PersonId),
     Treasury(crate::components::SettlementId),
+    /// Returned household provisions remain owned by the domestic group until sold.
+    Household(crate::components::HouseholdId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +236,10 @@ pub struct MootMarket {
     market_fee_bps: u16,
     #[serde(default)]
     trade_tier: MarketTradeTier,
+    /// Identifies the current outstanding-demand ledger independently of the
+    /// simulation clock. History closes this ledger in its own ordered pass.
+    #[serde(default)]
+    demand_epoch: u64,
 }
 
 const fn default_market_fee_bps() -> u16 {
@@ -226,11 +263,16 @@ impl MootMarket {
             listings: Vec::new(),
             market_fee_bps: DEFAULT_MARKET_FEE_BPS,
             trade_tier: MarketTradeTier::Moot,
+            demand_epoch: 0,
         }
     }
 
     pub const fn trade_tier(&self) -> MarketTradeTier {
         self.trade_tier
+    }
+
+    pub const fn demand_epoch(&self) -> u64 {
+        self.demand_epoch
     }
 
     /// Formal inter-settlement commerce begins only after the settlement has
@@ -430,6 +472,7 @@ impl MootMarket {
     /// Begin a fresh market-day accumulator from the currently displayed
     /// quote. Called only after the previous accumulator has been archived.
     pub fn begin_new_day(&mut self) {
+        self.demand_epoch = self.demand_epoch.wrapping_add(1);
         for pool in &mut self.pools {
             pool.previous_day = pool.day;
             pool.day = MarketDayFlow::opening(pool.bid, pool.ask);
@@ -729,10 +772,72 @@ impl MootMarket {
         let funded_unmet = funded_request.saturating_sub(preview.units.min(funded_request));
         let purchase = self.purchase(good, requested, budget, maximum_unit_price, excluded_seller);
         debug_assert_eq!(purchase.trade, preview);
-        self.pool_mut(good)
-            .day
-            .record_unmet_demand(unavailable, unaffordable, funded_unmet);
+        self.record_unmet_demand(
+            good,
+            unavailable,
+            unaffordable,
+            funded_unmet,
+            reference_price,
+        );
         purchase
+    }
+
+    /// Publish a bounded, already-observed shortfall without purchasing or
+    /// changing physical listings. Retrying buyers own claim deduplication;
+    /// only new units should reach this daily accumulator. New purchasing
+    /// capacity may fund an already recorded shortfall without recording the
+    /// missing units twice.
+    pub fn record_unmet_demand(
+        &mut self,
+        good: Good,
+        unavailable: u32,
+        unaffordable: u32,
+        funded: u32,
+        reference_price: u64,
+    ) {
+        if self.can_trade(good) {
+            let flow = &mut self.pool_mut(good).day;
+            let unclassified = flow
+                .unmet_units()
+                .saturating_add(u64::from(unavailable))
+                .saturating_add(u64::from(unaffordable))
+                .saturating_sub(flow.funded_unmet_units);
+            flow.record_unmet_demand(
+                unavailable,
+                unaffordable,
+                funded.min(unclassified.min(u64::from(u32::MAX)) as u32),
+                reference_price,
+            );
+        }
+    }
+
+    /// Withdraw a caller-owned outstanding claim from the current day before
+    /// replacing or resolving it. Callers must clear their claim bookkeeping
+    /// at the same market-day boundary; historical flows are never mutated.
+    /// Removing the cheapest claimant cannot reconstruct richer individual
+    /// ceilings, so the surviving aggregate deliberately keeps its safe bound.
+    pub fn withdraw_unmet_demand(
+        &mut self,
+        good: Good,
+        unavailable: u32,
+        unaffordable: u32,
+        funded: u32,
+    ) {
+        let flow = &mut self.pool_mut(good).day;
+        debug_assert!(flow.unavailable_units >= u64::from(unavailable));
+        debug_assert!(flow.unaffordable_units >= u64::from(unaffordable));
+        debug_assert!(flow.funded_unmet_units >= u64::from(funded));
+        flow.unavailable_units = flow
+            .unavailable_units
+            .saturating_sub(u64::from(unavailable));
+        flow.unaffordable_units = flow
+            .unaffordable_units
+            .saturating_sub(u64::from(unaffordable));
+        flow.funded_unmet_units = flow.funded_unmet_units.saturating_sub(u64::from(funded));
+        debug_assert!(flow.funded_unmet_units <= flow.unmet_units());
+        if flow.funded_unmet_units == 0 {
+            flow.funded_unmet_unit_price = 0;
+        }
     }
 
     /// Read the exact cheapest-fill result without changing listings or daily

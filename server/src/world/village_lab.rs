@@ -27,8 +27,7 @@ use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessSalePolicy,
     BusinessWagePolicy, CarriedLoad, CivicAccount, CompanyAccount, CompanyDecisionHistory,
     CompanyManagementPolicy, Good, GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket,
-    SettlementEconomy, TavernService, Wallet, FOOD_SECURITY_TARGET_DAYS, VILLAGE_MIN_PROSPERITY,
-    VILLAGE_REQUIRED_SECURE_DAYS,
+    SettlementEconomy, TavernService, Wallet, FOOD_SECURITY_TARGET_DAYS, VILLAGE_MIN_RESIDENTS,
 };
 use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
@@ -58,10 +57,9 @@ use crate::world::village_roads::{
 };
 
 const DEFAULT_LAB_WARP: f32 = 100.0;
-// The meadow needs one startup day followed by three fully secure day
-// boundaries. Continuous quality-scaled production needs the early workplaces
-// to accumulate their first physical batches before the secure streak begins;
-// 190 minutes covers the third boundary without weakening the rule.
+// Retain the established food/production observation window. Tier qualification
+// now uses durable housing and daily development evidence; food security remains
+// an independently observed wellbeing outcome.
 const DEFAULT_LAB_MINUTES: f32 = 190.0;
 // A dual foundation can legitimately queue behind several simultaneous road
 // surveys. Ten simulated minutes still catches a real deadlock quickly while
@@ -2230,7 +2228,9 @@ fn money_breakdown(world: &mut World) -> MoneyBreakdown {
         .query::<&InheritedBusinessCapital>()
         .iter(world)
         .map(|capital| capital.0)
-        .sum::<u64>();
+        .sum::<u64>()
+        .saturating_add(world.get_resource::<crate::world::house_upgrades::HouseUpgradeProjects>()
+            .map_or(0, |projects| projects.total_escrow_pennies()));
     let trade_escrow = world
         .query::<&shared::components::CivicTradeContract>()
         .iter(world)
@@ -2302,11 +2302,11 @@ fn money_trace(world: &mut World) -> HashMap<String, u64> {
             account.unposted_company_capital,
         );
     }
-    for (building_id, household) in world
-        .query::<(&BuildingId, &HouseholdEconomy)>()
+    for (household_id, household) in world
+        .query::<(&shared::components::HouseholdId, &HouseholdEconomy)>()
         .iter(world)
     {
-        trace.insert(format!("household:{}", building_id.0), household.pennies);
+        trace.insert(format!("household:{}", household_id.0), household.pennies);
     }
     for (entity, capital) in world
         .query::<(Entity, &InheritedBusinessCapital)>()
@@ -2323,6 +2323,9 @@ fn money_trace(world: &mut World) -> HashMap<String, u64> {
     let clearing = world
         .get_resource::<village::BusinessEventQueue>()
         .map_or(0, |queue| queue.pending_sale_gross());
+    trace.insert("house-upgrade-escrow".to_string(), world
+        .get_resource::<crate::world::house_upgrades::HouseUpgradeProjects>()
+        .map_or(0, |projects| projects.total_escrow_pennies()));
     trace.insert("market-clearing".to_string(), clearing);
     trace
 }
@@ -3214,8 +3217,10 @@ fn print_structure_report(world: &mut World) {
 }
 
 fn goods_totals(world: &mut World) -> (u32, u32, u32, u32, u32, u32, u32) {
+    let transit_wood = world.get_resource::<crate::world::house_upgrades::HouseUpgradeProjects>()
+        .map_or(0, |projects| projects.transit_wood());
     world.query::<&GoodsInventory>().iter(world).fold(
-        (0, 0, 0, 0, 0, 0, 0),
+        (transit_wood, 0, 0, 0, 0, 0, 0),
         |(wood, wheat, flour, bread, fish, meat, wool), inventory| {
             (
                 wood + inventory.amount(Good::Wood),
@@ -3698,16 +3703,11 @@ fn assert_lab_outcome(
             "secure food production did not cover residents: {economy:#?}"
         );
         assert_eq!(economy.unmet_food, 0, "secure residents went hungry");
-        assert!(
-            economy.prosperity >= VILLAGE_MIN_PROSPERITY
-                && economy.food_secure_days >= VILLAGE_REQUIRED_SECURE_DAYS,
-            "secure Hamlet never sustained its Village requirements: {economy:#?}"
-        );
     }
     // The focused inland control is intentionally allowed to run as a short
     // grain-loop smoke test, but a long soak represents abundant Meadows
     // conditions and must actually cross the physical Hamlet -> Village
-    // project. This catches food-accounting phase errors and Hall material
+    // project. This catches development-accounting errors and Hall material
     // deadlocks that a final stock snapshot alone cannot distinguish.
     if scenario == LabScenario::InlandMeadow
         && env_f32("FISTWORLD_LAB_MINUTES", DEFAULT_LAB_MINUTES) >= 400.0
@@ -3746,7 +3746,13 @@ fn assert_lab_outcome(
         let (settlement, economy) = economies
             .get("Lab Coldbarrow")
             .expect("food-poor settlement economy missing");
-        assert_eq!(settlement.tier, SettlementTier::Hamlet, "{economy:#?}");
+        if settlement.residents < VILLAGE_MIN_RESIDENTS {
+            assert_eq!(
+                settlement.tier,
+                SettlementTier::Hamlet,
+                "a small founding population must not bypass the Village population gate"
+            );
+        }
         assert!(
             evidence.coldbarrow_saw_hunger,
             "the frozen inland control was never measurably food-poor"
@@ -3754,9 +3760,8 @@ fn assert_lab_outcome(
         assert!(
             economy.reserve_days < FOOD_SECURITY_TARGET_DAYS
                 || economy.recent_food_production < settlement.residents as f32
-                || economy.unmet_food > 0
-                || economy.food_secure_days < VILLAGE_REQUIRED_SECURE_DAYS,
-            "the food-poor control unexpectedly satisfied every advancement requirement: {economy:#?}"
+                || economy.unmet_food > 0,
+            "the food-poor control unexpectedly lost all measured food pressure: {economy:#?}"
         );
         assert!(
             !evidence.meadow_saw_hunger,
@@ -4497,11 +4502,15 @@ fn assert_arrival_stress_outcome(
         snapshot.housed >= minimum_housed,
         "the population shock did not produce its scale-appropriate minimum of {minimum_housed} housed residents; snapshot={snapshot:#?}; active builders={construction_people:#?}"
     );
-    let required_houses = snapshot
-        .housed
-        .div_ceil(SettlementBuildingKind::House.housing_capacity() as usize);
+    let completed_beds: usize = world
+        .query::<(&SettlementBuilding, Option<&shared::components::HouseAppearance>)>()
+        .iter(world)
+        .map(|(building, appearance)| {
+            usize::from(building.kind.housing_capacity_with_house(appearance))
+        })
+        .sum();
     assert!(
-        snapshot.buildings[building_index(SettlementBuildingKind::House)] >= required_houses,
+        completed_beds >= snapshot.housed,
         "completed housing capacity disagreed with its physical cabins: {snapshot:#?}"
     );
     let road_requests: Vec<_> = world.query::<&RoadRequest>().iter(world).copied().collect();
@@ -4963,18 +4972,14 @@ fn assert_economy_soak_outcome(world: &mut World, evidence: &Evidence) {
         .query::<&GoodsInventory>()
         .iter(world)
         .all(|inventory| inventory.used_bulk() <= inventory.bulk_capacity()));
-    for (household, economy, pantry) in world
-        .query::<(&Household, &HouseholdEconomy, &GoodsInventory)>()
+    for (household, economy) in world
+        .query::<(&shared::components::HouseholdMembers, &HouseholdEconomy)>()
         .iter(world)
     {
         if household.resident_ids.is_empty() {
             assert_eq!(
                 economy.pennies, 0,
                 "an empty household retained a ghost necessities purse",
-            );
-            assert!(
-                pantry.is_empty(),
-                "an empty household retained food or goods outside the estate flow",
             );
         }
     }

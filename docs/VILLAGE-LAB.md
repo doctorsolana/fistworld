@@ -251,8 +251,9 @@ the lab can therefore inspect physical Meat/Wool work without simulating animal 
 default run adds eight uncommitted migrants on day 2. The settlement should
 visibly harvest non-edible Wheat, mill it into household-edible Flour, bake efficient
 Bread and land ready-to-eat Fish. It must cover one daily portion per resident, hold
-at least three reserve days, sustain the food rule for three days and advance from
-Hamlet to Village.
+at least three reserve days, and separately advance from Hamlet to Village through
+the occupied-housing qualification and paid Hall work. Food outcomes are still
+checked, but no longer grant or block a civic tier.
 
 `Lab Meadow` in the `inland-meadow` scenario instead uses a separate fertile Meadows
 anchor with no legal fishing site. It is the deterministic control for the complete
@@ -453,7 +454,7 @@ happens only when a real household, builder or business buys. The stock target i
 delivery ceiling: offers keep flowing until that resource's public compartment is full, which
 permits new sellers to undercut existing asks. A Hall has 1,200 bulk independently for every
 resource. Once a Marketplace is complete it adds 600 bulk to every compartment and acts as a
-second physical pickup/drop-off counter without adding staffing slots or a duplicate inventory.
+visible freight pickup/drop-off counter without adding staffing slots or a duplicate inventory.
 The same market also carries a monotonic trade tier: the founding Moot accepts every current
 good except Iron, the earthen Marketplace establishes level 1, and its paved Town upgrade
 establishes level 2 and unlocks Iron. Locked stock stays physical at its owner and creates no
@@ -472,7 +473,7 @@ reach and finish chopping a real tree interaction before receiving its
 three-Wood load, then deposits that load at the Lumberjack Hut. Better forest
 quality shortens the professional harvest cycle. Emergency construction
 self-supply yields only two Wood from the same interaction and normally visits a
-nearby safe second tree to fill a four-Wood personal load before returning. Final,
+nearby safe trees to fill a six-Wood personal load before returning. Final,
 dusk and blocked-next-tree loads return partially, making the loop both deadlock-safe
 and a bootstrap fallback rather than a competitive industry.
 The physical interactions have no authored daily resource grant. Manual firms can
@@ -545,8 +546,9 @@ requires all of the following:
   observed, and total coin is exactly conserved across wallets, civic treasuries,
   household purses and company treasuries;
 - reserve days, recent production/consumption, prosperity and secure-day progress update from physical state;
-- Coldbarrow alone records hunger, lacks fishing, adds food capacity and remains
-  a Hamlet without a secure reserve; the fertile Meadow advances to Village;
+- Coldbarrow alone records hunger, lacks fishing and adds food capacity. It follows
+  the same population/housing development rules despite its food pressure;
+  the fertile Meadow advances to Village;
 - every completed building, including one already close to a road, finishes its own door connector;
 - detached road islands and unfinished paths are rejected as network anchors,
   while the Moot Steward adopts roadless or disconnected buildings for repair;
@@ -742,8 +744,8 @@ Set `FISTWORLD_LAB_ROUTE_DIAGNOSTICS=1` for a routing investigation; the first
 failed road candidate also prints its blocked segment, candidate/connector
 counts and exact live obstacle entries. Leave it unset for ordinary soaks.
 
-Use a short run to iterate on early construction, but keep 190 minutes for tier
-work because physical startup plus three secure day boundaries are required. Add
+Use a short run to iterate on early construction, but retain the 190-minute
+reference window for complete founding, daily qualification and physical Hall work.
 Ordinary runs print bounded five-minute summaries without flooding the terminal on every
 building change. Use `FISTWORLD_LAB_VERBOSE=1` when every structural transition and every
 villager's detailed state are useful.

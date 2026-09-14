@@ -6,8 +6,9 @@ use super::stock::BakeryBreadDisplay;
 use bevy::prelude::*;
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
 use shared::components::{
-    CivicHallLevel, CivicHallUpgradeWorksite, ConstructionSite, HouseAppearance, MarketLevel,
-    PlayerPosition, PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind,
+    CivicHallLevel, CivicHallUpgradeWorksite, ConstructionSite, HouseAppearance,
+    HouseUpgradeWorksite, MarketLevel, PlayerPosition, PlayerRotation, Settlement,
+    SettlementBuilding, SettlementBuildingKind,
 };
 use shared::terrain::WorldTerrain;
 
@@ -21,6 +22,12 @@ pub struct SettlementVisual {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildingVisual {
     pub(super) building_type: BuildingType,
+}
+
+impl BuildingVisual {
+    pub(crate) fn rendered_type(&self) -> BuildingType {
+        self.building_type
+    }
 }
 
 /// Retains the requested replacement while the current scene remains visible.
@@ -95,7 +102,7 @@ pub(super) fn claim_building_ground(
             Option<&CivicHallUpgradeWorksite>,
             Option<&HouseAppearance>,
         ),
-        Without<PlacedBuilding>,
+        (Without<PlacedBuilding>, Without<HouseUpgradeWorksite>),
     >,
 ) {
     for (entity, settlement, position, rotation, level, placed, building_position) in halls.iter() {

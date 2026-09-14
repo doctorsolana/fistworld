@@ -3,6 +3,99 @@ use super::*;
 mod tavern;
 
 #[test]
+fn founding_corridor_reserves_dense_checks_for_the_chosen_route() {
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(Vec3::new(1700.0, 80.0, 0.0), Vec2::splat(120.0), 0.0, 4.0);
+    let props = PropBlockers::default();
+    let walls = [BuildingBlocker {
+        center: Vec2::new(1698.0, 0.0),
+        half: Vec2::new(6.0, 40.0),
+        rotation: 0.0,
+    }];
+    let survey = RoadSurvey {
+        terrain: &terrain,
+        buildings: &walls,
+        live_buildings: None,
+        props: &props,
+        start: Vec2::new(1650.0, 0.0),
+        goal: Vec2::new(1752.0, 0.0),
+        min: Vec2::new(1620.0, -90.0),
+        max: Vec2::new(1782.0, 90.0),
+        max_nodes: 1000,
+        cell_size: 6.0,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.0,
+    };
+    let mut reference = SurveyScratch::default();
+    assert!(!survey_a_star(&survey, &mut reference).is_empty());
+    let mut measured = SurveyScratch::default();
+    let path = certified_candidate_survey(&survey, &mut measured);
+    assert_eq!(path.first(), Some(&survey.start));
+    assert_eq!(path.last(), Some(&survey.goal));
+    assert_eq!(measured.metrics.searches, 1);
+    assert!(
+        measured.metrics.line_checks * 8 < reference.metrics.line_checks,
+        "founding must not densely sample every discarded edge: {} vs {} exact line checks",
+        measured.metrics.line_checks,
+        reference.metrics.line_checks
+    );
+    assert!(path
+        .windows(2)
+        .all(|edge| survey.line_clear(edge[0], edge[1], &mut measured)));
+}
+
+#[test]
+fn optimistic_corridor_never_certifies_a_missed_thin_obstruction() {
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(Vec3::new(1700.0, 80.0, 0.0), Vec2::splat(100.0), 0.0, 4.0);
+    let props = PropBlockers::default();
+    for half_length in [5.0, 40.0] {
+        // The 2m hint samples miss this thin wall. The precise route must
+        // detour around the short wall and reject the boundary-spanning one.
+        let wall = BuildingBlocker {
+            center: Vec2::new(1695.0, 0.0),
+            half: Vec2::new(0.1, half_length),
+            rotation: 0.0,
+        };
+        let survey = RoadSurvey {
+            terrain: &terrain,
+            buildings: &[wall],
+            live_buildings: None,
+            props: &props,
+            start: Vec2::new(1692.0, 0.0),
+            goal: Vec2::new(1722.0, 0.0),
+            min: Vec2::new(1680.0, -24.0),
+            max: Vec2::new(1740.0, 24.0),
+            max_nodes: 1000,
+            cell_size: 6.0,
+            coarse_stride: 1,
+            fine_endpoint_radius: 0.0,
+        };
+        let mut scratch = SurveyScratch::default();
+        let near = survey.start + Vec2::X * 6.0;
+        assert!(survey.candidate_line_clear(survey.start, near, &mut scratch));
+        assert!(!survey.line_clear(survey.start, near, &mut scratch));
+        let path = certified_candidate_survey(&survey, &mut scratch);
+        assert_eq!(
+            scratch.metrics.searches, 2,
+            "a missed obstruction needs the exact fallback"
+        );
+        if half_length < 24.0 {
+            assert_eq!(path.first(), Some(&survey.start));
+            assert_eq!(path.last(), Some(&survey.goal));
+            assert!(path
+                .windows(2)
+                .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
+        } else {
+            assert!(
+                path.is_empty(),
+                "coarse hints must never become route permission"
+            );
+        }
+    }
+}
+
+#[test]
 fn fenced_farm_work_stands_remain_reachable_through_the_shared_entrance() {
     let farm = Vec3::new(1700., 80., 0.);
     let mut terrain = WorldTerrain::default();
@@ -1965,6 +2058,15 @@ fn the_building_builder_owns_and_finishes_its_road_at_100x() {
 
 #[test]
 fn road_builder_chops_an_obstructing_tree_before_laying_the_ribbon() {
+    assert_road_tree_clearance_completes(false);
+}
+
+#[test]
+fn rejected_road_waypoint_still_clears_its_tree_before_resurveying() {
+    assert_road_tree_clearance_completes(true);
+}
+
+fn assert_road_tree_clearance_completes(waypoint_was_rejected: bool) {
     let mut app = road_test_app();
     app.init_resource::<Time>();
     app.insert_resource(WorldTerrain::default());
@@ -1980,7 +2082,7 @@ fn road_builder_chops_an_obstructing_tree_before_laying_the_ribbon() {
         Update,
         (build_village_roads, crate::player::hero::step_units).chain(),
     );
-    app.world_mut().spawn(TimeWarp(100.0));
+    app.world_mut().spawn(TimeWarp(1.0));
 
     let settlement = app.world_mut().spawn_empty().id();
     let start = Vec2::new(1_700.0, 0.0);
@@ -2028,24 +2130,42 @@ fn road_builder_chops_an_obstructing_tree_before_laying_the_ribbon() {
         ))
         .id();
 
-    let mut saw_chopping = false;
-    for _ in 0..180 {
+    if waypoint_was_rejected {
+        // Packing the preceding section publishes its next MoveTarget in the
+        // same tick. Navigation can reject that segment's live trunk before
+        // the road routine gets its next update to start clearing it.
+        let terrain = app.world().resource::<WorldTerrain>();
+        let goal = Vec3::new(end.x, terrain.get_height(end.x, end.y), end.y);
+        app.world_mut()
+            .entity_mut(builder)
+            .insert((MoveTarget(goal), NavigationRouteFailed { goal }));
+    }
+
+    let mut chopping_frames = 0;
+    for _ in 0..1_800 {
         app.world_mut()
             .resource_mut::<Time>()
             .advance_by(Duration::from_secs_f32(
                 1.0 / shared::protocol::FIXED_TIMESTEP_HZ as f32,
             ));
         app.update();
-        saw_chopping |= app
+        if app
             .world()
             .get::<CharacterActivity>(builder)
-            .is_some_and(|activity| *activity == CharacterActivity::Chopping);
+            .is_some_and(|activity| *activity == CharacterActivity::Chopping)
+        {
+            chopping_frames += 1;
+        }
         if app.world().get::<RoadBuilderRoutine>(builder).is_none() {
             break;
         }
     }
 
-    assert!(saw_chopping, "the worker never played the chopping job");
+    let chopping_seconds = chopping_frames as f32 / shared::protocol::FIXED_TIMESTEP_HZ as f32;
+    assert!(
+        (7.9..=8.1).contains(&chopping_seconds),
+        "road clearance should take eight seconds at 1x, observed {chopping_seconds:.2}"
+    );
     assert!(
         app.world()
             .resource::<StaticColliders>()

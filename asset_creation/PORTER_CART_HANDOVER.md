@@ -94,8 +94,8 @@ are authored base-on-origin, so they sit on the floor boards.
 **Two slots, not three.** The bundles run 0.21–0.42 m deep; three in a 1.30 m bed would interpenetrate.
 Verified with real bundles: `WoodBundle` and `WheatSheaf` both sit inside the bed with clearance.
 
-`shared/src/economy.rs` already calls `capacity::PORTER = 96` "the future hand-cart allowance", so
-there is a slot waiting for this. Mapping load count to slots shown is a runtime decision — 0, 1 or 2.
+`shared/src/economy/inventory.rs` defines `capacity::PORTER = 144` bulk, six times a
+personal inventory. Mapping load count to slots shown is a runtime decision — 0, 1 or 2.
 
 ## 4. Runtime integration
 
@@ -103,7 +103,7 @@ Nothing here needs the art touched again. The completed runtime path is:
 
 1. The server publishes `PorterCartState` for a porter running market collection or internal
    delivery. The empty outbound leg keeps the cart, so it does not pop in only after pickup.
-2. Real inventory bulk maps to the display: empty is 0 slots, 1–48 bulk is 1 slot and 49–96 bulk is
+2. Real inventory bulk maps to the display: empty is 0 slots, 1–72 bulk is 1 slot and 73–144 bulk is
    2 slots. An abnormally interrupted trip keeps its loaded cart until the inventory is unloaded.
 3. The client spawns `HandCart.glb` at the porter's transform with no offset, rotation or scale.
 4. The hero plays `pull`, while `cart_pull` copies the hero clip's exact seek time, speed and blend

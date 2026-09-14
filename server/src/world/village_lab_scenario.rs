@@ -24,9 +24,7 @@ use shared::worldgen::WorldBiome;
 use crate::world::village;
 
 mod town_growth;
-pub(crate) use town_growth::{
-    choose_town_growth_site, town_growth_seed, GrowthProfile, TOWN_GROWTH_FOUNDERS,
-};
+pub(crate) use town_growth::{choose_town_growth_site, town_growth_seed, GrowthProfile};
 
 pub(crate) const SECURE_VILLAGERS: usize = 8;
 pub(crate) const POOR_VILLAGERS: usize = 8;
@@ -427,7 +425,7 @@ impl LabScenario {
     pub(crate) fn residents_per_village(self) -> usize {
         let default = match self {
             Self::EconomySoak => 0,
-            Self::TownGrowth => TOWN_GROWTH_FOUNDERS,
+            Self::TownGrowth => GrowthProfile::from_environment().founders(),
             Self::RegionalEconomy => SECURE_VILLAGERS,
             Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE,
             Self::DenseStress => DENSE_STRESS_VILLAGERS,
@@ -2086,6 +2084,7 @@ pub(crate) fn stage_rendered_lab_arrivals(
     derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
     mut villager_seed: ResMut<crate::world::dev::VillagerSeed>,
     mut state: Local<RenderedLabArrivalState>,
+    mut immigration: ResMut<crate::world::immigration::NaturalImmigrationDirector>,
 ) {
     if !enabled_flag("FISTWORLD_VILLAGE_LAB_RUNTIME") {
         return;
@@ -2125,6 +2124,22 @@ pub(crate) fn stage_rendered_lab_arrivals(
             state.next_wave += 1;
             continue;
         };
+        if scenario == LabScenario::TownGrowth
+            && GrowthProfile::from_environment() == GrowthProfile::InlandBoats
+        {
+            for _ in 0..wave.count {
+                assert!(
+                    immigration.request_manual_arrival(),
+                    "lab arrival queue is full"
+                );
+            }
+            state.next_wave += 1;
+            info!(
+                "Town growth scenario day {}: requested {} physical boat arrivals",
+                wave.day, wave.count
+            );
+            continue;
+        }
         spawn_runtime_villagers(
             &mut commands,
             &terrain,
@@ -2664,9 +2679,16 @@ pub(crate) fn stage_rendered_lab_once(
             initial_tier,
         );
         if scenario == LabScenario::TownGrowth {
-            commands.entity(settlement_entity).insert(
+            let profile = GrowthProfile::from_environment();
+            commands.entity(settlement_entity).insert((
                 shared::components::SettlementDevelopment::from_seed(town_growth_seed(), 0),
-            );
+                profile.initial_inventory(),
+            ));
+            if profile == GrowthProfile::InlandBoats {
+                commands.insert_resource(
+                    crate::world::immigration::NaturalImmigrationDirector::manual_only(),
+                );
+            }
             info!(
                 "Town growth charter seed={} profile={:?}",
                 town_growth_seed(),

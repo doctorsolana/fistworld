@@ -38,8 +38,13 @@ class Session:
         raise TimeoutError(f"{description}: last replicated state {self.status()}")
 
     def command(self, action, *, expect_ok=True, timeout=100, **parameters):
-        request_id = self.next_id
-        self.next_id += 1
+        # A follow-up driver can be created while the launch/arrival driver is
+        # still running. Refresh after that handoff rather than accepting an
+        # old reply as proof that a new command executed. Drivers still submit
+        # sequentially; this is not a concurrent command queue.
+        replies = [int(p.stem.split("-")[1]) for p in self.directory.glob("reply-*.json")]
+        request_id = max(self.next_id, max(replies, default=0) + 1)
+        self.next_id = request_id + 1
         temporary = self.directory / "command.tmp"
         temporary.write_text(json.dumps({"id": request_id, "command": {"action": action, **parameters}}))
         temporary.replace(self.directory / "command.json")

@@ -227,7 +227,10 @@ pub fn plan_requested_roads(
             Has<HomeRoutine>,
             Has<InternalDeliveryRoutine>,
             Has<TradeRouteRoutine>,
-            Has<crate::world::settlement_development::CivicHallBuilderRoutine>,
+            (
+                Has<crate::world::settlement_development::CivicHallBuilderRoutine>,
+                Has<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
+            ),
         ),
         With<CharacterKind>,
     >,
@@ -317,7 +320,7 @@ pub fn plan_requested_roads(
             at_home,
             internal_delivery,
             trade_route,
-            civic_hall_building,
+            (civic_hall_building, house_upgrading),
         )) = builders.get_mut(request.builder)
         else {
             commands
@@ -341,6 +344,7 @@ pub fn plan_requested_roads(
             || internal_delivery
             || trade_route
             || civic_hall_building
+            || house_upgrading
         {
             continue;
         }
@@ -1147,6 +1151,36 @@ pub fn build_village_roads(
             continue;
         }
 
+        // A newly published waypoint can fail navigation in the same tick
+        // that the preceding section finishes. Clear its surveyed trunk
+        // before interpreting that failure as a reason to destroy/resurvey
+        // the road; this is precisely the obstruction this worker can remove.
+        if let RoadBuildPhase::GoingTo { point } = routine.phase {
+            let point = point.min(road.points.len() - 1);
+            if point >= usize::from(road.built_through) {
+                if let Some(tree) = obstruction_on_road_segment(&road, point, clearance.as_deref())
+                {
+                    let stand =
+                        road_tree_stand(&terrain, tree, Vec2::new(position.0.x, position.0.z), 0);
+                    activity.set_if_neq(CharacterActivity::Idle);
+                    routine.phase = RoadBuildPhase::GoingToTree {
+                        point,
+                        tree: tree.point,
+                        stand: Vec2::new(stand.x, stand.z),
+                        radius: tree.radius,
+                        approach: 0,
+                    };
+                    commands
+                        .entity(builder)
+                        .remove::<TravelRoute>()
+                        .remove::<NavigationRoutePending>()
+                        .remove::<NavigationRouteFailed>()
+                        .insert(MoveTarget(stand));
+                    continue;
+                }
+            }
+        }
+
         if let (RoadBuildPhase::GoingTo { point }, Some(failed)) = (routine.phase, route_failed) {
             let point = point.min(road.points.len() - 1);
             let xz = road.points[point];
@@ -1292,7 +1326,7 @@ pub fn build_village_roads(
                         point,
                         tree,
                         radius,
-                        seconds_left: CHOP_SECONDS,
+                        seconds_left: ROAD_CLEAR_TREE_SECONDS,
                     };
                 } else {
                     let next_approach = approach.wrapping_add(1);
@@ -1354,27 +1388,6 @@ pub fn build_village_roads(
                 activity.set_if_neq(CharacterActivity::Idle);
                 let point = point.min(road.points.len() - 1);
                 let xz = road.points[point];
-                if point >= usize::from(road.built_through) {
-                    if let Some(tree) =
-                        obstruction_on_road_segment(&road, point, clearance.as_deref())
-                    {
-                        let stand = road_tree_stand(
-                            &terrain,
-                            tree,
-                            Vec2::new(position.0.x, position.0.z),
-                            0,
-                        );
-                        routine.phase = RoadBuildPhase::GoingToTree {
-                            point,
-                            tree: tree.point,
-                            stand: Vec2::new(stand.x, stand.z),
-                            radius: tree.radius,
-                            approach: 0,
-                        };
-                        ensure_move_target(&mut commands, builder, move_target, stand);
-                        continue;
-                    }
-                }
                 let target = Vec3::new(xz.x, terrain.get_height(xz.x, xz.y), xz.y);
                 if ground_distance(position.0, target) > ROAD_REACH {
                     ensure_move_target(&mut commands, builder, move_target, target);
@@ -1479,7 +1492,7 @@ pub fn build_village_roads(
                     point,
                     tree,
                     radius,
-                    seconds_left: CHOP_SECONDS,
+                    seconds_left: ROAD_CLEAR_TREE_SECONDS,
                 };
             }
             RoadBuildPhase::ChoppingTree {

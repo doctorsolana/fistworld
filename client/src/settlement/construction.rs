@@ -3,7 +3,8 @@
 use super::buildings::BuildingVisual;
 use bevy::prelude::*;
 use shared::components::{
-    CivicHallUpgradeWorksite, ConstructionSite, HouseAppearance, PlayerPosition,
+    CivicHallUpgradeWorksite, ConstructionSite, HouseAppearance, HouseUpgradeWorksite,
+    PlayerPosition,
 };
 use shared::economy::{Good, GoodsInventory};
 use shared::terrain::WorldTerrain;
@@ -26,6 +27,7 @@ pub(super) fn attach_construction_supply_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    terrain: Option<Res<WorldTerrain>>,
     mut assets: Local<
         Option<(
             Handle<Mesh>,
@@ -41,6 +43,7 @@ pub(super) fn attach_construction_supply_visuals(
             &GoodsInventory,
             Option<&CivicHallUpgradeWorksite>,
             Option<&HouseAppearance>,
+            Option<&HouseUpgradeWorksite>,
         ),
         Without<ConstructionSupplyVisual>,
     >,
@@ -63,8 +66,8 @@ pub(super) fn attach_construction_supply_visuals(
         })
         .clone();
 
-    for (entity, site, position, inventory, hall_upgrade, house) in sites.iter() {
-        let (required, good, material, art) = hall_upgrade.map_or_else(
+    for (entity, site, position, inventory, hall_upgrade, house, house_upgrade) in sites.iter() {
+        let (mut required, good, material, mut art) = hall_upgrade.map_or_else(
             || {
                 (
                     site.kind.construction_wood_required(),
@@ -82,6 +85,10 @@ pub(super) fn attach_construction_supply_visuals(
                 )
             },
         );
+        if let Some(upgrade) = house_upgrade {
+            required = upgrade.wood_required;
+            art = upgrade.target.building_type();
+        }
         let delivered = inventory.amount(good);
         commands.entity(entity).insert((
             ConstructionSupplyVisual,
@@ -101,6 +108,9 @@ pub(super) fn attach_construction_supply_visuals(
             .into_iter()
             .enumerate()
             {
+                if house_upgrade.is_some() {
+                    break;
+                }
                 parent.spawn((
                     Name::new(format!("Worksite stake {}", index + 1)),
                     Mesh3d(mesh.clone()),
@@ -114,6 +124,25 @@ pub(super) fn attach_construction_supply_visuals(
                 let column = index % 3;
                 let row = (index / 3) % 2;
                 let layer = index / 6;
+                // Keep the occupied door and its approach open. The temporary
+                // stack sits beside the extension and rests on actual terrain.
+                let x = (column as f32 - 1.0) * 0.58
+                    + if house_upgrade.is_some() {
+                        half.x + 2.0
+                    } else {
+                        0.0
+                    };
+                let z = front + row as f32 * 0.34;
+                let y = if house_upgrade.is_some() {
+                    let world =
+                        position.0 + Quat::from_rotation_y(site.rotation) * Vec3::new(x, 0.0, z);
+                    terrain.as_ref().map_or(0.0, |terrain| {
+                        terrain.get_height(world.x, world.z) - position.0.y
+                    }) + 0.12
+                        + layer as f32 * 0.24
+                } else {
+                    0.14 + layer as f32 * 0.25
+                };
                 parent.spawn((
                     Name::new(format!("Delivered {} {unit}", good.label())),
                     ConstructionSupplyBundle {
@@ -123,12 +152,8 @@ pub(super) fn attach_construction_supply_visuals(
                     },
                     Mesh3d(mesh.clone()),
                     MeshMaterial3d(material.clone()),
-                    Transform::from_xyz(
-                        (column as f32 - 1.0) * 0.58,
-                        0.14 + layer as f32 * 0.25,
-                        front + row as f32 * 0.34,
-                    ),
-                    if !site.raising && unit <= delivered {
+                    Transform::from_xyz(x, y, z),
+                    if (house_upgrade.is_some() || !site.raising) && unit <= delivered {
                         Visibility::Inherited
                     } else {
                         Visibility::Hidden
@@ -140,18 +165,25 @@ pub(super) fn attach_construction_supply_visuals(
 }
 
 pub(super) fn sync_construction_supply_visuals(
-    sites: Query<(&ConstructionSite, &GoodsInventory)>,
+    sites: Query<(
+        &ConstructionSite,
+        &GoodsInventory,
+        Has<HouseUpgradeWorksite>,
+    )>,
     mut bundles: Query<(&ConstructionSupplyBundle, &mut Visibility)>,
 ) {
     for (bundle, mut visibility) in bundles.iter_mut() {
-        let Ok((site, inventory)) = sites.get(bundle.site) else {
+        let Ok((site, inventory, house_upgrade)) = sites.get(bundle.site) else {
             continue;
         };
-        let next = if !site.raising && bundle.unit <= inventory.amount(bundle.good) {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
+        // Upgrade stock remains recoverable until the completed upper storey
+        // consumes it; show those units throughout the work.
+        let next =
+            if (house_upgrade || !site.raising) && bundle.unit <= inventory.amount(bundle.good) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         if *visibility != next {
             *visibility = next;
         }
@@ -183,15 +215,18 @@ pub(super) fn raise_construction_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     terrain: Option<Res<WorldTerrain>>,
-    mut sites: Query<(
-        Entity,
-        &ConstructionSite,
-        &PlayerPosition,
-        Option<&CivicHallUpgradeWorksite>,
-        Option<&HouseAppearance>,
-        Option<&mut RaisingVisual>,
-        Option<&BuildingVisual>,
-    )>,
+    mut sites: Query<
+        (
+            Entity,
+            &ConstructionSite,
+            &PlayerPosition,
+            Option<&CivicHallUpgradeWorksite>,
+            Option<&HouseAppearance>,
+            Option<&mut RaisingVisual>,
+            Option<&BuildingVisual>,
+        ),
+        Without<HouseUpgradeWorksite>,
+    >,
     mut transforms: Query<&mut Transform>,
 ) {
     let Some(terrain) = terrain else {

@@ -350,7 +350,7 @@ fn wheel_roll_uses_distance_and_the_authored_negative_direction() {
 }
 
 #[test]
-fn work_activity_selects_one_tool_and_carrying_selects_none() {
+fn work_activity_frees_the_hands_even_with_a_partial_load() {
     assert_eq!(
         desired_tool(Some(CharacterActivity::Chopping), false),
         Some(ToolKind::Axe)
@@ -364,7 +364,10 @@ fn work_activity_selects_one_tool_and_carrying_selects_none() {
         Some(ToolKind::Hammer)
     );
     assert_eq!(desired_tool(None, false), None);
-    assert_eq!(desired_tool(Some(CharacterActivity::Chopping), true), None);
+    assert_eq!(
+        desired_tool(Some(CharacterActivity::Chopping), true),
+        Some(ToolKind::Axe)
+    );
     assert_eq!(desired_tool(Some(CharacterActivity::Fishing), false), None);
 }
 
@@ -511,6 +514,62 @@ fn a_loaded_stationary_villager_freezes_in_the_carry_pose() {
     assert_eq!(active_carry.weight(), 1.0);
     assert_eq!(active_carry.speed(), 0.0);
     assert_eq!(active_carry.seek_time(), 0.0);
+    assert!(player.animation(idle).is_none());
+    assert_eq!(player.playing_animations().count(), 1);
+}
+
+#[test]
+fn a_loaded_worker_chops_instead_of_freezing_with_their_partial_load() {
+    let mut world = World::new();
+    world.insert_resource(Time::<()>::default());
+    let carry = AnimationNodeIndex::new(0);
+    let idle = AnimationNodeIndex::new(1);
+    let chop = AnimationNodeIndex::new(2);
+    let mut player = AnimationPlayer::default();
+    player.play(idle).repeat().set_weight(1.0);
+    let player_entity = world.spawn(player).id();
+    world.spawn((
+        HeroVisual { speed: 0.0 },
+        CharacterActivity::Chopping,
+        HeroAnim {
+            archery: Default::default(),
+            riding: Default::default(),
+            movement: Default::default(),
+            combat: Default::default(),
+            player: player_entity,
+            idle: Some(idle),
+            walk: None,
+            build: None,
+            chop: Some(chop),
+            harvest: None,
+            carry: Some(carry),
+            pull: None,
+            sit_idle: None,
+            current_body: Some(idle),
+            fading_body: None,
+            body_fade_seconds: 0.0,
+            paused: false,
+            saved_weights: Vec::new(),
+        },
+        CarriedLoad {
+            good: Some(shared::economy::Good::Wood),
+            appearance: Some(CarriedAppearance::WoodBundle),
+        },
+    ));
+
+    world.run_system_once(drive_hero_locomotion).unwrap();
+    world
+        .resource_mut::<Time<()>>()
+        .advance_by(std::time::Duration::from_secs_f32(
+            BODY_ANIMATION_FADE_SECONDS,
+        ));
+    world.run_system_once(drive_hero_locomotion).unwrap();
+
+    let player = world.get::<AnimationPlayer>(player_entity).unwrap();
+    let active = player.animation(chop).unwrap();
+    assert_eq!(active.weight(), 1.0);
+    assert_eq!(active.speed(), 1.0);
+    assert!(player.animation(carry).is_none());
     assert!(player.animation(idle).is_none());
     assert_eq!(player.playing_animations().count(), 1);
 }

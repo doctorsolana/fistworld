@@ -6,8 +6,7 @@ use super::*;
 use shared::components::CompanyOwnership;
 
 use shared::economy::{
-    CompanyAccount, CompanyManagementPolicy, VILLAGE_MIN_PROSPERITY, VILLAGE_MIN_RESIDENTS,
-    VILLAGE_REQUIRED_SECURE_DAYS,
+    CompanyAccount, CompanyManagementPolicy, VILLAGE_MIN_RESIDENTS,
 };
 
 mod businesses_tests;
@@ -17,9 +16,12 @@ mod construction_tests;
 mod employment_tests;
 mod fixtures;
 mod households_tests;
+mod household_economy_tests;
 mod immigration_tests;
 mod integration_tests;
 mod planning_tests;
 mod production_tests;
 
 use fixtures::{spawn_test_company, village_test_app};
+
+use super::trades::find_tree_for_cycle_cached;

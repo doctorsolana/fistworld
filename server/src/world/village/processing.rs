@@ -69,6 +69,7 @@ pub(crate) struct ProcessorWorkProgress {
 #[allow(clippy::type_complexity)]
 pub fn assign_processing_routines(
     mut commands: Commands,
+    off_duty_workers: Query<&WorkerOffDuty>,
     world_time: Query<&WorldTime>,
     workplaces: Query<(
         Entity,
@@ -158,11 +159,13 @@ pub fn assign_processing_routines(
             &roads,
             &road_requests,
         ) {
-            for worker in roster {
-                commands
-                    .entity(*worker)
-                    .insert(WorkerOffDuty { day: clock.day });
-            }
+            super::workplace_access::defer_shift(
+                &mut commands,
+                roster,
+                workplace,
+                clock.day,
+                &off_duty_workers,
+            );
             continue;
         }
 

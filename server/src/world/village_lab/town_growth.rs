@@ -12,8 +12,10 @@ use shared::settlement_snapshot::*;
 use shared::terrain::TerrainDeltaChunk;
 
 use crate::world::village_lab_scenario::{
-    choose_town_growth_site, town_growth_seed, GrowthProfile, TOWN_GROWTH_FOUNDERS,
+    choose_town_growth_site, town_growth_seed, GrowthProfile,
 };
+
+mod boats;
 
 fn percentile(values: &[f64], fraction: f64) -> f64 {
     if values.is_empty() {
@@ -524,6 +526,7 @@ fn town_growth_lab() {
     std::env::set_var("CITYSIM_MAP_ID", "village_lab");
     let profile_name = std::env::var("FISTWORLD_TOWN_PROFILE").unwrap_or_else(|_| "steady".into());
     let profile = GrowthProfile::parse(&profile_name);
+    let founders = profile.founders();
     let seed = town_growth_seed();
     let minutes = env_f32("FISTWORLD_TOWN_MINUTES", profile.default_minutes()).clamp(1.0, 2_880.0);
     let warp = env_f32("FISTWORLD_TOWN_WARP", 25.0).clamp(1.0, 1_000.0);
@@ -535,6 +538,9 @@ fn town_growth_lab() {
     std::fs::create_dir_all(&directory).expect("create ignored growth output directory");
     let mut app = App::new();
     configure_lab(&mut app);
+    if profile == GrowthProfile::InlandBoats {
+        boats::configure(&mut app);
+    }
     app.insert_resource(WorldTerrain::default());
     let (hall, trees, farmland) = choose_town_growth_site(app.world().resource::<WorldTerrain>());
     println!(
@@ -547,11 +553,13 @@ fn town_growth_lab() {
         "SecureResident",
         CivicStrategy::Balanced,
         hall,
-        TOWN_GROWTH_FOUNDERS,
+        founders,
         SettlementTier::Hamlet,
     );
     let development = SettlementDevelopment::from_seed(seed, 0);
-    app.world_mut().entity_mut(settlement).insert(development);
+    app.world_mut()
+        .entity_mut(settlement)
+        .insert((development, profile.initial_inventory()));
     app.world_mut()
         .spawn((WorldTime::new_default(), TimeWarp::clamped(warp)));
     let initial_money = total_money(app.world_mut());
@@ -565,6 +573,7 @@ fn town_growth_lab() {
     );
     let mut next_wave = 0;
     let mut arrivals = 0;
+    let mut boat_journal = boats::Journal::default();
     let step = warp / 60.0;
     let ticks = (minutes * 60.0 / step).ceil() as usize;
     let mut updates = Vec::with_capacity(ticks);
@@ -578,6 +587,11 @@ fn town_growth_lab() {
         let started = Instant::now();
         app.update();
         updates.push(started.elapsed().as_secs_f64() * 1_000.0);
+        let elapsed = (tick + 1) as f32 * step;
+        if profile == GrowthProfile::InlandBoats {
+            boat_journal.observe(app.world_mut(), elapsed);
+            arrivals = boat_journal.spawned();
+        }
         let day = app
             .world_mut()
             .query::<&WorldTime>()
@@ -589,11 +603,25 @@ fn town_growth_lab() {
             if day < wave.day.saturating_sub(1) {
                 break;
             }
-            spawn_lab_arrivals(app.world_mut(), hall, wave.day, wave.count, wave.target);
-            arrivals += wave.count;
+            if profile == GrowthProfile::InlandBoats {
+                for _ in 0..wave.count {
+                    assert!(
+                        app.world_mut()
+                            .resource_mut::<crate::world::immigration::NaturalImmigrationDirector>()
+                            .request_manual_arrival(),
+                        "lab boat queue is full"
+                    );
+                }
+                println!(
+                    "TOWN requested {} boats on scenario day {}",
+                    wave.count, wave.day
+                );
+            } else {
+                spawn_lab_arrivals(app.world_mut(), hall, wave.day, wave.count, wave.target);
+                arrivals += wave.count;
+            }
             next_wave += 1;
         }
-        let elapsed = (tick + 1) as f32 * step;
         if elapsed >= next_capture || tick + 1 == ticks {
             let state = snapshot(
                 app.world_mut(),
@@ -604,7 +632,7 @@ fn town_growth_lab() {
                 &updates,
             );
             assert!(
-                state.metrics.residents as usize <= TOWN_GROWTH_FOUNDERS + arrivals,
+                state.metrics.residents as usize <= founders + arrivals,
                 "growth created phantom residents"
             );
             assert!(
@@ -640,12 +668,19 @@ fn town_growth_lab() {
             );
             for town in &state.settlements {
                 println!(
-                    "TOWN development id={} tier={:?} gate={:?} progress={}/{} prosperity={:.1} food_stock={} produced={:.1}/day consumed={:.1}/day unmet={} reserve={:.1}days clusters={} largest_cluster={} radius={:.1}m",
+                    "TOWN development id={} tier={:?} gate={:?} qualifying_days={}/{} housed_base={} occupied_homes={} business_types={} market_access={} paid_trade={} hall_materials={}/{} prosperity={:.1} food_stock={} produced={:.1}/day consumed={:.1}/day unmet={} reserve={:.1}days clusters={} largest_cluster={} radius={:.1}m",
                     town.id.0,
                     town.tier,
                     town.development.next_gate,
                     town.development.progress_days,
                     town.development.required_days,
+                    town.development.evidence.housed_residents,
+                    town.development.evidence.occupied_homes,
+                    town.development.evidence.operating_business_types,
+                    town.development.evidence.market_accessible,
+                    town.development.evidence.paid_trade_pennies,
+                    town.development.material_staged,
+                    town.development.material_required,
                     state.metrics.mean_prosperity,
                     state.metrics.food_inventory,
                     state.metrics.recent_food_production,
@@ -658,6 +693,9 @@ fn town_growth_lab() {
                 );
             }
             print_report(app.world_mut(), elapsed, false);
+            if profile == GrowthProfile::InlandBoats {
+                boat_journal.write(app.world_mut(), elapsed, &directory, capture_index);
+            }
             capture_index += 1;
             next_capture = elapsed + interval;
         }
@@ -749,6 +787,27 @@ fn rectangles_overlap(a: &SnapshotBuilding, b: &SnapshotBuilding) -> bool {
         (b.footprint_center - a.footprint_center).dot(axis).abs()
             < radius(a, a_axes) + radius(b, b_axes) - 0.05
     })
+}
+
+#[test]
+fn inland_boat_profile_starts_small_and_only_adds_sixty_arrivals() {
+    let profile = GrowthProfile::parse("inland-boats");
+    assert_eq!(profile.founders(), 5);
+    assert_eq!(profile.initial_inventory().amount(Good::Bread), 20);
+    assert_eq!(
+        profile.initial_inventory().used_bulk(),
+        20 * Good::Bread.bulk_per_unit()
+    );
+    assert_eq!(profile.target_population(), 65);
+    assert_eq!(profile.default_minutes(), 30.0 * 24.0);
+    let waves = profile.waves();
+    assert_eq!(waves.len(), 30);
+    for (index, wave) in waves.iter().enumerate() {
+        assert_eq!(wave.day, index as u32 + 1);
+        assert_eq!(wave.count, 2);
+    }
+    assert_eq!(GrowthProfile::Steady.founders(), 8);
+    assert_eq!(GrowthProfile::Steady.initial_inventory().used_bulk(), 0);
 }
 
 #[test]

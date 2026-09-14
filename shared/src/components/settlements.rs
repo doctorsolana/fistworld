@@ -108,6 +108,9 @@ pub enum SettlementProgressGate {
     CivicHallMaterials,
     CivicHallConstruction,
     Complete,
+    Housing,
+    OccupiedHomes,
+    BusinessActivity,
 }
 
 impl SettlementProgressGate {
@@ -115,17 +118,33 @@ impl SettlementProgressGate {
         match self {
             Self::FoodSecurity => "secure food supply",
             Self::Population => "more permanent residents",
-            Self::Marketplace => "build a marketplace",
+            Self::Marketplace => "complete an accessible marketplace",
             Self::Tavern => "build a tavern",
-            Self::Trade => "operate the local market",
+            Self::Trade => "complete recent paid trade",
             Self::Prosperity => "raise prosperity",
             Self::Church => "build a church",
-            Self::Sustaining => "sustain all requirements",
+            Self::Sustaining => "qualify on two of the last three days",
             Self::CivicHallMaterials => "buy and stage materials for the Hall upgrade",
             Self::CivicHallConstruction => "construct the Hall upgrade",
             Self::Complete => "highest settlement tier reached",
+            Self::Housing => "house more permanent residents",
+            Self::OccupiedHomes => "establish occupied homes",
+            Self::BusinessActivity => "operate different business types",
         }
     }
+}
+
+/// Compact structural evidence, aggregated by the authoritative daily economy.
+/// Housed residents occupy completed homes in their own settlement. Activity
+/// and paid trade refer to dated observations, never lifetime account totals.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SettlementDevelopmentEvidence {
+    pub residents: u32,
+    pub housed_residents: u32,
+    pub occupied_homes: u32,
+    pub operating_business_types: u8,
+    pub market_accessible: bool,
+    pub paid_trade_pennies: u64,
 }
 
 /// Replicated, inspectable settlement plan and promotion ledger.
@@ -141,17 +160,52 @@ pub struct SettlementDevelopment {
     pub inner_wall: SettlementWallStyle,
     pub outer_wall: SettlementWallStyle,
     pub next_gate: SettlementProgressGate,
+    /// Qualifying completed dates in the rolling window; never material units.
     pub progress_days: u16,
     pub required_days: u16,
+    /// The last observed completed date plus one, initialized to foundation day.
     pub last_progress_day: u32,
     pub last_road_work_day: u32,
     pub dirt_roads: u16,
     pub stone_roads: u16,
     pub stone_committed: u32,
     pub stone_needed: u32,
+    pub evidence: SettlementDevelopmentEvidence,
+    /// Low bit is the latest sampled completed day; skipped dates shift in zero.
+    pub qualification_bits: u8,
+    pub material_staged: u32,
+    pub material_required: u32,
 }
 
 impl SettlementDevelopment {
+    /// Add one honest calendar observation. Repeated or pre-foundation samples
+    /// do not count; gaps expire old evidence without copying current conditions.
+    pub fn record_qualification_day(&mut self, completed_day: u32, qualifies: bool) {
+        let Some(stamp) = completed_day.checked_add(1) else {
+            return;
+        };
+        if stamp <= self.last_progress_day {
+            return;
+        }
+        let elapsed = stamp.saturating_sub(self.last_progress_day);
+        let window = crate::economy::DEVELOPMENT_WINDOW_DAYS;
+        self.qualification_bits = if elapsed >= u32::from(window) {
+            0
+        } else {
+            self.qualification_bits << elapsed
+        };
+        self.qualification_bits =
+            (self.qualification_bits | u8::from(qualifies)) & ((1 << window) - 1);
+        self.progress_days = self.qualification_bits.count_ones() as u16;
+        self.last_progress_day = stamp;
+    }
+
+    pub fn reset_qualification(&mut self, day: u32) {
+        self.qualification_bits = 0;
+        self.progress_days = 0;
+        self.last_progress_day = day;
+    }
+
     pub fn from_foundation(name: &str, position: Vec3, day: u32) -> Self {
         let mut seed = 0xcbf2_9ce4_8422_2325_u64;
         for byte in name.bytes() {
@@ -199,15 +253,19 @@ impl SettlementDevelopment {
             center,
             inner_wall,
             outer_wall,
-            next_gate: SettlementProgressGate::FoodSecurity,
+            next_gate: SettlementProgressGate::Population,
             progress_days: 0,
-            required_days: crate::economy::VILLAGE_REQUIRED_SECURE_DAYS,
+            required_days: crate::economy::DEVELOPMENT_REQUIRED_DAYS,
             last_progress_day: day,
             last_road_work_day: day,
             dirt_roads: 0,
             stone_roads: 0,
             stone_committed: 0,
             stone_needed: 0,
+            evidence: SettlementDevelopmentEvidence::default(),
+            qualification_bits: 0,
+            material_staged: 0,
+            material_required: 0,
         }
     }
 }
@@ -222,9 +280,9 @@ pub enum SettlementTier {
     /// A city hall and not much else. Where founding lands you.
     #[default]
     Hamlet,
-    /// Feeds itself.
+    /// An established residential settlement with a completed Village Hall.
     Village,
-    /// Trade and defence.
+    /// Housing and active commerce supported by a completed Town Hall.
     Town,
     /// Reserved for future progression; retained for existing wire/save values.
     City,
@@ -245,8 +303,8 @@ impl SettlementTier {
     pub fn next_requirement(self) -> Option<&'static str> {
         match self {
             SettlementTier::Ruins => Some("refounding"),
-            SettlementTier::Hamlet => Some("food security: fed, grown here or bought in"),
-            SettlementTier::Village => Some("external trade and administration: a working market"),
+            SettlementTier::Hamlet => Some("established residents and occupied homes"),
+            SettlementTier::Village => Some("housing, operating businesses and paid trade"),
             SettlementTier::Town | SettlementTier::City => None,
         }
     }
@@ -266,6 +324,84 @@ impl SettlementTier {
             | SettlementTier::Village
             | SettlementTier::Town
             | SettlementTier::City => 2,
+        }
+    }
+}
+
+#[cfg(test)]
+mod development_tests {
+    use super::*;
+
+    #[test]
+    fn qualification_window_keeps_one_bad_day_and_expires_calendar_gaps() {
+        let mut development = SettlementDevelopment::from_seed(0, 0);
+        development.record_qualification_day(0, true);
+        development.record_qualification_day(1, false);
+        development.record_qualification_day(2, true);
+        assert_eq!(
+            (development.qualification_bits, development.progress_days),
+            (0b101, 2)
+        );
+        development.record_qualification_day(2, true);
+        development.record_qualification_day(1, true);
+        assert_eq!(
+            (development.qualification_bits, development.progress_days),
+            (0b101, 2)
+        );
+        development.record_qualification_day(5, true);
+        assert_eq!(
+            (development.qualification_bits, development.progress_days),
+            (1, 1)
+        );
+        development.record_qualification_day(6, true);
+        assert_eq!(development.progress_days, 2);
+    }
+
+    #[test]
+    fn qualification_ignores_pre_foundation_dates_and_resets_at_new_tier() {
+        let mut development = SettlementDevelopment::from_seed(0, 40);
+        development.record_qualification_day(39, true);
+        assert_eq!(development.progress_days, 0);
+        development.record_qualification_day(40, true);
+        assert_eq!(development.progress_days, 1);
+        development.reset_qualification(42);
+        development.record_qualification_day(41, true);
+        assert_eq!(development.progress_days, 0);
+        development.record_qualification_day(42, true);
+        assert_eq!(development.progress_days, 1);
+        development.record_qualification_day(u32::MAX, true);
+        assert_eq!(development.progress_days, 1);
+    }
+
+    #[test]
+    fn structural_evidence_and_material_progress_roundtrip_independently() {
+        let mut development = SettlementDevelopment::from_seed(u64::MAX, u32::MAX - 2);
+        development.evidence = SettlementDevelopmentEvidence {
+            residents: u32::MAX,
+            housed_residents: u32::MAX - 1,
+            occupied_homes: 999,
+            operating_business_types: u8::MAX,
+            market_accessible: true,
+            paid_trade_pennies: u64::MAX,
+        };
+        development.record_qualification_day(u32::MAX - 2, true);
+        development.material_staged = 5;
+        development.material_required = 12;
+        development.next_gate = SettlementProgressGate::CivicHallMaterials;
+        let bytes = bincode::serialize(&development).unwrap();
+        let decoded: SettlementDevelopment = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, development);
+        assert_eq!((decoded.progress_days, decoded.material_staged), (1, 5));
+        for gate in [
+            SettlementProgressGate::Housing,
+            SettlementProgressGate::OccupiedHomes,
+            SettlementProgressGate::BusinessActivity,
+        ] {
+            assert_eq!(
+                bincode::deserialize::<SettlementProgressGate>(&bincode::serialize(&gate).unwrap())
+                    .unwrap(),
+                gate
+            );
         }
     }
 }

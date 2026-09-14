@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Shared necessities budget attached to a completed house.
+/// Shared necessities budget owned by a stable household, independently of its home.
 ///
 /// Personal wallets still exist for permits and discretionary purchases. A
 /// household contributes only enough for its pantry target, so one resident
@@ -17,6 +17,12 @@ pub struct HouseholdEconomy {
     #[serde(default)]
     pub shopper: Option<crate::components::PersonId>,
     pub last_budget_day: u32,
+    /// Small hearth reserve, measured in days at the current occupancy.
+    pub fuel_target_days: u8,
+    /// Percentage of the previous day's hearth requirement actually supplied.
+    /// A cold home does not invent food losses or workforce penalties.
+    pub fuel_satisfaction: u8,
+    pub fuel_shortage_days: u16,
 }
 
 impl Default for HouseholdEconomy {
@@ -26,6 +32,9 @@ impl Default for HouseholdEconomy {
             pantry_target_days: 3,
             shopper: None,
             last_budget_day: u32::MAX,
+            fuel_target_days: 4,
+            fuel_satisfaction: 100,
+            fuel_shortage_days: 0,
         }
     }
 }
@@ -157,15 +166,18 @@ impl SettlementEconomy {
     }
 }
 
-/// A settlement is secure once it can survive this many days without another
-/// harvest. Production reliability remains a separate promotion requirement.
+/// Wellbeing reserve target. Food security does not determine civic tier.
 pub const FOOD_SECURITY_TARGET_DAYS: f32 = 3.0;
 
 pub const VILLAGE_MIN_RESIDENTS: u32 = 12;
 
-pub const VILLAGE_REQUIRED_SECURE_DAYS: u16 = 3;
+pub const VILLAGE_MIN_HOUSED_RESIDENTS: u32 = 8;
+pub const VILLAGE_MIN_OCCUPIED_HOMES: u32 = 2;
 
-pub const VILLAGE_MIN_PROSPERITY: f32 = 65.0;
+/// Structural qualification uses actual completed calendar dates. Missing
+/// observations occupy the window without earning qualification credit.
+pub const DEVELOPMENT_WINDOW_DAYS: u8 = 3;
+pub const DEVELOPMENT_REQUIRED_DAYS: u16 = 2;
 
 /// Wood staged beside the founding Moot before its permanent Village Hall is
 /// raised. This uses the same paid civic-worksite pipeline as later upgrades.
@@ -173,11 +185,8 @@ pub const VILLAGE_HALL_WOOD_REQUIRED: u32 = 12;
 
 pub const TOWN_MIN_RESIDENTS: u32 = 30;
 
-pub const TOWN_MIN_PROSPERITY: f32 = 70.0;
-
-pub const TOWN_MIN_MARKET_VOLUME: u64 = 5_000;
-
-pub const TOWN_REQUIRED_DAYS: u16 = 3;
+pub const TOWN_MIN_HOUSED_RESIDENTS: u32 = 20;
+pub const TOWN_MIN_OPERATING_BUSINESS_TYPES: u8 = 2;
 
 /// Dressed Stone staged beside the civic centre before a Village can raise
 /// its permanent Town Hall. The exchange buys this from real private offers;

@@ -19,14 +19,17 @@ def build_locomotion_clips(api):
         swing = math.cos(t)
         key("root", f, loc=(0, 0, 0), rot=(0, 0, 0))
         key("hips", f, rot=(0, D(4 * swing), 0))
-        key("torso", f, rot=(D(11), D(-5 * swing), D(2 * swing)))
-        key("head", f, rot=(D(-9), D(3 * swing), 0))
+        key("torso", f, rot=(D(6), D(-3 * swing), D(1.2 * swing)))
+        key("head", f, rot=(D(-4), D(2 * swing), 0))
         for side, sign in (("L", 1), ("R", -1)):
             leg = 38 * swing * sign
             key("leg." + side, f, rot=(D(leg), 0, 0))
             key("foot." + side, f, rot=(D(-leg + 3 * math.sin(t) * sign), 0, 0))
-            key("arm." + side, f, rot=(D(-8 - 36 * swing * sign), 0, D(-5 * sign)))
-            key("hand." + side, f, rot=(D(12), 0, 0))
+            key("arm." + side, f, rot=(D(-4 - 24 * swing * sign), 0, D(-3 * sign)))
+            # Bent elbows make an easy jog instead of swinging rigid arms
+            # from the shoulders. Foot arcs/cadence stay speed-matched.
+            key("forearm." + side, f, rot=(D(-32 - 6 * math.sin(t - 0.3) * sign), 0, 0))
+            key("hand." + side, f, rot=(D(2), 0, 0))
     api["fill_rest"](
         {
             "root",
@@ -39,6 +42,8 @@ def build_locomotion_clips(api):
             "foot.R",
             "arm.L",
             "arm.R",
+            "forearm.L",
+            "forearm.R",
             "hand.L",
             "hand.R",
         },

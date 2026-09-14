@@ -112,8 +112,12 @@ fn configure_server_fixed_schedule(app: &mut App) {
             player::business::handle_hero_company_orders,
             player::trade_routes::handle_hero_trade_route_orders,
             player::market::handle_hero_market_orders,
-            player::hero::ensure_player_permit_ledgers,
-            player::permits::handle_hero_permit_orders,
+            (
+                player::hero::ensure_player_permit_ledgers,
+                player::permits::handle_hero_permit_orders,
+                player::house_upgrades::handle_house_upgrade_requests,
+            )
+                .chain(),
             world::regions::update_client_interest,
             world::regions::apply_region_visibility,
             world::regions::update_region_sim_levels,

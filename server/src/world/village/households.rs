@@ -5,6 +5,15 @@
 
 use super::*;
 
+mod membership;
+mod needs;
+mod provisioning;
+mod shopping;
+pub use membership::{assign_households, ensure_house_appearances, ensure_households};
+pub(crate) use needs::HearthState;
+pub use provisioning::update_household_budgets_and_pantries;
+pub use shopping::run_household_shopping;
+
 /// Choose real food offers by price per ration, retaining the authored food
 /// preference only as a tie-breaker. A household may prefer Bread, but it
 /// should not spend its entire purse on one luxury loaf while affordable Meat,
@@ -31,693 +40,6 @@ fn household_food_purchase_order(hall_store: &GoodsInventory, market: &MootMarke
         order.push(absent_preference);
     }
     order
-}
-
-/// Cash moved into the shared pantry purse must correspond to food that can
-/// actually be bought today. An unavailable order still records demand below,
-/// but pre-funding empty shelves strands household wealth precisely when a new
-/// farm, mill or bakery needs that coin as investment capital.
-fn stocked_food_budget(
-    deficit: u32,
-    hall_store: &GoodsInventory,
-    market: &MootMarket,
-    order: &[Good],
-) -> u64 {
-    let mut remaining = deficit;
-    let mut pennies = 0u64;
-    for good in order.iter().copied() {
-        if remaining == 0 {
-            break;
-        }
-        let units = remaining.min(hall_store.amount(good));
-        pennies =
-            pennies.saturating_add(u64::from(units).saturating_mul(market.pool(good).ask.max(1)));
-        remaining -= units;
-    }
-    pennies
-}
-
-/// Give every completed cabin a bounded, inspectable household roster.
-pub fn ensure_households(
-    mut commands: Commands,
-    houses: Query<(
-        Entity,
-        &SettlementBuilding,
-        Option<&Household>,
-        Option<&HouseholdEconomy>,
-    )>,
-) {
-    for (entity, building, household, economy) in houses.iter() {
-        if building.kind == SettlementBuildingKind::House {
-            let mut entity_commands = commands.entity(entity);
-            if household.is_none() {
-                entity_commands.insert(Household::default());
-            }
-            if economy.is_none() {
-                entity_commands.insert(HouseholdEconomy::default());
-            }
-        }
-    }
-}
-
-/// Fund each house's shared necessities purse and restock its bounded pantry.
-///
-/// This is intentionally one decision per household per world day. Tactical
-/// households send the named shopper on a visible trip; strategic settlements
-/// settle the same purchase directly so 5,000 people do not need 5,000 paths.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn update_household_budgets_and_pantries(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    mut business_events: ResMut<BusinessEventQueue>,
-    mut queue_clock: Option<ResMut<MootQueueClock>>,
-    regions: Option<Res<RegionRegistry>>,
-    mut halls: Query<
-        (
-            Entity,
-            &Settlement,
-            &shared::components::SettlementId,
-            &PlayerPosition,
-            Option<&PlayerRotation>,
-            &mut GoodsInventory,
-            &mut MootMarket,
-        ),
-        (Without<SettlementBuilding>, Without<CharacterKind>),
-    >,
-    mut houses: Query<
-        (
-            Entity,
-            &SettlementBuilding,
-            &shared::components::BuildingOf,
-            &Household,
-            &mut HouseholdEconomy,
-            &mut GoodsInventory,
-        ),
-        Without<CharacterKind>,
-    >,
-    marketplaces: Query<
-        (
-            &SettlementBuilding,
-            &shared::components::BuildingOf,
-            &PlayerPosition,
-            &PlayerRotation,
-        ),
-        Without<Household>,
-    >,
-    positions: Query<&PlayerPosition>,
-    mut residents: Query<(
-        Entity,
-        &shared::components::PersonId,
-        &CharacterName,
-        &mut Wallet,
-        Option<&WorkStatus>,
-        Option<&HomeAssignment>,
-        Option<&RegionCoord>,
-        Option<&HouseholdShoppingRoutine>,
-    )>,
-    busy: Query<
-        (),
-        Or<(
-            With<ConstructionMaterialRoutine>,
-            With<RoadBuilderRoutine>,
-            With<HomeRoutine>,
-            With<WorkplaceDoorTransit>,
-            With<MarketCollectionRoutine>,
-            With<InternalDeliveryRoutine>,
-            With<MootQueueTicket>,
-            With<MootMealRoutine>,
-        )>,
-    >,
-) {
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    let day = clock.day;
-    let hall_by_id: HashMap<shared::components::SettlementId, Entity> = halls
-        .iter()
-        .map(|(entity, _, settlement_id, ..)| (*settlement_id, entity))
-        .collect();
-    let resident_by_id: HashMap<shared::components::PersonId, Entity> = residents
-        .iter()
-        .map(|(entity, person_id, ..)| (*person_id, entity))
-        .collect();
-    for (house_entity, building, building_of, household, mut economy, mut pantry) in
-        houses.iter_mut()
-    {
-        if building.kind != SettlementBuildingKind::House || economy.last_budget_day == day {
-            continue;
-        }
-        let mut members: Vec<(shared::components::PersonId, String, WorkStatus)> = household
-            .resident_ids
-            .iter()
-            .filter_map(|person_id| {
-                let entity = resident_by_id.get(person_id).copied()?;
-                let Ok((_, _, name, _, status, assignment, _, _)) = residents.get(entity) else {
-                    return None;
-                };
-                assignment
-                    .is_some_and(|assignment| assignment.home == house_entity)
-                    .then_some((
-                        *person_id,
-                        name.0.clone(),
-                        status.copied().unwrap_or_default(),
-                    ))
-            })
-            .collect();
-        members.sort_by(|a, b| {
-            let rank = |status: WorkStatus| match status {
-                WorkStatus::Chilling => 0,
-                WorkStatus::LookingForWork => 1,
-                WorkStatus::Employed => 2,
-            };
-            rank(a.2)
-                .cmp(&rank(b.2))
-                .then_with(|| a.1.cmp(&b.1))
-                .then_with(|| a.0.cmp(&b.0))
-        });
-        economy.shopper = members.first().map(|(person_id, ..)| *person_id);
-        if members.is_empty() {
-            economy.last_budget_day = day;
-            continue;
-        }
-        let target_units =
-            (members.len() as u32).saturating_mul(u32::from(economy.pantry_target_days));
-        let deficit = target_units.saturating_sub(pantry.edible_amount());
-        if deficit == 0 {
-            economy.last_budget_day = day;
-            continue;
-        }
-        let Some(hall_entity) = hall_by_id.get(&building_of.0).copied() else {
-            continue;
-        };
-        let Ok((_, _, _, hall_position, hall_rotation, mut hall_store, mut market)) =
-            halls.get_mut(hall_entity)
-        else {
-            continue;
-        };
-        let food_order = household_food_purchase_order(&hall_store, &market);
-        let estimated_unit_price = food_order
-            .first()
-            .map_or(0, |good| market.pool(*good).ask.max(1));
-        let wanted_budget = stocked_food_budget(deficit, &hall_store, &market, &food_order);
-        let mut needed = wanted_budget.saturating_sub(economy.pennies);
-        if needed > 0 {
-            // All earners contribute toward the same concrete pantry target.
-            // Two discretionary coins are protected only when the pantry can
-            // already cover today's household. A family with fewer than one
-            // ration per member spends those coins before accepting hunger.
-            let personal_floor = if pantry.edible_amount() < members.len() as u32 {
-                0
-            } else {
-                2 * PENNIES_PER_COIN
-            };
-            let mut contribution_order = members.clone();
-            contribution_order.sort_by_key(|(person_id, ..)| *person_id);
-            for (person_id, _, _) in contribution_order {
-                let Some(member_entity) = resident_by_id.get(&person_id).copied() else {
-                    continue;
-                };
-                let Ok((_, _, _, mut wallet, _, _, _, _)) = residents.get_mut(member_entity) else {
-                    continue;
-                };
-                let available = wallet.balance().saturating_sub(personal_floor);
-                let contribution = available.min(needed);
-                if contribution > 0 && wallet.debit(contribution) {
-                    economy.pennies = economy.pennies.saturating_add(contribution);
-                    needed -= contribution;
-                }
-                if needed == 0 {
-                    break;
-                }
-            }
-        }
-
-        let shopper_entity = economy
-            .shopper
-            .and_then(|shopper| resident_by_id.get(&shopper).copied());
-        let tactical_shopper = shopper_entity.is_some_and(|shopper| {
-            let Ok((_, _, _, _, _, _, region, routine)) = residents.get(shopper) else {
-                return false;
-            };
-            routine.is_none()
-                && busy.get(shopper).is_err()
-                && region.is_some_and(|region| {
-                    regions.as_ref().is_some_and(|registry| {
-                        registry
-                            .get(*region)
-                            .is_some_and(|state| state.sim_level == SimLevel::Tactical)
-                    })
-                })
-        });
-        let can_purchase_now = food_order.first().is_some_and(|good| {
-            hall_store.amount(*good) > 0
-                && estimated_unit_price > 0
-                && economy.pennies >= estimated_unit_price
-        });
-        if tactical_shopper && can_purchase_now && clock.is_day() {
-            if let Some(shopper) = shopper_entity {
-                let hall_entrance = SettlementBuildingKind::Hall.entrance_position(
-                    hall_position.0,
-                    hall_rotation.map_or(0.0, |rotation| rotation.0),
-                );
-                let counter = nearest_public_market_entrance(
-                    positions
-                        .get(house_entity)
-                        .map_or(hall_position.0, |position| position.0),
-                    hall_entrance,
-                    marketplaces
-                        .iter()
-                        .filter(|(building, owner, ..)| {
-                            building.kind == SettlementBuildingKind::Market
-                                && owner.0 == building_of.0
-                        })
-                        .map(|(building, _, position, rotation)| {
-                            building.kind.entrance_position(position.0, rotation.0)
-                        }),
-                );
-                commands.entity(shopper).insert(HouseholdShoppingRoutine {
-                    home: house_entity,
-                    hall: hall_entity,
-                    counter,
-                    phase: HouseholdShoppingPhase::GoingToMarket,
-                });
-                if counter == hall_entrance {
-                    if let Some(queue_clock) = queue_clock.as_deref_mut() {
-                        moot_services::enqueue_moot_service(
-                            &mut commands,
-                            queue_clock,
-                            shopper,
-                            hall_entity,
-                            MootServiceKind::HouseholdShopping,
-                        );
-                    } else {
-                        commands.entity(shopper).insert(MoveTarget(counter));
-                    }
-                } else {
-                    commands.entity(shopper).insert(MoveTarget(counter));
-                }
-                economy.last_budget_day = day;
-                continue;
-            }
-        }
-
-        let mut remaining = deficit;
-        for good in food_order {
-            if remaining == 0 {
-                break;
-            }
-            let room = pantry.free_bulk() / good.bulk_per_unit();
-            let requested = remaining.min(room);
-            let purchase =
-                market.purchase_recording_demand(good, requested, economy.pennies, None, None);
-            if purchase.trade.units == 0 {
-                // The order helper places at most one absent substitute after
-                // every live offer. Its failed purchase has now recorded the
-                // residual shortage, so stop rather than duplicating the same
-                // ration demand across other food groups.
-                break;
-            }
-            if economy.pennies < purchase.trade.pennies {
-                continue;
-            }
-            economy.pennies -= purchase.trade.pennies;
-            let moved = hall_store.transfer_to(&mut pantry, good, purchase.trade.units);
-            debug_assert_eq!(moved, purchase.trade.units);
-            business_events.record_market_purchase(day, building_of.0, purchase.fills);
-            remaining = remaining.saturating_sub(moved);
-        }
-        economy.last_budget_day = day;
-    }
-}
-
-/// Animate the tactical half of household restocking. The shopper pays from
-/// the house purse at the Moot, carries only what fits, and unloads at their
-/// own cabin; off-screen households use the aggregate branch above.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn run_household_shopping(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    mut business_events: ResMut<BusinessEventQueue>,
-    mut halls: Query<
-        (
-            &shared::components::SettlementId,
-            &PlayerPosition,
-            Option<&PlayerRotation>,
-            &mut GoodsInventory,
-            &mut MootMarket,
-        ),
-        (
-            With<Settlement>,
-            Without<SettlementBuilding>,
-            Without<CharacterKind>,
-        ),
-    >,
-    mut houses: Query<
-        (
-            &SettlementBuilding,
-            &PlayerPosition,
-            &PlayerRotation,
-            &Household,
-            &mut HouseholdEconomy,
-            &mut GoodsInventory,
-        ),
-        Without<CharacterKind>,
-    >,
-    mut shoppers: Query<
-        (
-            Entity,
-            &PlayerPosition,
-            &mut CharacterActivity,
-            &mut GoodsInventory,
-            &mut HouseholdShoppingRoutine,
-            Option<&MootQueueTicket>,
-            Option<&MoveTarget>,
-            Option<&HomeRoutine>,
-            Option<&NavigationRouteFailed>,
-        ),
-        (With<CharacterKind>, Without<strategic::StrategicPerson>),
-    >,
-) {
-    let day = world_time.iter().next().map_or(0, |clock| clock.day);
-    for (
-        shopper,
-        position,
-        mut activity,
-        mut carrier,
-        mut routine,
-        queue_ticket,
-        move_target,
-        home,
-        route_failed,
-    ) in shoppers.iter_mut()
-    {
-        if home.is_some() {
-            continue;
-        }
-        let Ok((settlement_id, _hall_position, _hall_rotation, mut hall_store, mut market)) =
-            halls.get_mut(routine.hall)
-        else {
-            commands
-                .entity(shopper)
-                .remove::<HouseholdShoppingRoutine>()
-                .remove::<MootQueueTicket>()
-                .remove::<MoveTarget>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
-            continue;
-        };
-        let Ok((building, home_position, home_rotation, household, mut economy, mut pantry)) =
-            houses.get_mut(routine.home)
-        else {
-            commands
-                .entity(shopper)
-                .remove::<HouseholdShoppingRoutine>()
-                .remove::<MootQueueTicket>()
-                .remove::<MoveTarget>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
-            continue;
-        };
-        let home_entrance = building
-            .kind
-            .entrance_position(home_position.0, home_rotation.0);
-        if route_failed.is_some() && queue_ticket.is_none() {
-            let mut shopper_commands = commands.entity(shopper);
-            shopper_commands
-                .remove::<MoveTarget>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
-            match routine.phase {
-                HouseholdShoppingPhase::GoingToMarket => {
-                    // Nothing has been purchased yet. Release this attempt so
-                    // the household can select a shopper again on its next
-                    // budget pass instead of leaving one resident asleep on a
-                    // terminal navigation result forever.
-                    shopper_commands.remove::<HouseholdShoppingRoutine>();
-                }
-                HouseholdShoppingPhase::ReturningHome => {
-                    // Purchased food is physical cargo. Preserve both it and
-                    // the routine, then request the cabin entrance again; a
-                    // road/prop revision may make the retry viable next tick.
-                    shopper_commands.insert(MoveTarget(home_entrance));
-                }
-            }
-            continue;
-        }
-        activity.set_if_neq(CharacterActivity::Idle);
-        match routine.phase {
-            HouseholdShoppingPhase::GoingToMarket => {
-                if let Some(ticket) = queue_ticket {
-                    if !ticket.is_ready() {
-                        continue;
-                    }
-                } else if ground_distance(position.0, routine.counter) > WORK_REACH {
-                    // Compatibility for a pre-queue save or a focused test
-                    // that creates only the shopping routine.
-                    ensure_move_target(&mut commands, shopper, move_target, routine.counter);
-                    continue;
-                }
-                let target = (household.resident_ids.len() as u32)
-                    .saturating_mul(u32::from(economy.pantry_target_days));
-                let mut remaining = target.saturating_sub(pantry.edible_amount());
-                let food_order = household_food_purchase_order(&hall_store, &market);
-                for good in food_order {
-                    if remaining == 0 {
-                        break;
-                    }
-                    let requested = remaining.min(carrier.free_bulk() / good.bulk_per_unit());
-                    let purchase = market.purchase_recording_demand(
-                        good,
-                        requested,
-                        economy.pennies,
-                        None,
-                        None,
-                    );
-                    if purchase.trade.units == 0 || economy.pennies < purchase.trade.pennies {
-                        break;
-                    }
-                    economy.pennies -= purchase.trade.pennies;
-                    let moved = hall_store.transfer_to(&mut carrier, good, purchase.trade.units);
-                    debug_assert_eq!(moved, purchase.trade.units);
-                    business_events.record_market_purchase(day, *settlement_id, purchase.fills);
-                    remaining = remaining.saturating_sub(moved);
-                }
-                if carrier.edible_amount() == 0 {
-                    commands
-                        .entity(shopper)
-                        .remove::<HouseholdShoppingRoutine>()
-                        .remove::<MootQueueTicket>()
-                        .remove::<MoveTarget>();
-                    continue;
-                }
-                commands
-                    .entity(shopper)
-                    .insert(MoveTarget(home_entrance))
-                    .remove::<MootQueueTicket>()
-                    .remove::<TravelRoute>()
-                    .remove::<NavigationRoutePending>()
-                    .remove::<NavigationRouteFailed>();
-                routine.phase = HouseholdShoppingPhase::ReturningHome;
-            }
-            HouseholdShoppingPhase::ReturningHome => {
-                if ground_distance(position.0, home_entrance) > DOOR_REACH {
-                    ensure_move_target(&mut commands, shopper, move_target, home_entrance);
-                    continue;
-                }
-                for good in Good::HOUSEHOLD_FOOD_PRIORITY {
-                    carrier.transfer_to(&mut pantry, good, u32::MAX);
-                }
-                commands
-                    .entity(shopper)
-                    .remove::<HouseholdShoppingRoutine>()
-                    .remove::<MoveTarget>();
-            }
-        }
-    }
-}
-
-/// Assign every resident to one cabin in their settlement, up to its real bed
-/// capacity. Nearest-first keeps a household spatially coherent without yet
-/// inventing family relationships.
-pub fn assign_households(
-    mut commands: Commands,
-    settlements: Query<(&shared::components::SettlementId, &Settlement)>,
-    mut houses: Query<(
-        Entity,
-        &SettlementBuilding,
-        &PlayerPosition,
-        &mut Household,
-        Option<&shared::components::BuildingId>,
-        &shared::components::BuildingOf,
-    )>,
-    villagers: Query<(
-        Entity,
-        &shared::components::PersonId,
-        &CharacterName,
-        &VillagerIntent,
-        &shared::components::ResidentOf,
-        &PlayerPosition,
-        Option<&HomeAssignment>,
-    )>,
-    changed_assignments: Query<(), Changed<HomeAssignment>>,
-    changed_names: Query<(), Changed<CharacterName>>,
-) {
-    let house_info: Vec<(
-        Entity,
-        shared::components::SettlementId,
-        Vec3,
-        usize,
-        Option<shared::components::BuildingId>,
-    )> = houses
-        .iter()
-        .filter(|(_, building, _, _, _, _)| building.kind == SettlementBuildingKind::House)
-        .map(
-            |(entity, building, position, _, building_id, building_of)| {
-                (
-                    entity,
-                    building_of.0,
-                    position.0,
-                    building.kind.housing_capacity() as usize,
-                    building_id.copied(),
-                )
-            },
-        )
-        .collect();
-    let house_lookup: HashMap<Entity, usize> = house_info
-        .iter()
-        .enumerate()
-        .map(|(index, (entity, ..))| (*entity, index))
-        .collect();
-    let settlement_names: HashMap<shared::components::SettlementId, String> = settlements
-        .iter()
-        .map(|(settlement_id, settlement)| (*settlement_id, settlement.name.clone()))
-        .collect();
-
-    // The common case is a fully assigned, unchanged village. Validate it in
-    // O(people + houses) and leave every replicated roster untouched. The old
-    // implementation rebuilt names and searched every house for every person
-    // on all 60 server ticks, even though housing changes only when a person or
-    // cabin changes.
-    let mut occupancy: HashMap<Entity, usize> = HashMap::new();
-    let mut needs_rebuild = !changed_assignments.is_empty() || !changed_names.is_empty();
-    for (_, _, _, intent, resident_of, _, assignment) in villagers.iter() {
-        if !intent.counts_as_resident() {
-            // Travelling villagers used to consume beds before they arrived,
-            // while recount_residents correctly excluded them. Remove any
-            // legacy assignment and rebuild its old cabin roster.
-            if assignment.is_some() {
-                needs_rebuild = true;
-            }
-            continue;
-        }
-        let Some(assignment) = assignment else {
-            needs_rebuild = true;
-            continue;
-        };
-        let Some(index) = house_lookup.get(&assignment.home).copied() else {
-            needs_rebuild = true;
-            continue;
-        };
-        let (_, place, _, capacity, _) = &house_info[index];
-        let same_settlement = resident_of.0 == *place;
-        let occupied = occupancy.entry(assignment.home).or_default();
-        if !same_settlement || *occupied >= *capacity {
-            needs_rebuild = true;
-            continue;
-        }
-        *occupied += 1;
-    }
-    if !needs_rebuild {
-        needs_rebuild = houses.iter().any(|(house, _, _, household, _, _)| {
-            occupancy.get(&house).copied().unwrap_or(0) != household.resident_ids.len()
-        });
-    }
-    if !needs_rebuild {
-        return;
-    }
-
-    let mut rosters: HashMap<Entity, Vec<(shared::components::PersonId, String)>> = HashMap::new();
-    let mut assigned: HashSet<Entity> = HashSet::new();
-    for (villager, person_id, name, intent, resident_of, _, assignment) in villagers.iter() {
-        let Some(assignment) = assignment else {
-            continue;
-        };
-        let valid = intent.counts_as_resident()
-            && house_lookup
-                .get(&assignment.home)
-                .and_then(|index| house_info.get(*index))
-                .is_some_and(|(house, place, _, capacity, _)| {
-                    resident_of.0 == *place && rosters.get(house).map_or(0, Vec::len) < *capacity
-                });
-        if valid {
-            assigned.insert(villager);
-            rosters
-                .entry(assignment.home)
-                .or_default()
-                .push((*person_id, name.0.clone()));
-            if let Some((_, _, _, _, Some(building_id))) = house_lookup
-                .get(&assignment.home)
-                .and_then(|index| house_info.get(*index))
-            {
-                commands
-                    .entity(villager)
-                    .insert(shared::components::LivesAt(*building_id));
-            }
-        } else {
-            commands
-                .entity(villager)
-                .remove::<HomeAssignment>()
-                .remove::<shared::components::LivesAt>();
-        }
-    }
-
-    for (house, place, house_position, capacity, building_id) in &house_info {
-        while rosters.get(house).map_or(0, Vec::len) < *capacity {
-            let resident = villagers
-                .iter()
-                .filter(|(entity, _, _, intent, resident_of, _, _)| {
-                    !assigned.contains(entity)
-                        && intent.counts_as_resident()
-                        && resident_of.0 == *place
-                })
-                .min_by(|a, b| {
-                    a.5 .0
-                        .distance_squared(*house_position)
-                        .total_cmp(&b.5 .0.distance_squared(*house_position))
-                })
-                .map(|(entity, person_id, name, _, _, _, _)| (entity, *person_id, name.0.clone()));
-            let Some((resident, person_id, name)) = resident else {
-                break;
-            };
-            assigned.insert(resident);
-            rosters
-                .entry(*house)
-                .or_default()
-                .push((person_id, name.clone()));
-            let mut resident_commands = commands.entity(resident);
-            resident_commands.insert(HomeAssignment { home: *house });
-            if let Some(building_id) = building_id {
-                resident_commands.insert(shared::components::LivesAt(*building_id));
-            }
-            let place_name = settlement_names
-                .get(place)
-                .map_or("unknown settlement", String::as_str);
-            info!("Village '{place_name}': {name} was assigned a bed in a cabin");
-        }
-    }
-
-    for (house, _, _, mut household, _, _) in houses.iter_mut() {
-        let next = rosters.remove(&house).unwrap_or_default();
-        let resident_ids: Vec<_> = next.iter().map(|(person_id, _)| *person_id).collect();
-        let resident_names: Vec<_> = next.into_iter().map(|(_, name)| name).collect();
-        if household.resident_ids != resident_ids || household.residents != resident_names {
-            household.resident_ids = resident_ids;
-            household.residents = resident_names;
-        }
-    }
 }
 
 /// Send housed villagers through their cabin door at sunset and back out at
@@ -754,6 +76,7 @@ pub fn run_household_schedules(
             With<TavernVisitRoutine>,
             With<TavernWorkerRoutine>,
             With<crate::world::settlement_development::CivicHallBuilderRoutine>,
+            With<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
         )>,
     >,
     carried_inventories: Query<&GoodsInventory, With<CharacterKind>>,
@@ -764,7 +87,7 @@ pub fn run_household_schedules(
             &mut PlayerPosition,
             &mut PlayerRotation,
             &mut CharacterActivity,
-            &HomeAssignment,
+            Option<&HomeAssignment>,
             Option<&MoveTarget>,
             Option<&mut HomeRoutine>,
             (
@@ -778,7 +101,11 @@ pub fn run_household_schedules(
                 Option<&NavigationRouteFailed>,
             ),
         ),
-        (With<CharacterKind>, Without<strategic::StrategicPerson>),
+        (
+            With<CharacterKind>,
+            Without<strategic::StrategicPerson>,
+            Or<(With<HomeAssignment>, With<HomeRoutine>)>,
+        ),
     >,
 ) {
     let Some(clock) = world_time.iter().next() else {
@@ -808,6 +135,23 @@ pub fn run_household_schedules(
         ),
     ) in villagers.iter_mut()
     {
+        let Some(assignment) = assignment else {
+            // Losing the dwelling removes HomeAssignment before this routine
+            // runs. Retain orphan sleepers in the query long enough to release
+            // their hidden body and obsolete door/path ownership.
+            if routine.is_some() {
+                activity.set_if_neq(CharacterActivity::Idle);
+                commands
+                    .entity(villager)
+                    .remove::<HomeRoutine>()
+                    .remove::<BuildingDoorUse>()
+                    .remove::<MoveTarget>()
+                    .remove::<TravelRoute>()
+                    .remove::<NavigationRoutePending>()
+                    .remove::<NavigationRouteFailed>();
+            }
+            continue;
+        };
         if moot_service_busy.get(villager).is_ok() {
             continue;
         }
@@ -1227,7 +571,10 @@ mod tests {
             household_food_purchase_order(&hall, &market),
             vec![Good::Bread]
         );
-        assert_eq!(stocked_food_budget(8, &hall, &market, &[Good::Bread]), 0);
+        assert_eq!(
+            provisioning::plan_basket(&market, &hall, 8, 0, u64::MAX, 80).pennies,
+            0
+        );
     }
 
     #[test]
@@ -1241,8 +588,9 @@ mod tests {
             3,
             120,
         );
-        let order = household_food_purchase_order(&hall, &market);
-
-        assert_eq!(stocked_food_budget(8, &hall, &market, &order), 360);
+        assert_eq!(
+            provisioning::plan_basket(&market, &hall, 8, 0, u64::MAX, 80).pennies,
+            360
+        );
     }
 }

@@ -889,7 +889,7 @@ pub fn step_units(
 }
 
 /// Enforce the movement/animation invariant after every tactical movement
-/// pass: an embodied villager without a destination is stationary.
+/// pass: an embodied character without a destination is stationary.
 ///
 /// Activity systems deliberately remove `MoveTarget` when somebody reaches a
 /// queue place, begins waiting, starts an indoor action, or abandons a route.
@@ -898,7 +898,7 @@ pub fn step_units(
 /// velocity survived indefinitely and clients rendered a stationary person
 /// walking in place. Boats are excluded because an embarked character's
 /// motion is authored by the vessel synchronization systems.
-pub fn settle_villagers_without_targets(
+pub fn settle_characters_without_targets(
     mut villagers: Query<
         (&CharacterKind, &mut CharacterMotion),
         (
@@ -910,7 +910,7 @@ pub fn settle_villagers_without_targets(
     >,
 ) {
     for (kind, mut motion) in villagers.iter_mut() {
-        if *kind == CharacterKind::Villager && motion.is_moving() {
+        if matches!(kind, CharacterKind::Villager | CharacterKind::Hero) && motion.is_moving() {
             *motion = CharacterMotion::STATIONARY;
         }
     }
@@ -946,9 +946,9 @@ mod tests {
     use shared::components::TimeWarp;
 
     #[test]
-    fn removing_a_villager_target_also_stops_the_walking_animation() {
+    fn removing_a_work_target_stops_villagers_and_heroes() {
         let mut app = App::new();
-        app.add_systems(Update, settle_villagers_without_targets);
+        app.add_systems(Update, settle_characters_without_targets);
         let villager = app
             .world_mut()
             .spawn((CharacterKind::Villager, CharacterMotion::new(Vec3::X)))
@@ -967,12 +967,11 @@ mod tests {
                 .unwrap(),
             CharacterMotion::STATIONARY
         );
-        assert!(app
-            .world()
-            .entity(moving_hero)
-            .get::<CharacterMotion>()
-            .unwrap()
-            .is_moving());
+        assert_eq!(*app.world().get::<CharacterMotion>(moving_hero).unwrap(), CharacterMotion::STATIONARY);
+        // Active movement still belongs to step_units, not this cleanup.
+        app.world_mut().entity_mut(moving_hero).insert((MoveTarget(Vec3::Z), CharacterMotion::new(Vec3::Z)));
+        app.update();
+        assert!(app.world().get::<CharacterMotion>(moving_hero).unwrap().is_moving());
     }
 
     /// Time warp scales hero movement, and the arrival clamp is what makes that

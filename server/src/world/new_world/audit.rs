@@ -6,6 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
 const SEEDS: [u64; 4] = [4794248476676134349, 7, 91, 12345];
+// The hosted startup stopped reporting progress after six towns and exceeded
+// its five-minute readiness window. Always exercise its full production plan.
+const STARTUP_REGRESSION_SEED: u64 = 1938040146946417273;
 const COVERAGE_RADIUS: f32 = 1500.0;
 
 #[derive(Debug)]
@@ -62,12 +65,12 @@ fn coverage_weights_usable_sites_and_exposes_an_unserved_landmass() {
 }
 
 #[test]
-#[ignore = "full-size production plans across four seeds; writes optional CSV audit evidence"]
+#[ignore = "full-size production plans including the hosted startup regression; optional CSV evidence"]
 fn ordinary_openings_report_land_aware_distribution() {
     let mut logging = App::new();
     logging.add_plugins(bevy::log::LogPlugin::default());
-    let seeds = std::env::var("FISTWORLD_OPENING_AUDIT_SEEDS").map_or_else(
-        |_| SEEDS.to_vec(),
+    let seeds: Vec<u64> = std::env::var("FISTWORLD_OPENING_AUDIT_SEEDS").map_or_else(
+        |_| SEEDS.into_iter().chain([STARTUP_REGRESSION_SEED]).collect(),
         |raw| {
             raw.split(',')
                 .map(|s| s.trim().parse::<u64>().expect("audit seed"))

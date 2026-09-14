@@ -106,6 +106,7 @@ pub struct PlaceBusinessRecord {
 pub struct PlacePermitRecord {
     pub kind: SettlementBuildingKind,
     pub raising: bool,
+    pub house_upgrade: bool,
     pub material: Good,
     pub delivered_material: u32,
     pub required_material: u32,
@@ -410,6 +411,7 @@ pub(super) fn learn_settlements(
         Option<&GoodsInventory>,
         Option<&BusinessForSale>,
         Option<&CivicHallUpgradeWorksite>,
+        Option<&shared::components::HouseUpgradeWorksite>,
     )>,
     mut places: ResMut<KnownPlaces>,
     ui_perf: Res<crate::ui::perf::UiPerf>,
@@ -517,26 +519,35 @@ pub(super) fn learn_settlements(
         |settlement: &Settlement, settlement_id: Option<&shared::components::SettlementId>| {
             let mut records: Vec<PlacePermitRecord> = sites
                 .iter()
-                .filter(|(site, owner, _, _, _)| {
+                .filter(|(site, owner, _, _, _, _)| {
                     settlement_id.map_or_else(
                         || site.settlement == settlement.name,
                         |id| owner.is_some_and(|owner| owner.0 == *id),
                     )
                 })
-                .map(|(site, _, inventory, for_sale, hall_upgrade)| {
-                    let (material, required_material) = hall_upgrade.map_or(
-                        (Good::Wood, site.kind.construction_wood_required()),
-                        |upgrade| (upgrade.material, upgrade.material_required),
-                    );
-                    PlacePermitRecord {
-                        kind: site.kind,
-                        raising: site.raising,
-                        material,
-                        delivered_material: inventory.map_or(0, |store| store.amount(material)),
-                        required_material,
-                        for_sale: for_sale.copied(),
-                    }
-                })
+                .map(
+                    |(site, _, inventory, for_sale, hall_upgrade, house_upgrade)| {
+                        let (material, required_material) = hall_upgrade.map_or(
+                            (
+                                Good::Wood,
+                                house_upgrade.map_or_else(
+                                    || site.kind.construction_wood_required(),
+                                    |upgrade| upgrade.wood_required,
+                                ),
+                            ),
+                            |upgrade| (upgrade.material, upgrade.material_required),
+                        );
+                        PlacePermitRecord {
+                            kind: site.kind,
+                            raising: site.raising,
+                            house_upgrade: house_upgrade.is_some(),
+                            material,
+                            delivered_material: inventory.map_or(0, |store| store.amount(material)),
+                            required_material,
+                            for_sale: for_sale.copied(),
+                        }
+                    },
+                )
                 .collect();
             records.sort_by_key(|permit| permit.kind.label());
             records
@@ -769,7 +780,11 @@ fn permit_queue_summary(place: &PlaceRecord) -> String {
         .map(|permit| {
             let state = format!(
                 "{}: {} ({}/{})",
-                permit.kind.label(),
+                if permit.house_upgrade {
+                    "House extension"
+                } else {
+                    permit.kind.label()
+                },
                 if permit.raising {
                     "raising"
                 } else {
@@ -1086,11 +1101,17 @@ fn building_label(place: &PlaceRecord, index: usize) -> String {
 }
 
 fn building_tree_summary(building: &PlaceBuildingRecord) -> String {
-    if building.kind.housing_capacity() > 0 {
+    if building
+        .kind
+        .housing_capacity_with_house(building.house_appearance.as_ref())
+        > 0
+    {
         format!(
             "{}/{} BEDS",
             building.residents.len(),
-            building.kind.housing_capacity()
+            building
+                .kind
+                .housing_capacity_with_house(building.house_appearance.as_ref())
         )
     } else if building.kind.positions() > 0 {
         format!(
@@ -1212,6 +1233,7 @@ pub(super) fn sync_place_detail(
         Option<&shared::economy::GoodsInventory>,
         Option<&shared::components::CivicHallUpgradeWorksite>,
         Option<&shared::economy::BusinessForSale>,
+        Option<&shared::components::HouseUpgradeWorksite>,
     )>,
     mut assign_buttons: Query<
         (&mut Node, &mut AssignHeroToWorksite),
@@ -1341,16 +1363,26 @@ pub(super) fn sync_place_detail(
         _ => None,
     };
     let model = match live_worksite {
-        Some((_, (site, inventory, upgrade, for_sale))) => {
+        Some((_, (site, inventory, upgrade, for_sale, house_upgrade))) => {
             let (good, required) = upgrade.map_or(
                 (
                     shared::economy::Good::Wood,
-                    site.kind.construction_wood_required(),
+                    house_upgrade.map_or_else(
+                        || site.kind.construction_wood_required(),
+                        |upgrade| upgrade.wood_required,
+                    ),
                 ),
                 |upgrade| (upgrade.material, upgrade.material_required),
             );
             let delivered = inventory.map_or(0, |inventory| inventory.amount(good));
-            worksite_detail_model(site, delivered, required, good, for_sale)
+            worksite_detail_model(
+                site,
+                delivered,
+                required,
+                good,
+                for_sale,
+                house_upgrade.is_some(),
+            )
         }
         // A finished (despawned) worksite falls back to the place overview.
         None if matches!(*selected_entry, SelectedPlaceEntry::Worksite(_)) => {
@@ -1370,7 +1402,7 @@ pub(super) fn sync_place_detail(
         }
     }
     for (mut node, mut assign) in assign_buttons.iter_mut() {
-        let display = if live_worksite.is_some() {
+        let display = if live_worksite.is_some_and(|(_, (_, _, _, _, upgrade))| upgrade.is_none()) {
             Display::Flex
         } else {
             Display::None
@@ -1378,7 +1410,9 @@ pub(super) fn sync_place_detail(
         if node.display != display {
             node.display = display;
         }
-        let target = live_worksite.map(|(site, _)| site);
+        let target = live_worksite
+            .filter(|(_, (_, _, _, _, upgrade))| upgrade.is_none())
+            .map(|(site, _)| site);
         if assign.0 != target {
             assign.0 = target;
         }
@@ -1636,6 +1670,7 @@ fn worksite_detail_model(
     required: u32,
     good: shared::economy::Good,
     for_sale: Option<&shared::economy::BusinessForSale>,
+    house_upgrade: bool,
 ) -> PlaceDetailModel {
     let status = if site.raising {
         "Raising the frame"
@@ -1652,7 +1687,11 @@ fn worksite_detail_model(
         ),
         DetailRow::Line(
             "CREW".into(),
-            "The village drafts a free resident; send your own hero below to supply and build it yourself".into(),
+            if house_upgrade {
+                "The owner funds materials and paid building work. Four beds remain usable until the upper storey is finished.".into()
+            } else {
+                "The village drafts a free resident; send your own hero below to supply and build it yourself".into()
+            },
         ),
     ];
     if let Some(listing) = for_sale {
@@ -1666,7 +1705,11 @@ fn worksite_detail_model(
         ));
     }
     PlaceDetailModel {
-        title: format!("{} WORKSITE", site.kind.label().to_uppercase()),
+        title: if house_upgrade {
+            "HOUSE EXTENSION".into()
+        } else {
+            format!("{} WORKSITE", site.kind.label().to_uppercase())
+        },
         subtitle: format!(
             "{} / {}",
             site.settlement.to_uppercase(),
@@ -1750,8 +1793,8 @@ fn detail_icon(label: &str) -> HudIcon {
         "PROSPERITY" | "MARKET" | "TRADE" => HudIcon::Scales,
         "TREASURY" | "ECONOMY" | "BUSINESS" => HudIcon::Purse,
         "UNREST" => HudIcon::Bell,
-        "STABILITY" | "OWNERSHIP" | "OFFICE" => HudIcon::Crest,
-        "GROWTH" | "PERMITS & WORKS" | "WORKSITE" => HudIcon::Compass,
+        "STABILITY" | "OWNERSHIP" | "OFFICE" | "LIVING CONDITIONS" => HudIcon::Crest,
+        "GROWTH" | "PERMITS & WORKS" | "WORKSITE" | "DEVELOPMENT" => HudIcon::Compass,
         "LOCATION" => HudIcon::Pin,
         _ => HudIcon::Book,
     }
@@ -1820,21 +1863,20 @@ fn group_rows(rows: Vec<(String, String)>, sections: &[(&str, &[&str])]) -> Vec<
 
 const OVERVIEW_SECTIONS: &[(&str, &[&str])] = &[
     (
-        "PEOPLE",
+        "LIVING CONDITIONS",
         &[
-            "RESIDENTS",
+            "POPULATION",
             "HOUSING",
             "UNEMPLOYMENT",
             "HUNGER",
             "UNPAID WORKERS",
+            "UNREST",
+            "UNREST PRESSURES",
+            "FOOD SECURITY",
         ],
     ),
-    (
-        "STABILITY",
-        &["UNREST", "UNREST PRESSURES", "FOOD SECURITY"],
-    ),
-    ("ECONOMY", &["TREASURY", "COMMON STORE"]),
-    ("GROWTH", &["STRUCTURES", "TO ADVANCE", "LOCATION"]),
+    ("CIVIC RESOURCES", &["TREASURY", "COMMON STORE"]),
+    ("SETTLEMENT", &["STRUCTURES", "LOCATION"]),
 ];
 
 const HALL_SECTIONS: &[(&str, &[&str])] = &[
@@ -2134,72 +2176,65 @@ fn place_detail_model(
                 place.fishing_piers,
                 if place.fishing_piers == 1 { "" } else { "s" },
             );
-            let advance = match place.development.as_ref() {
-                Some(development) if development.required_days > 0 => format!(
-                    "{} / {} of {} sustained days",
-                    development.next_gate.label(),
-                    development.progress_days,
-                    development.required_days,
-                ),
-                Some(development) => development.next_gate.label().to_string(),
-                None => match place.tier.next_requirement() {
-                    Some(requirement) if place.residents == 0 => {
-                        format!("Settlers first, then {requirement}")
-                    }
-                    Some(requirement) => requirement.to_string(),
-                    None => "This is as large as places get".to_string(),
-                },
-            };
+            let mut rows = vec![DetailRow::Section("DEVELOPMENT".into())];
+            rows.extend(
+                crate::ui::settlement_development::checklist(
+                    place.tier,
+                    place.development.as_ref(),
+                )
+                .into_iter()
+                .map(|(label, value)| DetailRow::Line(label, value)),
+            );
+            rows.extend(group_rows(
+                vec![
+                    ("POPULATION".into(), residents),
+                    ("UNREST".into(), unrest_summary(place.economy.as_ref())),
+                    (
+                        "UNREST PRESSURES".into(),
+                        unrest_pressure_summary(place.economy.as_ref()),
+                    ),
+                    (
+                        "FOOD SECURITY".into(),
+                        food_security_summary(place.economy.as_ref()),
+                    ),
+                    (
+                        "HUNGER".into(),
+                        hunger_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "UNEMPLOYMENT".into(),
+                        work_seekers_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "HOUSING".into(),
+                        housing_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "UNPAID WORKERS".into(),
+                        unpaid_workers_summary(place.economy.as_ref()),
+                    ),
+                    ("STRUCTURES".into(), structures),
+                    (
+                        "COMMON STORE".into(),
+                        inventory_summary(
+                            place.inventory_used,
+                            place.inventory_capacity,
+                            &place.inventory,
+                        ),
+                    ),
+                    (
+                        "TREASURY".into(),
+                        format!("{} coin", format_money(place.treasury)),
+                    ),
+                    ("LOCATION".into(), location(place.position)),
+                ],
+                OVERVIEW_SECTIONS,
+            ));
             PlaceDetailModel {
                 title: place.name.clone(),
                 subtitle: format!("{status} / SETTLEMENT OVERVIEW"),
-                tiles: town_tiles(place),
-                rows: group_rows(
-                    vec![
-                        ("RESIDENTS".into(), residents),
-                        ("UNREST".into(), unrest_summary(place.economy.as_ref())),
-                        (
-                            "UNREST PRESSURES".into(),
-                            unrest_pressure_summary(place.economy.as_ref()),
-                        ),
-                        (
-                            "FOOD SECURITY".into(),
-                            food_security_summary(place.economy.as_ref()),
-                        ),
-                        (
-                            "HUNGER".into(),
-                            hunger_summary(place.economy.as_ref(), place.residents),
-                        ),
-                        (
-                            "UNEMPLOYMENT".into(),
-                            work_seekers_summary(place.economy.as_ref(), place.residents),
-                        ),
-                        (
-                            "HOUSING".into(),
-                            housing_summary(place.economy.as_ref(), place.residents),
-                        ),
-                        (
-                            "UNPAID WORKERS".into(),
-                            unpaid_workers_summary(place.economy.as_ref()),
-                        ),
-                        ("STRUCTURES".into(), structures),
-                        (
-                            "COMMON STORE".into(),
-                            inventory_summary(
-                                place.inventory_used,
-                                place.inventory_capacity,
-                                &place.inventory,
-                            ),
-                        ),
-                        (
-                            "TREASURY".into(),
-                            format!("{} coin", format_money(place.treasury)),
-                        ),
-                        ("TO ADVANCE".into(), advance),
-                        ("LOCATION".into(), location(place.position)),
-                    ],
-                    OVERVIEW_SECTIONS,
-                ),
+                tiles: Vec::new(),
+                rows,
             }
         }
         SelectedPlaceEntry::Hall => {
@@ -2557,7 +2592,12 @@ fn place_detail_model(
                             "Produces Meat and Wool from its pasture / 2 work positions".into()
                         }
                         SettlementBuildingKind::House => {
-                            format!("Housing / {} beds", building.kind.housing_capacity())
+                            format!(
+                                "Housing / {} beds",
+                                building.kind.housing_capacity_with_house(
+                                    building.house_appearance.as_ref()
+                                )
+                            )
                         }
                         SettlementBuildingKind::Hall => "Civic building".into(),
                         SettlementBuildingKind::Market => {
@@ -2579,13 +2619,19 @@ fn place_detail_model(
                     },
                 ),
             ];
-            if building.kind.housing_capacity() > 0 {
+            if building
+                .kind
+                .housing_capacity_with_house(building.house_appearance.as_ref())
+                > 0
+            {
                 rows.push((
                     "BEDS".into(),
                     format!(
                         "{} / {} occupied",
                         building.residents.len(),
-                        building.kind.housing_capacity()
+                        building
+                            .kind
+                            .housing_capacity_with_house(building.house_appearance.as_ref())
                     ),
                 ));
                 rows.push((
@@ -3065,7 +3111,7 @@ mod tests {
             rotation: 0.0,
             stand: Vec3::ZERO,
         };
-        let model = worksite_detail_model(&site, 4, 10, shared::economy::Good::Wood, None);
+        let model = worksite_detail_model(&site, 4, 10, shared::economy::Good::Wood, None, false);
         assert_eq!(model.title, "HOUSE WORKSITE");
         assert_eq!(model.subtitle, "BRACKWATER / AWAITING MATERIALS");
         assert!(model
@@ -3076,7 +3122,8 @@ mod tests {
             raising: true,
             ..site
         };
-        let model = worksite_detail_model(&raising, 10, 10, shared::economy::Good::Wood, None);
+        let model =
+            worksite_detail_model(&raising, 10, 10, shared::economy::Good::Wood, None, false);
         assert_eq!(model.subtitle, "BRACKWATER / RAISING THE FRAME");
     }
 
@@ -3235,6 +3282,32 @@ mod tests {
         assert!(model
             .lines()
             .any(|(label, value)| label == "HUNGER" && value.contains("50%")));
+    }
+
+    #[test]
+    fn overview_keeps_development_and_living_conditions_in_distinct_sections() {
+        let mut place = explorer_place();
+        let mut development = SettlementDevelopment::from_seed(1, 0);
+        development.evidence.residents = 30;
+        development.evidence.housed_residents = 20;
+        development.progress_days = 2;
+        development.qualification_bits = 0b101;
+        place.development = Some(development);
+        let model = place_detail_model(&place, SelectedPlaceEntry::Overview, false);
+        assert_eq!(model.rows[0], DetailRow::Section("DEVELOPMENT".into()));
+        let living = model
+            .rows
+            .iter()
+            .position(|row| *row == DetailRow::Section("LIVING CONDITIONS".into()))
+            .unwrap();
+        assert!(model.rows[..living].contains(&DetailRow::Line("HOUSED".into(), "20 / 20".into())));
+        assert!(model.rows[..living].contains(&DetailRow::Line(
+            "QUALIFYING DAYS".into(),
+            "2 of last 3 · 2 needed".into()
+        )));
+        assert!(model.rows[living..]
+            .iter()
+            .any(|row| matches!(row, DetailRow::Line(label, _) if label == "HUNGER")));
     }
 
     #[test]

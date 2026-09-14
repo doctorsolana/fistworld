@@ -387,6 +387,9 @@ pub fn update_cursor_terrain_hit(
     mut last_inputs: Local<Option<(Vec2, Vec2, Vec2, Vec3, Quat)>>,
 ) {
     if let Some(forced) = forced {
+        // Returning to the real pointer must rebuild its ray even when the
+        // camera and cursor did not move during a capture/placement command.
+        *last_inputs = None;
         let y = visible_surface_height(&terrain, forced.0.x, forced.0.y);
         hit.0 = Some(Vec3::new(forced.0.x, y, forced.0.y));
         cursor_ray.0 = None;

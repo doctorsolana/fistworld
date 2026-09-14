@@ -10,6 +10,7 @@
 //! spawning a component instead of by editing the picker.
 
 pub mod attack_ring;
+pub(crate) mod archer_range;
 pub mod commands;
 pub mod formation_preview;
 pub mod order;
@@ -36,6 +37,7 @@ pub struct SelectionPlugin;
 impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selection>();
+        archer_range::install(app);
         app.add_systems(
             OnEnter(GameState::Playing),
             formation_preview::spawn_preview_label,
@@ -90,6 +92,8 @@ impl Plugin for SelectionPlugin {
                 order::issue_order_on_right_click,
                 formation_preview::draw_formation_preview,
                 ring::sync_selection_ring,
+                archer_range::collect,
+                archer_range::draw,
                 attack_ring::hover_attack_target,
                 attack_ring::sync_authoritative_targets,
                 attack_ring::sync_attack_rings,

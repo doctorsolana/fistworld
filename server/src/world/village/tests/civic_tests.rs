@@ -139,10 +139,16 @@ fn an_empty_pantry_spends_discretionary_coin_before_accepting_hunger() {
                 resident_ids: vec![shared::components::PersonId(707)],
                 residents: vec!["Ada".to_string()],
             },
-            HouseholdEconomy::default(),
+            shared::components::BuildingId(708),
+            PlayerPosition(Vec3::new(10.0, 0.0, 0.0)),
+            PlayerRotation(0.0),
             GoodsInventory::new(shared::economy::capacity::HOUSE),
         ))
         .id();
+    let account = app.world_mut().spawn((shared::components::HouseholdId(709), shared::components::HouseholdMembers {
+        resident_ids: vec![shared::components::PersonId(707)], settlement: settlement_id,
+        dwelling: Some(shared::components::BuildingId(708)),
+    }, HouseholdEconomy::default())).id();
     let resident = app
         .world_mut()
         .spawn((
@@ -156,10 +162,10 @@ fn an_empty_pantry_spends_discretionary_coin_before_accepting_hunger() {
 
     app.update();
 
-    assert_eq!(app.world().get::<Wallet>(resident).unwrap().balance(), 0);
+    assert_eq!(app.world().get::<Wallet>(resident).unwrap().balance(), 20);
     assert_eq!(
-        app.world().get::<HouseholdEconomy>(home).unwrap().pennies,
-        20,
+        app.world().get::<HouseholdEconomy>(account).unwrap().pennies,
+        0,
     );
     assert_eq!(
         app.world()

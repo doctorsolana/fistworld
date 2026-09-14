@@ -595,17 +595,20 @@ pub fn staff_moot_hall_roles(
         &shared::components::SettlementId,
         &SettlementPolicies,
     )>,
-    mut villagers: Query<(
-        Entity,
-        &shared::components::PersonId,
-        &CharacterName,
-        &VillagerIntent,
-        &mut Occupation,
-        &mut WorkStatus,
-        Option<&MootSteward>,
-        Option<&shared::components::EmployedAt>,
-        Option<&shared::components::CivicEmployment>,
-    )>,
+    mut villagers: Query<
+        (
+            Entity,
+            &shared::components::PersonId,
+            &CharacterName,
+            &VillagerIntent,
+            &mut Occupation,
+            &mut WorkStatus,
+            Option<&MootSteward>,
+            Option<&shared::components::EmployedAt>,
+            Option<&shared::components::CivicEmployment>,
+        ),
+        Without<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
+    >,
 ) {
     for (hall, settlement, mut administration, settlement_id, policies) in halls.iter_mut() {
         let mut steward = None;

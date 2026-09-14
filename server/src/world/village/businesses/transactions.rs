@@ -74,6 +74,24 @@ impl BusinessEventQueue {
         }
     }
 
+    /// A household's final estate can retire its canonical account between a
+    /// physical sale and ledger settlement. Preserve the already-paid claim
+    /// under the estate's treasury beneficiary instead of an obsolete group.
+    pub fn reroute_retired_household_sales(
+        &mut self,
+        household: shared::components::HouseholdId,
+        fallback_settlement: shared::components::SettlementId,
+    ) {
+        for event in &mut self.events {
+            let BusinessEvent::Sale { fill, .. } = event else {
+                continue;
+            };
+            if fill.seller == MarketSeller::Household(household) {
+                fill.seller = MarketSeller::Treasury(fallback_settlement);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn pending_sale_gross(&self) -> u64 {
         self.events
@@ -119,6 +137,11 @@ pub fn apply_business_events(
     company_entities: Query<(Entity, &shared::components::CompanyId)>,
     mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
     mut people: Query<(Entity, &shared::components::PersonId, &mut Wallet)>,
+    mut households: Query<(
+        Entity,
+        &shared::components::HouseholdId,
+        &mut HouseholdEconomy,
+    )>,
     mut settlements: Query<(
         Entity,
         &shared::components::SettlementId,
@@ -147,6 +170,10 @@ pub fn apply_business_events(
         .collect();
     let people_entities: HashMap<shared::components::PersonId, Entity> =
         people.iter().map(|(entity, id, _)| (*id, entity)).collect();
+    let household_entities: HashMap<shared::components::HouseholdId, Entity> = households
+        .iter()
+        .map(|(entity, id, _)| (*id, entity))
+        .collect();
     let settlement_entities: HashMap<shared::components::SettlementId, Entity> = settlements
         .iter()
         .map(|(entity, id, ..)| (*id, entity))
@@ -198,6 +225,7 @@ pub fn apply_business_events(
             MarketSeller::Business(id) => business_entities.get(&id).map(|(entity, _)| *entity),
             MarketSeller::Person(id) => people_entities.get(&id).copied(),
             MarketSeller::Treasury(id) => settlement_entities.get(&id).copied(),
+            MarketSeller::Household(id) => household_entities.get(&id).copied(),
         };
         let fee_entity = settlement_entities.get(&market_id).copied();
         if fee_entity.is_none() {
@@ -250,6 +278,11 @@ pub fn apply_business_events(
                     wallet.credit(seller_net);
                 }
             }
+            (MarketSeller::Household(_), Some(entity)) => {
+                if let Ok((_, _, mut account)) = households.get_mut(entity) {
+                    account.pennies = account.pennies.saturating_add(seller_net);
+                }
+            }
             (MarketSeller::Treasury(_), Some(entity)) => {
                 if let Ok((_, _, mut settlement, civic)) = settlements.get_mut(entity) {
                     settlement.treasury = settlement.treasury.saturating_add(seller_net);
@@ -285,6 +318,165 @@ pub fn apply_business_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn returned_household_goods_pay_the_canonical_purse_once_with_ordinary_fees() {
+        let mut app = App::new();
+        app.init_resource::<BusinessEventQueue>()
+            .add_systems(Update, apply_business_events);
+        let household_id = shared::components::HouseholdId(91);
+        let settlement_id = shared::components::SettlementId(92);
+        let account = app
+            .world_mut()
+            .spawn((household_id, HouseholdEconomy::default()))
+            .id();
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Returnford".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 4,
+                    treasury: 0,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<BusinessEventQueue>()
+            .record_market_purchase(
+                2,
+                settlement_id,
+                [MarketFill {
+                    seller: MarketSeller::Household(household_id),
+                    good: Good::Wood,
+                    units: 2,
+                    unit_price: 50,
+                    gross: 100,
+                    market_fee: 5,
+                }],
+            );
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<HouseholdEconomy>(account)
+                .unwrap()
+                .pennies,
+            95
+        );
+        assert_eq!(app.world().get::<Settlement>(hall).unwrap().treasury, 5);
+        assert_eq!(
+            app.world()
+                .resource::<BusinessEventQueue>()
+                .pending_sale_count(),
+            0
+        );
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<HouseholdEconomy>(account)
+                .unwrap()
+                .pennies,
+            95
+        );
+        assert_eq!(app.world().get::<Settlement>(hall).unwrap().treasury, 5);
+    }
+
+    #[test]
+    fn a_missing_household_seller_settles_to_the_market_treasury() {
+        let mut app = App::new();
+        app.init_resource::<BusinessEventQueue>()
+            .add_systems(Update, apply_business_events);
+        let settlement_id = shared::components::SettlementId(92);
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Returnford".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 0,
+                    treasury: 0,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<BusinessEventQueue>()
+            .record_market_purchase(
+                2,
+                settlement_id,
+                [MarketFill {
+                    seller: MarketSeller::Household(shared::components::HouseholdId(91)),
+                    good: Good::Wood,
+                    units: 2,
+                    unit_price: 50,
+                    gross: 100,
+                    market_fee: 5,
+                }],
+            );
+        app.update();
+        assert_eq!(app.world().get::<Settlement>(hall).unwrap().treasury, 100);
+        assert_eq!(
+            app.world()
+                .resource::<BusinessEventQueue>()
+                .pending_sale_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn final_household_estate_redirects_queued_proceeds_but_keeps_market_fees_local() {
+        let mut app = App::new();
+        app.init_resource::<BusinessEventQueue>()
+            .add_systems(Update, apply_business_events);
+        let home = shared::components::SettlementId(92);
+        let market = shared::components::SettlementId(93);
+        let household = shared::components::HouseholdId(91);
+        let spawn_hall = |world: &mut World, id| {
+            world
+                .spawn((
+                    id,
+                    Settlement {
+                        name: "Returnford".into(),
+                        tier: shared::components::SettlementTier::Hamlet,
+                        residents: 0,
+                        treasury: 0,
+                    },
+                ))
+                .id()
+        };
+        let home_hall = spawn_hall(app.world_mut(), home);
+        let market_hall = spawn_hall(app.world_mut(), market);
+        let mut queue = app.world_mut().resource_mut::<BusinessEventQueue>();
+        queue.record_market_purchase(
+            2,
+            market,
+            [MarketFill {
+                seller: MarketSeller::Household(household),
+                good: Good::Wood,
+                units: 2,
+                unit_price: 50,
+                gross: 100,
+                market_fee: 5,
+            }],
+        );
+        queue.reroute_retired_household_sales(household, home);
+        app.update();
+        assert_eq!(
+            app.world().get::<Settlement>(home_hall).unwrap().treasury,
+            95
+        );
+        assert_eq!(
+            app.world().get::<Settlement>(market_hall).unwrap().treasury,
+            5
+        );
+        assert_eq!(
+            app.world()
+                .resource::<BusinessEventQueue>()
+                .pending_sale_count(),
+            0
+        );
+    }
 
     #[test]
     fn an_offline_heroes_sale_pays_once_and_survives_readoption() {

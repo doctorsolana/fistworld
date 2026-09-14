@@ -1,5 +1,8 @@
 //! Vacancy matching, skill requirements and durable workplace assignment.
 
+use super::businesses::market_response::{
+    MarketResponseShare, MarketResponseSite, MarketResponses,
+};
 use super::*;
 
 const UNPAID_DAYS_BEFORE_PRIVATE_RESIGNATION: u64 = 3;
@@ -54,7 +57,7 @@ fn marginal_operating_plan(
     management: &BusinessManagementPolicy,
     market: Option<&MootMarket>,
     seller: Option<MarketSeller>,
-    responsive_sellers: usize,
+    response: MarketResponseShare,
     generic_output_demand: u32,
     external_output_bid: Option<u64>,
     food_buffer_days: f32,
@@ -78,44 +81,44 @@ fn marginal_operating_plan(
     let own_current = account.current_day.sold_units;
     let own_previous = account.previous_day.sold_units;
     let proven_daily_sales = own_current.max(own_previous);
-    let (unavailable, demand_variation, fee_bps, mut output_quote, input_quote) =
-        market.map_or((0, 0, 0, output.base_price(), 0), |market| {
+    let (funded_shortage, demand_variation, fee_bps, mut output_quote, input_quote) = market
+        .map_or((0, 0, 0, output.base_price(), 0), |market| {
             let pool = market.pool(output);
-            let sellers = u64::try_from(responsive_sellers.max(1)).unwrap_or(u64::MAX);
-            let unavailable = pool
-                .day
-                .unavailable_units
-                .max(pool.previous_day.unavailable_units)
-                .div_ceil(sellers)
+            let quote = sale.asking_unit_price.max(sale.minimum_unit_price).max(1);
+            let funded_shortage = response
+                .units(
+                    pool.day
+                        .funded_unmet_at(quote)
+                        .max(pool.previous_day.funded_unmet_at(quote)),
+                )
                 .min(u64::from(u32::MAX)) as u32;
-            let demand_variation = pool
-                .day
-                .requested_units()
-                .abs_diff(pool.previous_day.requested_units())
-                .div_ceil(sellers)
+            let demand_variation = response
+                .units(
+                    pool.day
+                        .consumer_units
+                        .saturating_add(pool.day.funded_unmet_at(quote))
+                        .abs_diff(
+                            pool.previous_day
+                                .consumer_units
+                                .saturating_add(pool.previous_day.funded_unmet_at(quote)),
+                        ),
+                )
                 .min(u64::from(u32::MAX)) as u32;
             let input_quote = capacity
                 .input
                 .map_or(0, |(input, _)| market.suggested_price(input));
             (
-                unavailable,
+                funded_shortage,
                 demand_variation,
                 market.market_fee_bps(),
-                sale.asking_unit_price.max(sale.minimum_unit_price).max(1),
+                quote,
                 input_quote,
             )
         });
-    // An empty shelf has no live ask from which a closed producer can value
-    // reopening. Failed purchases are nevertheless real demand: use the
-    // exchange's current scarcity/last-sale quote when buyers requested units
-    // which no listing could supply. This remains a price signal rather than a
-    // production order; the owner still rejects the shift when that revenue
-    // cannot cover inputs and wages.
-    if unavailable > 0 {
-        if let Some(market) = market {
-            output_quote = output_quote.max(market.suggested_price(output));
-        }
-    }
+    // Local shortages are valued at the producer's actual published ask and
+    // only up to the buyers' recorded purchasing capacity. Daily management
+    // can quote a profitable restart; a historical sale or authored base
+    // price cannot manufacture revenue at a price this firm will not charge.
     // A funded inter-settlement tender is a real bid, not merely an abstract
     // quantity shortage. The seller remains free to choose any ask at or
     // below the buyer's ceiling; this price is used only to answer whether a
@@ -143,7 +146,7 @@ fn marginal_operating_plan(
     // share as demand even when the order book has no listing. `max` avoids
     // counting the same hungry household twice when a failed market purchase
     // already recorded the shortage against this exact output.
-    let unmet_output_demand = unavailable.max(generic_output_demand);
+    let unmet_output_demand = funded_shortage.max(generic_output_demand);
     let desired_dispatch = proven_daily_sales
         .saturating_add(unmet_output_demand)
         .saturating_add(strategy_buffer);
@@ -276,6 +279,10 @@ pub fn review_automatic_staffing(
             Option<&shared::components::OperatedBy>,
             Option<&BusinessAccount>,
             Option<&BusinessProcurementPolicy>,
+            Option<&BusinessSalePolicy>,
+            Option<&BusinessWagePolicy>,
+            Option<&BusinessStaffingPolicy>,
+            Option<&BusinessManagementPolicy>,
         )>,
         Query<(
             Entity,
@@ -314,7 +321,7 @@ pub fn review_automatic_staffing(
         })
         .collect();
     let mut household_food = HashMap::<shared::components::SettlementId, u32>::new();
-    let mut responsive_sellers = HashMap::<(shared::components::SettlementId, Good), usize>::new();
+    let responses;
     let mut food_restart_leaders =
         HashMap::<(shared::components::SettlementId, Good), shared::components::BuildingId>::new();
     let mut trade_restart_leaders =
@@ -339,6 +346,7 @@ pub fn review_automatic_staffing(
             operated_by,
             _,
             procurement,
+            ..,
         ) in read.iter()
         {
             if building.kind == SettlementBuildingKind::House {
@@ -357,9 +365,6 @@ pub fn review_automatic_staffing(
                         .or_insert(*building_id);
                 }
                 if let Some(output) = business_output(building.kind) {
-                    *responsive_sellers
-                        .entry((building_of.0, output))
-                        .or_default() += 1;
                     trade_restart_leaders
                         .entry((building_of.0, output))
                         .and_modify(|current| *current = (*current).min(*building_id))
@@ -400,6 +405,29 @@ pub fn review_automatic_staffing(
                 }
             }
         }
+        responses = MarketResponses::build(
+            read.iter().filter_map(
+                |(id, building_of, building, _, condition, _, _, _, sale, wage, _, management)| {
+                    let mut sale = *sale?;
+                    let wage = wage?;
+                    let management = management?;
+                    sale.target_margin_bps = management.strategy.target_margin_bps();
+                    Some(MarketResponseSite {
+                        id: *id,
+                        settlement: building_of.0,
+                        kind: building.kind,
+                        quality: building.quality,
+                        state: condition
+                            .map_or(BusinessState::Operating, |condition| condition.state),
+                        assigned_workers: building.workers.len().min(usize::from(u8::MAX)) as u8,
+                        daily_wage: wage.daily_wage,
+                        sale,
+                        autopilot: management.autopilot,
+                    })
+                },
+            ),
+            |settlement| markets.get(&settlement).map(|(market, ..)| *market),
+        );
     }
     // A buyer-funded inter-settlement tender is a real order even before the
     // source market has a listing. Route formation deliberately waits for
@@ -703,12 +731,7 @@ pub fn review_automatic_staffing(
             management,
             market,
             seller,
-            output.map_or(1, |good| {
-                responsive_sellers
-                    .get(&(building_of.0, good))
-                    .copied()
-                    .unwrap_or(1)
-            }),
+            responses.share_for(*building_id),
             generic_output_demand,
             (external_trade.0 > 0).then_some(external_trade.1),
             food_buffer_days,
@@ -813,6 +836,7 @@ pub fn fill_vacancies(
             With<ConstructionMaterialRoutine>,
             With<RoadBuilderRoutine>,
             With<moot_services::PermitPickupRoutine>,
+            With<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
         )>,
     >,
 ) {
@@ -1628,7 +1652,7 @@ mod tests {
             &BusinessManagementPolicy::default(),
             None,
             None,
-            1,
+            MarketResponseShare::SOLO,
             0,
             None,
             1.0,
@@ -1662,7 +1686,7 @@ mod tests {
             &BusinessManagementPolicy::default(),
             None,
             None,
-            1,
+            MarketResponseShare::SOLO,
             0,
             None,
             1.0,
@@ -1710,7 +1734,7 @@ mod tests {
                     &management,
                     Some(market),
                     Some(seller),
-                    1,
+                    MarketResponseShare::SOLO,
                     0,
                     None,
                     reserve_days,
@@ -1769,7 +1793,7 @@ mod tests {
             &management,
             None,
             None,
-            1,
+            MarketResponseShare::SOLO,
             0,
             None,
             3.0,
@@ -1798,7 +1822,7 @@ mod tests {
             &BusinessManagementPolicy::default(),
             None,
             None,
-            1,
+            MarketResponseShare::SOLO,
             0,
             None,
             1.0,
@@ -1836,7 +1860,7 @@ mod tests {
             &BusinessManagementPolicy::default(),
             Some(&market),
             Some(MarketSeller::Business(shared::components::BuildingId(100))),
-            1,
+            MarketResponseShare::SOLO,
             0,
             None,
             1.0,
@@ -1873,7 +1897,7 @@ mod tests {
             &BusinessManagementPolicy::default(),
             Some(&market),
             Some(MarketSeller::Business(shared::components::BuildingId(100))),
-            1,
+            MarketResponseShare::SOLO,
             5,
             None,
             1.0,
@@ -1983,7 +2007,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_civic_material_shelf_values_reopening_at_the_market_quote() {
+    fn operating_plan_does_not_assume_revenue_above_its_published_price() {
         let lumber = SettlementBuilding {
             kind: SettlementBuildingKind::LumberjackHut,
             settlement: "Timbermoot".into(),
@@ -2007,16 +2031,217 @@ mod tests {
             &BusinessManagementPolicy::default(),
             Some(&market),
             Some(MarketSeller::Business(shared::components::BuildingId(70))),
-            1,
+            MarketResponseShare::SOLO,
             0,
             None,
             1.0,
             false,
         );
 
-        assert_eq!(plan.optimal_positions, 1);
-        assert!(plan.target_output_units > 0);
-        assert!(plan.marginal_daily_profit > 0);
+        assert_eq!(plan.optimal_positions, 0);
+        assert_eq!(plan.target_output_units, 0);
+    }
+
+    #[test]
+    fn funded_civic_order_reopens_a_lumber_hut_from_stale_low_or_high_prices() {
+        for (stale_ask, competitor_count) in [(4, 1), (50, 1), (500, 1), (4, 5), (500, 5)] {
+            let mut app = App::new();
+            app.add_systems(
+                Update,
+                (review_business_management, review_automatic_staffing).chain(),
+            );
+            let mut clock = WorldTime::new_default();
+            clock.day = 16;
+            app.world_mut().spawn(clock);
+            let settlement_id = shared::components::SettlementId(7);
+            let seller = MarketSeller::Business(shared::components::BuildingId(70));
+            let mut market = MootMarket::founding();
+            market.consign(seller, Good::Wood, 1, 4);
+            market.purchase(Good::Wood, 1, 4, None, None);
+            market.begin_new_day();
+            market.begin_new_day();
+            market.purchase_recording_demand(Good::Wood, 6, 300, None, None);
+            let hall = app
+                .world_mut()
+                .spawn((
+                    settlement_id,
+                    Settlement {
+                        name: "Timbermoot".into(),
+                        tier: shared::components::SettlementTier::Hamlet,
+                        residents: 35,
+                        treasury: 300,
+                    },
+                    market,
+                ))
+                .id();
+            let mut sale = BusinessSalePolicy::for_good(Good::Wood);
+            sale.asking_unit_price = stale_ask;
+            let competitors: Vec<_> = (0..competitor_count)
+                .rev()
+                .map(|index| {
+                    app.world_mut()
+                        .spawn((
+                            shared::components::BuildingId(70 + index),
+                            shared::components::BuildingOf(settlement_id),
+                            SettlementBuilding {
+                                kind: SettlementBuildingKind::LumberjackHut,
+                                settlement: "Timbermoot".into(),
+                                owner: None,
+                                quality: 0.246_816,
+                                workers: Vec::new(),
+                            },
+                            GoodsInventory::new(
+                                SettlementBuildingKind::LumberjackHut.storage_bulk_capacity(),
+                            ),
+                            BusinessAccount {
+                                gross_revenue: 84,
+                                ..default()
+                            },
+                            BusinessManagementPolicy::default(),
+                            BusinessCondition {
+                                state: BusinessState::Mothballed,
+                                opened_day: 0,
+                                ..default()
+                            },
+                            sale,
+                            BusinessWagePolicy::default(),
+                            BusinessStaffingPolicy::new(0),
+                        ))
+                        .id()
+                })
+                .collect();
+            let business = *competitors.last().unwrap();
+
+            app.update();
+
+            let plan = app.world().get::<BusinessOperatingPlan>(business).unwrap();
+            assert_eq!(plan.optimal_positions, 1);
+            assert!(plan.target_output_units >= 6);
+            assert!(plan.marginal_daily_profit > 0);
+            assert_eq!(
+                app.world()
+                    .get::<BusinessCondition>(business)
+                    .unwrap()
+                    .state,
+                BusinessState::Operating
+            );
+            let asking = app
+                .world()
+                .get::<BusinessSalePolicy>(business)
+                .unwrap()
+                .asking_unit_price;
+            assert!(asking > 4 && asking <= 50);
+            assert_eq!(
+                app.world()
+                    .get::<MootMarket>(hall)
+                    .unwrap()
+                    .listed_units(Good::Wood),
+                0
+            );
+            assert_eq!(app.world().get::<Settlement>(hall).unwrap().treasury, 300);
+            for competitor in competitors.iter().filter(|entity| **entity != business) {
+                assert_eq!(
+                    app.world()
+                        .get::<BusinessOperatingPlan>(*competitor)
+                        .unwrap()
+                        .optimal_positions,
+                    0,
+                    "an idle rival must not claim a second copy of the same restart order",
+                );
+            }
+            assert_eq!(
+                app.world()
+                    .get::<GoodsInventory>(business)
+                    .unwrap()
+                    .amount(Good::Wood),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn unfunded_or_lower_price_shortages_do_not_create_profitable_shifts() {
+        let lumber = SettlementBuilding {
+            kind: SettlementBuildingKind::LumberjackHut,
+            settlement: "Timbermoot".into(),
+            owner: None,
+            quality: 1.0,
+            workers: Vec::new(),
+        };
+        for (budget, ceiling) in [(0, 50), (300, 4)] {
+            let mut market = MootMarket::founding();
+            market.purchase_recording_demand(Good::Wood, 6, budget, Some(ceiling), None);
+            let plan = marginal_operating_plan(
+                8,
+                &lumber,
+                &GoodsInventory::new(lumber.kind.storage_bulk_capacity()),
+                &BusinessAccount::default(),
+                &BusinessSalePolicy::for_good(Good::Wood),
+                &BusinessWagePolicy::default(),
+                &BusinessManagementPolicy::default(),
+                Some(&market),
+                Some(MarketSeller::Business(shared::components::BuildingId(70))),
+                MarketResponseShare::SOLO,
+                0,
+                None,
+                1.0,
+                false,
+            );
+            assert_eq!(plan.optimal_positions, 0);
+            assert_eq!(plan.target_output_units, 0);
+        }
+    }
+
+    #[test]
+    fn steady_timber_demand_stops_at_available_stock_and_respects_site_capacity() {
+        for quality in [0.0, 0.25, 1.0] {
+            let lumber = SettlementBuilding {
+                kind: SettlementBuildingKind::LumberjackHut,
+                settlement: "Timbermoot".into(),
+                owner: None,
+                quality,
+                workers: Vec::new(),
+            };
+            for requested in [0, 1, 6, 500] {
+                let mut market = MootMarket::founding();
+                market.purchase_recording_demand(Good::Wood, requested, 100_000, None, None);
+                market.begin_new_day();
+                market.purchase_recording_demand(Good::Wood, requested, 100_000, None, None);
+                for available in [0, requested] {
+                    let mut stock = GoodsInventory::new(10_000);
+                    stock.add(Good::Wood, available);
+                    let plan = marginal_operating_plan(
+                        8,
+                        &lumber,
+                        &stock,
+                        &BusinessAccount::default(),
+                        &BusinessSalePolicy::for_good(Good::Wood),
+                        &BusinessWagePolicy::default(),
+                        &BusinessManagementPolicy::default(),
+                        Some(&market),
+                        Some(MarketSeller::Business(shared::components::BuildingId(70))),
+                        MarketResponseShare::SOLO,
+                        0,
+                        None,
+                        0.0,
+                        false,
+                    );
+                    if available >= requested || requested <= 1 {
+                        assert_eq!(plan.optimal_positions, 0);
+                        assert_eq!(plan.target_output_units, 0);
+                    } else {
+                        assert!(plan.optimal_positions > 0);
+                        assert!(plan.target_output_units <= requested);
+                        assert!(
+                            plan.target_output_units
+                                <= rated_daily_production(lumber.kind, quality)
+                                    .unwrap()
+                                    .output_units
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -81,6 +81,7 @@ pub fn consider_permits(
             Option<&shared::components::OperatedBy>,
             Option<&BusinessWagePolicy>,
             Option<&BusinessStaffingPolicy>,
+            Option<&shared::components::HouseAppearance>,
         )>,
         Query<(
             Entity,
@@ -88,7 +89,11 @@ pub fn consider_permits(
             &mut shared::economy::CompanyAccount,
         )>,
     )>,
-    pending: Query<(&UnderConstruction, &GoodsInventory)>,
+    pending: Query<(
+        &UnderConstruction,
+        &GoodsInventory,
+        Option<&shared::components::HouseAppearance>,
+    )>,
     road_requests: Query<&RoadRequest>,
     placed: Query<(
         &SettlementBuilding,
@@ -173,7 +178,7 @@ pub fn consider_permits(
     let mut protected_payroll = HashMap::<shared::components::CompanyId, u64>::new();
     {
         let business_read = buildings.p0();
-        for (_, building, _, _, _, _, account, _, operated_by, wage, staffing) in
+        for (_, building, _, _, _, _, account, _, operated_by, wage, staffing, _) in
             business_read.iter()
         {
             let (Some(_account), Some(operated_by)) = (account, operated_by) else {
@@ -247,22 +252,51 @@ pub fn consider_permits(
         // deciding on successive permit ticks all build the same thing.
         let mut have: HashMap<SettlementBuildingKind, usize> = HashMap::new();
         let mut completed: HashMap<SettlementBuildingKind, usize> = HashMap::new();
+        let mut housing_capacity = 0usize;
+        let mut pending_housing_capacity = 0usize;
+        let mut house_capacity_by_id = HashMap::new();
         let business_read = buildings.p0();
-        for (_, building, _, _, _, _, _, _, _, _, _) in
-            business_read
-                .iter()
-                .filter(|(_, _, building_of, _, condition, _, _, _, _, _, _)| {
-                    building_of.0 == *settlement_id
-                        && !condition
-                            .is_some_and(|condition| !condition.state.counts_as_active_capacity())
-                })
+        for (_, building, _, _, _, _, _, building_id, _, _, _, appearance) in business_read
+            .iter()
+            .filter(|(_, _, building_of, _, condition, _, _, _, _, _, _, _)| {
+                building_of.0 == *settlement_id
+                    && !condition
+                        .is_some_and(|condition| !condition.state.counts_as_active_capacity())
+            })
         {
             *have.entry(building.kind).or_default() += 1;
             *completed.entry(building.kind).or_default() += 1;
+            housing_capacity = housing_capacity.saturating_add(usize::from(
+                building.kind.housing_capacity_with_house(appearance),
+            ));
+            if building.kind == SettlementBuildingKind::House {
+                if let Some(id) = building_id {
+                    house_capacity_by_id
+                        .insert(*id, building.kind.housing_capacity_with_house(appearance));
+                }
+            }
         }
-        for (under, _) in pending.iter() {
+        for (under, _, appearance) in pending.iter() {
             if under.settlement == settlement_entity {
                 *have.entry(under.kind).or_default() += 1;
+                pending_housing_capacity = pending_housing_capacity.saturating_add(usize::from(
+                    under.kind.housing_capacity_with_house(appearance),
+                ));
+            }
+        }
+        let mut upgrading_houses = HashSet::new();
+        for (upgrade, building_of) in planning.house_upgrades.iter() {
+            if building_of.0 != *settlement_id || !upgrading_houses.insert(upgrade.house) {
+                continue;
+            }
+            if let Some(current) = house_capacity_by_id.get(&upgrade.house) {
+                pending_housing_capacity = pending_housing_capacity.saturating_add(usize::from(
+                    upgrade
+                        .target
+                        .level
+                        .housing_capacity()
+                        .saturating_sub(*current),
+                ));
             }
         }
         // The hall is always there; it is the founding act, not a need.
@@ -270,13 +304,14 @@ pub fn consider_permits(
 
         let active_worksites = pending
             .iter()
-            .filter(|(under, _)| under.settlement == settlement_entity)
+            .filter(|(under, _, _)| under.settlement == settlement_entity)
             .count()
             + planning
                 .hall_upgrades
                 .iter()
                 .filter(|(_, building_of, _)| building_of.0 == *settlement_id)
-                .count();
+                .count()
+            + upgrading_houses.len();
         let active_connectors = road_requests
             .iter()
             .filter(|request| request.settlement == settlement_entity)
@@ -311,7 +346,8 @@ pub fn consider_permits(
             lumber_huts: count(SettlementBuildingKind::LumberjackHut),
             stone_quarries: count(SettlementBuildingKind::StoneQuarry),
             taverns: count(SettlementBuildingKind::Tavern),
-            houses: count(SettlementBuildingKind::House),
+            housing_capacity,
+            pending_housing_capacity,
             // A Village does not create a speculative Stone shortage merely
             // because Town is its eventual next tier. Demand begins when its
             // physical Town Works exists, or when another settlement posts a
@@ -348,7 +384,7 @@ pub fn consider_permits(
             });
             signals.recent_wheat_export_demand = merchant_demand.units(*settlement_id, Good::Wheat);
         }
-        for (_, building, building_of, _, condition, inventory, account, _, _, _, staffing) in
+        for (_, building, building_of, _, condition, inventory, account, _, _, _, staffing, _) in
             business_read.iter()
         {
             if building_of.0 != *settlement_id {
@@ -384,7 +420,7 @@ pub fn consider_permits(
                 .stone_stock
                 .saturating_add(market.listed_units(Good::Stone));
         }
-        for (under, inventory) in pending.iter() {
+        for (under, inventory, _) in pending.iter() {
             if under.settlement == settlement_entity {
                 if matches!(
                     under.kind,
@@ -453,7 +489,7 @@ pub fn consider_permits(
         let mut storage_holders = HashSet::<shared::components::PersonId>::new();
         let mut holdings_by_kind =
             HashSet::<(shared::components::PersonId, SettlementBuildingKind)>::new();
-        for (_, building, building_of, owner, _, _, _, _, _, _, _) in business_read.iter() {
+        for (_, building, building_of, owner, _, _, _, _, _, _, _, _) in business_read.iter() {
             if building_of.0 == *settlement_id {
                 if let Some(owner) = owner {
                     *holding_counts.entry(owner.0).or_default() += 1;
@@ -466,7 +502,7 @@ pub fn consider_permits(
                 }
             }
         }
-        for (under, _) in pending.iter() {
+        for (under, _, _) in pending.iter() {
             if under.settlement_id == *settlement_id {
                 if let Some(owner) = under.owner_id {
                     *holding_counts.entry(owner).or_default() += 1;
@@ -502,7 +538,7 @@ pub fn consider_permits(
                 blocked_portfolios.insert(owner.0);
             }
         }
-        for (under, _) in pending.iter() {
+        for (under, _, _) in pending.iter() {
             if under.settlement_id == *settlement_id && is_private_business(under.kind) {
                 if let Some(owner) = under.owner_id {
                     blocked_portfolios.insert(owner);
@@ -799,7 +835,7 @@ pub fn consider_permits(
                 position: position.0,
                 rotation: rotation.map_or(0.0, |rotation| rotation.0),
             })
-            .chain(pending.iter().filter_map(|(under, _)| {
+            .chain(pending.iter().filter_map(|(under, _, _)| {
                 (under.settlement == settlement_entity).then_some(PlotNeighbor {
                     kind: under.kind,
                     position: under.position,
@@ -841,8 +877,8 @@ pub fn consider_permits(
         occupied.extend(
             pending
                 .iter()
-                .filter(|(under, _)| under.settlement == settlement_entity)
-                .flat_map(|(under, _)| {
+                .filter(|(under, _, _)| under.settlement == settlement_entity)
+                .flat_map(|(under, _, _)| {
                     let radius = under
                         .kind
                         .intended_field_half_extents()
@@ -877,7 +913,7 @@ pub fn consider_permits(
                     ))
                 }),
         );
-        occupied.extend(pending.iter().filter_map(|(under, _)| {
+        occupied.extend(pending.iter().filter_map(|(under, _, _)| {
             if under.settlement != settlement_entity {
                 return None;
             }
@@ -943,8 +979,8 @@ pub fn consider_permits(
         access_blockers.extend(
             pending
                 .iter()
-                .filter(|(under, _)| under.settlement == settlement_entity)
-                .flat_map(|(under, _)| {
+                .filter(|(under, _, _)| under.settlement == settlement_entity)
+                .flat_map(|(under, _, _)| {
                     road_access_blockers_for_new_plot(under.kind, under.position, under.rotation)
                 }),
         );

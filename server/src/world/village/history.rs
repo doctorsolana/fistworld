@@ -12,9 +12,9 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender};
 
 use shared::components::{
-    BuildingId, BuildingOf, CivicEmployment, CompanyId, EmployedAt, MootAdministration, Nutrition,
-    OperatedBy, OwnedBy, PersonId, ResidentOf, Settlement, SettlementBuilding,
-    SettlementBuildingKind, SettlementId, SettlementPolicies, WorldTime,
+    BuildingId, BuildingOf, CivicEmployment, CompanyId, EmployedAt, HouseholdMembers,
+    MootAdministration, Nutrition, OperatedBy, OwnedBy, PersonId, ResidentOf, Settlement,
+    SettlementBuilding, SettlementBuildingKind, SettlementId, SettlementPolicies, WorldTime,
 };
 use shared::economy::{
     business_working_capital, BusinessAccount, BusinessCondition, BusinessDayLedger,
@@ -351,7 +351,6 @@ pub fn capture_settlement_history(
         &SettlementBuilding,
         Option<&GoodsInventory>,
         Option<&BusinessAccount>,
-        Option<&HouseholdEconomy>,
         Option<&BusinessSalePolicy>,
         Option<&BusinessWagePolicy>,
         Option<&BusinessStaffingPolicy>,
@@ -371,6 +370,12 @@ pub fn capture_settlement_history(
     )>,
     employment: Query<&EmployedAt>,
     companies: Query<(&CompanyId, &shared::economy::CompanyAccount)>,
+    households: Query<(&HouseholdMembers, &HouseholdEconomy)>,
+    upgrades: Option<Res<crate::world::house_upgrades::HouseUpgradeProjects>>,
+    upgrade_piles: Query<
+        (&BuildingOf, &GoodsInventory),
+        With<shared::components::HouseUpgradeWorksite>,
+    >,
 ) {
     let Some(day) = world_time.iter().next().map(|time| time.day) else {
         return;
@@ -394,13 +399,16 @@ pub fn capture_settlement_history(
         .map(|(id, account)| (*id, *account))
         .collect();
     let mut counted_company_cash = HashSet::<(SettlementId, CompanyId)>::new();
+    for (members, economy) in households.iter() {
+        let aggregate = aggregates.entry(members.settlement).or_default();
+        aggregate.household_cash = aggregate.household_cash.saturating_add(economy.pennies);
+    }
     for (
         building_id,
         building_of,
         building,
         inventory,
         business_account,
-        household_economy,
         sale,
         wage,
         staffing,
@@ -456,9 +464,6 @@ pub fn capture_settlement_history(
                 .unlisted_business_food
                 .saturating_add(inventory.map_or(0, GoodsInventory::edible_amount));
         }
-        aggregate.household_cash = aggregate
-            .household_cash
-            .saturating_add(household_economy.map_or(0, |economy| economy.pennies));
         if let Some(account) = business_account.copied() {
             let output_good = super::business_output(building.kind);
             let mut stock = [0; Good::COUNT];
@@ -506,6 +511,9 @@ pub fn capture_settlement_history(
             .saturating_add(u32::from(employed_at.is_some() || civic_job.is_some()));
         add_inventory(&mut aggregate.stock, inventory);
     }
+    for (of, pile) in upgrade_piles.iter() {
+        add_inventory(&mut aggregates.entry(of.0).or_default().stock, Some(pile));
+    }
     let mut completed_days = HashSet::new();
     for (
         entity,
@@ -531,6 +539,14 @@ pub fn capture_settlement_history(
         let aggregate = aggregates.remove(settlement_id).unwrap_or_default();
         let snapshots = business_snapshots.remove(settlement_id).unwrap_or_default();
         let mut physical_stock = aggregate.stock;
+        physical_stock[Good::Wood.index()] = physical_stock[Good::Wood.index()].saturating_add(
+            upgrades.as_ref().map_or(0, |projects| {
+                projects.transit_wood_in_settlement(*settlement_id)
+            }),
+        );
+        let upgrade_escrow = upgrades
+            .as_ref()
+            .map_or(0, |projects| projects.escrow_in_settlement(*settlement_id));
         add_inventory(&mut physical_stock, Some(hall_inventory));
         let civic_wage_arrears = administration.map_or(0, |office| office.wage_arrears);
 
@@ -586,7 +602,10 @@ pub fn capture_settlement_history(
                 .treasury
                 .saturating_add(aggregate.resident_wallets)
                 .saturating_add(aggregate.household_cash)
-                .saturating_add(aggregate.business_cash);
+                .saturating_add(aggregate.business_cash)
+                // Commissioned private capital still exists while workers haul
+                // and build; it is neither civic nor household spending money.
+                .saturating_add(upgrade_escrow);
             let civic_ledger = civic_account
                 .and_then(|account| account.ledger_for_day(completed_day))
                 .unwrap_or_else(|| shared::economy::CivicDayLedger::empty(completed_day));
@@ -862,6 +881,58 @@ pub fn handle_company_history_requests(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn household_history_counts_unhoused_groups_in_their_own_settlement_once() {
+        let mut app = App::new();
+        app.init_resource::<SettlementEconomyRuntime>()
+            .init_resource::<SettlementHistoryRuntime>()
+            .add_systems(Update, capture_settlement_history);
+        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+        let settlement_id = SettlementId(61);
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Accountford".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 1,
+                    treasury: 50,
+                },
+                GoodsInventory::new(100),
+                MootMarket::founding(),
+                SettlementEconomy::default(),
+            ))
+            .id();
+        for (id, settlement, pennies) in [(62, settlement_id, 700), (63, SettlementId(64), 900)] {
+            app.world_mut().spawn((
+                shared::components::HouseholdId(id),
+                HouseholdMembers {
+                    resident_ids: vec![PersonId(id)],
+                    settlement,
+                    dwelling: None,
+                },
+                HouseholdEconomy {
+                    pennies,
+                    ..default()
+                },
+            ));
+        }
+        app.world_mut()
+            .spawn((ResidentOf(settlement_id), Wallet::new(100)));
+        app.update();
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
+        app.update();
+        app.update();
+
+        let history = app.world().resource::<SettlementHistoryRuntime>();
+        let days = history.days.get(&hall).unwrap();
+        assert_eq!(days.len(), 1);
+        assert_eq!(days[0].household_cash, 700);
+        assert_eq!(days[0].total_local_coin, 850);
+        assert_eq!(history.world_days.back().unwrap().household_cash, 700);
+    }
 
     fn empty_day(day: u32) -> SettlementHistoryDay {
         SettlementHistoryDay {

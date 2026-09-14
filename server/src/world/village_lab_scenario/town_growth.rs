@@ -15,6 +15,8 @@ pub(crate) enum GrowthProfile {
     Low,
     Steady,
     Burst,
+    /// Five founders, twenty Bread, then two physical sea arrivals per day.
+    InlandBoats,
     CityGradual(usize),
     CitySurge(usize),
 }
@@ -25,6 +27,7 @@ impl GrowthProfile {
             "low" => Self::Low,
             "steady" => Self::Steady,
             "burst" => Self::Burst,
+            "inland-boats" => Self::InlandBoats,
             value => {
                 let parts: Vec<_> = value.split('-').collect();
                 if let ["city", population, pace] = parts.as_slice() {
@@ -36,7 +39,7 @@ impl GrowthProfile {
                         }
                     }
                 }
-                panic!("FISTWORLD_TOWN_PROFILE must be low, steady, burst, or city-{{100|250|500}}-{{gradual|surge}}")
+                panic!("FISTWORLD_TOWN_PROFILE must be low, steady, burst, inland-boats, or city-{{100|250|500}}-{{gradual|surge}}")
             }
         }
     }
@@ -45,9 +48,26 @@ impl GrowthProfile {
         Self::parse(&std::env::var("FISTWORLD_TOWN_PROFILE").unwrap_or_else(|_| "steady".into()))
     }
 
+    pub(crate) fn founders(self) -> usize {
+        if self == Self::InlandBoats {
+            5
+        } else {
+            TOWN_GROWTH_FOUNDERS
+        }
+    }
+
+    pub(crate) fn initial_inventory(self) -> GoodsInventory {
+        let mut inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
+        if self == Self::InlandBoats {
+            assert_eq!(inventory.add(Good::Bread, 20), 20);
+        }
+        inventory
+    }
+
     #[cfg(test)]
     pub(crate) fn default_minutes(self) -> f32 {
         match self {
+            Self::InlandBoats => 720.0,
             Self::CityGradual(_) | Self::CitySurge(_) => 1_440.0,
             _ => 240.0,
         }
@@ -56,7 +76,7 @@ impl GrowthProfile {
     /// Offered population includes founders; admission and retention remain outcomes.
     #[cfg(test)]
     pub(crate) fn target_population(self) -> usize {
-        TOWN_GROWTH_FOUNDERS + self.waves().iter().map(|wave| wave.count).sum::<usize>()
+        self.founders() + self.waves().iter().map(|wave| wave.count).sum::<usize>()
     }
 
     pub(crate) fn waves(self) -> Vec<LabArrivalWave> {
@@ -64,6 +84,9 @@ impl GrowthProfile {
             Self::Low => vec![(2, 2), (4, 2), (6, 2)],
             Self::Steady => (2..=8).map(|day| (day, 3)).collect(),
             Self::Burst => vec![(4, 24)],
+            // The first pair sails in after startup on scenario day one;
+            // initial population remains five, maximum offered population 65.
+            Self::InlandBoats => (1..=30).map(|day| (day, 2)).collect(),
             Self::CityGradual(target) | Self::CitySurge(target) => {
                 // Establish the same initial economy before changing migration
                 // pressure. No capacity, goods, permits or tiers are fabricated.

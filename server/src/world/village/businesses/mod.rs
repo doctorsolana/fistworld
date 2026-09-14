@@ -7,6 +7,7 @@
 //! world day; per-tick work only appends compact events.
 
 mod management;
+pub(super) mod market_response;
 mod transactions;
 
 pub use management::review_business_management;

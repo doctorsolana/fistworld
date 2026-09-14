@@ -60,12 +60,15 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
     app.init_resource::<player::combat::fronts::CombatSpace>();
     app.init_resource::<player::archery::ArrowObstacles>();
     app.init_resource::<super::BusinessEventQueue>();
+    app.init_resource::<super::development_evidence::SettlementDevelopmentSamples>();
     app.init_resource::<super::CompanyDividendQueue>();
     app.init_resource::<super::CompanyEscrowRefundQueue>();
     app.init_resource::<super::MootQueueClock>();
     app.init_resource::<super::MortalityLedger>();
     app.init_resource::<super::RegionalTradeIntelligence>();
     app.init_resource::<super::trade_routes::RegionalMerchantDemand>();
+    app.init_resource::<world::house_upgrades::HouseUpgradeProjects>();
+    app.init_resource::<world::house_upgrades::decision::HouseUpgradeDecisions>();
     app.configure_sets(
         schedule.clone(),
         (
@@ -190,6 +193,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     .in_set(VillageEconomySet::MarketsBusinesses),
                 (
                     super::ensure_households,
+                    super::ensure_house_appearances,
                     super::assign_households,
                     super::update_household_budgets_and_pantries,
                 )
@@ -209,6 +213,9 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     .chain()
                     .in_set(VillageEconomySet::SettlementAccounts),
                 (
+                    world::house_upgrades::lab::stage_connected_upgrade_lab,
+                    world::house_upgrades::decision::review_house_upgrades,
+                    world::house_upgrades::run_house_upgrade_projects,
                     super::consider_permits,
                     world::fortifications::setup_defense_lab,
                     world::fortifications::plan_settlement_defenses,
@@ -256,6 +263,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 world::settlement_development::run_civic_hall_upgrade_projects,
                 world::fortifications::run_fortification_projects,
                 super::post_civic_import_contracts,
+                super::development_evidence::aggregate_settlement_development,
                 world::settlement_development::update_settlement_developments,
                 world::settlement_development::sync_civic_hall_levels,
                 world::settlement_development::sync_market_levels,
@@ -263,6 +271,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 (
                     (
                         super::ensure_fishing_piers,
+                        super::workplace_access::resume_staff_after_road_completion,
                         super::assign_farmer_routines,
                         super::assign_fishing_routines,
                         super::assign_lumberjack_routines,
@@ -369,7 +378,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 player::combat::expire_combat_bodies,
             )
                 .chain(),
-            player::hero::settle_villagers_without_targets,
+            player::hero::settle_characters_without_targets,
             player::army::maintain_battalions,
         )
             .chain()

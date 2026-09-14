@@ -209,6 +209,14 @@ impl Default for NaturalImmigrationDirector {
 }
 
 impl NaturalImmigrationDirector {
+    /// Controlled labs retain real voyages without ambient extra arrivals.
+    pub(crate) fn manual_only() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+
     /// Queue one complete God-mode arrival. Bounded so repeated UI clicks
     /// cannot create an unbounded pathfinding backlog.
     pub fn request_manual_arrival(&mut self) -> bool {

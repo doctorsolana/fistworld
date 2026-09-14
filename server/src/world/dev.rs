@@ -324,6 +324,7 @@ pub fn handle_dev_commands(
         &shared::components::CharacterKind,
         Option<&shared::components::CommandedBy>,
         Has<crate::player::combat::WarParty>,
+        Option<&crate::world::village::HouseholdShoppingRoutine>,
     )>,
     settlements: Query<(
         &shared::components::Settlement,
@@ -588,8 +589,8 @@ pub fn handle_dev_commands(
                     // Only VILLAGERS can be conscripted. A hero is somebody's
                     // persisted body; taking one into a retinue would let god
                     // mode hand a player's character to another player.
-                    let Some((unit, _, kind, current_owner, enlisted)) =
-                        kinds.iter().find(|(_, id, _, _, _)| **id == person)
+                    let Some((unit, _, kind, current_owner, enlisted, shopping)) =
+                        kinds.iter().find(|(_, id, _, _, _, _)| **id == person)
                     else {
                         continue;
                     };
@@ -598,6 +599,14 @@ pub fn handle_dev_commands(
                         continue;
                     }
                     if commanded {
+                        if shopping.is_some_and(|routine| routine.has_cargo()) {
+                            let message = "Let this resident finish delivering household provisions before recruiting them.";
+                            info!("Dev: refusing conscription: {message}");
+                            commands.queue(move |world: &mut World| {
+                                crate::player::orders::feedback(world, link, 0, message.into());
+                            });
+                            continue;
+                        }
                         // A soldier already under arms cannot be talked into
                         // your retinue: an enemy war band's raider would flip
                         // sides mid-battle (CommandedBy outranks their

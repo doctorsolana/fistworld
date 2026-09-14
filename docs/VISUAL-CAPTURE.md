@@ -96,6 +96,61 @@ fixture environment variables remain supported.
 
 ## Medieval HUD
 
+`capture/scenarios/settlement-development.ron` exercises the compact settlement
+card and Places overview with deterministic replicated daily readings. Its six
+views cover Village housing requirements, Town market/business/trade requirements,
+the current three-day qualification window, hardship alongside approved
+development, and separate physical Hall material and construction readings. The
+compact **Expand** button opens the ordinary Places overview. Development and
+Living Conditions must remain visibly separate, and Hall Wood/Stone counts must
+never appear as sustained days or invented work percentages.
+
+Each PNG and `.capture.json` is accompanied by a
+`phase-N.development.json` with the exact replicated reading and visible text
+bounds. The longer Town and Hall views scroll the ordinary detail pane.
+Readiness requires a visible book panel and text within it, loaded artwork and
+the resulting page. Approved Hall projects show their approval status rather than
+presenting saved observations as today's rolling window. This fixture proves
+presentation; the server's ordinary village lab verifies qualification and paid
+Hall construction.
+
+```bash
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/scenarios/settlement-development.ron --out logs/captures/settlement-development-review
+```
+
+Verified 2026-09-14 at 1800×1100 in
+`logs/captures/settlement-development-approved-20260914`: all six PNG/capture/evidence
+sets were inspected. The compact Village and Town checklists fit; the scrolled
+Places spread shows qualifying development beside food, housing and employment
+hardship. Hall stock reads 7/12 then 12/12 Wood, independently of its approved
+qualification. Pending settlements retain their current three-day count. All
+captures report zero pending building LOD and ground-paint work.
+
+The connected companion uses normal founders, immigration, housing, paid supplies
+and civic labour through a real client/server session:
+
+```bash
+cargo build -p server
+cargo build --profile playtest -p client --bin client
+python3 capture/settlement_development_session.py --out logs/settlement-development-session/review
+```
+
+It refuses an occupied UDP 5000, writes to a fresh directory and only stops its
+own processes. It waits for the opening cinematic and camera to finish before
+selecting the Hall. Replicated qualification, material staging and tier changes
+drive its captures; no tiers, materials, housing or employment are granted beyond
+the standard Village Lab scenario. The final **Expand** action opens the actual
+settlement overview. Long card/page content uses the existing scroll areas.
+
+The 2026-09-14 connected run in
+`logs/settlement-development-20260914/connected-ready` observed eight founders
+and eight normal arrivals, two qualifying dates, the 12-Wood worksite and completed
+Village Hall on day 9. The settlement retained ID 1. Inspected window captures
+show the changed building and updated checklist with zero pending building LOD
+and ground-paint work. This is behaviour/presentation evidence at 25×, not an FPS
+measurement. The later approval-label-only correction is covered by the offline
+scenario above.
+
 `capture/scenarios/ui-medieval-hud.ron` rehearses the live portrait, single character
 expansion, map, encyclopedia and bell/clear controls. Capture waits for canonical portrait
 and HUD artwork readiness, then the actual action's resulting UI state. Encyclopedia checks
@@ -161,6 +216,20 @@ BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/
 ```
 
 ## Ordinary connected first-session regression
+
+The connected session driver also accepts `left_click` and `cursor` with world `x`
+and `z`. `cursor` previews ordinary permit placement; `left_click` uses the normal
+pointer/placement handlers. A `right_click` with `pick: true` projects the pointer
+through the real camera to select a worksite interaction; its default terrain-only
+mode continues to issue ground movement. Frame the target before a pointer pick,
+and wait for replicated results rather than treating an input reply as completion.
+Unnamed real buttons can be addressed by `text:<visible label>`; stable `Name`
+identifiers are preferred. The `construction` status section exposes permit,
+worksite, objective, road and owned-building state for completion assertions.
+The opt-in status also exposes region-replicated household groups, purse/warmth
+readings, dwelling stock and member objectives for physical-provisioning checks.
+These are read-only inspections and ordinary input, never inventory or world grants.
+
 
 Build both binaries together (market messages include a protocol-versioned purchase price
 ceiling), then run against a free local UDP port 5000:
@@ -561,6 +630,66 @@ at frame 133. Native PNGs 132/133/134 and `review-earthworks-surface.png` confir
 local brown pulse is gone after initializing replacement materials from their generator's
 climate. The fixture's refill queues drained within each sampled frame; this does not establish
 a dense forest refill budget or connected construction performance.
+
+## Selected archer range
+
+`capture/scenarios/archer-range.ron` exercises the production selection and range
+overlay in normal Play, using the real dressed archer assets. Its six states cover
+no selection, a sixteen-member battalion, a detached archer, a moved archer, a
+sidearm and deselection. `phase-*.range.json` checks range/source counts, the shared
+65 m radius and each vertex's ground lift. Inspect these with the PNGs and ordinary
+`.capture.json`; this fixture makes no authoritative firing or line-of-sight claim.
+
+```bash
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario capture/scenarios/archer-range.ron
+```
+
+Verified 2026-09-14 in `logs/captures/archer-range-review`: all six 1800×1100 window
+images were inspected. A single warm contour marks the battalion, detached reach
+follows the selected individual, and the estimate caption and contour disappear
+for the sidearm and deselected states. All captures had 289 loaded chunks and no
+pending ground painting. See [ARCHERY.md](ARCHERY.md) for gameplay boundaries.
+
+## Occupied house extensions
+
+`capture/scenarios/house-upgrade.ron` stages both house lines through occupied
+Ground level, partial material delivery, active extension work, completed upper
+storey and occupied night lighting. It uses the real scene, door, light, LOD,
+scaffold and inventory-bundle consumers with explicit offline component changes.
+
+```bash
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario capture/scenarios/house-upgrade.ron
+```
+
+Readiness waits for the actual requested building art and its LOD to be ready.
+Alongside each PNG and `.capture.json`, `phase-*.json` records stable house and
+resident identities, appearance, bed capacity, worksite inventory and shown Wood
+bundles. Assertions forbid a second worksite house/ground claim and require shown
+bundles to match recoverable inventory, including while construction is active.
+Inspect ground contact, scaffold joints, door clearance, the unchanged occupied
+Ground house during work, and the finished house's night windows and lamps.
+
+Verified 2026-09-14 under `logs/captures/house-upgrade-final`: five 1800×1100 scene
+captures passed, with no pending building LOD or ground painting. Both houses kept
+four beds and their residents through work, then provided eight beds. Material
+bundles remained present during construction; door operation and completed night
+lighting were inspected in the PNGs. This proves presentation only. Use the
+connected owner-button and material-travel fixture in [HOUSE-UPGRADES.md](HOUSE-UPGRADES.md)
+for authoritative spending, transport and paid labour acceptance.
+
+`python3 capture/house_upgrade_session.py` runs that connected acceptance against
+current debug-server and playtest-client binaries. It waits for the first normal
+house and its completed doorway road, uses the actual owner button, and records
+the server's response, two material deliveries, occupied construction, and the
+loaded upper-storey asset. The 2026-09-14 accepted run retained 451 replicated
+samples and inspected 1440×900 window captures under
+`logs/house-upgrade-connected-accepted-20260914`: six then two Wood delivered,
+sixty seconds of paid work, and the same house/entrance/original residents with
+eight completed beds. See its `acceptance-review.json` for scope; synthetic lab
+setup and concurrent compilation make this a behaviour test, not an economy or
+whole-server performance benchmark.
 
 ## Window, offscreen scene and diagnostics
 
@@ -1572,6 +1701,27 @@ through real Back/Cancel controls. Inspect each PNG, `.capture.json` and `.neste
 these offline fixtures do not validate successful server transactions.
 
 ## Connected NPC movement and porter regression
+
+`capture/construction_delivery_session.py` observes ordinary self-supplied
+construction in the inland Village Lab at 10x. It grants no timber or ownership:
+founders cut trees, carry Wood and complete homes through their normal routines.
+
+```sh
+cargo build -p server
+cargo build -p client --profile playtest --bin client
+python3 capture/construction_delivery_session.py
+```
+
+The driver refuses an occupied UDP5000, uses a fresh ignored output directory and
+stops only its own processes. It records tree work, loaded travel, site deliveries
+and completed housing. Inspect the PNG sequences with their capture/session
+metadata and the debug server's `Village material delivery start` breadcrumbs.
+The milestones prove construction progresses; they do not automatically prove a
+shortest route. Freshly cut timber should approach a plot or nearby retained road
+entry, with the original public corridor available when that approach fails.
+Empty egress should reuse the reached entry. Buying stock at the Hall remains a
+separate, intentional trip. Capture readbacks make this unsuitable as a frame-rate
+benchmark.
 
 `capture/npc_movement.py` runs an ordinary generated world, creates a character
 through the real UI and observes a populated town. It does not stage NPCs, grant

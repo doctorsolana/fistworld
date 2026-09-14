@@ -310,21 +310,10 @@ check_loop("sit_idle", P + 1)
 
 
 # ==================================================================================================
-# BODY: walk -- authored here rather than retargeted, so its GROUND SPEED is a controlled number.
-#
-# The client normalises playback as `(visual.speed / HERO_MOVE_SPEED).clamp(0.4, 1.6)`
-# (client/src/hero/mod.rs), which treats this clip as though it were authored FOR HERO_MOVE_SPEED.
-# The inherited v1 walk covered 0.610 m per 1.0 s cycle -- 0.61 m/s against a 3.2 m/s hero, so at
-# full speed it played at 1.0x and slid 5.2x. Measured, not guessed: asset_creation scratch stride.py.
-#
-# Two levers, and the rig caps both. Stride is bounded by leg length: hip 0.26 to foot 0.08 is 0.18
-# units, 0.307 m scaled, so one step is at most 2*0.307*sin(theta) and even a 45 deg swing only buys
-# 0.87 m per cycle. Cadence is bounded by taste. This uses a 38 deg swing over 18 frames, which is a
-# brisk purposeful walk rather than a stroll, and roughly doubles the covered ground.
-#
-# It will still not reach 3.2 m/s -- nothing at this leg length will, at any cadence that does not
-# read as a blur. The remainder has to come from the client's normalisation constant. See
-# ASSET_HANDOVER.md; the authored figure is printed below at build time.
+# BODY: walk -- relaxed upper body with the existing grounded stride.
+# Preserve the leg arcs and 0.75 s period: changing cadence alone causes foot
+# sliding at the production WALK_CYCLE_SPEED. Smaller arm/hip swings and a
+# nearly upright torso remove the old forceful marching silhouette.
 # ==================================================================================================
 WALK_LOOP = 18        # 0.75 s at 24 fps
 begin("walk")
@@ -338,15 +327,14 @@ for f in range(1, V + 2):
     # The foot counter-rotates so it meets the ground flat rather than toe-first at the extremes.
     key("foot.L", f, rot=(D(-15) * stride + D(4) * bob, 0, 0))
     key("foot.R", f, rot=(D(15) * stride + D(4) * bob, 0, 0))
-    # A brisk walk leans into it. Purely cosmetic, but without it a fast cadence reads as scurrying.
-    key("torso",  f, rot=(D(6), D(-4) * stride, 0))
-    key("head",   f, rot=(D(-3), D(5) * stride, 0))
-    key("hips",   f, rot=(0, D(7) * stride, 0))
-    # Arms swing OPPOSITE their leg, which is what makes a walk read as a walk.
-    key("arm.L",  f, rot=(D(-30) * stride, 0, D(3)))
-    key("arm.R",  f, rot=(D(30) * stride, 0, D(-3)))
-    key("hand.L", f, rot=(D(-10) * stride, 0, 0))
-    key("hand.R", f, rot=(D(10) * stride, 0, 0))
+    key("torso",  f, rot=(D(2), D(-2.5) * stride, 0))
+    key("head",   f, rot=(D(-1), D(2) * stride, 0))
+    key("hips",   f, rot=(0, D(4) * stride, 0))
+    # Easy opposing arm swing with a small wrist lag, not a military march.
+    key("arm.L",  f, rot=(D(-13) * stride, 0, D(2)))
+    key("arm.R",  f, rot=(D(13) * stride, 0, D(-2)))
+    key("hand.L", f, rot=(D(-3) * math.sin(t - 0.25), 0, 0))
+    key("hand.R", f, rot=(D(3) * math.sin(t - 0.25), 0, 0))
     key("root",   f, loc=(0, 0, 0))
 fill_rest({"leg.L", "leg.R", "foot.L", "foot.R", "torso", "head", "hips",
            "arm.L", "hand.L", "arm.R", "hand.R", "root"}, list(range(1, V + 2)))

@@ -1848,3 +1848,17 @@ mod tests {
         ));
     }
 }
+
+/// Read-only projection for the opt-in connected input/capture harness.
+pub(crate) fn inspect_placement(world: &World) -> Option<(Vec3, f32, bool, &str)> {
+    let preview = world
+        .get_resource::<PermitPlacementPreview>()?
+        .value
+        .as_ref()?;
+    Some((
+        preview.position,
+        preview.rotation,
+        preview.band != PreviewBand::Invalid,
+        &preview.reason,
+    ))
+}

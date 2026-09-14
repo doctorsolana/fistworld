@@ -21,6 +21,15 @@ recorded separately from implementation claims.
   preserve remaining ammunition. Detached troops retain their equipment; re-forming an all-archer battalion also preserves bows and ammunition.
 - Spread the line with the existing right-drag frontage controls when allies
   screen the rear ranks' shots.
+- Selecting archers shows a subtle terrain-following **65 m bow-reach estimate**,
+  in normal Play as well as combat mode. Each selected battalion gets one outline
+  centred on its living, visible members with equipped bows and ammunition;
+  detached archers each get their own. The boundary is an estimate from that
+  group centre, not a promise that every member can hit every point. Terrain,
+  scenery and friendly bodies still determine clear shots on the server.
+  Deselecting, switching to sidearms, empty quivers or a modal hides the relevant
+  indicator. Aboard and mounted troops are excluded because mounted archery is
+  not implemented. The overlay also hides beyond the normal selection-ring zoom limit.
 
 `./run.sh archerworld` builds and opens a manual 120-vs-120 battle: two infantry
 battalions and one archer battalion against three enemy battalions. Enemies
@@ -67,6 +76,11 @@ hold-line rules own the resulting melee.
 - `client/hero/archery.rs`: the existing cached body/bow animation graphs.
   `hero/arrows.rs` reuses the authored arrow scene and samples its launch locally.
 - Army roster/model/view/binding and the tactical command keys own player controls.
+- `client/selection/archer_range.rs` owns selection-only range presentation. It
+  reads shared `BOW_RANGE`, looks up selected entities only, and reuses grouping
+  scratch storage. Its 256-segment ground contour is cached while stationary;
+  movement resamples it at most ten times per second, and changed terrain or
+  selection refreshes it immediately. There is no per-member battalion circle.
 
 Ranged targeting uses a coarser index alongside the melee body grid and staggered
 0.25–0.33 s decisions. Convex shapes are built at server initialization and shared;
@@ -87,6 +101,11 @@ original capsule. See [CAVALRY.md](CAVALRY.md) for mounted-unit limitations.
 
 ## Verification
 
+- `archer-range.ron`: offline real-renderer selection study covering unselected,
+  sixteen-member battalion, detached, moved, sidearm and deselected states in
+  normal Play. Readiness checks the real dressed bow assets and production range
+  state. Each `phase-*.range.json` records the contour count, source count,
+  shared radius and ground lift alongside the PNG and `.capture.json`.
 - `battle-archers.ron`: 16 archers, 32 infantry counterattack; requires real arrows
   and a transition to archer melee, alongside normal contact/casualty assertions.
 - `battle-mixed-archers.ron`: 120 vs 120, with archers behind two infantry units.
@@ -98,6 +117,15 @@ original capsule. See [CAVALRY.md](CAVALRY.md) for mounted-unit limitations.
 - Focused tests cover ballistic interception, swept bodies, convex walls, cancelled
   draws, friendly screens/crossings, ammunition/ownership, close-range hysteresis,
   detached approaches, attack-move pause/resume and incomplete-rank stability.
+
+Selection overlay verified 2026-09-14 in `logs/captures/archer-range-review`:
+six inspected 1800×1100 window captures and their metadata passed. The selected
+16-member battalion produced one outline; detached and moved selections followed
+their own positions. Sidearm and deselected states showed no outline or caption.
+The shared radius was 65 m (maximum sampled error below 0.00001 m); all contour
+vertices followed terrain with the intended 0.18 m lift. Two focused client tests
+also cover grouping, ineligible sources and immediate clearing. This is offline
+presentation evidence; it does not repeat the connected combat verification below.
 
 Verified 2026-09-07 with paired playtest binaries and the real connected renderer:
 

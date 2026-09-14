@@ -256,9 +256,9 @@ pub fn pursue_attack_orders(
         // In reach: stand and fight. Reach (2.0m) is hit MID-STRIDE - well
         // before step_units' 0.15m arrival write - so the motion must be
         // parked here too, or the last replicated velocity stays a full walk
-        // and the client plays walk-in-place over the fight forever (nothing
-        // else resets a unit whose MoveTarget was removed out from under it;
-        // settle_villagers_without_targets deliberately skips heroes).
+        // and the client plays walk-in-place over the fight. Park immediately
+        // for the combat pass; the shared end-of-movement cleanup also covers
+        // targets removed by construction and other civilian work routines.
         if move_target.is_some() {
             commands.entity(attacker).remove::<MoveTarget>();
         }

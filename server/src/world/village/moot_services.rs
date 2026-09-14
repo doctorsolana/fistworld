@@ -230,16 +230,9 @@ fn local_queue_slot(lane: MootServiceLane, index: usize) -> Vec2 {
         MootServiceLane::Immigration => -1.0,
         MootServiceLane::Resident => 1.0,
         MootServiceLane::Freight => {
-            if index == 0 {
-                return Vec2::new(13.0, QUEUE_SERVICE_Z - 0.5);
-            }
-            let offset = index - 1;
-            let row = offset / QUEUE_ROW_LENGTH;
-            let column = offset % QUEUE_ROW_LENGTH;
-            return Vec2::new(
-                13.0 + row as f32 * QUEUE_SPACING,
-                QUEUE_FIRST_ROW_Z - (column + 1) as f32 * QUEUE_SPACING,
-            );
+            // Counter-local centre lane. Hall food/immigration queues occupy
+            // the two sides; freight advances along the clear middle aisle.
+            return Vec2::new(0.0, -(index as f32) * QUEUE_SPACING);
         }
     };
     if index == 0 {
@@ -289,7 +282,24 @@ pub(crate) fn advance_moot_service_queues(
     colliders: Option<Res<StaticColliders>>,
     derived: Option<Res<DerivedColliderLibrary>>,
     mut clock: ResMut<MootQueueClock>,
-    halls: Query<(&PlayerPosition, Option<&PlayerRotation>), With<Settlement>>,
+    halls: Query<
+        (
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+            Option<&shared::components::SettlementId>,
+        ),
+        With<Settlement>,
+    >,
+    marketplaces: Query<
+        (
+            Entity,
+            &shared::components::BuildingOf,
+            &SettlementBuilding,
+            &PlayerPosition,
+            &PlayerRotation,
+        ),
+        Without<MootQueueTicket>,
+    >,
     mut people: Query<
         (
             Entity,
@@ -319,7 +329,7 @@ pub(crate) fn advance_moot_service_queues(
     }
 
     for ((hall_entity, lane), queue) in queues {
-        let Ok((hall_position, hall_rotation)) = halls.get(hall_entity) else {
+        let Ok((hall_position, hall_rotation, settlement_id)) = halls.get(hall_entity) else {
             for (_, person, _) in queue {
                 commands
                     .entity(person)
@@ -337,14 +347,57 @@ pub(crate) fn advance_moot_service_queues(
             *previous_peak = queue.len();
             info!("Moot {lane:?} queue reached {} villagers", queue.len());
         }
-        let yaw = hall_rotation.map_or(0.0, |rotation| rotation.0);
+        let hall_yaw = hall_rotation.map_or(0.0, |rotation| rotation.0);
+        // The Hall owns the ledger, but a completed marketplace owns its
+        // visible freight counter. Reserved plots never enter this query.
+        // Choose one stable counter per Hall so all tickets share one FIFO.
+        let market = (lane == MootServiceLane::Freight)
+            .then(|| {
+                marketplaces
+                    .iter()
+                    .filter(|(_, of, building, _, _)| {
+                        Some(&of.0) == settlement_id
+                            && building.kind == SettlementBuildingKind::Market
+                    })
+                    .min_by(|a, b| {
+                        a.3 .0
+                            .distance_squared(hall_position.0)
+                            .total_cmp(&b.3 .0.distance_squared(hall_position.0))
+                            .then_with(|| a.0.to_bits().cmp(&b.0.to_bits()))
+                    })
+            })
+            .flatten();
+        let (origin, yaw, facing_target) = if lane == MootServiceLane::Freight {
+            let (counter, yaw, facing_target) = market.map_or_else(
+                || {
+                    let entrance =
+                        SettlementBuildingKind::Hall.entrance_position(hall_position.0, hall_yaw);
+                    (entrance, hall_yaw, hall_position.0)
+                },
+                |(_, _, building, position, rotation)| {
+                    (
+                        building.kind.entrance_position(position.0, rotation.0),
+                        rotation.0,
+                        position.0,
+                    )
+                },
+            );
+            let first = shared::rotation::local_to_world_xz(local_queue_slot(lane, 0), yaw);
+            (
+                counter - Vec3::new(first.x, 0.0, first.y),
+                yaw,
+                facing_target,
+            )
+        } else {
+            (hall_position.0, hall_yaw, hall_position.0)
+        };
         for rank in 0..queue.len() {
             let (_, person, _) = queue[rank];
-            let target = world_slot(hall_position.0, yaw, lane, rank, terrain.as_deref());
+            let target = world_slot(origin, yaw, lane, rank, terrain.as_deref());
             let ahead_target = if rank == 0 {
-                hall_position.0
+                facing_target
             } else {
-                world_slot(hall_position.0, yaw, lane, rank - 1, terrain.as_deref())
+                world_slot(origin, yaw, lane, rank - 1, terrain.as_deref())
             };
             let ahead_position = rank.checked_sub(1).map(|ahead| queue[ahead].2);
             let Ok((
@@ -1516,5 +1569,84 @@ mod tests {
             *app.world().get::<CharacterActivity>(person).unwrap(),
             CharacterActivity::Sitting
         );
+    }
+}
+
+#[cfg(test)]
+mod freight_counter_tests {
+    use super::*;
+
+    #[test]
+    fn freight_collects_at_a_completed_market_or_the_real_hall_door() {
+        for has_market in [false, true] {
+            let mut app = App::new();
+            app.init_resource::<Time>()
+                .init_resource::<MootQueueClock>();
+            app.add_systems(Update, advance_moot_service_queues);
+            let settlement_id = shared::components::SettlementId(81);
+            let hall = app
+                .world_mut()
+                .spawn((
+                    settlement_id,
+                    Settlement {
+                        name: "Counterton".into(),
+                        tier: shared::components::SettlementTier::Village,
+                        residents: 12,
+                        treasury: 0,
+                    },
+                    PlayerPosition(Vec3::ZERO),
+                    PlayerRotation(0.0),
+                ))
+                .id();
+            let (counter_kind, counter_position, yaw) = if has_market {
+                let position = Vec3::new(30.0, 0.0, 20.0);
+                app.world_mut().spawn((
+                    shared::components::BuildingOf(settlement_id),
+                    SettlementBuilding {
+                        kind: SettlementBuildingKind::Market,
+                        settlement: "Counterton".into(),
+                        owner: None,
+                        quality: 1.0,
+                        workers: Vec::new(),
+                    },
+                    PlayerPosition(position),
+                    PlayerRotation(0.7),
+                ));
+                (SettlementBuildingKind::Market, position, 0.7)
+            } else {
+                (SettlementBuildingKind::Hall, Vec3::ZERO, 0.0)
+            };
+            let counter = counter_kind.entrance_position(counter_position, yaw);
+            let person = app
+                .world_mut()
+                .spawn((
+                    CharacterKind::Hero,
+                    PlayerPosition(counter),
+                    PlayerRotation(0.0),
+                    CharacterActivity::Idle,
+                    MootQueueTicket {
+                        hall,
+                        serial: 1,
+                        kind: MootServiceKind::ConstructionMaterial,
+                        state: MootQueueState::Queued,
+                        failed_routes: 0,
+                        head_wait_seconds: 0.0,
+                        head_best_distance: f32::INFINITY,
+                    },
+                ))
+                .id();
+            app.update();
+            assert!(
+                matches!(
+                    app.world().get::<MootQueueTicket>(person).unwrap().state,
+                    MootQueueState::Serving { .. }
+                ),
+                "a player at the physical counter must be served"
+            );
+            assert!(
+                app.world().get::<MoveTarget>(person).is_none(),
+                "do not walk to an invisible side plot"
+            );
+        }
     }
 }

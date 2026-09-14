@@ -12,6 +12,7 @@ the RTS/living-world codebase. Start with [WORLD-DESIGN.md](docs/WORLD-DESIGN.md
 game, [CIVIC-ECONOMY.md](docs/CIVIC-ECONOMY.md) for the executable market and policy
 rules, [COMPANY-ECONOMY-IMPLEMENTATION.md](docs/COMPANY-ECONOMY-IMPLEMENTATION.md)
 for shares, pooled finance and vertical integration,
+[HOUSEHOLD-ECONOMY.md](docs/HOUSEHOLD-ECONOMY.md) for shared spending and hearth fuel,
 [ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical boundaries, and
 [ROADMAP.md](docs/ROADMAP.md) for implemented and future work. The executable coastal
 arrival and reusable ship-navigation contract are documented in
@@ -30,7 +31,7 @@ arrival and reusable ship-navigation contract are documented in
   grazing and wandering near observers, and bounded client animation rigs. Stables
   and horse acquisition remain future work.
 - Server-authoritative multiplayer, region interest management, session accounts and
-  stable `PersonId`, `SettlementId`, `BuildingId`, `CompanyId`, `TradeContractId` and
+  stable `PersonId`, `HouseholdId`, `SettlementId`, `BuildingId`, `CompanyId`, `TradeContractId` and
   `TradeRouteId` relationships. A disconnected player
   can rejoin the same running server and re-adopt their live hero, cargo, coin and retinue;
   restarting the server intentionally begins a fresh world.
@@ -62,6 +63,10 @@ arrival and reusable ship-navigation contract are documented in
   adaptive wages, real business profit/loss, protected working capital, NPC owner strategies,
   input procurement, stock liquidation/property auctions, household food purchases, Poor
   Relief and durable business lifecycle states.
+- Stable household accounts survive moving or losing a home. Members share necessities
+  proportionally to spendable cash, retry provisioning within the day, and buy a small
+  Wood reserve for their hearth after food. Physical goods stay in their stores or on
+  their assigned carrier; family relationships and births remain future work.
 - Stable companies above productive sites: every firm has exactly 1,000 ordinary
   shares, a separately appointed Company Master, one authoritative treasury, consolidated liabilities,
   tax and pro-rata dividends. A sole proprietor is normally owner, Master and worker of
@@ -148,8 +153,11 @@ arrival and reusable ship-navigation contract are documented in
   production, and summary/detail replication.
 
 The live tier ladder is **Moot (Hamlet) → Village → Town**; City is future work.
-Its current population gates are 12 and 30 residents, combined with sustained food,
-prosperity, trade and civic-building requirements. Promotion is now physical: a qualified
+Its population gates are 12 and 30 residents. Village also requires 8 housed residents
+across two homes; Town requires 20 housed residents, an accessible Market, two operating
+business types and paid trade. Qualification uses two of the last three days; temporary
+hunger and unemployment remain living-condition problems without resetting development.
+See [settlement development](docs/SETTLEMENT-DEVELOPMENT.md). Promotion is physical: a qualified
 Hamlet must purchase and stage 12 Wood for its Village Hall, while a qualified Village must
 purchase and stage 8 Stone for its Town Hall, importing it by a physical company route when
 the local market cannot supply it; a named civic worker then walks to the Hall and

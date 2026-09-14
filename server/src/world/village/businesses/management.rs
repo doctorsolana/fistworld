@@ -1,5 +1,6 @@
 use super::super::*;
 
+use super::market_response::{MarketResponseSite, MarketResponses};
 use shared::economy::{sustainable_unit_price, BusinessManagementPolicy};
 
 const INSOLVENT_DAYS_BEFORE_CLOSURE: u16 = 5;
@@ -161,11 +162,11 @@ pub(crate) fn review_automatic_price(
         || previous.sold_units < previous.produced_units
         || rival_sales
         || total_stock > sale.company_reserve_units.saturating_add(2);
-    let competitive_reference = market
-        .best_competitor
-        .or((market.last_clearing_price > 0).then_some(market.last_clearing_price));
     if weak_sales {
-        if let Some(reference) = competitive_reference.filter(|price| *price < current) {
+        // A past sale is not an offer buyers can still accept. In an empty
+        // market that stale price used to cancel every scarcity increase,
+        // permanently trapping a closed supplier below its restart cost.
+        if let Some(reference) = market.best_competitor.filter(|price| *price < current) {
             let target = reference.saturating_sub(1).max(1);
             let competitive_step = sale
                 .max_daily_price_change_bps
@@ -270,8 +271,57 @@ pub fn review_business_management(
     let Some(day) = world_time.iter().next().map(|clock| clock.day) else {
         return;
     };
+    if businesses
+        .iter()
+        .all(|(_, _, _, _, _, _, _, _, _, _, condition, ..)| condition.last_review_day == day)
+    {
+        // New sites still get a same-day first review. Quiet simulation ticks
+        // do not rebuild settlement, shareholder and workforce hash maps for
+        // decisions every existing company has already made today.
+        return;
+    }
     let hall_by_settlement: HashMap<shared::components::SettlementId, Entity> =
         halls.iter().map(|(entity, id, _)| (*id, entity)).collect();
+    let responses = MarketResponses::build(
+        businesses.iter().map(
+            |(
+                _,
+                id,
+                building_of,
+                building,
+                _,
+                _,
+                sale,
+                wage,
+                _,
+                management,
+                condition,
+                _,
+                _,
+                _,
+                _,
+            )| {
+                let mut sale = *sale;
+                sale.target_margin_bps = management.strategy.target_margin_bps();
+                MarketResponseSite {
+                    id: *id,
+                    settlement: building_of.0,
+                    kind: building.kind,
+                    quality: building.quality,
+                    state: condition.state,
+                    assigned_workers: building.workers.len().min(usize::from(u8::MAX)) as u8,
+                    daily_wage: wage.daily_wage,
+                    sale,
+                    autopilot: management.autopilot,
+                }
+            },
+        ),
+        |settlement| {
+            hall_by_settlement
+                .get(&settlement)
+                .and_then(|entity| markets.get(*entity).ok())
+        },
+    );
     let unmet_food_by_settlement: HashMap<shared::components::SettlementId, u32> = halls
         .iter()
         .map(|(_, id, economy)| (*id, economy.map_or(0, |economy| economy.unmet_food)))
@@ -304,11 +354,12 @@ pub fn review_business_management(
     }
     let mut responsive_food_businesses = HashMap::<shared::components::SettlementId, u64>::new();
     for (_, _, building_of, building, _, _, _, _, _, _, condition, ..) in businesses.iter_mut() {
-        if super::super::business_output(building.kind).is_some_and(Good::is_edible)
-            && (condition.state.accepts_new_workers()
-                || condition.state == BusinessState::Mothballed)
-        {
-            *responsive_food_businesses.entry(building_of.0).or_default() += 1;
+        if condition.state.accepts_new_workers() || condition.state == BusinessState::Mothballed {
+            if let Some(output) = super::super::business_output(building.kind) {
+                if output.is_edible() {
+                    *responsive_food_businesses.entry(building_of.0).or_default() += 1;
+                }
+            }
         }
     }
 
@@ -682,6 +733,15 @@ pub fn review_business_management(
                 replacement_input_cost,
                 market.market_fee_bps(),
             );
+            if sale.automatic_pricing && total_output_stock == 0 {
+                if let Some((quote, ceiling)) = responses.restart_quote_for(*building_id) {
+                    // Empty shelves have no inventory to clear. Quote within
+                    // the overlap between real batch cost and demonstrated
+                    // buying capacity; otherwise a scarcity rise above every
+                    // funded bid can itself prevent production indefinitely.
+                    sale.asking_unit_price = sale.asking_unit_price.clamp(quote, ceiling);
+                }
+            }
             voluntary_closure = condition.state != BusinessState::Mothballed
                 && automatic_owner_should_close(
                     day,
@@ -1108,6 +1168,31 @@ mod tests {
             sale.asking_unit_price
                 >= sustainable_unit_price(account.estimated_unit_cost, 500, sale.target_margin_bps)
         );
+    }
+
+    #[test]
+    fn historical_clearance_does_not_cancel_empty_market_price_discovery() {
+        let mut account = BusinessAccount::default();
+        let mut sale = BusinessSalePolicy::for_good(Good::Wood);
+        sale.asking_unit_price = 4;
+        for _ in 0..4 {
+            let previous = sale.asking_unit_price;
+            review_automatic_price(
+                &mut account,
+                &mut sale,
+                BusinessState::Mothballed,
+                0,
+                Good::Wood,
+                MarketPriceSignals {
+                    last_clearing_price: 4,
+                    unavailable_units: 6,
+                    ..default()
+                },
+                0,
+                500,
+            );
+            assert!(sale.asking_unit_price > previous);
+        }
     }
 
     #[test]

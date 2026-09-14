@@ -22,6 +22,7 @@ class TownGrowthTests(unittest.TestCase):
         self.assertEqual(town_growth.profile_list("city-100-gradual,city-500-surge"),
                          ["city-100-gradual", "city-500-surge"])
         self.assertEqual(town_growth.SMALL_PROFILES, ("low", "steady", "burst"))
+        self.assertEqual(town_growth.profile_list("inland-boats"), ["inland-boats"])
         for value in ("city-1000-surge", "city-500-fast", "city-0-gradual"):
             with self.assertRaises(argparse.ArgumentTypeError):
                 town_growth.profile_list(value)

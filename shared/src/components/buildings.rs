@@ -99,6 +99,16 @@ pub enum HouseLevel {
     UpperStorey,
 }
 
+impl HouseLevel {
+    /// Beds provided by the completed physical structure.
+    pub const fn housing_capacity(self) -> u8 {
+        match self {
+            Self::Ground => 4,
+            Self::UpperStorey => 8,
+        }
+    }
+}
+
 /// Stable replicated art identity for one house or house worksite.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct HouseAppearance {
@@ -109,7 +119,9 @@ pub struct HouseAppearance {
 impl HouseAppearance {
     /// Pick a repeatable line from the approved plot rather than iteration or
     /// RNG order, so reloads and high-speed simulations cannot re-skin homes.
-    pub fn for_new_house(tier: SettlementTier, plot: Vec3) -> Self {
+    /// Settlement progression permits a paid upgrade; new homes still begin
+    /// on the ground floor.
+    pub fn for_new_house(_tier: SettlementTier, plot: Vec3) -> Self {
         let x = (plot.x * 4.0).round() as i64 as u64;
         let z = (plot.z * 4.0).round() as i64 as u64;
         let mut hash = x ^ z.rotate_left(32) ^ 0x9e37_79b9_7f4a_7c15;
@@ -124,12 +136,22 @@ impl HouseAppearance {
             } else {
                 HouseLine::LongCabin
             },
-            level: if tier >= SettlementTier::Village {
-                HouseLevel::UpperStorey
-            } else {
-                HouseLevel::Ground
-            },
+            level: HouseLevel::Ground,
         }
+    }
+
+    /// Recover explicit authored house state without downgrading an existing
+    /// upper storey when attaching its canonical appearance component.
+    pub const fn from_building_type(art: crate::building::BuildingType) -> Option<Self> {
+        use crate::building::BuildingType as Art;
+        let (line, level) = match art {
+            Art::LogCabin => (HouseLine::Cabin, HouseLevel::Ground),
+            Art::CabinL2 => (HouseLine::Cabin, HouseLevel::UpperStorey),
+            Art::LongCabin => (HouseLine::LongCabin, HouseLevel::Ground),
+            Art::LongCabinL2 => (HouseLine::LongCabin, HouseLevel::UpperStorey),
+            _ => return None,
+        };
+        Some(Self { line, level })
     }
 
     pub const fn building_type(self) -> crate::building::BuildingType {
@@ -470,7 +492,7 @@ mod house_appearance_tests {
     }
 
     #[test]
-    fn plot_pick_is_stable_and_tier_only_changes_the_rung() {
+    fn plot_pick_is_stable_and_new_houses_start_on_the_ground_floor() {
         let plot = Vec3::new(137.25, 0.0, -82.75);
         let hamlet = HouseAppearance::for_new_house(SettlementTier::Hamlet, plot);
         assert_eq!(
@@ -480,7 +502,42 @@ mod house_appearance_tests {
         let village = HouseAppearance::for_new_house(SettlementTier::Village, plot);
         assert_eq!(hamlet.line, village.line);
         assert_eq!(hamlet.level, HouseLevel::Ground);
-        assert_eq!(village.level, HouseLevel::UpperStorey);
+        assert_eq!(village.level, HouseLevel::Ground);
+        assert_eq!(
+            HouseAppearance::for_new_house(SettlementTier::Town, plot).level,
+            HouseLevel::Ground
+        );
+    }
+
+    #[test]
+    fn completed_house_levels_supply_four_or_eight_beds() {
+        assert_eq!(HouseLevel::Ground.housing_capacity(), 4);
+        assert_eq!(HouseLevel::UpperStorey.housing_capacity(), 8);
+        assert_eq!(
+            SettlementBuildingKind::House.housing_capacity_with_house(None),
+            4
+        );
+        for line in [HouseLine::Cabin, HouseLine::LongCabin] {
+            for level in [HouseLevel::Ground, HouseLevel::UpperStorey] {
+                let appearance = HouseAppearance { line, level };
+                assert_eq!(
+                    HouseAppearance::from_building_type(appearance.building_type()),
+                    Some(appearance)
+                );
+                assert_eq!(
+                    SettlementBuildingKind::House.housing_capacity_with_house(Some(&appearance)),
+                    level.housing_capacity()
+                );
+                assert_eq!(
+                    SettlementBuildingKind::Hall.housing_capacity_with_house(Some(&appearance)),
+                    0
+                );
+            }
+        }
+        assert_eq!(
+            HouseAppearance::from_building_type(BuildingType::MootHall),
+            None
+        );
     }
 
     #[test]

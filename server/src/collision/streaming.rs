@@ -19,7 +19,7 @@ const COLLIDER_VIEW_DISTANCE_CHUNKS: i32 = 3;
 const MAX_COLLIDER_CHUNKS_TO_LOAD_PER_TICK: usize = 6;
 
 /// Spatial hash cell size in meters.
-const COLLIDER_CELL_SIZE: f32 = 16.0;
+use crate::collision::library::COLLIDER_CELL_SIZE;
 
 /// Stateful cache used by static-collider streaming to avoid full recomputation each tick.
 #[derive(Resource, Default)]

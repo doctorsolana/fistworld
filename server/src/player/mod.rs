@@ -18,6 +18,7 @@ pub mod combat;
 pub mod commander;
 pub mod companies;
 pub mod hero;
+pub mod house_upgrades;
 pub mod market;
 pub mod orders;
 pub mod permits;

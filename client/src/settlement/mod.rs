@@ -20,6 +20,7 @@ mod debug;
 mod farm_wind;
 pub(crate) mod fortifications;
 mod grounds;
+mod house_upgrades;
 mod lighting;
 mod livestock;
 mod stock;
@@ -86,6 +87,7 @@ impl Plugin for SettlementPlugin {
                     .chain()
                     .after(TerrainUpdateSet),
                 attach_construction_supply_visuals,
+                house_upgrades::attach_house_upgrade_scaffolds,
                 sync_construction_supply_visuals,
                 claim_building_ground,
                 raise_construction_visuals,

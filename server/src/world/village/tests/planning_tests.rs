@@ -296,7 +296,7 @@ fn a_coastal_food_shortage_diversifies_after_the_first_farm() {
 }
 
 #[test]
-fn three_secure_days_qualify_a_hamlet_without_skipping_civic_construction() {
+fn secure_food_history_reports_wellbeing_without_changing_tier() {
     let mut app = village_test_app();
     app.init_resource::<SettlementEconomyRuntime>();
     app.add_systems(
@@ -338,8 +338,10 @@ fn three_secure_days_qualify_a_hamlet_without_skipping_civic_construction() {
         shared::components::SettlementTier::Hamlet,
         "economy evidence must not bypass the Village Hall worksite"
     );
-    assert_eq!(economy.food_secure_days, VILLAGE_REQUIRED_SECURE_DAYS);
-    assert!(economy.prosperity >= VILLAGE_MIN_PROSPERITY);
+    assert_eq!(economy.food_secure_days, 3);
+    assert_eq!(economy.unmet_food, 0);
+    assert_eq!(economy.recent_food_production, VILLAGE_MIN_RESIDENTS as f32);
+    assert!(economy.reserve_days >= shared::economy::FOOD_SECURITY_TARGET_DAYS);
 }
 
 #[test]

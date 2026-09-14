@@ -13,6 +13,7 @@ pub mod bootstrap;
 pub mod dev;
 pub mod fortifications;
 pub mod household_yards;
+pub mod house_upgrades;
 pub mod identity;
 pub mod immigration;
 pub mod map_state;

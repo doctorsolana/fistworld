@@ -54,6 +54,7 @@ pub fn discharge_from_village_life(entity: &mut bevy::ecs::system::EntityCommand
     entity
         .remove::<crate::world::village::VillagerIntent>()
         .remove::<crate::world::village::MigrationCooldown>()
+        .remove::<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>()
         .remove::<(
             crate::world::village::ConstructionMaterialRoutine,
             crate::world::village::LumberjackRoutine,

@@ -156,17 +156,27 @@ pub(super) fn sync_carried_load_visuals(
     mut assets: ResMut<CarriedLoadAssets>,
     attachments: Query<(Entity, Ref<CarryAttachment>, &CharacterAttachmentOwner)>,
     children: Query<&Children>,
-    loads: Query<(Ref<CarriedLoad>, Option<Ref<PorterCartState>>), With<CharacterKind>>,
+    loads: Query<
+        (
+            Ref<CarriedLoad>,
+            Option<Ref<PorterCartState>>,
+            Option<Ref<CharacterActivity>>,
+        ),
+        With<CharacterKind>,
+    >,
     mut removed_carts: RemovedComponents<PorterCartState>,
     existing_visuals: Query<&CarriedLoadVisual>,
 ) {
     let removed_carts: HashSet<_> = removed_carts.read().collect();
     for (attachment, marker, owner) in attachments.iter() {
-        let Ok((load, cart)) = loads.get(owner.0) else {
+        let Ok((load, cart, activity)) = loads.get(owner.0) else {
             continue;
         };
         if !marker.is_added()
             && !load.is_changed()
+            && !activity
+                .as_ref()
+                .is_some_and(|activity| activity.is_changed())
             && !cart.as_ref().is_some_and(|cart| cart.is_changed())
             && !removed_carts.contains(&owner.0)
         {
@@ -175,7 +185,10 @@ pub(super) fn sync_carried_load_visuals(
         // A cart load belongs on its authored bed anchors, never duplicated in
         // the porter's arms. Removing the cart re-evaluates this attachment so
         // an abnormal in-flight personal load remains visible.
-        let desired = cart.is_none().then(|| load.visible_appearance()).flatten();
+        // Work frees the hands without changing the authoritative inventory.
+        let desired = (cart.is_none() && !is_manual_work(activity.as_deref().copied()))
+            .then(|| load.visible_appearance())
+            .flatten();
         let existing = children.get(attachment).ok().and_then(|children| {
             children.iter().find_map(|child| {
                 existing_visuals
@@ -266,11 +279,24 @@ pub(super) fn carried_asset_spec(appearance: CarriedAppearance) -> CarriedAssetS
     }
 }
 
+pub(super) fn is_manual_work(activity: Option<CharacterActivity>) -> bool {
+    matches!(
+        activity,
+        Some(
+            CharacterActivity::Chopping
+                | CharacterActivity::Farming
+                | CharacterActivity::Building
+                | CharacterActivity::Mining
+                | CharacterActivity::Fishing
+        )
+    )
+}
+
 pub(super) fn desired_tool(
     activity: Option<CharacterActivity>,
     carrying: bool,
 ) -> Option<ToolKind> {
-    if carrying {
+    if carrying && !is_manual_work(activity) {
         return None;
     }
     match activity {
@@ -284,8 +310,7 @@ pub(super) fn desired_tool(
 
 /// Attach only the tool required by the character's current visible work.
 ///
-/// A physical load always wins: a villager carrying wood cannot also hold a
-/// tool. `CharacterActivity` is authoritative, avoiding an N characters × M
+/// During work the carried bundle is stowed and the working tool wins. `CharacterActivity` is authoritative, avoiding an N characters × M
 /// construction-sites proximity join on the client.
 pub(super) fn sync_tool_visuals(
     mut commands: Commands,

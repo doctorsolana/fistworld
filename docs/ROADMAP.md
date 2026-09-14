@@ -276,6 +276,15 @@ results establish their original fixtures, not every later balance revision.
       required Wood in the panel and as visible timber bundles in the world. The
       encyclopedia retains the same completed-building snapshot in an expandable
       settlement/building explorer with a dedicated detail sheet per record.
+- [x] Stable domestic household identities, dwelling-independent shared purses,
+      proportional necessities contributions, bounded within-day restocking and
+      physical hearth fuel consumption. Families, genders, births and aging remain
+      separate future decisions; see [HOUSEHOLD-ECONOMY.md](HOUSEHOLD-ECONOMY.md).
+- [x] Owner-funded upper storeys at Village tier and above: four beds remain
+      usable during paid construction, eight become available on completion.
+      Private capital buys physically delivered Wood; stable households and
+      existing home identity survive. Bounded autonomous investment responds to
+      housing need. See [HOUSE-UPGRADES.md](HOUSE-UPGRADES.md).
 - [x] Capacity-bounded designated households. At sunset villagers interrupt
       work, open their own cabin's authored door, walk through it and sleep;
       sunrise opens the door before they emerge. Shared door demand holds one
@@ -375,14 +384,15 @@ results establish their original fixtures, not every later balance revision.
       manual control freezes policy, and weekly autopilot changes at most one lever.
       The implemented formulas, money flows and review order are maintained in
       [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
-- [x] First tier advancement: a Hamlet with at least 12 residents qualifies after
-      three consecutive days with three reserve days, recent food production covering
-      population, no hunger and prosperity at least 65. It then buys and visibly stages
+- [x] First tier advancement: a Hamlet with at least 12 living residents and 8 housed
+      across 2 occupied homes qualifies on two of the last three completed days.
+      Hunger and prosperity remain separate wellbeing readings. It buys and visibly stages
       12 Wood from real private consignments; a named civic worker physically raises the
       Village Hall before the tier changes.
-- [x] Later tier advancement: a Village with at least 30 residents, a Marketplace,
-      Tavern, sufficient Moot trade and prosperity 70 becomes a Town after three
-      sustained days. Village → Town additionally buys and stages 8 Stone and
+- [x] Later tier advancement: a Village with at least 30 residents, 20 housed,
+      an accessible Marketplace, two operating private business types and paid trade
+      qualifies on two of the last three completed days. Tavern is optional.
+      Village → Town additionally buys and stages 8 Stone and
       physically constructs the Town Hall. Town is the current progression ceiling;
       Town → City awaits its own content and material recipe. The generic Hall
       project seam is ready for that future recipe. Moot/Village/Town Halls, Market and Church
@@ -486,8 +496,9 @@ ordinary residents shed paths, door choreography and work-animation phases.
 - [x] Prosperity scalar with a panel breakdown: reserve 40, production 30,
       housing 20, employment 10, and hunger penalty down to -30.
 - [x] Hamlet → Village → Town advancement with inspectable population,
-      food, prosperity, trade and civic-building gates. The enacted gates are 12
-      residents for Village and 30 for Town; City is a future rung.
+      occupied housing, operating commerce and civic construction. Qualification
+      uses two of the last three dated observations, independent of temporary hunger.
+      The enacted gates are 12 residents for Village and 30 for Town; City is a future rung.
 - [x] Reconcile observed per-trip production with the distant strategic tick. Both use the
       same quality-scaled rates, worker counts, one-field/two-field Farmstead capacity,
       storage limits, sale policy and market transaction code.
@@ -503,8 +514,8 @@ ordinary residents shed paths, door choreography and work-animation phases.
       thousands of dead ECS bodies.
 - [ ] Births against a food-supported cap, aging and other natural mortality
 - [ ] Further food processing, recipes, nutrition quality and differentiated diets
-- [x] Later tier ladder requirements: Marketplace and Tavern plus sustained trade
-      advance a Village to Town. Authored Hall/Market/Church assets are live;
+- [x] Later tier ladder requirements: accessible Marketplace, occupied housing and
+      operating commerce advance a Village to Town. Authored Hall/Market/Church assets are live;
       City progression, a distinct City Hall and its material recipe remain open.
       Military stays outside the growth gate.
 - [ ] Hysteresis on every transition

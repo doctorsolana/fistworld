@@ -32,12 +32,34 @@ macro_rules! stable_id {
 }
 
 stable_id!(PersonId);
+stable_id!(HouseholdId);
 stable_id!(SettlementId);
 stable_id!(BuildingId);
 stable_id!(PermitId);
 stable_id!(CompanyId);
 stable_id!(TradeContractId);
 stable_id!(TradeRouteId);
+
+/// A person's domestic group, independent of their current bed or settlement.
+/// Membership carries no family, employment, political or command authority.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HouseholdMember(pub HouseholdId);
+
+/// The domestic group currently assigned this physical dwelling. Food and fuel
+/// remain in the building's inventory when the group moves elsewhere.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OccupiedByHousehold(pub HouseholdId);
+
+/// Durable domestic membership and the group's optional physical dwelling.
+/// Attached to the household entity beside its `HouseholdId` and necessities
+/// account. Members can be temporarily away; the house's `Household` roster
+/// lists only people currently entitled to a bed there.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct HouseholdMembers {
+    pub resident_ids: Vec<PersonId>,
+    pub settlement: SettlementId,
+    pub dwelling: Option<BuildingId>,
+}
 
 /// One person's durable voting/economic interest in a company. Every share is
 /// an ordinary equal unit; percentages are derived for display only.
@@ -391,6 +413,35 @@ pub struct CivicEmployment {
 /// fast door access, while this survives serialization and entity remapping.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LivesAt(pub BuildingId);
+
+#[cfg(test)]
+mod household_tests {
+    use super::*;
+
+    #[test]
+    fn membership_roundtrips_with_and_without_a_dwelling() {
+        for dwelling in [None, Some(BuildingId(u64::MAX))] {
+            let value = (
+                HouseholdId(u64::MAX),
+                HouseholdMember(HouseholdId(u64::MAX)),
+                OccupiedByHousehold(HouseholdId(u64::MAX)),
+                HouseholdMembers {
+                    resident_ids: vec![PersonId(1), PersonId(u64::MAX)],
+                    settlement: SettlementId(u64::MAX),
+                    dwelling,
+                },
+            );
+            let bytes = bincode::serialize(&value).unwrap();
+            let decoded: (
+                HouseholdId,
+                HouseholdMember,
+                OccupiedByHousehold,
+                HouseholdMembers,
+            ) = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, value);
+        }
+    }
+}
 
 #[cfg(test)]
 mod company_tests {

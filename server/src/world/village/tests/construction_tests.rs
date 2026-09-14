@@ -141,6 +141,7 @@ fn player_assignment_advances_the_physical_supply_loop_at_night_without_villager
             site,
             cycle: 0,
             last_tree: None,
+            rejected_trees: Vec::new(),
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -184,10 +185,34 @@ fn player_assignment_advances_the_physical_supply_loop_at_night_without_villager
         (remaining - 9.0).abs() < 0.01,
         "night work did not consume world time: {remaining:.3}s remained"
     );
+
+    // A service-counter arrival radius is far too broad for an axe. Even
+    // after dark, walk to the actual tree stand before beginning the work.
+    let tree_stand = hall_position + Vec3::X * 2.0;
+    app.world_mut()
+        .get_mut::<ConstructionMaterialRoutine>(hero)
+        .unwrap()
+        .phase = ConstructionMaterialPhase::WalkingToTree {
+        tree: tree_stand + Vec3::X,
+        stand: tree_stand,
+    };
+    app.update();
+    assert_eq!(
+        app.world().get::<CharacterActivity>(hero),
+        Some(&CharacterActivity::Idle)
+    );
+    assert_eq!(app.world().get::<MoveTarget>(hero).unwrap().0, tree_stand);
+    app.world_mut().get_mut::<PlayerPosition>(hero).unwrap().0 = tree_stand;
+    app.update();
+    assert_eq!(
+        app.world().get::<CharacterActivity>(hero),
+        Some(&CharacterActivity::Chopping)
+    );
+    assert!(app.world().get::<MoveTarget>(hero).is_none());
 }
 
 #[test]
-fn emergency_builder_batches_two_trees_into_one_full_delivery() {
+fn emergency_builder_batches_three_trees_into_one_full_delivery() {
     let mut app = village_test_app();
     app.init_resource::<Time>();
     app.insert_resource(WorldTerrain::default());
@@ -267,6 +292,7 @@ fn emergency_builder_batches_two_trees_into_one_full_delivery() {
             site,
             cycle: 0,
             last_tree: None,
+            rejected_trees: Vec::new(),
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -335,6 +361,28 @@ fn emergency_builder_batches_two_trees_into_one_full_delivery() {
             .get::<ConstructionMaterialRoutine>(builder)
             .unwrap()
             .phase,
+        ConstructionMaterialPhase::Seeking
+    ));
+    app.world_mut()
+        .get_mut::<ConstructionMaterialRoutine>(builder)
+        .unwrap()
+        .phase = ConstructionMaterialPhase::Chopping {
+        tree: hall_position - Vec3::Z,
+        seconds_left: 0.0,
+    };
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<GoodsInventory>(builder)
+            .unwrap()
+            .amount(Good::Wood),
+        6
+    );
+    assert!(matches!(
+        app.world()
+            .get::<ConstructionMaterialRoutine>(builder)
+            .unwrap()
+            .phase,
         ConstructionMaterialPhase::Delivering { .. }
     ));
     assert_eq!(app.world().get::<MoveTarget>(builder).unwrap().0, stand);
@@ -366,6 +414,8 @@ fn construction_top_up_tree_is_distinct_from_the_tree_just_felled() {
         hall,
         first_stand,
         Some(first_tree),
+        &[],
+        None,
         1,
         71,
     );
@@ -436,6 +486,7 @@ fn nightfall_finishes_deliveries_in_flight_and_stands_down_the_rest_cleanly() {
                     site: Entity::PLACEHOLDER,
                     cycle: 0,
                     last_tree: None,
+                    rejected_trees: Vec::new(),
                     failed_tree_routes: 0,
                     failed_store_routes: 0,
                     failed_delivery_routes: 0,
@@ -833,6 +884,7 @@ fn the_first_worksite_chops_its_own_wood_when_no_lumber_hut_exists() {
             site,
             cycle: 0,
             last_tree: None,
+            rejected_trees: Vec::new(),
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -974,6 +1026,7 @@ fn failed_market_route_releases_a_construction_supplier_to_gather_wood() {
             site,
             cycle: 0,
             last_tree: None,
+            rejected_trees: Vec::new(),
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -1108,6 +1161,7 @@ fn public_construction_buys_private_wood_and_pays_its_business_owner() {
             site,
             cycle: 0,
             last_tree: None,
+            rejected_trees: Vec::new(),
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -1129,7 +1183,7 @@ fn public_construction_buys_private_wood_and_pays_its_business_owner() {
             .unwrap()
             .amount(Good::Wood),
         4,
-        "the builder's sixteen-bulk inventory carries four Wood"
+        "the builder collects only the four Wood reserved for this trip"
     );
     assert_eq!(
         app.world()
@@ -1589,4 +1643,47 @@ fn a_parked_site_is_re_drafted_only_after_its_cooldown_expires() {
     assert!(world
         .get::<ConstructionMaterialRoutine>(free_resident)
         .is_some());
+}
+
+#[test]
+fn nearest_construction_tree_ignores_salt_and_excludes_rejected_routes() {
+    let terrain = WorldTerrain::default();
+    let at = Vec3::new(1720.0, terrain.get_height(1720.0, 0.0), 0.0);
+    let mut cache = TreeWorkCandidateCache::default();
+    let lookup = |cache: &mut TreeWorkCandidateCache, salt, rejected: &[Vec3]| {
+        find_nearby_tree_for_cycle_cached(
+            cache, &terrain, None, None, at, at, None, rejected, None, 0, salt,
+        )
+    };
+    for _ in 0..32 {
+        let _ = lookup(&mut cache, 0, &[]);
+    }
+    let TreeCandidateLookup::Found {
+        tree: nearest,
+        stand,
+    } = lookup(&mut cache, 0, &[])
+    else {
+        panic!("fixture has usable trees");
+    };
+    for salt in [1, 7, 21, 47, 999] {
+        let TreeCandidateLookup::Found { tree, .. } = lookup(&mut cache, salt, &[]) else {
+            panic!()
+        };
+        assert_eq!(
+            tree, nearest,
+            "salt must not send an empty builder to a distant tree"
+        );
+    }
+    let TreeCandidateLookup::Found {
+        tree,
+        stand: next_stand,
+    } = lookup(&mut cache, 0, &[nearest])
+    else {
+        panic!()
+    };
+    assert_ne!(
+        tree, nearest,
+        "a failed route must choose another reachable candidate"
+    );
+    assert!(ground_distance(at, next_stand) >= ground_distance(at, stand));
 }

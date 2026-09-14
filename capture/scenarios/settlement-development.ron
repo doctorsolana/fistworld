@@ -1,0 +1,16 @@
+// Offline replicated daily evidence, rendered by production settlement views.
+// Expand uses the real compact button. No claim of simulated advancement.
+(version: 1, name: "settlement-development", map: "village_lab",
+ output_dir: "logs/captures/settlement-development", resolution: (1800, 1100),
+ fixed_delta_seconds: 0.016666667, target: window, show_window: false,
+ warmup_frames: 180,
+ readiness: (minimum_frames: 60, maximum_frames: 1800, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+ environment: { "FISTFORCE_CAPTURE_DEVELOPMENT": "1", "FISTFORCE_CAPTURE_ENCYCLOPEDIA": "places", "FISTFORCE_CAPTURE_CLOUDS": "clear", "FISTFORCE_CAPTURE_HUD": "play" },
+ shots: [
+  (name: "00-compact-village-checklist", focus: (0.0, 0.0, 0.0), yaw: 0.55, zoom: 70.0, time_of_day: 0.43),
+  (name: "01-places-village-checklist", focus: (0.0, 0.0, 0.0), yaw: 0.55, zoom: 70.0, time_of_day: 0.43),
+  (name: "02-compact-town-missing-requirements", focus: (0.0, 0.0, 0.0), yaw: 0.55, zoom: 70.0, time_of_day: 0.43),
+  (name: "03-town-qualified-with-hardship", focus: (0.0, 0.0, 0.0), yaw: 0.55, zoom: 70.0, time_of_day: 0.43),
+  (name: "04-compact-hall-materials", focus: (0.0, 0.0, 0.0), yaw: 0.55, zoom: 70.0, time_of_day: 0.43),
+  (name: "05-hall-work-underway", focus: (0.0, 0.0, 0.0), yaw: 0.55, zoom: 70.0, time_of_day: 0.78)
+ ])

@@ -422,6 +422,7 @@ pub fn ensure_fishing_piers(
 #[allow(clippy::too_many_arguments)]
 pub fn assign_farmer_routines(
     mut commands: Commands,
+    off_duty_workers: Query<&WorkerOffDuty>,
     world_time: Query<&WorldTime>,
     terrain: Option<Res<WorldTerrain>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
@@ -528,7 +529,7 @@ pub fn assign_farmer_routines(
             .get(farmstead)
             .is_ok_and(|plan| plan.day == clock.day && plan.remaining(clock.day) == 0)
         {
-            defer_shift_until_workplace_access(&mut commands, employees, clock.day);
+            release_workers_for_day(&mut commands, employees, clock.day);
             continue;
         }
         let Some(farm_fields) = fields_by_farm.get(building_id) else {
@@ -551,7 +552,13 @@ pub fn assign_farmer_routines(
             &roads,
             &road_requests,
         ) {
-            defer_shift_until_workplace_access(&mut commands, employees, clock.day);
+            super::workplace_access::defer_shift(
+                &mut commands,
+                employees,
+                farmstead,
+                clock.day,
+                &off_duty_workers,
+            );
             continue;
         }
         for (worker_index, employee) in employees
@@ -1117,6 +1124,7 @@ pub fn run_farmer_routines(
 /// Attach the physical hut-to-pier loop to each named fisher.
 pub fn assign_fishing_routines(
     mut commands: Commands,
+    off_duty_workers: Query<&WorkerOffDuty>,
     world_time: Query<&WorldTime>,
     huts: Query<(
         Entity,
@@ -1207,7 +1215,13 @@ pub fn assign_fishing_routines(
             &roads,
             &road_requests,
         ) {
-            defer_shift_until_workplace_access(&mut commands, employees, clock.day);
+            super::workplace_access::defer_shift(
+                &mut commands,
+                employees,
+                hut_entity,
+                clock.day,
+                &off_duty_workers,
+            );
             continue;
         }
         for employee in employees.iter().take(hut.kind.positions() as usize) {
@@ -1813,6 +1827,7 @@ pub fn run_fishing_routines(
 /// a compatibility path for buildings loaded before durable relationships.
 pub fn assign_lumberjack_routines(
     mut commands: Commands,
+    off_duty_workers: Query<&WorkerOffDuty>,
     world_time: Query<&WorldTime>,
     huts: Query<(
         Entity,
@@ -1897,7 +1912,13 @@ pub fn assign_lumberjack_routines(
             &roads,
             &road_requests,
         ) {
-            defer_shift_until_workplace_access(&mut commands, employees, clock.day);
+            super::workplace_access::defer_shift(
+                &mut commands,
+                employees,
+                hut_entity,
+                clock.day,
+                &off_duty_workers,
+            );
             continue;
         }
         for employee in employees.iter().take(building.kind.positions() as usize) {
@@ -2364,7 +2385,7 @@ pub fn run_lumberjack_routines(
                     activity.set_if_neq(CharacterActivity::Idle);
                     continue;
                 }
-                if ground_distance(position.0, stand) <= WORK_REACH {
+                if ground_distance(position.0, stand) <= TREE_WORK_REACH {
                     routine.failed_tree_routes = 0;
                     commands.entity(worker).remove::<MoveTarget>();
                     let to_tree = tree - position.0;
@@ -2465,10 +2486,22 @@ pub fn run_lumberjack_routines(
 
 /// Keep the small replicated carried-load view in sync with private inventory.
 pub fn sync_carried_load(
-    mut carriers: Query<(&GoodsInventory, &mut CarriedLoad), With<CharacterKind>>,
+    projects: Option<Res<crate::world::house_upgrades::HouseUpgradeProjects>>,
+    mut carriers: Query<
+        (
+            Entity,
+            &GoodsInventory,
+            &mut CarriedLoad,
+            Option<&crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
+        ),
+        With<CharacterKind>,
+    >,
 ) {
-    for (inventory, mut carried) in carriers.iter_mut() {
-        let next = CarriedLoad::from_inventory(inventory);
+    for (entity, inventory, mut carried, upgrade) in carriers.iter_mut() {
+        let next = upgrade
+            .and_then(|_| projects.as_ref())
+            .and_then(|projects| projects.carried_load_for_worker(entity))
+            .unwrap_or_else(|| CarriedLoad::from_inventory(inventory));
         if *carried != next {
             *carried = next;
         }
@@ -2559,6 +2592,9 @@ pub(super) fn postpone_construction_tree_search(
         advance_failed_tree_candidate(routine.cycle, routine.failed_tree_routes);
     routine.cycle = cycle;
     routine.failed_tree_routes = failed_routes;
+    if widened {
+        routine.rejected_trees.clear();
+    }
     routine.tree_retry_after = now + timber_retry_delay(retry_failures);
     routine.phase = ConstructionMaterialPhase::Seeking;
     widened
@@ -2668,7 +2704,7 @@ impl TreeWorkCandidates {
             .filter(|(_, spawn)| {
                 let distance =
                     Vec2::new(spawn.position.x - hut.x, spawn.position.z - hut.z).length();
-                (TREE_MIN_DISTANCE..=TREE_MAX_DISTANCE).contains(&distance)
+                distance <= TREE_MAX_DISTANCE
             })
             .map(|(index, _)| index)
             .collect();
@@ -2788,7 +2824,7 @@ fn tree_work_position(
         .and_then(|kind| derived.and_then(|library| library.by_kind.get(&kind)))
         .map_or(0.75, |shape| shape.horizontal_radius)
         * tree_spawn.scale;
-    let stand_distance = (tree_radius + VILLAGER_PROP_RADIUS + 0.25).max(2.4);
+    let stand_distance = (tree_radius + VILLAGER_PROP_RADIUS + 0.12).max(1.1);
 
     // The natural first choice faces back toward the workplace. If its route
     // fails, the next pass starts on a different side of the trunk instead of
@@ -2868,11 +2904,9 @@ pub(super) fn find_tree_for_cycle_cached(
 
 /// Find a deterministic, collision-safe top-up tree close to the carrier.
 ///
-/// The initial tree still comes from the settlement-wide salted rotation so
-/// simultaneous builders spread through the woodland. Once a builder already
-/// has a partial load, however, another long radial trip defeats the purpose of
-/// batching. Scan the same bounded 48-tree cache, exclude the trunk just used,
-/// and choose the nearest valid stand without generating props or doing A*.
+/// Scan a bounded local pool, excluding the trunk just used and approaches
+/// rejected by navigation. The salt only breaks equal-distance ties; it must
+/// never send an empty builder past nearby timber to a random distant tree.
 pub(super) fn find_nearby_tree_for_cycle_cached(
     cache: &mut TreeWorkCandidateCache,
     terrain: &WorldTerrain,
@@ -2881,6 +2915,8 @@ pub(super) fn find_nearby_tree_for_cycle_cached(
     hut: Vec3,
     carrier: Vec3,
     excluded_tree: Option<Vec3>,
+    rejected_trees: &[Vec3],
+    colliders: Option<&StaticColliders>,
     cycle: u32,
     salt: u32,
 ) -> TreeCandidateLookup {
@@ -2898,7 +2934,14 @@ pub(super) fn find_nearby_tree_for_cycle_cached(
         let order = (start + offset) % choice_count;
         let tree_index = candidates.trees[order];
         let tree = candidates.spawns[tree_index].position;
-        if excluded_tree.is_some_and(|excluded| tree.distance_squared(excluded) < 0.01) {
+        if colliders.and_then(|colliders| colliders.tree_is_present(tree)) == Some(false) {
+            continue;
+        }
+        if excluded_tree.is_some_and(|excluded| tree.distance_squared(excluded) < 0.01)
+            || rejected_trees
+                .iter()
+                .any(|rejected| tree.distance_squared(*rejected) < 0.01)
+        {
             continue;
         }
         let Some((tree, stand)) = tree_work_position(
@@ -3029,12 +3072,8 @@ fn unload_worker_output(
     carrier.amount(good) == 0
 }
 
-/// A completed workplace can advertise positions one schedule pass before its
-/// connector joins the public road graph. Those employees still have a real
-/// job, but they cannot begin an embodied shift yet. Release them to ordinary
-/// household/ambient behaviour for this day instead of leaving the whole
-/// roster motionless outside their homes until the connector finishes.
-fn defer_shift_until_workplace_access(commands: &mut Commands, employees: &[Entity], day: u32) {
+/// Release employees when the operating plan deliberately has no work today.
+fn release_workers_for_day(commands: &mut Commands, employees: &[Entity], day: u32) {
     for employee in employees {
         commands.entity(*employee).insert(WorkerOffDuty { day });
     }

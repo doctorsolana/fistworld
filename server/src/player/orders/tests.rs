@@ -279,7 +279,7 @@ fn five_battalions_expand_to_all_250_unique_slots_without_crossing_blocks() {
 
 #[test]
 fn an_obstructed_battalion_reaches_its_slots_through_the_real_mover() {
-    use crate::player::hero::{settle_villagers_without_targets, step_units};
+    use crate::player::hero::{settle_characters_without_targets, step_units};
     use shared::region::RegionCoord;
     use shared::spatial::{ObstacleEntry, SpatialObstacleGrid};
     use shared::terrain::WorldTerrain;
@@ -335,7 +335,7 @@ fn an_obstructed_battalion_reaches_its_slots_through_the_real_mover() {
         (
             advance_marches,
             step_units,
-            settle_villagers_without_targets,
+            settle_characters_without_targets,
         )
             .chain(),
     );

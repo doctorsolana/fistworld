@@ -593,6 +593,19 @@ pub struct HeroPermitResult {
     pub message: String,
 }
 
+/// The server derives the requesting owner from the authenticated connection.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HouseUpgradeRequest {
+    pub house: crate::components::BuildingId,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HouseUpgradeResponse {
+    pub house: crate::components::BuildingId,
+    pub accepted: bool,
+    pub message: String,
+}
+
 /// Server -> Client: whether this connection may use god mode.
 ///
 /// Sent once after the player's name is accepted. Purely capability discovery for the

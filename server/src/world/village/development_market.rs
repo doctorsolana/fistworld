@@ -43,7 +43,10 @@ pub struct DevelopmentMarketSignals {
     pub unproven_windmill: bool,
     pub unproven_bakery: bool,
     pub lumber_huts: usize,
-    pub houses: usize,
+    /// Beds in completed houses, using each house's actual physical level.
+    pub housing_capacity: usize,
+    /// Additional beds already approved but not yet physically available.
+    pub pending_housing_capacity: usize,
     pub wheat_stock: u32,
     pub flour_stock: u32,
     pub bread_stock: u32,
@@ -117,8 +120,8 @@ pub struct DevelopmentMarketSignals {
 
 impl DevelopmentMarketSignals {
     pub fn beds(self) -> usize {
-        self.houses
-            .saturating_mul(SettlementBuildingKind::House.housing_capacity() as usize)
+        self.housing_capacity
+            .saturating_add(self.pending_housing_capacity)
     }
 
     pub const fn recoverable(self, kind: SettlementBuildingKind) -> usize {
@@ -1081,13 +1084,45 @@ mod tests {
     use shared::economy::TOWN_HALL_STONE_REQUIRED;
 
     #[test]
+    fn housing_permits_use_real_completed_and_pending_beds() {
+        let needs_house = |signals| {
+            private_opportunities(signals, None, None, &SettlementPolicies::default())
+                .iter()
+                .any(|opportunity| opportunity.kind == SettlementBuildingKind::House)
+        };
+        let ground = DevelopmentMarketSignals {
+            residents: 8,
+            housing_capacity: 4,
+            ..Default::default()
+        };
+        assert!(needs_house(ground));
+        let approved = DevelopmentMarketSignals {
+            pending_housing_capacity: 4,
+            ..ground
+        };
+        assert_eq!(approved.housing_capacity, 4);
+        assert_eq!(approved.beds(), 8);
+        assert!(!needs_house(approved));
+        let completed = DevelopmentMarketSignals {
+            housing_capacity: 8,
+            ..ground
+        };
+        assert_eq!(completed.pending_housing_capacity, 0);
+        assert!(!needs_house(completed));
+        assert!(needs_house(DevelopmentMarketSignals {
+            residents: 9,
+            ..completed
+        }));
+    }
+
+    #[test]
     fn a_large_towns_food_shortage_keeps_the_same_per_capita_investment_signal() {
         let opportunity = |scale: u32, supplied: bool| {
             let residents = 24 * scale;
             let output = if supplied { residents } else { residents / 2 };
             let signals = DevelopmentMarketSignals {
                 residents,
-                houses: (6 * scale) as usize,
+                housing_capacity: (24 * scale) as usize,
                 livestock_farms: (2 * scale) as usize,
                 anticipated_meat_output: output * 3,
                 recent_meat_output: output * 2,
@@ -1141,7 +1176,7 @@ mod tests {
         };
         let demand = DevelopmentMarketSignals {
             residents: 100,
-            houses: 25,
+            housing_capacity: 100,
             farms: 4,
             livestock_farms: 5,
             ..Default::default()
@@ -1206,7 +1241,7 @@ mod tests {
     fn town_hall_stone_shortage_advertises_exactly_one_initial_quarry() {
         let shortage = DevelopmentMarketSignals {
             residents: 30,
-            houses: 8,
+            housing_capacity: 32,
             town_hall_stone_demand: TOWN_HALL_STONE_REQUIRED,
             ..Default::default()
         };
@@ -1247,7 +1282,7 @@ mod tests {
             residents: 40,
             farms: 6,
             windmills: 1,
-            houses: 10,
+            housing_capacity: 40,
             wheat_stock: 80,
             recent_wheat_output: 24,
             ..Default::default()
@@ -1278,7 +1313,7 @@ mod tests {
             residents: 40,
             farms: 2,
             windmills: 1,
-            houses: 2,
+            housing_capacity: 8,
             ..Default::default()
         };
         let economy = SettlementEconomy {
@@ -1308,7 +1343,7 @@ mod tests {
         };
         let hungry = DevelopmentMarketSignals {
             residents: 12,
-            houses: 3,
+            housing_capacity: 12,
             ..Default::default()
         };
         let initial = private_opportunities(hungry, Some(&economy), None, &policies)
@@ -1370,7 +1405,7 @@ mod tests {
             farms: 2,
             anticipated_wheat_output: 16,
             recent_wheat_output: 32,
-            houses: 4,
+            housing_capacity: 16,
             ..Default::default()
         };
         let local = private_opportunities(covered, Some(&economy), None, &policies)
@@ -1434,7 +1469,7 @@ mod tests {
             residents: 20,
             farms: 1,
             windmills: 1,
-            houses: 5,
+            housing_capacity: 20,
             ..Default::default()
         };
         let mill = private_opportunities(
@@ -1462,7 +1497,7 @@ mod tests {
             windmills: 2,
             flour_stock: 160,
             recent_flour_output: 16,
-            houses: 20,
+            housing_capacity: 80,
             ..Default::default()
         };
 
@@ -1493,7 +1528,7 @@ mod tests {
             bakeries: 1,
             flour_stock: 80,
             recent_flour_output: 16,
-            houses: 4,
+            housing_capacity: 16,
             ..Default::default()
         };
         let opportunities =
@@ -1518,7 +1553,7 @@ mod tests {
             farms: 2,
             windmills: 1,
             wheat_stock: 8,
-            houses: 10,
+            housing_capacity: 40,
             ..Default::default()
         };
         let covered_mill = private_opportunities(covered, None, None, &policies)
@@ -1586,7 +1621,7 @@ mod tests {
             farms: 3,
             windmills: 1,
             completed_windmills: 1,
-            houses: 10,
+            housing_capacity: 40,
             wheat_stock: 20,
             recent_wheat_output: 12,
             recent_windmill_sales: 2,
@@ -1678,7 +1713,7 @@ mod tests {
             recent_windmill_sales: 2,
             recent_windmill_profit: 100,
             lossmaking_windmills: 1,
-            houses: 5,
+            housing_capacity: 20,
             ..Default::default()
         };
 
@@ -1774,7 +1809,7 @@ mod tests {
         let policies = SettlementPolicies::default();
         let empty = DevelopmentMarketSignals {
             residents: 40,
-            houses: 10,
+            housing_capacity: 40,
             farms: 2,
             windmills: 1,
             ..Default::default()
@@ -1805,7 +1840,7 @@ mod tests {
             residents: 8,
             farms: 1,
             windmills: 1,
-            houses: 2,
+            housing_capacity: 8,
             wheat_stock: 30,
             ..Default::default()
         };
@@ -1846,7 +1881,7 @@ mod tests {
             residents: 80,
             farms: 3,
             fishers: 1,
-            houses: 20,
+            housing_capacity: 80,
             ..Default::default()
         };
         let economy = SettlementEconomy {
@@ -1872,7 +1907,7 @@ mod tests {
     fn mothballed_food_site_does_not_block_emergency_competition() {
         let signals = DevelopmentMarketSignals {
             residents: 30,
-            houses: 8,
+            housing_capacity: 32,
             recoverable_fishers: 1,
             ..Default::default()
         };

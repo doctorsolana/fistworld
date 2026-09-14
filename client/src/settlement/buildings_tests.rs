@@ -210,3 +210,113 @@ fn pending_upgrades_retain_house_and_hall_roots_and_wiring() {
         );
     }
 }
+
+#[test]
+fn house_extension_keeps_one_ground_claim_and_never_raises_a_second_house() {
+    use crate::settlement::construction::{
+        attach_construction_supply_visuals, raise_construction_visuals,
+        sync_construction_supply_visuals, ConstructionSupplyBundle,
+    };
+    use crate::settlement::house_upgrades::attach_house_upgrade_scaffolds;
+    use shared::components::{BuildingId, HouseUpgradeWorksite, PersonId};
+    use shared::economy::{Good, GoodsInventory};
+    let mut app = App::new();
+    app.add_plugins((
+        bevy::app::TaskPoolPlugin::default(),
+        bevy::asset::AssetPlugin::default(),
+    ))
+    .init_resource::<Assets<Mesh>>()
+    .init_resource::<Assets<StandardMaterial>>()
+    .init_resource::<Time>()
+    .insert_resource(flat_terrain())
+    .add_systems(
+        Update,
+        (
+            claim_building_ground,
+            attach_construction_supply_visuals,
+            attach_house_upgrade_scaffolds,
+            raise_construction_visuals,
+            sync_construction_supply_visuals,
+        ),
+    );
+    let home = app
+        .world_mut()
+        .spawn((
+            SettlementBuilding {
+                kind: SettlementBuildingKind::House,
+                settlement: "Extension".into(),
+                owner: None,
+                quality: 0.8,
+                workers: Vec::new(),
+            },
+            HouseAppearance::default(),
+            PlayerPosition(Vec3::ZERO),
+            PlayerRotation(0.0),
+        ))
+        .id();
+    let mut inventory = GoodsInventory::new(100);
+    inventory.add(Good::Wood, 8);
+    let site = app
+        .world_mut()
+        .spawn((
+            HouseUpgradeWorksite {
+                house: BuildingId(1),
+                owner: PersonId(2),
+                target: HouseAppearance {
+                    line: HouseLine::Cabin,
+                    level: HouseLevel::UpperStorey,
+                },
+                wood_required: 8,
+            },
+            ConstructionSite {
+                kind: SettlementBuildingKind::House,
+                settlement: "Extension".into(),
+                raising: false,
+                stand: Vec3::Z * 5.0,
+                rotation: 0.0,
+            },
+            PlayerPosition(Vec3::ZERO),
+            inventory,
+        ))
+        .id();
+    app.update();
+    assert!(app.world().get::<PlacedBuilding>(home).is_some());
+    let child_count = app.world().get::<Children>(site).unwrap().len();
+    assert!(
+        child_count > 8,
+        "real material and scaffold geometry attaches"
+    );
+    assert_eq!(
+        app.world().get::<Transform>(site).unwrap().translation,
+        Vec3::ZERO
+    );
+    assert!(app.world().get::<PlacedBuilding>(site).is_none());
+    assert!(app.world().get::<BuildingVisual>(site).is_none());
+    app.world_mut()
+        .get_mut::<ConstructionSite>(site)
+        .unwrap()
+        .raising = true;
+    app.update();
+    assert_eq!(
+        app.world().get::<Children>(site).unwrap().len(),
+        child_count,
+        "repeated review does not duplicate scaffold parts"
+    );
+    assert!(app.world().get::<PlacedBuilding>(site).is_none());
+    assert!(app.world().get::<BuildingVisual>(site).is_none());
+    assert!(app.world().get::<WorldAssetRoot>(site).is_none());
+    let visible_bundles = app
+        .world_mut()
+        .query::<(&ConstructionSupplyBundle, &Visibility)>()
+        .iter(app.world())
+        .filter(|(bundle, visibility)| bundle.site == site && **visibility == Visibility::Inherited)
+        .count();
+    assert_eq!(
+        visible_bundles, 8,
+        "recoverable Wood remains visible throughout work"
+    );
+    assert_eq!(
+        app.world().get::<HouseAppearance>(home).unwrap().level,
+        HouseLevel::Ground
+    );
+}

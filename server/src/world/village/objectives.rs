@@ -14,6 +14,8 @@ pub fn sync_character_objectives(
     people: Query<(
         Entity,
         &CharacterKind,
+        Option<&PlayerConstructionAssignment>,
+        Option<&crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
         (
             Option<&VillagerIntent>,
             Option<&MigrationCooldown>,
@@ -53,6 +55,8 @@ pub fn sync_character_objectives(
     for (
         entity,
         kind,
+        player_construction,
+        house_upgrade,
         (
             intent,
             migration_cooldown,
@@ -89,37 +93,57 @@ pub fn sync_character_objectives(
         ),
     ) in people.iter()
     {
-        if *kind != CharacterKind::Villager {
+        // Heroes use the same physical supply loop without civilian intent.
+        // Clear the explanation once a new player order cancels that work.
+        if *kind != CharacterKind::Villager && player_construction.is_none() {
+            if current_objective.is_some() || current_navigation.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<CharacterObjective>()
+                    .remove::<CharacterNavigationStatus>();
+            }
             continue;
         }
 
-        let objective = objective_for(
-            intent,
-            migration_cooldown,
-            queue,
-            immigration_departure,
-            meal,
-            permit,
-            construction,
-            road,
-            home,
-            shopping,
-            market_collection,
-            internal_delivery,
-            trade_route,
-            civic_hall_builder,
-            tavern_visit,
-            tavern_worker,
-            farmer,
-            fisher,
-            lumberjack,
-            quarry,
-            processing,
-            ambient,
-            off_duty,
-            work_status,
-            move_target.is_some(),
-        );
+        let objective = if let Some(upgrade) = house_upgrade {
+            if upgrade.carrying {
+                CharacterObjective::CarryingConstructionWood
+            } else if move_target.is_some() {
+                CharacterObjective::CollectingConstructionWood
+            } else {
+                CharacterObjective::ConstructingBuilding
+            }
+        } else if player_construction.is_some() && construction.is_none() {
+            CharacterObjective::ConstructingBuilding
+        } else {
+            objective_for(
+                intent,
+                migration_cooldown,
+                queue,
+                immigration_departure,
+                meal,
+                permit,
+                construction,
+                road,
+                home,
+                shopping,
+                market_collection,
+                internal_delivery,
+                trade_route,
+                civic_hall_builder,
+                tavern_visit,
+                tavern_worker,
+                farmer,
+                fisher,
+                lumberjack,
+                quarry,
+                processing,
+                ambient,
+                off_duty,
+                work_status,
+                move_target.is_some(),
+            )
+        };
         let navigation = if route_failed.is_some() {
             CharacterNavigationStatus::RouteBlocked
         } else if route_pending.is_some() {
@@ -220,12 +244,12 @@ fn objective_for(
             | ConstructionMaterialPhase::UnloadingAtHall { .. }
             | ConstructionMaterialPhase::CollectingFromStore { .. }
             | ConstructionMaterialPhase::WalkingToTree { .. }
-            | ConstructionMaterialPhase::Chopping { .. } => {
+            | ConstructionMaterialPhase::LeavingDeliveryAccess { .. } => {
                 CharacterObjective::FindingConstructionWood
             }
+            ConstructionMaterialPhase::Chopping { .. } => CharacterObjective::ChoppingTimber,
             ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
-            | ConstructionMaterialPhase::Delivering { .. }
-            | ConstructionMaterialPhase::LeavingDeliveryAccess { .. } => {
+            | ConstructionMaterialPhase::Delivering { .. } => {
                 CharacterObjective::CarryingConstructionWood
             }
         };
@@ -252,6 +276,7 @@ fn objective_for(
         return match shopping.phase {
             HouseholdShoppingPhase::GoingToMarket => CharacterObjective::GoingHouseholdShopping,
             HouseholdShoppingPhase::ReturningHome => CharacterObjective::ReturningWithHouseholdFood,
+            HouseholdShoppingPhase::ReturningToMarket => CharacterObjective::DeliveringMarketGoods,
         };
     }
     if let Some(collection) = market_collection {
@@ -326,5 +351,59 @@ fn objective_for(
         CharacterObjective::WalkingToDestination
     } else {
         CharacterObjective::Idle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commanded_hero_reports_supply_chop_build_and_clears_after_cancellation() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_character_objectives);
+        let site = app.world_mut().spawn_empty().id();
+        let hero = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Hero,
+                PlayerConstructionAssignment {
+                    site,
+                    settlement: site,
+                },
+                ConstructionMaterialRoutine::new(site),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(hero),
+            Some(&CharacterObjective::FindingConstructionWood)
+        );
+        app.world_mut()
+            .get_mut::<ConstructionMaterialRoutine>(hero)
+            .unwrap()
+            .phase = ConstructionMaterialPhase::Chopping {
+            tree: Vec3::ZERO,
+            seconds_left: 40.0,
+        };
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(hero),
+            Some(&CharacterObjective::ChoppingTimber)
+        );
+        app.world_mut()
+            .entity_mut(hero)
+            .remove::<ConstructionMaterialRoutine>();
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(hero),
+            Some(&CharacterObjective::ConstructingBuilding)
+        );
+        app.world_mut()
+            .entity_mut(hero)
+            .remove::<PlayerConstructionAssignment>();
+        app.update();
+        assert!(app.world().get::<CharacterObjective>(hero).is_none());
+        assert!(app.world().get::<CharacterNavigationStatus>(hero).is_none());
     }
 }

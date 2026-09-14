@@ -345,7 +345,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<GoodsInventory>()
             .unwrap()
             .amount(Good::Wood),
-        24
+        36
     );
     assert_eq!(
         world
@@ -353,7 +353,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<GoodsInventory>()
             .unwrap()
             .amount(Good::Wood),
-        21
+        9
     );
     assert_eq!(
         world.entity(porter).get::<CarriedLoad>().unwrap().good,
@@ -365,7 +365,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<GoodsInventory>()
             .unwrap()
             .amount(Good::Wood),
-        24
+        36
     );
     assert!(matches!(
         world
@@ -424,7 +424,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<GoodsInventory>()
             .unwrap()
             .amount(Good::Wood),
-        24,
+        36,
         "a retry must retain the physical load and reserved market cash"
     );
     app.world_mut()
@@ -477,7 +477,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<GoodsInventory>()
             .unwrap()
             .amount(Good::Wood),
-        24,
+        36,
     );
     app.world_mut()
         .entity_mut(porter)
@@ -500,7 +500,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<GoodsInventory>()
             .unwrap()
             .amount(Good::Wood),
-        24
+        36
     );
     assert!(world
         .entity(porter)
@@ -513,7 +513,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<MootMarket>()
             .unwrap()
             .seller_listed_units(shared::economy::MarketSeller::Business(seller), Good::Wood),
-        24
+        36
     );
     assert_eq!(
         world.get::<CompanyAccount>(company).unwrap().cash,
@@ -565,7 +565,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<GoodsInventory>()
             .unwrap()
             .amount(Good::Wood),
-        25,
+        37,
     );
     assert_eq!(
         app.world()
@@ -573,7 +573,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             .get::<MootMarket>()
             .unwrap()
             .seller_listed_units(shared::economy::MarketSeller::Business(seller), Good::Wood),
-        25,
+        37,
     );
 
     // A porter improves throughput but is not a hard dependency. With the

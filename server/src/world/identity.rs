@@ -11,9 +11,9 @@ use shared::components::CharacterKind;
 use shared::components::{
     AttachedTo, BuildingId, BuildingOf, CharacterName, CivicEmployment, CivicRole,
     CivicTradeContract, Company, CompanyId, CompanyTradeRoute, EmployedAt, FarmField, FishingPier,
-    LivesAt, LivestockPasture, MootAdministration, OwnedBy, PersonId, PlayerPosition, ResidentOf,
-    RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId, TradeContractId,
-    TradeRouteId, VillageRoad,
+    HouseholdId, LivesAt, LivestockPasture, MootAdministration, OwnedBy, PersonId, PlayerPosition,
+    ResidentOf, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
+    TradeContractId, TradeRouteId, VillageRoad,
 };
 
 use super::village::{HomeAssignment, VillagerIntent};
@@ -21,6 +21,7 @@ use super::village::{HomeAssignment, VillagerIntent};
 #[derive(Resource, Debug)]
 pub struct WorldIdAllocator {
     next_person: u64,
+    next_household: u64,
     next_settlement: u64,
     next_building: u64,
     next_company: u64,
@@ -188,6 +189,7 @@ impl Default for WorldIdAllocator {
     fn default() -> Self {
         Self {
             next_person: 1,
+            next_household: 1,
             next_settlement: 1,
             next_building: 1,
             next_company: 1,
@@ -200,6 +202,10 @@ impl Default for WorldIdAllocator {
 impl WorldIdAllocator {
     fn observe_person(&mut self, id: PersonId) {
         self.next_person = self.next_person.max(id.0.saturating_add(1));
+    }
+
+    fn observe_household(&mut self, id: HouseholdId) {
+        self.next_household = self.next_household.max(id.0.saturating_add(1));
     }
 
     fn observe_settlement(&mut self, id: SettlementId) {
@@ -225,6 +231,12 @@ impl WorldIdAllocator {
     pub(crate) fn person(&mut self) -> PersonId {
         let id = PersonId(self.next_person);
         self.next_person = self.next_person.saturating_add(1);
+        id
+    }
+
+    pub(crate) fn household(&mut self) -> HouseholdId {
+        let id = HouseholdId(self.next_household);
+        self.next_household = self.next_household.saturating_add(1);
         id
     }
 
@@ -274,6 +286,7 @@ pub fn assign_stable_world_ids(
     mut commands: Commands,
     mut allocator: ResMut<WorldIdAllocator>,
     existing_people: Query<&PersonId, Added<PersonId>>,
+    existing_households: Query<&HouseholdId, Added<HouseholdId>>,
     existing_settlements: Query<&SettlementId, Added<SettlementId>>,
     existing_buildings: Query<&BuildingId, Added<BuildingId>>,
     existing_companies: Query<&CompanyId, Added<CompanyId>>,
@@ -288,6 +301,9 @@ pub fn assign_stable_world_ids(
 ) {
     for id in existing_people.iter() {
         allocator.observe_person(*id);
+    }
+    for id in existing_households.iter() {
+        allocator.observe_household(*id);
     }
     for id in existing_settlements.iter() {
         allocator.observe_settlement(*id);
@@ -537,6 +553,18 @@ pub fn reconcile_stable_world_relationships(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn household_allocator_observes_existing_group_ids() {
+        let mut app = App::new();
+        app.init_resource::<WorldIdAllocator>()
+            .add_systems(Update, assign_stable_world_ids);
+        app.world_mut().spawn(HouseholdId(700));
+        app.update();
+        let mut ids = app.world_mut().resource_mut::<WorldIdAllocator>();
+        assert_eq!(ids.household(), HouseholdId(701));
+        assert_eq!(ids.household(), HouseholdId(702));
+    }
 
     #[test]
     fn allocator_observes_loaded_ids_and_never_reassigns_existing_people() {

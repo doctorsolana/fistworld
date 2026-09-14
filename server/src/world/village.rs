@@ -23,6 +23,7 @@ mod companies;
 mod construction;
 pub(crate) use construction::{level_construction_ground, publish_terrain_chunks};
 pub(crate) use planning::founding_civic_square;
+pub(crate) mod development_evidence;
 mod development_market;
 mod economy;
 mod employment;
@@ -46,6 +47,7 @@ pub mod strategic;
 mod tavern;
 mod trade_routes;
 mod trades;
+mod workplace_access;
 
 pub use businesses::{apply_business_events, review_business_management, BusinessEventQueue};
 pub use civic::{
@@ -74,9 +76,10 @@ pub use employment::{
     sync_company_porters,
 };
 pub use households::{
-    assign_households, ensure_households, run_household_schedules, run_household_shopping,
+    assign_households, ensure_house_appearances, ensure_households, run_household_schedules, run_household_shopping,
     update_household_budgets_and_pantries,
 };
+pub(crate) use households::HearthState;
 #[cfg(test)]
 pub(crate) use moot_services::PermitPickupRoutine;
 pub(crate) use moot_services::{
@@ -154,8 +157,8 @@ pub use trades::{
 };
 use trades::{
     build_clip_facing, exterior_door_clearance_position, find_nearby_tree_for_cycle_cached,
-    find_tree_for_cycle_cached, ground_distance, postpone_construction_store_route,
-    postpone_construction_tree_search, TreeCandidateLookup, TreeWorkCandidateCache,
+    ground_distance, postpone_construction_store_route, postpone_construction_tree_search,
+    TreeCandidateLookup, TreeWorkCandidateCache,
 };
 
 use bevy::ecs::system::SystemParam;
@@ -209,7 +212,7 @@ type PermitBusyFilter = Or<(
     With<TavernVisitRoutine>,
     With<TavernWorkerRoutine>,
     With<WorkplaceDoorTransit>,
-    With<PierTraversal>,
+    Or<(With<PierTraversal>, With<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>)>,
 )>;
 
 /// Terrain and collision truth needed while choosing a plot. Keeping these
@@ -241,6 +244,14 @@ pub struct PermitPlanningResources<'w, 's> {
             &'static shared::components::CivicHallUpgradeWorksite,
             &'static shared::components::BuildingOf,
             &'static GoodsInventory,
+        ),
+    >,
+    house_upgrades: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::HouseUpgradeWorksite,
+            &'static shared::components::BuildingOf,
         ),
     >,
     trade_contracts: Query<'w, 's, &'static shared::components::CivicTradeContract>,
@@ -370,12 +381,17 @@ const ARRIVAL_RADIUS: f32 = 12.0;
 /// Physical work-loop tuning. Prices decide whether a transfer can happen, but
 /// walking, work duration and carried capacity still decide when it happens.
 const WORK_REACH: f32 = 2.5;
+// Tree work must reach its collision-safe stand before the axe starts. The
+// broad building/service interaction radius makes people chop empty air.
+const TREE_WORK_REACH: f32 = 0.35;
 const INDOOR_REST_SECONDS: f32 = 4.0;
 // These are world-time work passes, not tiny transaction delays. Output rate is
 // physical: field quality controls how much labour makes one Wheat, and a
 // farmer works continuously until the shift ends instead of receiving a daily
 // production allowance.
-pub(crate) const CHOP_SECONDS: f32 = 40.0;
+// Five two-bundle interactions supply a first house in two minutes of axe
+// work. Professional woodcutters still produce more timber per work-second.
+pub(crate) const CHOP_SECONDS: f32 = 24.0;
 /// A worker preserves their job and carried cargo across transient commute
 /// failures, but one unreachable hut must not pin them outside a cabin for an
 /// entire day. A later shift can retry after roads or obstacles change.
@@ -388,7 +404,6 @@ const MAX_WORKPLACE_ROUTE_FAILURES: u8 = 3;
 const PERFECT_FIELD_SECONDS_PER_WHEAT: f32 = 120.0;
 const FARM_CARRY_BATCH_UNITS: u32 = 2;
 const FISH_CARRY_BATCH_UNITS: u32 = 2;
-const TREE_MIN_DISTANCE: f32 = 10.0;
 const TREE_MAX_DISTANCE: f32 = 120.0;
 const DOOR_REACH: f32 = 0.4;
 const DOOR_OPEN_SECONDS: f32 = 0.667;
@@ -570,6 +585,7 @@ pub struct ConstructionMaterialRoutine {
     /// scenery is not depleted yet, so top-up selection must explicitly avoid
     /// immediately harvesting the same visible trunk twice.
     last_tree: Option<Vec3>,
+    rejected_trees: Vec<Vec3>,
     failed_tree_routes: u8,
     failed_store_routes: u8,
     failed_delivery_routes: u8,
@@ -597,6 +613,7 @@ impl ConstructionMaterialRoutine {
             site,
             cycle: 0,
             last_tree: None,
+            rejected_trees: Vec::new(),
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -871,17 +888,30 @@ enum MarketCollectionPhase {
 /// households settle the identical transaction directly at their daily tick.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct HouseholdShoppingRoutine {
+    account: Entity,
+    household: shared::components::HouseholdId,
     home: Entity,
     hall: Entity,
     /// Hall or Marketplace entrance chosen when this shopping trip begins.
     counter: Vec3,
     phase: HouseholdShoppingPhase,
+    /// Only this trip's purchased goods belong to the shared household. Personal
+    /// cargo already on the shopper must not silently become pantry property.
+    cargo: [u32; Good::COUNT],
+}
+
+impl HouseholdShoppingRoutine {
+    pub(crate) fn has_cargo(&self) -> bool {
+        self.cargo.iter().any(|amount| *amount > 0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HouseholdShoppingPhase {
     GoingToMarket,
     ReturningHome,
+    /// A displaced household sells its provisions through the original exchange.
+    ReturningToMarket,
 }
 
 #[derive(Debug, Clone, Copy)]
