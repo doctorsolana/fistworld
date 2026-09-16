@@ -7,11 +7,12 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use shared::components::{
-    CharacterKind, Horse, PlayerBoat, PlayerPosition, Vessel, WreckedVessel, HORSE_CLEARANCE,
+    CharacterKind, CompanyShip, HORSE_CLEARANCE, Horse, PlayerBoat, PlayerPosition, Vessel,
+    WreckedVessel,
 };
 use shared::terrain::WorldTerrain;
 
-use super::{segment_is_water, water_at, CoastalVoyage};
+use super::{CoastalVoyage, segment_is_water, water_at};
 
 // A 4.27m by 1.80m dinghy fits within this conservative circle, with room
 // for the seated occupant and swell. Independent of the current hull heading.
@@ -25,7 +26,12 @@ const SLOT_DIRECTIONS: usize = 8;
 pub(crate) type ArrivalBodies<'w, 's> = Query<
     'w,
     's,
-    (&'static PlayerPosition, Has<CharacterKind>, Has<Horse>),
+    (
+        &'static PlayerPosition,
+        Has<CharacterKind>,
+        Has<Horse>,
+        Option<&'static CompanyShip>,
+    ),
     Or<(
         With<PlayerBoat>,
         With<Vessel>,
@@ -38,6 +44,7 @@ pub(crate) type ArrivalBodies<'w, 's> = Query<
 #[derive(Default)]
 pub(crate) struct ArrivalOccupancy {
     bodies: HashMap<IVec2, Vec<(Vec2, f32)>>,
+    largest_radius: f32,
 }
 
 impl ArrivalOccupancy {
@@ -45,8 +52,10 @@ impl ArrivalOccupancy {
     /// ticks do not scan world bodies or rebuild this spawn-only index.
     pub(crate) fn from_bodies(bodies: &ArrivalBodies) -> Self {
         let mut occupied = Self::default();
-        for (position, person, horse) in bodies.iter() {
-            let radius = if horse {
+        for (position, person, horse, ship) in bodies.iter() {
+            let radius = if let Some(ship) = ship {
+                super::clearance::WatercraftClearance::for_ship(ship.kind).radius
+            } else if horse {
                 HORSE_CLEARANCE
             } else if person {
                 BODY_RADIUS
@@ -60,6 +69,7 @@ impl ArrivalOccupancy {
 
     fn insert(&mut self, position: Vec2, radius: f32) {
         if position.is_finite() {
+            self.largest_radius = self.largest_radius.max(radius);
             self.bodies
                 .entry((position / BUCKET_SIZE).floor().as_ivec2())
                 .or_default()
@@ -73,8 +83,9 @@ impl ArrivalOccupancy {
 
     fn clear(&self, position: Vec2) -> bool {
         let cell = (position / BUCKET_SIZE).floor().as_ivec2();
-        (-1..=1).all(|x| {
-            (-1..=1).all(|y| {
+        let reach = ((ARRIVAL_HULL_RADIUS + self.largest_radius) / BUCKET_SIZE).ceil() as i32;
+        (-reach..=reach).all(|x| {
+            (-reach..=reach).all(|y| {
                 self.bodies
                     .get(&(cell + IVec2::new(x, y)))
                     .is_none_or(|bodies| {
@@ -96,12 +107,25 @@ impl ArrivalOccupancy {
         voyage: CoastalVoyage,
         seed: u64,
     ) -> Option<CoastalVoyage> {
+        self.vacant_voyage_matching(terrain, voyage, seed, |_| true)
+    }
+
+    /// Include the caller's hull/geometry check while considering each bounded
+    /// slot. Filtering only the first returned centre-water slot can hide safe
+    /// alternatives forever when that first slot clips a shore or map edge.
+    pub(crate) fn vacant_voyage_matching(
+        &self,
+        terrain: &WorldTerrain,
+        voyage: CoastalVoyage,
+        seed: u64,
+        mut accepts_start: impl FnMut(Vec2) -> bool,
+    ) -> Option<CoastalVoyage> {
         arrival_slots(voyage.start.xz(), seed).find_map(|point| {
             if !self.clear(point) {
                 return None;
             }
             let water = water_at(terrain, point)?;
-            if !segment_is_water(terrain, voyage.start.xz(), point) {
+            if !segment_is_water(terrain, voyage.start.xz(), point) || !accepts_start(point) {
                 return None;
             }
             Some(CoastalVoyage {
@@ -143,6 +167,33 @@ fn arrival_slots(start: Vec2, seed: u64) -> impl Iterator<Item = Vec2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_hull_slot_does_not_hide_a_later_safe_start() {
+        use super::super::clearance::{WaterNavigationGeometry, WatercraftClearance};
+        let terrain = WorldTerrain::default();
+        let voyage = super::super::coastal_voyages(&terrain, 0)[0];
+        let geometry = WaterNavigationGeometry::default();
+        let mut occupied = ArrivalOccupancy::default();
+        occupied.reserve(voyage.start);
+        let first = occupied
+            .vacant_voyage(&terrain, voyage, 7)
+            .unwrap()
+            .start
+            .xz();
+        let mut checked = 0;
+        let next = occupied
+            .vacant_voyage_matching(&terrain, voyage, 7, |point| {
+                checked += 1;
+                point.distance_squared(first) > 0.01
+                    && geometry.point_clear(&terrain, point, WatercraftClearance::DINGHY)
+            })
+            .expect("later hull-safe water slots must remain eligible after an earlier rejection");
+        assert_ne!(next.start.xz(), first);
+        assert!(next.start.distance(voyage.start) >= ARRIVAL_HULL_RADIUS * 2.);
+        assert!(geometry.point_clear(&terrain, next.start.xz(), WatercraftClearance::DINGHY));
+        assert!(checked >= 2 && checked <= 1 + SLOT_RINGS * SLOT_DIRECTIONS);
+    }
 
     #[test]
     fn full_arrival_neighborhood_refuses_instead_of_overlapping() {

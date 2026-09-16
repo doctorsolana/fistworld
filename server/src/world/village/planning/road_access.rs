@@ -1,13 +1,13 @@
 //! Geometric proof that an approved plot has a dry, unobstructed road connector.
 
 #[cfg(test)]
-use super::demand::processing_upstream_is_complete;
+use super::demand::processing_inputs_are_available;
 #[cfg(test)]
 use super::fishing::{advance_incremental_fishing_search, find_incremental_fishing_site};
 #[cfg(test)]
 use super::manual::validate_manual_plot;
 #[cfg(test)]
-use super::plots::{include_resumable_search_cursor, MAX_SETTLEMENT_SEARCH_RADIUS};
+use super::plots::{MAX_SETTLEMENT_SEARCH_RADIUS, include_resumable_search_cursor};
 use crate::world::village::*;
 
 pub(super) fn closest_point_on_segment(point: Vec2, start: Vec2, end: Vec2) -> Vec2 {
@@ -107,6 +107,17 @@ pub(crate) fn road_access_blockers_for_new_plot(
     result
 }
 impl RoadAccessBlocker {
+    pub(crate) fn for_port(port: shared::components::PortGeometry) -> Vec<Self> {
+        port.footprints()
+            .into_iter()
+            .map(|rect| Self {
+                center: rect.center,
+                half: rect.half_extents,
+                rotation: rect.yaw,
+            })
+            .collect()
+    }
+
     pub(crate) fn for_field(
         field: &shared::components::FarmField,
         position: Vec3,
@@ -496,25 +507,29 @@ mod road_access_tests {
     use super::*;
 
     #[test]
-    fn processing_permits_require_completed_upstream_industries() {
+    fn unquoted_processing_permits_require_completed_local_upstream_industries() {
         let mut completed = HashMap::new();
-        assert!(!processing_upstream_is_complete(
+        assert!(!processing_inputs_are_available(
             SettlementBuildingKind::Windmill,
-            &completed
+            &completed,
+            None
         ));
         completed.insert(SettlementBuildingKind::Farmstead, 1);
-        assert!(processing_upstream_is_complete(
+        assert!(processing_inputs_are_available(
             SettlementBuildingKind::Windmill,
-            &completed
+            &completed,
+            None
         ));
-        assert!(!processing_upstream_is_complete(
+        assert!(!processing_inputs_are_available(
             SettlementBuildingKind::Bakery,
-            &completed
+            &completed,
+            None
         ));
         completed.insert(SettlementBuildingKind::Windmill, 1);
-        assert!(processing_upstream_is_complete(
+        assert!(processing_inputs_are_available(
             SettlementBuildingKind::Bakery,
-            &completed
+            &completed,
+            None
         ));
     }
 
@@ -597,9 +612,11 @@ mod road_access_tests {
             route.len() > 4,
             "the blocked direct line must become a bend"
         );
-        assert!(route
-            .windows(2)
-            .all(|segment| !blocker.blocks_segment(segment[0], segment[1])));
+        assert!(
+            route
+                .windows(2)
+                .all(|segment| !blocker.blocks_segment(segment[0], segment[1]))
+        );
         let future_definition = kind.placement_definition();
         let future_shell = RoadAccessBlocker {
             center: future_definition.world_footprint_center(position, rotation),
@@ -724,15 +741,17 @@ mod road_access_tests {
         let mut clock = VillageClock::default();
 
         for _ in 0..rings {
-            assert!(find_incremental_fishing_site(
-                &terrain,
-                hall,
-                &occupied,
-                &[],
-                settlement,
-                &mut clock,
-            )
-            .is_none());
+            assert!(
+                find_incremental_fishing_site(
+                    &terrain,
+                    hall,
+                    &occupied,
+                    &[],
+                    settlement,
+                    &mut clock,
+                )
+                .is_none()
+            );
         }
 
         assert_eq!(
@@ -748,15 +767,10 @@ mod road_access_tests {
         );
         // The next permit decision returns from the exhausted-coast cache and
         // does not restart at the founding ring.
-        assert!(find_incremental_fishing_site(
-            &terrain,
-            hall,
-            &occupied,
-            &[],
-            settlement,
-            &mut clock,
-        )
-        .is_none());
+        assert!(
+            find_incremental_fishing_site(&terrain, hall, &occupied, &[], settlement, &mut clock,)
+                .is_none()
+        );
         assert_eq!(
             clock.site_search_radii.get(&(settlement, kind)).copied(),
             Some(maximum),
@@ -777,9 +791,11 @@ mod road_access_tests {
             clock.site_search_radii.get(&(settlement, kind)).copied(),
             Some((minimum + 4.0).min(maximum))
         );
-        assert!(!clock
-            .failed_fishing_terrain_versions
-            .contains_key(&settlement));
+        assert!(
+            !clock
+                .failed_fishing_terrain_versions
+                .contains_key(&settlement)
+        );
 
         clock.site_search_radii.insert((settlement, kind), maximum);
         assert!(!advance_incremental_fishing_search(&mut clock, settlement));

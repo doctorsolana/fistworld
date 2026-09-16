@@ -3,12 +3,13 @@
 use super::controls::{CompanyBranchPolicyButton, CompanyManagementButton, CompanySiteButton};
 use super::model::{CompanyBranchRecord, CompanySiteRecord};
 use super::widgets::{detail_button, signed_money};
-use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::business_management::BusinessManagementSelection;
+use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT, RADIUS};
 use bevy::prelude::*;
 use shared::components::CompanyId;
-use shared::economy::{format_money, BusinessSourcingMode};
+use shared::economy::{BusinessSourcingMode, format_money};
 use shared::protocol::HeroCompanyAction;
 
 pub(super) fn spawn_branch_card(
@@ -322,10 +323,10 @@ pub(super) fn spawn_site_ledger(
                 detail_button(
                     actions,
                     CompanyManagementButton {
-                        site: site.entity,
+                        target: BusinessManagementSelection::Site(site.entity),
                         company,
                     },
-                    "MANAGE SITE",
+                    "SITE SETTINGS",
                 );
             });
         });
@@ -370,6 +371,7 @@ pub(super) fn spawn_site_card(
                     ledger::reading(12.0),
                     TextColor(INK_MUTED),
                 ));
+                crate::ui::encyclopedia::person_links::spawn_site_people(copy, site.id);
             });
             row.spawn(ledger::body(
                 format!("Staff {} / {}", site.workers, site.enabled_positions),
@@ -387,10 +389,10 @@ pub(super) fn spawn_site_card(
                 detail_button(
                     actions,
                     CompanyManagementButton {
-                        site: site.entity,
+                        target: BusinessManagementSelection::Site(site.entity),
                         company,
                     },
-                    "MANAGE SITE",
+                    "SITE SETTINGS",
                 );
             });
         });

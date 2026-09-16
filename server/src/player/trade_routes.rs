@@ -11,10 +11,10 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender, NetworkTarget, RemoteId, Replicate};
 
 use shared::components::{
-    BuildingId, BuildingOf, CompanyId, CompanyLeadership, CompanyTradeRoute, Hero, OperatedBy,
-    PersonId, SettlementBuilding, SettlementBuildingKind, SettlementId, TradeRouteHistory,
-    TradeRouteId, TradeRouteMode, TradeRouteSchedule, TradeRouteStatus, TradeRouteStop,
-    TradeRouteStopAction, MAX_TRADE_ROUTE_STOPS,
+    BuildingId, BuildingOf, CompanyId, CompanyLeadership, CompanyShip, CompanyTradeRoute, Hero,
+    MAX_TRADE_ROUTE_STOPS, MaritimeTradeRoute, OperatedBy, PersonId, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, SettlementPort, ShipId, TradeRouteHistory, TradeRouteId,
+    TradeRouteMode, TradeRouteSchedule, TradeRouteStatus, TradeRouteStop, TradeRouteStopAction,
 };
 use shared::economy::{BusinessCondition, Good, PENNIES_PER_COIN};
 use shared::protocol::{
@@ -127,11 +127,14 @@ pub fn handle_hero_trade_route_orders(
         Option<&BusinessCondition>,
     )>,
     porters: Query<&CompanyPorter>,
+    ships: Query<(&ShipId, &CompanyShip)>,
+    ports: Query<&SettlementPort>,
     mut routes: Query<(
         Entity,
         &TradeRouteId,
         &mut CompanyTradeRoute,
         &mut TradeRouteSchedule,
+        Option<&MaritimeTradeRoute>,
     )>,
 ) {
     let land_access = LandTradeAccess::from_tags(land_networks.iter());
@@ -182,7 +185,7 @@ pub fn handle_hero_trade_route_orders(
                     } => {
                         if routes
                             .iter()
-                            .filter(|(_, _, route, _)| route.company == order.company)
+                            .filter(|(_, _, route, _, _)| route.company == order.company)
                             .count()
                             >= MAX_ROUTES_PER_COMPANY
                         {
@@ -198,7 +201,9 @@ pub fn handle_hero_trade_route_orders(
                         if !porters.iter().any(|porter| {
                             porter.company == order.company && porter.storage_hall == warehouse
                         }) {
-                            return Err("That Storage Hall must employ a Company Porter before opening a route.");
+                            return Err(
+                                "That Storage Hall must employ a Company Porter before opening a route.",
+                            );
                         }
                         validate_schedule(
                             &stops,
@@ -261,8 +266,8 @@ pub fn handle_hero_trade_route_orders(
                         automatic,
                         stops,
                     } => {
-                        let Some((_, _, mut route_state, mut schedule)) =
-                            routes.iter_mut().find(|(_, id, route_state, _)| {
+                        let Some((_, _, mut route_state, mut schedule, maritime)) =
+                            routes.iter_mut().find(|(_, id, route_state, _, _)| {
                                 **id == route && route_state.company == order.company
                             })
                         else {
@@ -283,20 +288,43 @@ pub fn handle_hero_trade_route_orders(
                                 "Wait for the caravan to return before changing its timetable.",
                             );
                         }
-                        validate_schedule(
-                            &stops,
-                            route_state.origin,
-                            &known_settlements,
-                            &regional_markets,
-                            &storage_settlements,
-                        )?;
-                        land_access.validate_schedule(&stops)?;
-                        let cargo_target = validate_trade_values(
-                            good,
-                            cargo_target,
-                            maximum_purchase_price,
-                            minimum_destination_price,
-                        )?;
+                        let cargo_target = if let Some(maritime) = maritime {
+                            let hull = ships
+                                .iter()
+                                .find(|(id, hull)| {
+                                    **id == maritime.ship && hull.company == order.company
+                                })
+                                .map(|(_, hull)| hull)
+                                .ok_or("That route's ship is unavailable.")?;
+                            crate::world::shipping::routes::validate_stops(
+                                &stops,
+                                route_state.origin,
+                                hull.kind,
+                                ports.iter().copied(),
+                            )?;
+                            super::maritime::validate_values(
+                                hull.kind,
+                                good,
+                                cargo_target,
+                                maximum_purchase_price,
+                                minimum_destination_price,
+                            )?
+                        } else {
+                            validate_schedule(
+                                &stops,
+                                route_state.origin,
+                                &known_settlements,
+                                &regional_markets,
+                                &storage_settlements,
+                            )?;
+                            land_access.validate_schedule(&stops)?;
+                            validate_trade_values(
+                                good,
+                                cargo_target,
+                                maximum_purchase_price,
+                                minimum_destination_price,
+                            )?
+                        };
                         if !schedule.replace(stops) {
                             return Err("Choose between two and eight valid stops.");
                         }
@@ -306,6 +334,9 @@ pub fn handle_hero_trade_route_orders(
                         route_state.maximum_purchase_price = maximum_purchase_price;
                         route_state.minimum_destination_price = minimum_destination_price;
                         route_state.automatic = automatic;
+                        // An explicit owner order takes this route out of NPC
+                        // management, including remote consignment repricing.
+                        route_state.autonomous_management = false;
                         if route_state.status != TradeRouteStatus::Mothballed {
                             route_state.status = if automatic {
                                 TradeRouteStatus::WaitingForPorter
@@ -316,15 +347,25 @@ pub fn handle_hero_trade_route_orders(
                         Ok("Caravan timetable updated.".to_string())
                     }
                     HeroTradeRouteAction::SetMothballed { route, mothballed } => {
-                        let Some((_, _, mut route_state, schedule)) =
-                            routes.iter_mut().find(|(_, id, route_state, _)| {
+                        let Some((route_entity, _, mut route_state, schedule, maritime)) =
+                            routes.iter_mut().find(|(_, id, route_state, _, _)| {
                                 **id == route && route_state.company == order.company
                             })
                         else {
                             return Err("That company route is unavailable.");
                         };
                         if route_state.mode != TradeRouteMode::Merchant {
-                            return Err("An active public delivery contract cannot be mothballed by the carrier.");
+                            return Err(
+                                "An active public delivery contract cannot be mothballed by the carrier.",
+                            );
+                        }
+                        if maritime.is_some() && mothballed
+                            && !matches!(route_state.status, TradeRouteStatus::Idle | TradeRouteStatus::Mothballed)
+                        {
+                            route_state.automatic = false;
+                            route_state.autonomous_management = false;
+                            commands.entity(route_entity).insert(crate::world::shipping::routes::StopAfterVoyage);
+                            return Ok("The ship will finish its delivery and return home, then stand down its crew.".to_string());
                         }
                         if route_state.assigned_caravaner.is_some()
                             || !matches!(
@@ -337,8 +378,25 @@ pub fn handle_hero_trade_route_orders(
                             );
                         }
                         if !mothballed {
-                            land_access.validate_schedule(schedule.stops())?;
+                            if let Some(maritime) = maritime {
+                                let hull = ships
+                                    .iter()
+                                    .find(|(id, hull)| {
+                                        **id == maritime.ship && hull.company == order.company
+                                    })
+                                    .map(|(_, hull)| hull)
+                                    .ok_or("That route's ship is unavailable.")?;
+                                crate::world::shipping::routes::validate_stops(
+                                    schedule.stops(),
+                                    route_state.origin,
+                                    hull.kind,
+                                    ports.iter().copied(),
+                                )?;
+                            } else {
+                                land_access.validate_schedule(schedule.stops())?;
+                            }
                         }
+                        route_state.autonomous_management = false;
                         route_state.status = if mothballed {
                             TradeRouteStatus::Mothballed
                         } else {
@@ -351,8 +409,8 @@ pub fn handle_hero_trade_route_orders(
                         })
                     }
                     HeroTradeRouteAction::DispatchOnce { route } => {
-                        let Some((_, _, mut route_state, schedule)) =
-                            routes.iter_mut().find(|(_, id, route_state, _)| {
+                        let Some((_, _, mut route_state, schedule, maritime)) =
+                            routes.iter_mut().find(|(_, id, route_state, _, _)| {
                                 **id == route && route_state.company == order.company
                             })
                         else {
@@ -366,7 +424,24 @@ pub fn handle_hero_trade_route_orders(
                         {
                             return Err("This caravan is not idle at its home warehouse.");
                         }
-                        land_access.validate_schedule(schedule.stops())?;
+                        if let Some(maritime) = maritime {
+                            let hull = ships
+                                .iter()
+                                .find(|(id, hull)| {
+                                    **id == maritime.ship && hull.company == order.company
+                                })
+                                .map(|(_, hull)| hull)
+                                .ok_or("That route's ship is unavailable.")?;
+                            crate::world::shipping::routes::validate_stops(
+                                schedule.stops(),
+                                route_state.origin,
+                                hull.kind,
+                                ports.iter().copied(),
+                            )?;
+                        } else {
+                            land_access.validate_schedule(schedule.stops())?;
+                        }
+                        route_state.autonomous_management = false;
                         route_state.status = TradeRouteStatus::WaitingForPorter;
                         Ok("One caravan circuit queued.".to_string())
                     }
@@ -406,14 +481,16 @@ mod tests {
         ];
         let markets: HashSet<_> = [HOME, AWAY].into_iter().collect();
         assert!(validate_schedule(&stops, HOME, &known(), &markets, &HashSet::new()).is_err());
-        assert!(validate_schedule(
-            &stops,
-            HOME,
-            &known(),
-            &markets,
-            &[HOME].into_iter().collect()
-        )
-        .is_ok());
+        assert!(
+            validate_schedule(
+                &stops,
+                HOME,
+                &known(),
+                &markets,
+                &[HOME].into_iter().collect()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -482,14 +559,16 @@ mod tests {
             },
         ];
         let markets: HashSet<_> = [HOME, AWAY].into_iter().collect();
-        assert!(validate_schedule(
-            &stops,
-            HOME,
-            &known(),
-            &markets,
-            &[HOME].into_iter().collect()
-        )
-        .is_ok());
+        assert!(
+            validate_schedule(
+                &stops,
+                HOME,
+                &known(),
+                &markets,
+                &[HOME].into_iter().collect()
+            )
+            .is_ok()
+        );
     }
 
     #[test]

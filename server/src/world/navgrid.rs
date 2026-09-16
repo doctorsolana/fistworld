@@ -60,16 +60,22 @@ pub fn sync_obstacle_grid(
     >,
     mut removed_yards: RemovedComponents<shared::components::HouseholdYard>,
     mut fields: crate::world::farm_boundaries::FarmBoundarySource,
+    ports: Query<&shared::components::SettlementPort>,
+    changed_ports: Query<(), Changed<shared::components::SettlementPort>>,
+    mut removed_ports: RemovedComponents<shared::components::SettlementPort>,
 ) {
     let fields_changed = fields.refresh();
     let walls_removed = removed_walls.read().count() > 0;
     let yards_removed = removed_yards.read().count() > 0;
+    let ports_removed = removed_ports.read().count() > 0;
     if state.last_building_version == Some(building_index.version)
         && changed_walls.is_empty()
         && !walls_removed
         && changed_yards.is_empty()
         && !yards_removed
         && !fields_changed
+        && changed_ports.is_empty()
+        && !ports_removed
     {
         return;
     }
@@ -117,6 +123,13 @@ pub fn sync_obstacle_grid(
     for obstacle in fields.obstacles() {
         grid.insert(obstacle);
     }
+    for port in &ports {
+        if port.built {
+            for obstacle in port.geometry.ground_obstacles() {
+                grid.insert(obstacle);
+            }
+        }
+    }
 
     if !buildings.is_empty() {
         trace!("Rebuilt spatial grid with {} obstacles", buildings.len());
@@ -126,7 +139,7 @@ pub fn sync_obstacle_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collision::building_index::{sync_building_spatial_index, BuildingSpatialIndex};
+    use crate::collision::building_index::{BuildingSpatialIndex, sync_building_spatial_index};
     use shared::building::BuildingType;
     use shared::building::{BuildingPosition, PlacedBuilding};
     use shared::components::SettlementBuildingKind;
@@ -158,9 +171,107 @@ mod tests {
     }
 
     #[test]
+    fn authored_port_solids_block_pawns_keep_walking_lane_and_follow_completion_removal() {
+        use shared::components::{
+            PORT_OBSTACLE_TYPE, PortGeometry, SettlementId, SettlementPort, ShipKind,
+        };
+        let mut app = navigation_app();
+        let yaw = 0.73_f32;
+        let sea = Vec3::new(-yaw.sin(), 0., -yaw.cos());
+        let shore = Vec3::new(80., 1., -50.);
+        let geometry = PortGeometry {
+            shore,
+            pier_end: shore + sea * 34.,
+            berth: shore + sea * 40. - Vec3::Y,
+            departure: shore + sea * 40. + Quat::from_rotation_y(yaw) * Vec3::X * 15. - Vec3::Y,
+            yaw: yaw - std::f32::consts::FRAC_PI_2,
+            maximum_ship: ShipKind::Cog,
+        };
+        let entity = app
+            .world_mut()
+            .spawn(SettlementPort {
+                settlement: SettlementId(1),
+                geometry,
+                built: false,
+            })
+            .id();
+        let office_start = geometry.project_asset_point(Vec3::new(-9., 1., 2.)).xz();
+        let office_end = geometry.project_asset_point(Vec3::new(-1., 1., 2.)).xz();
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<SpatialObstacleGrid>()
+                .segment_blocked_by_type(office_start, office_end, PORT_OBSTACLE_TYPE)
+        );
+        app.world_mut()
+            .get_mut::<SettlementPort>(entity)
+            .unwrap()
+            .built = true;
+        app.update();
+        let grid = app.world().resource::<SpatialObstacleGrid>();
+        assert!(grid.segment_blocked_by_type(office_start, office_end, PORT_OBSTACLE_TYPE));
+        for (first, last) in [
+            (Vec3::new(3., 1., 2.7), Vec3::new(6., 1., 2.7)),
+            (Vec3::new(2., 1., -0.25), Vec3::new(3.3, 1., -0.25)),
+        ] {
+            assert!(grid.segment_blocked_by_type(
+                geometry.project_asset_point(first).xz(),
+                geometry.project_asset_point(last).xz(),
+                PORT_OBSTACLE_TYPE
+            ));
+        }
+        // The complete 2.4 m central aisle remains available to pawn centres
+        // after the ordinary capsule radius is added to each actual solid.
+        for x in [-1.2, 0., 1.2] {
+            assert!(!grid.segment_blocked_by_type(
+                geometry.project_asset_point(Vec3::new(x, 1., 5.4)).xz(),
+                geometry.project_asset_point(Vec3::new(x, 1., -20.)).xz(),
+                PORT_OBSTACLE_TYPE,
+            ));
+        }
+        let version = grid.version;
+        for _ in 0..4 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().resource::<SpatialObstacleGrid>().version,
+            version
+        );
+        let shift = Vec3::X * 60.;
+        {
+            let mut port = app.world_mut().get_mut::<SettlementPort>(entity).unwrap();
+            port.geometry.shore += shift;
+            port.geometry.pier_end += shift;
+            port.geometry.berth += shift;
+            port.geometry.departure += shift;
+        }
+        app.update();
+        let grid = app.world().resource::<SpatialObstacleGrid>();
+        assert!(!grid.segment_blocked_by_type(office_start, office_end, PORT_OBSTACLE_TYPE));
+        assert!(grid.segment_blocked_by_type(
+            office_start + shift.xz(),
+            office_end + shift.xz(),
+            PORT_OBSTACLE_TYPE
+        ));
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<SettlementPort>();
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<SpatialObstacleGrid>()
+                .segment_blocked_by_type(
+                    office_start + shift.xz(),
+                    office_end + shift.xz(),
+                    PORT_OBSTACLE_TYPE
+                )
+        );
+    }
+
+    #[test]
     fn farm_fences_block_the_boundary_keep_gate_open_and_ignore_quality_churn() {
         use shared::components::{
-            FarmField, FarmFieldShape, PlayerPosition, PlayerRotation, FARM_FENCE_OBSTACLE_TYPE,
+            FARM_FENCE_OBSTACLE_TYPE, FarmField, FarmFieldShape, PlayerPosition, PlayerRotation,
         };
         let mut app = navigation_app();
         let origin = Vec3::new(-4.45, 0., 9.);
@@ -204,30 +315,32 @@ mod tests {
         );
         app.world_mut().get_mut::<PlayerPosition>(entity).unwrap().0 += Vec3::X * 50.;
         app.update();
-        assert!(!app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .segment_blocked_by_type(
-                Vec2::new(-10., 9.),
-                Vec2::new(-7., 9.),
-                FARM_FENCE_OBSTACLE_TYPE
-            ));
+        assert!(
+            !app.world()
+                .resource::<SpatialObstacleGrid>()
+                .segment_blocked_by_type(
+                    Vec2::new(-10., 9.),
+                    Vec2::new(-7., 9.),
+                    FARM_FENCE_OBSTACLE_TYPE
+                )
+        );
         app.world_mut().entity_mut(entity).remove::<FarmField>();
         app.update();
-        assert!(!app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .segment_blocked_by_type(
-                Vec2::new(40., 9.),
-                Vec2::new(43., 9.),
-                FARM_FENCE_OBSTACLE_TYPE
-            ));
+        assert!(
+            !app.world()
+                .resource::<SpatialObstacleGrid>()
+                .segment_blocked_by_type(
+                    Vec2::new(40., 9.),
+                    Vec2::new(43., 9.),
+                    FARM_FENCE_OBSTACLE_TYPE
+                )
+        );
     }
 
     #[test]
     fn yard_fences_track_transform_and_removal_while_the_entrance_stays_open() {
         use shared::components::{
-            HouseholdYard, PlayerPosition, PlayerRotation, YardSide, YardUse, YARD_OBSTACLE_TYPE,
+            HouseholdYard, PlayerPosition, PlayerRotation, YARD_OBSTACLE_TYPE, YardSide, YardUse,
         };
         let mut app = navigation_app();
         let entity = app
@@ -301,10 +414,11 @@ mod tests {
             })
             .id();
         app.update();
-        assert!(!app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .point_blocked(Vec2::new(-7.0, 0.0)));
+        assert!(
+            !app.world()
+                .resource::<SpatialObstacleGrid>()
+                .point_blocked(Vec2::new(-7.0, 0.0))
+        );
         app.world_mut()
             .get_mut::<FortificationSegment>(wall)
             .unwrap()
@@ -321,10 +435,11 @@ mod tests {
         );
         app.world_mut().despawn(wall);
         app.update();
-        assert!(!app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .point_blocked(Vec2::new(-7.0, 0.0)));
+        assert!(
+            !app.world()
+                .resource::<SpatialObstacleGrid>()
+                .point_blocked(Vec2::new(-7.0, 0.0))
+        );
     }
 
     #[test]
@@ -341,10 +456,11 @@ mod tests {
             ))
             .id();
         app.update();
-        assert!(app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .point_blocked(Vec2::ZERO));
+        assert!(
+            app.world()
+                .resource::<SpatialObstacleGrid>()
+                .point_blocked(Vec2::ZERO)
+        );
 
         app.world_mut()
             .get_mut::<BuildingPosition>(building)

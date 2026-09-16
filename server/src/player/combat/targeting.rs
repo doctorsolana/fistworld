@@ -2,7 +2,7 @@
 //! participate, but an army on another side of the map is never scanned locally.
 
 use super::hostility::{Allegiance, CombatIntents, HostilityIndex};
-use super::{AttackOrder, WarParty, ACQUISITION_RANGE, MELEE_REACH};
+use super::{ACQUISITION_RANGE, AttackOrder, MELEE_REACH, WarParty};
 use crate::player::hero::{MoveTarget, OfflineHero};
 use crate::player::orders::CommandStance;
 use bevy::prelude::*;
@@ -98,7 +98,7 @@ pub fn acquire_targets(
             Or<(With<CommandedBy>, With<WarParty>)>,
             Without<OfflineHero>,
             Without<AboardBoat>,
-            Without<crate::world::village::strategic::StrategicPerson>,
+            Without<shared::components::AboardShip>,
         ),
     >,
     identities: Query<&PersonId>,

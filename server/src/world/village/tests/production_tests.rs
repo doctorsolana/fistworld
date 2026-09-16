@@ -341,11 +341,12 @@ fn a_farmer_carries_wheat_only_to_the_farmstead_store() {
     app.update();
     assert!(app.world().entity(farmer).get::<FarmerRoutine>().is_some());
     assert!(app.world().entity(farmer).get::<WorkerOffDuty>().is_none());
-    assert!(app
-        .world()
-        .entity(farmer)
-        .get::<NavigationRouteFailed>()
-        .is_none());
+    assert!(
+        app.world()
+            .entity(farmer)
+            .get::<NavigationRouteFailed>()
+            .is_some()
+    );
     assert_eq!(
         app.world()
             .entity(farmer)
@@ -360,6 +361,11 @@ fn a_farmer_carries_wheat_only_to_the_farmstead_store() {
         .get_mut::<PlayerPosition>()
         .unwrap()
         .0 = farm_entrance;
+    // This production-only fixture poses the arrival; the shared recovery
+    // regression separately drives the real planner and mover at both warps.
+    // A stale failure clears only after the actual entrance is reached.
+    app.update();
+    assert!(app.world().get::<NavigationRouteFailed>(farmer).is_none());
     app.update();
 
     assert_eq!(
@@ -385,19 +391,20 @@ fn a_farmer_carries_wheat_only_to_the_farmstead_store() {
             .unwrap()
             .amount(Good::Wheat),
         0,
-        "the farmer must never bypass the Farmstead to sell at the hall"
+        "ordinary production deposits at the Farmstead; it does not sell remotely"
     );
     assert!(app.world().entity(farmer).get::<FarmerRoutine>().is_some());
     assert!(app.world().entity(farmer).get::<WorkerOffDuty>().is_none());
-    assert!(app
-        .world()
-        .entity(farmer)
-        .get::<MarketCollectionRoutine>()
-        .is_none());
+    assert!(
+        app.world()
+            .entity(farmer)
+            .get::<MarketCollectionRoutine>()
+            .is_none()
+    );
 
-    // A full workplace is real backpressure: the worker must keep even a
-    // partial last basket until a porter creates room. The shift may end only
-    // after that basket is physically deposited.
+    // This production-only fixture checks full-store backpressure: the worker
+    // retains even a partial last basket until capacity is available. Separate
+    // commerce regressions exercise the missing-porter overflow delivery path.
     let farm_wheat_before_backpressure = {
         let mut farm_entity = app.world_mut().entity_mut(farm);
         let mut farm_store = farm_entity.get_mut::<GoodsInventory>().unwrap();
@@ -456,6 +463,23 @@ fn a_farmer_carries_wheat_only_to_the_farmstead_store() {
     app.update();
     assert_eq!(
         app.world()
+            .get::<GoodsInventory>(farmer)
+            .unwrap()
+            .amount(Good::Wheat),
+        1,
+        "freeing store space cannot deliver a basket still out in the field"
+    );
+    assert_eq!(
+        app.world()
+            .get::<GoodsInventory>(farm)
+            .unwrap()
+            .amount(Good::Wheat),
+        farm_wheat_before_backpressure - 1
+    );
+    app.world_mut().get_mut::<PlayerPosition>(farmer).unwrap().0 = farm_entrance;
+    app.update();
+    assert_eq!(
+        app.world()
             .entity(farmer)
             .get::<GoodsInventory>()
             .unwrap()
@@ -469,15 +493,16 @@ fn a_farmer_carries_wheat_only_to_the_farmstead_store() {
             .unwrap()
             .amount(Good::Wheat),
         farm_wheat_before_backpressure,
-        "the space freed by a porter must receive the final basket exactly once, without another pathfinding loop"
+        "the space freed by a porter receives the final basket exactly once after physical arrival"
     );
     assert!(app.world().entity(farmer).get::<FarmerRoutine>().is_none());
     assert!(app.world().entity(farmer).get::<WorkerOffDuty>().is_some());
-    assert!(app
-        .world()
-        .entity(farmer)
-        .get::<FarmerHarvestProgress>()
-        .is_some());
+    assert!(
+        app.world()
+            .entity(farmer)
+            .get::<FarmerHarvestProgress>()
+            .is_some()
+    );
 }
 
 #[test]
@@ -720,7 +745,10 @@ fn completed_tree_interactions_keep_producing_without_a_daily_cap() {
                 chop_seconds: lumber_seconds_per_tree(0.9),
                 production_day: u32::MAX,
                 produced_today: 0,
-                phase: LumberjackPhase::Chopping,
+                phase: LumberjackPhase::Chopping {
+                    tree: Vec3::new(30.0, 2.0, -1.0),
+                    stand: Vec3::new(30.0, 2.0, 0.0),
+                },
             },
         ))
         .id();
@@ -744,8 +772,8 @@ fn completed_tree_interactions_keep_producing_without_a_daily_cap() {
         app.world()
             .entity(woodcutter)
             .get::<NavigationRouteFailed>()
-            .is_none(),
-        "a failed loaded return route must be retried instead of disabling the woodcutter"
+            .is_some(),
+        "a failed loaded return retains its failure until the bounded navigator retries"
     );
     assert_eq!(
         app.world()
@@ -761,6 +789,12 @@ fn completed_tree_interactions_keep_producing_without_a_daily_cap() {
         .get_mut::<PlayerPosition>()
         .unwrap()
         .0 = entrance;
+    app.update();
+    assert!(
+        app.world()
+            .get::<NavigationRouteFailed>(woodcutter)
+            .is_none()
+    );
     app.update();
     assert_eq!(
         app.world()
@@ -778,9 +812,13 @@ fn completed_tree_interactions_keep_producing_without_a_daily_cap() {
         .remove::<MoveTarget>();
     {
         let mut entity = app.world_mut().entity_mut(woodcutter);
+        entity.get_mut::<PlayerPosition>().unwrap().0 = Vec3::new(30.0, 2.0, 0.0);
         let mut routine = entity.get_mut::<LumberjackRoutine>().unwrap();
         routine.chop_seconds = lumber_seconds_per_tree(0.9);
-        routine.phase = LumberjackPhase::Chopping;
+        routine.phase = LumberjackPhase::Chopping {
+            tree: Vec3::new(30.0, 2.0, -1.0),
+            stand: Vec3::new(30.0, 2.0, 0.0),
+        };
     }
     app.update();
     let total_wood = app
@@ -835,14 +873,16 @@ fn completed_tree_interactions_keep_producing_without_a_daily_cap() {
             .amount(Good::Wood),
         0
     );
-    assert!(app
-        .world()
-        .entity(woodcutter)
-        .get::<LumberjackRoutine>()
-        .is_none());
-    assert!(app
-        .world()
-        .entity(woodcutter)
-        .get::<WorkerOffDuty>()
-        .is_some());
+    assert!(
+        app.world()
+            .entity(woodcutter)
+            .get::<LumberjackRoutine>()
+            .is_none()
+    );
+    assert!(
+        app.world()
+            .entity(woodcutter)
+            .get::<WorkerOffDuty>()
+            .is_some()
+    );
 }

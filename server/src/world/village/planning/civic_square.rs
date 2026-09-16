@@ -7,8 +7,8 @@ use shared::components::{SettlementCivicSquare, SettlementDefenses};
 
 use super::neighborhood::PlotNeighbor;
 use super::plots::PlannedPlotCandidate;
-use super::road_access::{road_access_blockers_for_plot, RoadAccessBlocker};
-use super::terrain::{slope_at, FREEBOARD};
+use super::road_access::{RoadAccessBlocker, road_access_blockers_for_plot};
+use super::terrain::{FREEBOARD, slope_at};
 use crate::world::village::*;
 
 type SurveySignature = (usize, usize, usize, u32);
@@ -217,12 +217,21 @@ pub fn ensure_civic_squares(
             .is_ok()
         });
         if let Some(square) = selected {
-            info!("Settlement '{}': civic square reserved at ({:.1}, {:.1}); Market at ({:.1}, {:.1})", settlement.name,
-                square.center.x, square.center.z, square.market_position.x, square.market_position.z);
+            info!(
+                "Settlement '{}': civic square reserved at ({:.1}, {:.1}); Market at ({:.1}, {:.1})",
+                settlement.name,
+                square.center.x,
+                square.center.z,
+                square.market_position.x,
+                square.market_position.z
+            );
             commands.entity(entity).insert(square);
             failed.remove(&entity);
         } else {
-            info!("Settlement '{}': no clear, dry civic square with a certified Market approach near the Hall; existing plots preserved", settlement.name);
+            info!(
+                "Settlement '{}': no clear, dry civic square with a certified Market approach near the Hall; existing plots preserved",
+                settlement.name
+            );
             failed.insert(entity, signature);
         }
     }
@@ -297,6 +306,7 @@ fn clears_permanent_hall(square: &SettlementCivicSquare, hall: Vec3, rotation: f
 }
 
 fn square_ground_is_suitable(terrain: &WorldTerrain, square: &SettlementCivicSquare) -> bool {
+    let bounds = terrain.generator.active_map_bounds();
     shared::components::minimum_rotated_rect_water_clearance(
         terrain,
         square.center,
@@ -310,7 +320,7 @@ fn square_ground_is_suitable(terrain: &WorldTerrain, square: &SettlementCivicSqu
                         square.half_extents * Vec2::new(x, z),
                         square.rotation,
                     );
-                shared::terrain::world_pos_in_bounds(sample.x, sample.y)
+                bounds.contains_xz(sample.x, sample.y)
                     && slope_at(terrain, sample.x, sample.y) <= 0.18
             })
         })
@@ -432,6 +442,80 @@ pub(super) fn civic_frontage_candidates(
 mod tests {
     use super::*;
     use shared::components::SettlementBuildingKind as Kind;
+
+    #[test]
+    fn plot_and_square_bounds_follow_their_world_and_include_the_full_footprint() {
+        use shared::map::{HeightmapData, LoadedMap, MapBounds, MapDefinition, MapTerrain};
+
+        let make_terrain = |half: f32| {
+            let bounds = MapBounds {
+                min: [-half; 2],
+                max: [half; 2],
+            };
+            WorldTerrain::from_loaded_map(LoadedMap {
+                definition: MapDefinition {
+                    map_id: "placement-bounds-test".into(),
+                    bounds,
+                    terrain: MapTerrain {
+                        heightmap: "unused-authored-fixture".into(),
+                        minimap: None,
+                        water_level: Some(0.0),
+                        height_min: 8.0,
+                        height_max: 8.0,
+                    },
+                    generated: None,
+                    player_spawn: None,
+                    objects: Vec::new(),
+                    blockers: Vec::new(),
+                },
+                heightmap: HeightmapData::new(bounds, 2, 2, vec![8.0; 4], Some(0.0)),
+                edits: default(),
+                terrain_deltas_by_chunk: default(),
+                objects_by_chunk: default(),
+                biome_field: None,
+                rivers: default(),
+                river_segments_by_chunk: default(),
+                content_hash: half.to_bits() as u64,
+                map_dir: default(),
+            })
+        };
+        let large = make_terrain(256.0);
+        let small = make_terrain(16.0);
+        // Loading another world must neither clip this world's valid fields
+        // nor grant the smaller world permission to build outside its map.
+        for kind in [Kind::House, Kind::Farmstead, Kind::FishermansHut] {
+            for rotation in [0.0, 0.7] {
+                let candidate = Vec3::new(80.0, 8.0, 0.0);
+                assert!(super::super::terrain::plot_fits_navigation_bounds(
+                    &large, kind, candidate, rotation
+                ));
+                assert!(!super::super::terrain::plot_fits_navigation_bounds(
+                    &small, kind, candidate, rotation
+                ));
+            }
+        }
+        assert!(!super::super::terrain::plot_fits_navigation_bounds(
+            &small,
+            Kind::House,
+            Vec3::new(15.0, 8.0, 0.0),
+            0.0,
+        ));
+        let mut square = SettlementCivicSquare {
+            center: Vec3::new(80.0, 8.0, 0.0),
+            half_extents: Vec2::splat(14.0),
+            rotation: 0.7,
+            market_position: Vec3::new(80.0, 8.0, 0.0),
+            market_rotation: 0.7,
+        };
+        assert!(square_ground_is_suitable(&large, &square));
+        assert!(!square_ground_is_suitable(&small, &square));
+        square.center = Vec3::new(0.0, 8.0, 0.0);
+        square.rotation = 0.0;
+        assert!(square_ground_is_suitable(&small, &square));
+        square.center.x = 12.0;
+        assert!(small.generator.active_map_bounds().contains_xz(12.0, 0.0));
+        assert!(!square_ground_is_suitable(&small, &square));
+    }
 
     fn found_square(hall_point: Vec2) -> (App, Entity, Vec3, SettlementCivicSquare) {
         let mut app = App::new();

@@ -42,21 +42,37 @@ world day. A previously recorded Tavern meal prevents a second ration being
 consumed at the daily boundary. Household foods are Bread, Meat, Fish and Flour;
 Flour abstracts home baking and raw Wheat is not a ration.
 
-Real market offers are ordered by price per ration. Equal prices use Bread,
-Meat, Fish, then Flour. Members contribute only enough cash to cover the funded
-purchase target. Unavailable goods can record demand without moving personal
-money into an unusable household purse.
+Real market offers are ordered by price per ration across individual listings.
+Equal prices use Bread, Meat, Fish, then Flour. A cheap first loaf does not make
+later expensive loaves preferable to cheaper fish. Members contribute only
+enough cash to cover the funded purchase target. Unavailable goods can record
+demand without moving personal money into an unusable household purse.
 
-The ordinary personal reserve is two coins per member. If the pantry cannot
-feed all current residents today, that reserve yields to food. Contributions
-are proportional to each member's available cash above the applicable reserve.
-Integer pennies use a deterministic largest-remainder allocation, with stable
-identity and day rotation resolving ties. A low `PersonId` no longer pays the
-entire household bill before other members contribute.
+The ordinary personal reserve is two days of the cheapest locally quoted
+household ration per member. Empty markets use observed sale prices, then
+founding prices, only as a reserve estimate. Contributions first use cash above
+that reserve, proportionally across members. Only today's missing food and
+hearth fuel can call on the protected savings; a one-meal shortage cannot
+expose those savings to a full multi-day stock-up. Integer pennies use a
+deterministic largest-remainder allocation, with stable identity and day
+rotation resolving ties.
 
-The account also targets four days of household fuel, purchased after food. Wood
+Purchases cover today's food, today's hearth fuel, the remaining three-day
+food reserve, then the remaining four-day fuel reserve. Today's food retains
+priority if it cannot be supplied. Restocking uses discretionary cash. Wood
 uses the existing physical production, market, seller payment and carrying
 systems; there is no separate free firewood supply.
+
+Unhoused residents and public relief use the same cheapest physical ready-meal
+selection; Flour still requires a home kitchen. When Emergency budget relief is
+enabled, the Hall may buy one real ration per unfed resident at the daily meal
+boundary. Its daily cash envelope is one third of discretionary treasury cash
+after civic wage arrears and the enacted payroll reserve. This emergency budget
+is separate from the ordinary food stockpile target, and does not require
+recent local production: available imported food can feed a poor resident.
+Personal purchases clear first; partial relief rotates recipient order by day.
+No available stock or no funded budget means no meal, and the ordinary seller
+payment and market fee still apply.
 
 ## Responsive provisioning
 
@@ -70,18 +86,26 @@ Pantry capacity limits both purchases and shortage claims: a full store does not
 report missing market supply or unaffordable food simply because it cannot accept
 more goods. A later review can buy after physical storage becomes available.
 
-Observed households select an available member to collect necessities through
+Outstanding demand keeps at most two bids per need: today's essentials and
+reserve restocking. Bids use the actual remaining purchasing budget, capped by
+the local offer or last-sale quote; a resident with ten pennies still expresses
+a ten-penny meal bid when a loaf costs twenty. Protected personal savings can
+back today's essentials, but never the reserve bid. Food and fuel share one
+budget, and reviews withdraw their original price slices before replacement,
+so retries cannot duplicate purchasing power or erase another household's bids.
+
+Households select an available member to collect necessities through
 the existing market service and physical carrying routine. Purchases leave the
 market inventory, pay the real seller and return as cargo to the dwelling.
-Ordinary unobserved households use the aggregate purchase path. Neither path
-creates money or substitutes a company's private stock for a paid market sale.
+The same physical trip runs in unobserved towns and on servers with no clients.
+It creates no money and cannot substitute a company's private stock for a paid market sale.
 
 If a dwelling disappears before purchase, the empty trip is cancelled. A loaded
 shopper returns the household's goods to the original Hall and consigns only
 that owned cargo under `MarketSeller::Household`. The existing Hall inventory
 bounds the deposit; a full Hall retains the goods with the carrier until storage
 opens, and personal cargo stays with the person. Finishing the return
-releases the shopper for normal work and simulation LOD. Consignment is not a
+releases the shopper for normal work. Consignment is not a
 refund: the household receives net proceeds only when another real purchase
 clears its listing, with the ordinary market fee. If the final member dies,
 remaining listings and queued proceeds follow the settlement estate. Developer

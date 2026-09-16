@@ -11,13 +11,21 @@ use crate::ui::encyclopedia::*;
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 use shared::components::{
-    SettlementBuildingKind, TradeRouteMode, TradeRouteStop, TradeRouteStopAction,
-    MAX_TRADE_ROUTE_STOPS,
+    MAX_TRADE_ROUTE_STOPS, SettlementBuildingKind, TradeRouteMode, TradeRouteStop,
+    TradeRouteStopAction,
 };
 use shared::economy::Good;
 use shared::protocol::{
-    HeroTradeRouteAction, HeroTradeRouteOrder, HeroTradeRouteResult, ReliableChannel,
+    HeroMaritimeAction, HeroMaritimeOrder, HeroTradeRouteAction, HeroTradeRouteOrder,
+    HeroTradeRouteResult, ReliableChannel,
 };
+
+#[derive(Resource, Default)]
+pub struct TradeRouteRequests(std::collections::VecDeque<RouteRequest>);
+struct RouteRequest {
+    company: shared::components::CompanyId,
+    draft: Option<TradeRouteDraft>,
+}
 
 pub(in crate::ui::encyclopedia) fn handle_trade_route_open_buttons(
     guard: Res<ClickGuard>,
@@ -73,6 +81,7 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_open_buttons(
         editor.draft = Some(TradeRouteDraft {
             company: *company_id,
             route: None,
+            ship: None,
             warehouse: warehouse.id,
             good: Good::Stone,
             cargo_target: 4,
@@ -115,6 +124,7 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_open_buttons(
         editor.draft = Some(TradeRouteDraft {
             company: button.company,
             route: Some(button.route),
+            ship: route.ship,
             warehouse: route.warehouse,
             good: route.good,
             cargo_target: route.cargo_target,
@@ -143,6 +153,7 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_quick_actions(
         &mut MessageSender<HeroTradeRouteOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
+    mut requests: Option<ResMut<TradeRouteRequests>>,
 ) {
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -167,6 +178,15 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_quick_actions(
                 mothballed: false,
             },
         };
+        if let Some(requests) = requests.as_deref_mut() {
+            if requests.0.len() >= 16 {
+                continue;
+            }
+            requests.0.push_back(RouteRequest {
+                company: button.company,
+                draft: None,
+            });
+        }
         sender.send::<ReliableChannel>(HeroTradeRouteOrder {
             company: button.company,
             action,
@@ -189,6 +209,12 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
         &mut MessageSender<HeroTradeRouteOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
+    mut maritime: Query<
+        &mut MessageSender<HeroMaritimeOrder>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+    mut maritime_requests: Option<ResMut<super::fleet::MaritimeRequests>>,
+    mut route_requests: Option<ResMut<TradeRouteRequests>>,
 ) {
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -221,6 +247,31 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
         match *action {
             TradeRouteEditorAction::Cancel => unreachable!(),
             TradeRouteEditorAction::Save => {
+                if let Some((ship, _)) = draft.ship.filter(|_| draft.route.is_none()) {
+                    if let (Ok(mut sender), Some(requests)) =
+                        (maritime.single_mut(), maritime_requests.as_deref_mut())
+                    {
+                        draft.pending = super::fleet::submit(
+                            &mut sender,
+                            requests,
+                            draft.company,
+                            HeroMaritimeAction::CreateRoute {
+                                ship,
+                                good: draft.good,
+                                cargo_target: draft.cargo_target,
+                                maximum_purchase_price: draft.maximum_purchase_price,
+                                minimum_destination_price: draft.minimum_destination_price,
+                                automatic: draft.automatic,
+                                stops: draft.stops.clone(),
+                            },
+                        );
+                    } else {
+                        editor.message = "Connect to the server before saving a route.".into();
+                        editor.success = false;
+                    }
+                    editor.draft = Some(draft);
+                    continue;
+                }
                 let action = if let Some(route) = draft.route {
                     HeroTradeRouteAction::Update {
                         route,
@@ -243,6 +294,17 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
                     }
                 };
                 if let Ok(mut sender) = clients.single_mut() {
+                    if let Some(requests) = route_requests.as_deref_mut() {
+                        if requests.0.len() >= 16 {
+                            editor.message = "Previous orders are still awaiting a reply.".into();
+                            editor.draft = Some(draft);
+                            continue;
+                        }
+                        requests.0.push_back(RouteRequest {
+                            company: draft.company,
+                            draft: Some(draft.clone()),
+                        });
+                    }
                     sender.send::<ReliableChannel>(HeroTradeRouteOrder {
                         company: draft.company,
                         action,
@@ -251,7 +313,7 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
                 }
             }
             TradeRouteEditorAction::PreviousWarehouse | TradeRouteEditorAction::NextWarehouse => {
-                if !warehouses.is_empty() && draft.route.is_none() {
+                if !warehouses.is_empty() && draft.route.is_none() && draft.ship.is_none() {
                     let direction = if *action == TradeRouteEditorAction::PreviousWarehouse {
                         -1
                     } else {
@@ -273,16 +335,14 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
                 };
                 let next = cycle_index(&Good::ALL, &draft.good, direction);
                 draft.good = Good::ALL[next];
-                let capacity =
-                    shared::economy::capacity::PORTER / draft.good.bulk_per_unit().max(1);
+                let capacity = draft.cargo_capacity();
                 draft.cargo_target = draft.cargo_target.min(capacity.max(1));
             }
             TradeRouteEditorAction::CargoDown(amount) => {
                 draft.cargo_target = draft.cargo_target.saturating_sub(amount).max(1);
             }
             TradeRouteEditorAction::CargoUp(amount) => {
-                let capacity =
-                    shared::economy::capacity::PORTER / draft.good.bulk_per_unit().max(1);
+                let capacity = draft.cargo_capacity();
                 draft.cargo_target = draft
                     .cargo_target
                     .saturating_add(amount)
@@ -315,7 +375,7 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
                 if draft.stops.len() < MAX_TRADE_ROUTE_STOPS {
                     let last = draft.stops.last().map(|stop| stop.settlement);
                     if let Some(settlement) = directory.settlements.iter().find(|settlement| {
-                        Some(settlement.id) != last && settlement.has_marketplace
+                        Some(settlement.id) != last && draft.accepts_settlement(settlement)
                     }) {
                         draft.stops.push(TradeRouteStop {
                             settlement: settlement.id,
@@ -351,7 +411,7 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
                     let ids: Vec<_> = directory
                         .settlements
                         .iter()
-                        .filter(|settlement| settlement.has_marketplace)
+                        .filter(|settlement| draft.accepts_settlement(settlement))
                         .map(|settlement| settlement.id)
                         .collect();
                     if ids.is_empty() {
@@ -364,27 +424,23 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
             TradeRouteEditorAction::PreviousStopAction(index)
             | TradeRouteEditorAction::NextStopAction(index) => {
                 if index < draft.stops.len() {
-                    const ACTIONS: [TradeRouteStopAction; 4] = [
-                        TradeRouteStopAction::Load,
-                        TradeRouteStopAction::Buy,
-                        TradeRouteStopAction::Unload,
-                        TradeRouteStopAction::Sell,
-                    ];
+                    let actions = draft.stop_actions();
                     let direction =
                         if matches!(action, TradeRouteEditorAction::PreviousStopAction(_)) {
                             -1
                         } else {
                             1
                         };
-                    let next = cycle_index(&ACTIONS, &draft.stops[index].action, direction);
-                    draft.stops[index].action = ACTIONS[next];
+                    let next = cycle_index(actions, &draft.stops[index].action, direction);
+                    draft.stops[index].action = actions[next];
                     if !directory.settlements.iter().any(|settlement| {
-                        settlement.id == draft.stops[index].settlement && settlement.has_marketplace
+                        settlement.id == draft.stops[index].settlement
+                            && draft.accepts_settlement(settlement)
                     }) {
                         if let Some(market) = directory
                             .settlements
                             .iter()
-                            .find(|settlement| settlement.has_marketplace)
+                            .find(|settlement| draft.accepts_settlement(settlement))
                         {
                             draft.stops[index].settlement = market.id;
                         }
@@ -398,16 +454,34 @@ pub(in crate::ui::encyclopedia) fn handle_trade_route_editor_buttons(
 
 pub(in crate::ui::encyclopedia) fn receive_trade_route_results(
     mut receivers: Query<&mut MessageReceiver<HeroTradeRouteResult>, With<crate::GameClient>>,
+    mut requests: ResMut<TradeRouteRequests>,
+    mut feedback: ResMut<super::model::CompanyPolicyFeedback>,
     mut editor: ResMut<TradeRouteEditorState>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for result in receiver.receive() {
-            editor.message = result.message;
-            editor.success = result.success;
-            if result.success {
-                editor.draft = None;
-            } else if let Some(draft) = editor.draft.as_mut() {
-                draft.pending = false;
+            let Some(request) = requests.0.pop_front() else {
+                continue;
+            };
+            feedback.company = Some(request.company);
+            feedback.message = result.message.clone();
+            feedback.success = result.success;
+            let matches = request.draft.as_ref().is_some_and(|sent| {
+                editor.draft.as_ref().is_some_and(|current| {
+                    current.pending
+                        && current.company == sent.company
+                        && current.route == sent.route
+                        && current.ship == sent.ship
+                })
+            });
+            if matches {
+                editor.message = result.message;
+                editor.success = result.success;
+                if result.success {
+                    editor.draft = None;
+                } else if let Some(draft) = editor.draft.as_mut() {
+                    draft.pending = false;
+                }
             }
         }
     }

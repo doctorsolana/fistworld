@@ -1,5 +1,5 @@
 //! Shared native text and hairline rules for company pages in the ledger.
-use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
 use crate::ui::ledger;
 use crate::ui::styles::{INK, INK_MUTED, PLATE_RULE_SOFT};
 use bevy::prelude::*;
@@ -75,7 +75,7 @@ pub(super) fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: 
                     ..default()
                 })
                 .with_children(|heading| {
-                    use crate::ui::hud::chrome::{icon, HudIcon};
+                    use crate::ui::hud::chrome::{HudIcon, icon};
                     let symbol = match title {
                         "Your Position" => HudIcon::Person,
                         "Today's Ledger" => HudIcon::Book,

@@ -4,11 +4,14 @@ use super::model::{
     CompanyDrilldownReturn, CompanyFilter, CompanyPolicyFeedback, SelectedCompany,
     TradeRouteEditorAction, TradeRouteQuickAction,
 };
+use crate::ui::business_management::{
+    BusinessFeedback, BusinessManagementPage, BusinessManagementSelection, BusinessManagementTarget,
+};
 use crate::ui::encyclopedia::*;
 use crate::ui::foundation::UiButtonStyle;
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
-use shared::components::{BuildingId, CompanyId, PersonId, TradeRouteId};
+use shared::components::{BuildingId, CompanyId, OperatedBy, TradeRouteId};
 use shared::protocol::{HeroCompanyAction, HeroCompanyOrder, HeroCompanyResult, ReliableChannel};
 
 #[derive(Component)]
@@ -60,11 +63,8 @@ pub struct CompanyRow(pub CompanyId);
 pub struct CompanySiteButton(pub BuildingId);
 
 #[derive(Component, Clone, Copy)]
-pub struct CompanyPersonButton(pub PersonId);
-
-#[derive(Component, Clone, Copy)]
 pub struct CompanyManagementButton {
-    pub site: Entity,
+    pub(crate) target: BusinessManagementSelection,
     pub company: CompanyId,
 }
 
@@ -135,6 +135,7 @@ pub(in crate::ui::encyclopedia) fn handle_company_site_buttons(
     mut selected_entry: ResMut<places::SelectedPlaceEntry>,
     mut return_to: ResMut<CompanyDrilldownReturn>,
     mut tab: ResMut<EncyclopediaTab>,
+    mut search: ResMut<search::EncyclopediaSearch>,
 ) {
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -155,30 +156,8 @@ pub(in crate::ui::encyclopedia) fn handle_company_site_buttons(
         selected_place.0 = Some(place);
         *selected_entry = places::SelectedPlaceEntry::Building(index);
         return_to.0 = selected_company.0;
+        search.clear_places();
         *tab = EncyclopediaTab::Places;
-    }
-}
-
-pub(in crate::ui::encyclopedia) fn handle_company_person_buttons(
-    guard: Res<ClickGuard>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    buttons: Query<(&Interaction, &CompanyPersonButton), Changed<Interaction>>,
-    people: Res<KnownPeople>,
-    mut selected: ResMut<SelectedPerson>,
-    mut tab: ResMut<EncyclopediaTab>,
-) {
-    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
-        return;
-    }
-    for (interaction, CompanyPersonButton(person)) in buttons.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        if people.records.iter().all(|record| record.id != *person) {
-            continue;
-        }
-        selected.0 = Some(*person);
-        *tab = EncyclopediaTab::People;
     }
 }
 
@@ -186,7 +165,8 @@ pub(in crate::ui::encyclopedia) fn handle_company_management_buttons(
     guard: Res<ClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
     buttons: Query<(&Interaction, &CompanyManagementButton), Changed<Interaction>>,
-    mut target: ResMut<crate::ui::business_management::BusinessManagementTarget>,
+    mut target: ResMut<BusinessManagementTarget>,
+    mut page: ResMut<BusinessManagementPage>,
     mut return_to: ResMut<crate::ui::business_management::BusinessManagementReturn>,
 ) {
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
@@ -195,7 +175,11 @@ pub(in crate::ui::encyclopedia) fn handle_company_management_buttons(
     for (interaction, button) in buttons.iter() {
         if *interaction == Interaction::Pressed {
             // Opens as a page inside this window; the window stays open.
-            target.0 = Some(button.site);
+            target.0 = Some(button.target);
+            *page = match button.target {
+                BusinessManagementSelection::Site(_) => BusinessManagementPage::Site,
+                BusinessManagementSelection::Company(_) => BusinessManagementPage::Company,
+            };
             return_to.0 = Some(button.company);
         }
     }
@@ -230,9 +214,25 @@ pub(in crate::ui::encyclopedia) fn handle_company_branch_policy_buttons(
 pub(in crate::ui::encyclopedia) fn receive_company_policy_results(
     mut receivers: Query<&mut MessageReceiver<HeroCompanyResult>, With<crate::GameClient>>,
     mut feedback: ResMut<CompanyPolicyFeedback>,
+    target: Res<BusinessManagementTarget>,
+    page: Res<BusinessManagementPage>,
+    sites: Query<&OperatedBy>,
+    mut management_feedback: ResMut<BusinessFeedback>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for result in receiver.receive() {
+            let company = match target.0 {
+                Some(BusinessManagementSelection::Company(id)) => Some(id),
+                Some(BusinessManagementSelection::Site(site)) => {
+                    sites.get(site).ok().map(|owner| owner.0)
+                }
+                None => None,
+            };
+            if company == Some(result.company) && *page == BusinessManagementPage::Company {
+                management_feedback.message = result.message.clone();
+                management_feedback.success = result.success;
+            }
+            feedback.company = Some(result.company);
             feedback.message = result.message;
             feedback.success = result.success;
         }

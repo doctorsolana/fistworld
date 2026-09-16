@@ -14,7 +14,8 @@ use std::collections::{BinaryHeap, VecDeque};
 
 use shared::components::{
     AboardBoat, CharacterActivity, CharacterMotion, CloudSeed, CommandedBy, PlayerBoat,
-    PlayerPosition, PlayerRotation, SettlementBuildingKind, Vessel, WorldTime, WreckedVessel,
+    PlayerPosition, PlayerRotation, SettlementBuildingKind, ShipKind, Vessel, WorldTime,
+    WreckedVessel,
 };
 use shared::protocol::{CreateHero, DisembarkBoat, SailToLanding};
 use shared::region::RegionCoord;
@@ -24,7 +25,13 @@ use crate::player::hero::{HeroIndex, MoveTarget, OfflineHero};
 
 pub(crate) mod arrival;
 use arrival::{ArrivalBodies, ArrivalOccupancy};
+pub(crate) mod berth;
+pub(crate) mod clearance;
+use clearance::{WaterNavigationGeometry, WatercraftClearance};
+mod navigation;
 mod session;
+pub use navigation::plan as plan_vessel_routes;
+pub(crate) use navigation::{TerrainDependencies, WaterPlanResult, WaterRouteCache, WaterSearch};
 use session::PausedPlayerVoyage;
 pub(crate) use session::{pause_account_voyage, release_dead_hero_boats, resume_account_voyage};
 
@@ -71,6 +78,50 @@ pub struct VesselRoute {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct VesselNavigation {
     hull_speed: f32,
+    clearance: WatercraftClearance,
+}
+
+/// Explicit failure lets physical shipping distinguish a blocked route from arrival.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct VesselRouteFailed {
+    pub goal: Vec2,
+}
+
+/// Only the water planner certifies whole corridors; movers cannot bless a
+/// manually replaced route after checking just its first movement step.
+#[derive(Component, Debug, Clone)]
+pub(crate) struct VesselRouteCertification {
+    pub(crate) revision: (u64, u32, u64),
+    pub(crate) clearance: WatercraftClearance,
+    pub(crate) position: Vec2,
+    terrain_reads: TerrainDependencies,
+}
+
+impl VesselRouteCertification {
+    pub(crate) fn new(
+        terrain: &WorldTerrain,
+        revision: (u64, u32, u64),
+        clearance: WatercraftClearance,
+        position: Vec2,
+        waypoints: &[Vec2],
+    ) -> Self {
+        let mut terrain_reads = TerrainDependencies::default();
+        terrain_reads.changed(terrain);
+        // The sampler extends the radius by half a diagonal sampling cell.
+        // A full extra sample step is conservative and covers every hull probe.
+        let radius = clearance.radius + clearance::SAMPLE_STEP;
+        let mut previous = position;
+        for point in waypoints {
+            terrain_reads.observe_segment(terrain, previous, *point, radius);
+            previous = *point;
+        }
+        Self {
+            revision,
+            clearance,
+            position,
+            terrain_reads,
+        }
+    }
 }
 
 /// What a queued route search is FOR. A plain sail ends on the water; a
@@ -89,15 +140,24 @@ pub enum VesselGoal {
 #[derive(Resource, Default)]
 pub struct VesselNavigationQueue {
     pending: VecDeque<(Entity, VesselGoal)>,
+    active: HashMap<Entity, navigation::ActiveVesselSearch>,
+    pub(crate) cache: navigation::WaterRouteCache,
 }
 
 impl VesselNavigationQueue {
     pub(crate) fn request(&mut self, vessel: Entity, goal: VesselGoal) {
+        self.active.remove(&vessel);
         self.pending.retain(|(queued, _)| *queued != vessel);
         self.pending.push_back((vessel, goal));
     }
 
-    fn take(&mut self, vessel: Entity) -> Option<VesselGoal> {
+    pub(crate) fn is_pending(&self, vessel: Entity) -> bool {
+        self.active.contains_key(&vessel)
+            || self.pending.iter().any(|(queued, _)| *queued == vessel)
+    }
+
+    pub(crate) fn take(&mut self, vessel: Entity) -> Option<VesselGoal> {
+        self.active.remove(&vessel);
         let index = self
             .pending
             .iter()
@@ -141,7 +201,17 @@ impl WreckExpiry {
 impl VesselNavigation {
     pub(crate) const DINGHY: Self = Self {
         hull_speed: BOAT_SPEED,
+        clearance: WatercraftClearance::DINGHY,
     };
+    pub(crate) const fn for_ship(kind: ShipKind) -> Self {
+        Self {
+            hull_speed: match kind {
+                ShipKind::Coaster => 6.0,
+                ShipKind::Cog => 4.5,
+            },
+            clearance: WatercraftClearance::for_ship(kind),
+        }
+    }
 }
 
 /// One ocean-connected approach discovered from a map edge. Natural
@@ -253,7 +323,6 @@ fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<Coastal
     water_at(terrain, start)?;
     let mut distance = COAST_SCAN_STEP;
     let mut shore = None;
-    let mut last_water = start;
     while distance <= max_scan {
         let point = start + inward * distance;
         if dry_at(terrain, point) {
@@ -265,7 +334,6 @@ fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<Coastal
         if water_at(terrain, point).is_none() {
             break;
         }
-        last_water = point;
         distance += COAST_SCAN_STEP;
     }
     let shore = shore?;
@@ -276,16 +344,25 @@ fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<Coastal
     let inward = (shore - start).normalize_or_zero();
     let voyage_start = shore - inward * START_OFFSHORE_DISTANCE;
     let water = water_at(terrain, voyage_start)?;
-    if !segment_is_water(terrain, start, voyage_start)
-        || !segment_is_water(terrain, voyage_start, last_water)
-    {
+    let clear = WaterNavigationGeometry::default();
+    // A wet center line can thread a shoal or narrow inlet that the actual
+    // hull cannot pass. Every arrival approach must connect to the outside
+    // ocean with the same swept clearance used by ordinary sailing.
+    if !clear.segment_clear(terrain, start, voyage_start, WatercraftClearance::DINGHY) {
+        return None;
+    }
+    let mooring = (0..=11).map(|i| shore - inward * i as f32).find(|p| {
+        shore.distance(*p) <= MAX_DISEMBARK_DISTANCE
+            && clear.point_clear(terrain, *p, WatercraftClearance::DINGHY)
+    })?;
+    if !clear.segment_clear(terrain, voyage_start, mooring, WatercraftClearance::DINGHY) {
         return None;
     }
     let yaw = f32::atan2(-inward.x, -inward.y);
     Some(CoastalVoyage {
         start: Vec3::new(voyage_start.x, water, voyage_start.y),
         yaw,
-        mooring: last_water,
+        mooring,
         landing: Vec3::new(shore.x, terrain.get_height(shore.x, shore.y), shore.y),
     })
 }
@@ -321,252 +398,25 @@ fn starting_voyage(terrain: &WorldTerrain, account: &str) -> Option<(Vec3, f32)>
         .map(|voyage| (voyage.start, voyage.yaw))
 }
 
-fn to_cell(point: Vec2) -> WaterCell {
-    WaterCell {
-        x: (point.x / NAV_CELL).round() as i32,
-        z: (point.y / NAV_CELL).round() as i32,
-    }
-}
-
-fn from_cell(cell: WaterCell) -> Vec2 {
-    Vec2::new(cell.x as f32 * NAV_CELL, cell.z as f32 * NAV_CELL)
-}
-
-fn nearest_connected_water_cell(terrain: &WorldTerrain, point: Vec2) -> Option<WaterCell> {
-    let center = to_cell(point);
-    let mut candidates = Vec::with_capacity(25);
-    for dx in -2..=2 {
-        for dz in -2..=2 {
-            let cell = WaterCell {
-                x: center.x + dx,
-                z: center.z + dz,
-            };
-            candidates.push((point.distance_squared(from_cell(cell)), cell));
-        }
-    }
-    candidates.sort_by(|(a, _), (b, _)| a.total_cmp(b));
-    candidates.into_iter().find_map(|(_, cell)| {
-        let cell_point = from_cell(cell);
-        (water_at(terrain, cell_point).is_some() && segment_is_water(terrain, point, cell_point))
-            .then_some(cell)
-    })
-}
-
 fn water_heuristic(a: WaterCell, b: WaterCell) -> f32 {
     let delta = Vec2::new((a.x - b.x) as f32, (a.z - b.z) as f32);
     delta.length()
 }
 
-/// Water-only A* with a direct-line fast path. It is intentionally computed on
-/// command, not every tick; even a long opening sail pays for one search.
+/// Synchronous completion is reserved for focused terrain fixtures. Runtime
+/// players and natural immigrants retain the same search between bounded slices.
+#[cfg(test)]
 pub(crate) fn water_route(terrain: &WorldTerrain, start: Vec2, goal: Vec2) -> Option<Vec<Vec2>> {
-    water_at(terrain, start)?;
-    water_at(terrain, goal)?;
-    if segment_is_water(terrain, start, goal) {
-        return Some(vec![goal]);
-    }
-
-    // A perfectly valid click can round to a grid centre just over the shore.
-    // Connect both exact endpoints to their nearest visible water cell rather
-    // than rejecting the order because of that discretization accident.
-    let start_cell = nearest_connected_water_cell(terrain, start)?;
-    let goal_cell = nearest_connected_water_cell(terrain, goal)?;
-    let mut open = BinaryHeap::new();
-    let mut came_from = HashMap::new();
-    let mut score = HashMap::new();
-    let mut closed = HashSet::new();
-    score.insert(start_cell, 0.0_f32);
-    open.push(OpenWaterCell {
-        cost: (water_heuristic(start_cell, goal_cell) * 1_000.0) as i32,
-        cell: start_cell,
-    });
-    let neighbours = [
-        (-1, -1),
-        (0, -1),
-        (1, -1),
-        (-1, 0),
-        (1, 0),
-        (-1, 1),
-        (0, 1),
-        (1, 1),
-    ];
-    let mut expanded = 0;
-    while let Some(OpenWaterCell { cell, .. }) = open.pop() {
-        if !closed.insert(cell) {
-            continue;
-        }
-        expanded += 1;
-        if expanded > NAV_MAX_EXPANDED {
-            return None;
-        }
-        if cell == goal_cell {
-            let mut cells = vec![cell];
-            let mut cursor = cell;
-            while let Some(previous) = came_from.get(&cursor).copied() {
-                cells.push(previous);
-                cursor = previous;
-            }
-            cells.reverse();
-            let mut route: Vec<Vec2> = cells.into_iter().skip(1).map(from_cell).collect();
-            route.push(goal);
-            // Remove unnecessary stair-steps without ever cutting across land.
-            let mut simplified = Vec::new();
-            let mut anchor = start;
-            let mut index = 0;
-            while index < route.len() {
-                let mut furthest = index;
-                for candidate in (index..route.len()).rev() {
-                    if segment_is_water(terrain, anchor, route[candidate]) {
-                        furthest = candidate;
-                        break;
-                    }
-                }
-                anchor = route[furthest];
-                simplified.push(anchor);
-                index = furthest + 1;
-            }
-            return Some(simplified);
-        }
-        let current_score = score.get(&cell).copied().unwrap_or(f32::INFINITY);
-        for (dx, dz) in neighbours {
-            let next = WaterCell {
-                x: cell.x + dx,
-                z: cell.z + dz,
-            };
-            if closed.contains(&next) {
-                continue;
-            }
-            let next_world = from_cell(next);
-            if water_at(terrain, next_world).is_none()
-                || !segment_is_water(terrain, from_cell(cell), next_world)
-            {
-                continue;
-            }
-            let step = if dx != 0 && dz != 0 {
-                std::f32::consts::SQRT_2
-            } else {
-                1.0
-            };
-            let tentative = current_score + step;
-            if tentative >= score.get(&next).copied().unwrap_or(f32::INFINITY) {
-                continue;
-            }
-            came_from.insert(next, cell);
-            score.insert(next, tentative);
-            open.push(OpenWaterCell {
-                cost: ((tentative + water_heuristic(next, goal_cell)) * 1_000.0) as i32,
-                cell: next,
-            });
-        }
-    }
-    None
+    navigation::complete_route(terrain, start, goal)
 }
 
-/// Choose where a boat should put its sailor ashore for an inland click.
-///
-/// Walks the straight line from the click TOWARD the boat and takes the first
-/// dry→water coast crossing — the beach facing the boat's side of the world,
-/// nearest the click. Each crossing yields a dry `landing` and a `mooring` a
-/// few metres off it; a crossing whose water the boat cannot actually reach
-/// (an inland lake, a too-narrow river) is skipped and the scan continues
-/// toward the boat, whose own water is reachable by definition.
+#[cfg(test)]
 pub(crate) fn find_landing(
     terrain: &WorldTerrain,
     boat: Vec2,
     click: Vec2,
 ) -> Option<(Vec2, Vec2, Vec<Vec2>)> {
-    let to_boat = boat - click;
-    let distance = to_boat.length();
-    if !distance.is_finite() || distance < 1.0e-3 {
-        return None;
-    }
-    let direction = to_boat / distance;
-    let steps = (distance / LANDING_SCAN_STEP).ceil() as usize;
-    let mut last_dry: Option<Vec2> = None;
-    let mut attempts = 0;
-    for step in 0..=steps {
-        let point = click + direction * (step as f32 * LANDING_SCAN_STEP).min(distance);
-        if water_at(terrain, point).is_none() {
-            // Dry or out of bounds; out-of-bounds also resets the crossing.
-            last_dry = dry_at(terrain, point).then_some(point);
-            continue;
-        }
-        let Some(landing) = last_dry else {
-            continue;
-        };
-        // A coast crossing. Moor a boat-length off the waterline when the
-        // water allows it, so the hull does not visibly ground on the beach.
-        let deeper = point + direction * LANDING_SCAN_STEP;
-        let mooring = if water_at(terrain, deeper).is_some()
-            && landing.distance(deeper) <= MAX_DISEMBARK_DISTANCE
-        {
-            deeper
-        } else {
-            point
-        };
-        attempts += 1;
-        if let Some(route) = water_route(terrain, boat, mooring) {
-            return Some((mooring, landing, route));
-        }
-        if attempts >= LANDING_ROUTE_ATTEMPTS {
-            return None;
-        }
-        // Unreachable water (lake, dead channel): keep scanning toward the
-        // boat for the next crossing.
-        last_dry = None;
-    }
-    None
-}
-
-/// Spend a fixed amount of route-planning work per server tick. Direct open
-/// water orders remain practically immediate, while complex coast searches
-/// are naturally spread out under fleet-scale command bursts.
-pub fn plan_vessel_routes(
-    mut commands: Commands,
-    terrain: Res<WorldTerrain>,
-    mut queue: ResMut<VesselNavigationQueue>,
-    vessels: Query<&PlayerPosition, With<Vessel>>,
-) {
-    let mut budget = NAV_ROUTES_PER_TICK;
-    while budget > 0 {
-        let Some((vessel, goal)) = queue.pending.pop_front() else {
-            break;
-        };
-        let Ok(position) = vessels.get(vessel) else {
-            continue;
-        };
-        let start = position.0.xz();
-        match goal {
-            VesselGoal::Sail(goal) => {
-                budget -= 1;
-                // A fresh sail order supersedes any landing still in flight.
-                commands.entity(vessel).remove::<PendingLanding>();
-                if let Some(waypoints) = water_route(&terrain, start, goal) {
-                    commands
-                        .entity(vessel)
-                        .insert(VesselRoute { waypoints, next: 0 });
-                }
-            }
-            VesselGoal::Land { click } => {
-                // A landing can spend several bounded searches; bill it as a
-                // whole tick of planning rather than letting one click stack
-                // multiple A* passes on top of a fleet's sail orders.
-                budget = 0;
-                if let Some((mooring, landing, waypoints)) = find_landing(&terrain, start, click) {
-                    commands.entity(vessel).insert((
-                        VesselRoute { waypoints, next: 0 },
-                        PendingLanding {
-                            mooring,
-                            landing,
-                            walk_to: click,
-                        },
-                    ));
-                } else {
-                    info!("No reachable landing for a shore order near {click:?}");
-                }
-            }
-        }
-    }
+    navigation::complete_landing(terrain, boat, click)
 }
 
 /// Normal (non-god) hero creation. Position is selected from the active map,
@@ -671,7 +521,9 @@ pub fn handle_create_hero_requests(
                 continue;
             }
             let boat = spawn_opening_boat(&mut commands, hero, &account, position, yaw);
-            info!("Opening voyage created for '{account}': hero={hero:?} boat={boat:?} at={position:?}");
+            info!(
+                "Opening voyage created for '{account}': hero={hero:?} boat={boat:?} at={position:?}"
+            );
         }
     }
 }
@@ -712,6 +564,8 @@ fn spawn_opening_boat(
 pub fn step_boats(
     mut commands: Commands,
     terrain: Res<WorldTerrain>,
+    geometry: Option<Res<WaterNavigationGeometry>>,
+    mut queue: ResMut<VesselNavigationQueue>,
     simulation_time: crate::world::simulation_time::SimulationTime,
     world_time: Query<&WorldTime>,
     cloud_seed: Query<&CloudSeed>,
@@ -720,6 +574,8 @@ pub fn step_boats(
             Entity,
             &mut VesselRoute,
             &VesselNavigation,
+            Option<&mut VesselRouteCertification>,
+            Option<&PendingLanding>,
             &mut PlayerPosition,
             &mut PlayerRotation,
             &mut RegionCoord,
@@ -737,10 +593,51 @@ pub fn step_boats(
         shared::wind::wind_seed_phase(cloud_seed.iter().next().map_or(0, |seed| seed.seed));
     let downwind = shared::wind::wind_direction(absolute_seconds, seed_phase);
     let (_, wind_speed) = shared::wind::wind_state(absolute_seconds, seed_phase);
-    for (entity, mut route, navigation, mut position, mut rotation, mut region, mut motion) in
-        boats.iter_mut()
+    let empty_geometry = WaterNavigationGeometry::default();
+    let geometry = geometry.as_deref().unwrap_or(&empty_geometry);
+    for (
+        entity,
+        mut route,
+        navigation,
+        mut certified,
+        landing,
+        mut position,
+        mut rotation,
+        mut region,
+        mut motion,
+    ) in boats.iter_mut()
     {
         let before = position.0;
+        let trusted = certified.as_deref_mut().is_some_and(|proof| {
+            let revision = geometry.revision(&terrain);
+            if proof.revision.0 != revision.0
+                || proof.revision.2 != revision.2
+                || proof.clearance != navigation.clearance
+                || proof.position.distance_squared(before.xz()) > 0.0001
+                || proof.terrain_reads.changed(&terrain)
+            {
+                return false;
+            }
+            proof.revision = revision;
+            true
+        });
+        if !trusted && !route.waypoints.is_empty() {
+            queue.request(
+                entity,
+                landing.map_or_else(
+                    || VesselGoal::Sail(*route.waypoints.last().unwrap()),
+                    |landing| VesselGoal::Land {
+                        click: landing.walk_to,
+                    },
+                ),
+            );
+            commands
+                .entity(entity)
+                .remove::<VesselRoute>()
+                .remove::<VesselRouteCertification>();
+            *motion = CharacterMotion::STATIONARY;
+            continue;
+        }
         let mut current = Vec2::new(before.x, before.z);
         let mut remaining_seconds = dt;
         let mut direction = Vec2::ZERO;
@@ -764,10 +661,14 @@ pub fn step_boats(
             };
             // World changes can invalidate an old route. Stop at the last
             // valid water point; never let a stale plan beach the vessel.
-            if water_at(&terrain, proposed).is_none()
-                || !segment_is_water(&terrain, current, proposed)
-            {
-                commands.entity(entity).remove::<VesselRoute>();
+            if water_at(&terrain, proposed).is_none() {
+                commands
+                    .entity(entity)
+                    .remove::<VesselRoute>()
+                    .remove::<VesselRouteCertification>()
+                    .insert(VesselRouteFailed {
+                        goal: *route.waypoints.last().unwrap(),
+                    });
                 if motion.is_moving() {
                     *motion = CharacterMotion::STATIONARY;
                 }
@@ -778,6 +679,9 @@ pub fn step_boats(
             if step + BOAT_ARRIVE_EPSILON >= distance {
                 route.next += 1;
             }
+        }
+        if let Some(proof) = certified.as_deref_mut() {
+            proof.position = current;
         }
         let water_y = water_at(&terrain, current).unwrap_or(before.y);
         let next = Vec3::new(current.x, water_y, current.y);
@@ -1358,7 +1262,12 @@ mod tests {
         world
             .resource_mut::<VesselNavigationQueue>()
             .request(boat, VesselGoal::Land { click });
-        world.run_system_once(plan_vessel_routes).unwrap();
+        for _ in 0..10_000 {
+            world.run_system_once(plan_vessel_routes).unwrap();
+            if world.get::<PendingLanding>(boat).is_some() {
+                break;
+            }
+        }
         let pending = *world
             .get::<PendingLanding>(boat)
             .expect("planning must store the landing intent");

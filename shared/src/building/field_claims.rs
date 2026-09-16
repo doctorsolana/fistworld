@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use crate::components::{FarmField, FarmFieldShape, PlayerPosition, PlayerRotation};
 use crate::terrain::ChunkCoord;
 
-use super::{clearance_zones_for_building, BuildZoneEntry, BuildingType};
+use super::{BuildZoneEntry, BuildingType, clearance_zones_for_building};
 
 /// Small soil/fence-edge clearance, not the rectangular planning/terrace envelope.
 pub const FARM_VEGETATION_MARGIN: f32 = 0.25;
@@ -44,9 +44,9 @@ impl FieldClaim {
             for x in x0..=x1 {
                 for z in z0..=z1 {
                     let coord = ChunkCoord::new(x, z);
-                    if coord.in_world_bounds() {
-                        chunks.insert(coord);
-                    }
+                    // Index the finite accepted footprint in full. The
+                    // terrain owner clips streaming against its own map.
+                    chunks.insert(coord);
                 }
             }
         };
@@ -421,9 +421,11 @@ mod tests {
         app.update();
         let observed = app.world().resource::<Observed>();
         assert!(observed.touched.contains(&home));
-        assert!(observed
-            .touched
-            .contains(&ChunkCoord::from_world_pos(moved)));
+        assert!(
+            observed
+                .touched
+                .contains(&ChunkCoord::from_world_pos(moved))
+        );
         assert!(!observed.index.contains_point(at.xz()));
         assert!(observed.index.contains_point(moved.xz()));
 
@@ -431,20 +433,22 @@ mod tests {
             .entity_mut(entity)
             .remove::<PlayerPosition>();
         app.update();
-        assert!(!app
-            .world()
-            .resource::<Observed>()
-            .index
-            .contains_point(moved.xz()));
+        assert!(
+            !app.world()
+                .resource::<Observed>()
+                .index
+                .contains_point(moved.xz())
+        );
         app.world_mut()
             .entity_mut(entity)
             .insert(PlayerPosition(moved));
         app.update();
-        assert!(app
-            .world()
-            .resource::<Observed>()
-            .index
-            .contains_point(moved.xz()));
+        assert!(
+            app.world()
+                .resource::<Observed>()
+                .index
+                .contains_point(moved.xz())
+        );
 
         app.world_mut().entity_mut(entity).remove::<FarmField>();
         app.update();

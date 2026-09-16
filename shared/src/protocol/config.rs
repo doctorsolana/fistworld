@@ -2,9 +2,9 @@ use std::time::Duration;
 
 pub const SERVER_PORT: u16 = 5000;
 pub const SERVER_ADDR: &str = "127.0.0.1";
-// Authenticated server-wide plaintext chat on its own ordered reliable channel.
+// Authoritative road bridges add a regional replicated walking surface.
 // This wire revision requires both client and server to restart together.
-pub const PROTOCOL_ID: u64 = 0x1234567890ABCE0A;
+pub const PROTOCOL_ID: u64 = 0x1234567890ABCE0F;
 pub const NETCODE_CLIENT_TIMEOUT_SECS: i32 = 10;
 pub const NETCODE_TOKEN_EXPIRE_SECS: i32 = 30;
 

@@ -135,9 +135,27 @@ pub(crate) fn ground_clear(
     colliders: Option<&crate::collision::library::StaticColliders>,
     derived: Option<&crate::collision::library::DerivedColliderLibrary>,
 ) -> bool {
+    ground_clear_with_bridges(a, b, radius, terrain, None, buildings, colliders, derived)
+}
+
+pub(crate) fn ground_clear_with_bridges(
+    a: Vec2,
+    b: Vec2,
+    radius: f32,
+    terrain: Option<&WorldTerrain>,
+    decks: Option<&crate::world::bridges::BridgeDecks>,
+    buildings: Option<&shared::spatial::SpatialObstacleGrid>,
+    colliders: Option<&crate::collision::library::StaticColliders>,
+    derived: Option<&crate::collision::library::DerivedColliderLibrary>,
+) -> bool {
     if radius == 0.0 {
         return crate::player::hero::navigation_segment_clear(a, b, buildings, colliders, derived)
-            && terrain.is_none_or(|t| crate::player::hero::terrain_segment_walkable(t, a, b));
+            && terrain.is_none_or(|t| {
+                decks.map_or_else(
+                    || crate::player::hero::terrain_segment_walkable(t, a, b),
+                    |decks| crate::world::bridges::segment_walkable(t, Some(decks), a, b, 0.0),
+                )
+            });
     }
     if buildings.is_some_and(|g| g.segment_blocked_with_clearance(a, b, radius))
         || colliders.zip(derived).is_some_and(|(c, d)| {
@@ -148,7 +166,18 @@ pub(crate) fn ground_clear(
     }
     let point_clear = |offset: Vec2| {
         terrain.is_none_or(|t| {
-            crate::player::hero::terrain_segment_walkable(t, a + offset, b + offset)
+            decks.map_or_else(
+                || crate::player::hero::terrain_segment_walkable(t, a + offset, b + offset),
+                |decks| {
+                    crate::world::bridges::segment_walkable(
+                        t,
+                        Some(decks),
+                        a + offset,
+                        b + offset,
+                        0.0,
+                    )
+                },
+            )
         })
     };
     point_clear(Vec2::ZERO)

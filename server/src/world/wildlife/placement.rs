@@ -3,10 +3,6 @@ use bevy::prelude::*;
 use shared::{components::*, region::RegionCoord, terrain::WorldTerrain};
 
 pub(crate) const MAX_HORSES: usize = 128;
-pub(crate) const MAX_ACTIVE_HORSES: usize = 32;
-pub(crate) const OBSERVATION_RADIUS: f32 = 180.0;
-#[derive(Component)]
-pub(crate) struct ActiveWildHorse;
 
 #[derive(Resource, Default)]
 struct HorseIds(u64);

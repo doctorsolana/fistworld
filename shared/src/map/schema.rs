@@ -450,33 +450,38 @@ mod tests {
     }
 
     #[test]
-    fn shipped_world_legacy_ids_all_have_a_canonical_destination() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../client/assets/maps/big_world/map.ron");
-        let text = std::fs::read_to_string(&path).expect("shipped world map exists");
-        let mut map: MapDefinition = ron::from_str(&text).expect("shipped world map parses");
-        let expected_changes = map
-            .objects
-            .iter()
-            .filter(|object| {
-                object
-                    .prop_kind()
-                    .is_some_and(|kind| object.kind != kind.id())
-            })
-            .count();
-        let changed = map.normalize_prop_ids();
-        assert_eq!(changed, expected_changes);
+    fn maintained_authored_maps_resolve_every_nonempty_prop_list() {
+        // The generated big_world recipe has no authored objects. Use real
+        // populated fixtures so this cannot pass without checking any props.
+        for map_id in ["battle_lab", "village_lab", "town_art_study"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../client/assets/maps/{map_id}/map.ron"));
+            let text = std::fs::read_to_string(&path).expect("maintained map exists");
+            let mut map: MapDefinition = ron::from_str(&text).expect("maintained map parses");
+            assert!(
+                !map.objects.is_empty(),
+                "{map_id} must exercise authored props"
+            );
+            map.validate()
+                .unwrap_or_else(|error| panic!("{map_id}: {error}"));
+            let scenes: Vec<_> = map
+                .objects
+                .iter()
+                .map(|object| object.resolved_scene_path().expect("validated prop"))
+                .collect();
 
-        for object in &map.objects {
-            if let Some(kind) = object.prop_kind() {
-                assert_eq!(object.kind, kind.id(), "legacy id survived normalization");
-            } else {
-                assert!(
-                    object.kind.ends_with(".glb") || object.kind.contains(".glb#"),
-                    "unregistered object id '{}' has no compatibility alias",
-                    object.kind
-                );
+            map.normalize_prop_ids();
+            for (object, scene) in map.objects.iter().zip(scenes) {
+                assert_eq!(object.resolved_scene_path(), Some(scene), "{map_id}");
+                if let Some(kind) = object.prop_kind() {
+                    assert_eq!(object.kind, kind.id(), "{map_id}: noncanonical prop id");
+                }
             }
+            assert_eq!(
+                map.normalize_prop_ids(),
+                0,
+                "{map_id}: normalization is idempotent"
+            );
         }
     }
 

@@ -177,6 +177,38 @@ impl SpatialObstacleGrid {
         false
     }
 
+    /// Whether an obstacle's expanded footprint reaches this point. This is
+    /// a conservative proximity hint, never collision permission. Query the
+    /// existing buckets directly so adaptive navigation does not allocate a
+    /// nearby-obstacle list for every explored cell.
+    pub fn point_near_obstacle(&self, point: Vec2, clearance: f32) -> bool {
+        let clearance = clearance.max(0.0);
+        let min = Self::world_to_cell(point - Vec2::splat(clearance));
+        let max = Self::world_to_cell(point + Vec2::splat(clearance));
+        for x in min.0..=max.0 {
+            for z in min.1..=max.1 {
+                let Some(indices) = self.cells.get(&(x, z)) else {
+                    continue;
+                };
+                for &index in indices {
+                    let obstacle = &self.obstacles[index];
+                    let basis = self.obstacle_inverse_basis[index];
+                    let delta = point - obstacle.center;
+                    let local = Vec2::new(
+                        delta.x * basis.cos - delta.y * basis.sin,
+                        delta.x * basis.sin + delta.y * basis.cos,
+                    );
+                    if local.x.abs() <= obstacle.half_extents.x + clearance
+                        && local.y.abs() <= obstacle.half_extents.y + clearance
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Check a whole movement segment against the exact rotated footprints.
     ///
     /// Sampling a line at fixed spacing is not stable under subdivision: a

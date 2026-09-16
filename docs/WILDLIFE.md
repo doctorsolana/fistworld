@@ -14,16 +14,14 @@ are not implemented.
   once. It rejects water, steep slopes, other biomes, blocked ground and overlapping
   horses. Initial vegetation checks use the same deterministic blocking props and
   baked radii as navigation, including chunks nobody has streamed yet.
-- `server/src/world/wildlife/behavior.rs` chooses at most 32 nearby animals across
-  all observers. Observation is reconsidered twice per real second with a 25 m
-  exit margin. Active horses alternate grazing, idle/alert poses and short walks
-  around their home patch. They certify ground segments and avoid other horses.
-- Distant horses have no movement, route search or behavioral updates. Their
-  small records remain on the server and still use ordinary region interest
-  filtering. This is deliberately a stationary offscreen wildlife policy, not
-  a claim that migration, feeding or breeding is being simulated strategically.
-- Inactive horses do not anchor collider streaming. Activation requests the
-  ordinary collider chunks; wandering waits for its current chunk to load.
+- `server/src/world/wildlife/behavior.rs` advances every wild horse through the
+  same grazing, idle/alert and short-walk routine regardless of client presence.
+  Ground certification and horse avoidance are identical on and off camera.
+- Every wild horse anchors a small, one-chunk-radius collider footprint; ridden
+  mounts retain the wider actor footprint. Movement waits for local blockers.
+  Camera positions do not participate in authoritative collider streaming.
+- Rendering and replication still use distance/interest budgets. Those budgets
+  cannot pause authoritative behavior or replace an animal's identity.
 
 Bootstrap permits at most 24 herds of four (96 initial horses), with a hard
 128-wild-horse world limit. Provisioned cavalry mounts have their own lifecycle

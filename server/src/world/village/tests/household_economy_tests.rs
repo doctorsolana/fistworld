@@ -20,7 +20,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(wallets: &[(PersonId, u64)], tactical: bool, fuel_days: u8) -> Self {
+    fn new(wallets: &[(PersonId, u64)], observed: bool, fuel_days: u8) -> Self {
         let mut app = village_test_app();
         app.add_systems(
             Update,
@@ -31,12 +31,14 @@ impl Fixture {
             )
                 .chain(),
         );
+        app.init_resource::<Time>()
+            .insert_resource(super::fixtures::dry_test_terrain());
         let region = RegionCoord::new(0, 0);
-        if tactical {
+        if observed {
             app.init_resource::<RegionRegistry>();
             app.world_mut()
                 .resource_mut::<RegionRegistry>()
-                .set_level_for_test(region, SimLevel::Tactical);
+                .set_observers_for_test(region, 1);
         }
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
         let hall = app
@@ -55,6 +57,18 @@ impl Fixture {
                 MootMarket::founding(),
             ))
             .id();
+        app.world_mut().spawn((
+            SettlementBuilding {
+                kind: SettlementBuildingKind::Market,
+                settlement: "Provisionford".into(),
+                owner: None,
+                quality: 1.0,
+                workers: Vec::new(),
+            },
+            BuildingOf(SETTLEMENT),
+            PlayerPosition(Vec3::new(10.0, 0.0, 0.0)),
+            PlayerRotation(0.0),
+        ));
         let resident_ids: Vec<_> = wallets.iter().map(|(id, _)| *id).collect();
         let account = app
             .world_mut()
@@ -114,6 +128,7 @@ impl Fixture {
                         Wallet::new(*cash),
                         WorkStatus::LookingForWork,
                         PlayerPosition(home_position),
+                        PlayerRotation(0.0),
                         region,
                         CharacterActivity::Idle,
                         GoodsInventory::new(shared::economy::capacity::VILLAGER),
@@ -159,6 +174,29 @@ impl Fixture {
         self.app.update();
     }
 
+    fn complete_trip(&mut self) {
+        use bevy::ecs::system::RunSystemOnce;
+        assert!(
+            !self.shoppers().is_empty(),
+            "the real provisioning system must assign the trip"
+        );
+        for _ in 0..2400 {
+            self.app
+                .world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+            self.app
+                .world_mut()
+                .run_system_once(crate::player::hero::step_units)
+                .unwrap();
+            self.app.update();
+            if self.shoppers().is_empty() {
+                return;
+            }
+        }
+        panic!("household shopper did not physically deliver the reserved basket");
+    }
+
     fn stock(&self, entity: Entity, good: Good) -> u32 {
         self.app
             .world()
@@ -200,6 +238,93 @@ impl Fixture {
 }
 
 #[test]
+fn positioned_household_without_a_region_registry_collects_and_delivers_its_basket() {
+    let mut fixture = Fixture::new(&[(PersonId(1), 1_000)], true, 0);
+    fixture.app.world_mut().remove_resource::<RegionRegistry>();
+    fixture.list(Good::Bread, 10, 20);
+    fixture.at_minute(0);
+    let shopper = fixture.people[0].1;
+    assert_eq!(fixture.shoppers(), vec![shopper]);
+    assert_eq!(fixture.stock(fixture.hall, Good::Bread), 10);
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 0);
+    assert_eq!(fixture.money(), 1_000);
+
+    let counter = fixture.app.world().get::<MoveTarget>(shopper).unwrap().0;
+    fixture
+        .app
+        .world_mut()
+        .get_mut::<PlayerPosition>(shopper)
+        .unwrap()
+        .0 = counter;
+    fixture.app.update();
+    let collected = fixture.stock(shopper, Good::Bread);
+    assert!(collected > 0);
+    assert_eq!(fixture.stock(fixture.hall, Good::Bread), 10 - collected);
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 0);
+    assert_eq!(fixture.money(), 1_000);
+
+    let home = fixture.app.world().get::<MoveTarget>(shopper).unwrap().0;
+    fixture
+        .app
+        .world_mut()
+        .get_mut::<PlayerPosition>(shopper)
+        .unwrap()
+        .0 = home;
+    fixture.app.update();
+    assert!(fixture.shoppers().is_empty());
+    assert_eq!(fixture.stock(shopper, Good::Bread), 0);
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), collected);
+    assert_eq!(fixture.money(), 1_000);
+}
+
+#[test]
+fn unobserved_household_uses_the_same_physical_basket_trip() {
+    let mut fixture = Fixture::new(&[(PersonId(1), 1_000)], false, 0);
+    fixture.list(Good::Bread, 10, 20);
+    fixture.at_minute(0);
+    assert_eq!(fixture.shoppers().len(), 1);
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 0);
+    assert_eq!(fixture.stock(fixture.hall, Good::Bread), 10);
+    fixture.complete_trip();
+    let bought = fixture.stock(fixture.home, Good::Bread);
+    assert!(bought > 0);
+    assert_eq!(fixture.stock(fixture.hall, Good::Bread), 10 - bought);
+    assert_eq!(fixture.money(), 1_000);
+    assert_eq!(
+        fixture
+            .app
+            .world()
+            .get::<Settlement>(fixture.hall)
+            .unwrap()
+            .treasury,
+        u64::from(bought) * 20
+    );
+}
+
+#[test]
+fn household_prefers_an_available_member_over_an_employed_member() {
+    let mut fixture = Fixture::new(&[(PersonId(1), 1_000), (PersonId(2), 1_000)], false, 0);
+    let available = fixture.people[0].1;
+    let employed = fixture.people[1].1;
+    fixture
+        .app
+        .world_mut()
+        .entity_mut(available)
+        .insert(WorkStatus::Chilling);
+    fixture
+        .app
+        .world_mut()
+        .entity_mut(employed)
+        .insert(WorkStatus::Employed);
+    fixture.list(Good::Bread, 10, 20);
+    fixture.at_minute(0);
+    assert_eq!(fixture.shoppers(), vec![available]);
+    assert!(fixture.app.world().get::<MoveTarget>(employed).is_none());
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 0);
+    assert_eq!(fixture.money(), 2_000);
+}
+
+#[test]
 fn same_day_restock_reaches_the_pantry_without_repeating_the_shortage_claim() {
     let mut fixture = Fixture::new(&[(PersonId(1), 1_000)], false, 0);
     fixture.at_minute(0);
@@ -234,6 +359,7 @@ fn same_day_restock_reaches_the_pantry_without_repeating_the_shortage_claim() {
     }
     fixture.list(Good::Bread, 3, 10);
     fixture.at_minute(80);
+    fixture.complete_trip();
 
     assert_eq!(
         fixture
@@ -261,16 +387,17 @@ fn same_day_restock_reaches_the_pantry_without_repeating_the_shortage_claim() {
 }
 
 #[test]
-fn a_household_buys_food_before_cheap_fuel_when_it_cannot_afford_both() {
+fn todays_food_and_warmth_precede_stockpiling_from_personal_savings() {
     let mut fixture = Fixture::new(&[(PersonId(1), 50)], false, 4);
     fixture.list(Good::Bread, 3, 20);
     fixture.list(Good::Wood, 2, 5);
     fixture.at_minute(0);
+    fixture.complete_trip();
 
-    assert_eq!(fixture.stock(fixture.home, Good::Bread), 2);
-    assert_eq!(fixture.stock(fixture.home, Good::Wood), 0);
-    assert_eq!(fixture.stock(fixture.hall, Good::Bread), 1);
-    assert_eq!(fixture.stock(fixture.hall, Good::Wood), 2);
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 1);
+    assert_eq!(fixture.stock(fixture.home, Good::Wood), 1);
+    assert_eq!(fixture.stock(fixture.hall, Good::Bread), 2);
+    assert_eq!(fixture.stock(fixture.hall, Good::Wood), 1);
     assert_eq!(fixture.money(), 50);
     assert_eq!(
         fixture
@@ -279,7 +406,7 @@ fn a_household_buys_food_before_cheap_fuel_when_it_cannot_afford_both() {
             .get::<Wallet>(fixture.people[0].1)
             .unwrap()
             .balance(),
-        10
+        25
     );
 }
 
@@ -337,6 +464,7 @@ fn pantry_capacity_blocks_claims_and_cash_until_storage_is_available() {
     assert_eq!(yard_store.add(Good::Stone, removed), 3);
     fixture.app.world_mut().spawn(yard_store);
     fixture.at_minute(100);
+    fixture.complete_trip();
 
     assert_eq!(fixture.stock(fixture.home, Good::Bread), 3);
     assert_eq!(fixture.stock(fixture.hall, Good::Bread), 0);
@@ -364,6 +492,7 @@ fn real_pantry_purchases_share_contributions_proportionally_and_conserve_coin() 
         let mut fixture = Fixture::new(&wallets, false, 0);
         fixture.list(Good::Bread, 6, 10);
         fixture.at_minute(0);
+        fixture.complete_trip();
         let mut balances: Vec<_> = fixture
             .people
             .iter()
@@ -380,7 +509,7 @@ fn real_pantry_purchases_share_contributions_proportionally_and_conserve_coin() 
             })
             .collect();
         balances.sort_by_key(|(id, _)| *id);
-        assert_eq!(balances, vec![(PersonId(1), 85), (PersonId(2), 255)]);
+        assert_eq!(balances, vec![(PersonId(1), 87), (PersonId(2), 253)]);
         assert_eq!(fixture.stock(fixture.home, Good::Bread), 6);
         assert_eq!(fixture.stock(fixture.hall, Good::Bread), 0);
         assert_eq!(
@@ -714,13 +843,48 @@ fn displaced_shopper_returns_owned_goods_and_the_household_is_paid_only_after_re
         .get_mut::<GoodsInventory>(fixture.hall)
         .unwrap()
         .resize_bulk_capacity(0);
-    fixture
-        .app
-        .world_mut()
-        .get_mut::<PlayerPosition>(shopper)
-        .unwrap()
-        .0 = counter;
-    fixture.app.update();
+    // A displaced household returns title to the Hall consignment counter,
+    // which need not be the public Market where it bought the basket.
+    let return_counter = fixture.app.world().get::<MoveTarget>(shopper).unwrap().0;
+    assert_ne!(return_counter, counter);
+    use bevy::ecs::system::RunSystemOnce;
+    for _ in 0..1200 {
+        fixture
+            .app
+            .world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        fixture
+            .app
+            .world_mut()
+            .run_system_once(crate::player::hero::step_units)
+            .unwrap();
+        fixture.app.update();
+        if ground_distance(
+            fixture
+                .app
+                .world()
+                .get::<PlayerPosition>(shopper)
+                .unwrap()
+                .0,
+            return_counter,
+        ) <= WORK_REACH
+        {
+            break;
+        }
+    }
+    assert!(
+        ground_distance(
+            fixture
+                .app
+                .world()
+                .get::<PlayerPosition>(shopper)
+                .unwrap()
+                .0,
+            return_counter
+        ) <= WORK_REACH
+    );
+
     assert_eq!(fixture.shoppers(), vec![shopper]);
     assert_eq!(fixture.stock(shopper, Good::Bread), 3);
     assert_eq!(fixture.stock(fixture.hall, Good::Bread), 0);
@@ -788,12 +952,14 @@ fn displaced_shopper_returns_owned_goods_and_the_household_is_paid_only_after_re
         .map(|fill| fill.gross - fill.market_fee)
         .sum();
     assert_eq!(purchase.trade.units, 3);
-    assert!(fixture
-        .app
-        .world_mut()
-        .get_mut::<Wallet>(buyer)
-        .unwrap()
-        .debit(purchase.trade.pennies));
+    assert!(
+        fixture
+            .app
+            .world_mut()
+            .get_mut::<Wallet>(buyer)
+            .unwrap()
+            .debit(purchase.trade.pennies)
+    );
     let removed = fixture
         .app
         .world_mut()
@@ -849,12 +1015,287 @@ fn losing_a_dwelling_before_purchase_releases_the_empty_shopping_trip() {
 
     assert!(fixture.shoppers().is_empty());
     assert!(fixture.app.world().get::<MoveTarget>(shopper).is_none());
-    assert!(fixture
-        .app
-        .world()
-        .get::<NavigationRoutePending>(shopper)
-        .is_none());
+    assert!(
+        fixture
+            .app
+            .world()
+            .get::<NavigationRoutePending>(shopper)
+            .is_none()
+    );
     assert_eq!(fixture.stock(shopper, Good::Bread), 0);
     assert_eq!(fixture.stock(fixture.hall, Good::Bread), 3);
     assert_eq!(fixture.money(), 1_000);
+}
+
+#[test]
+fn emergency_contributions_cover_one_meal_without_emptying_savings_into_restock() {
+    let mut fixture = Fixture::new(&[(PersonId(1), 60)], false, 0);
+    fixture.list(Good::Bread, 3, 20);
+    fixture.at_minute(0);
+    fixture.complete_trip();
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 1);
+    assert_eq!(
+        fixture
+            .app
+            .world()
+            .get::<Wallet>(fixture.people[0].1)
+            .unwrap()
+            .balance(),
+        40
+    );
+    fixture.at_minute(120);
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 1);
+    assert_eq!(fixture.money(), 60);
+}
+
+#[test]
+fn household_reserve_tracks_real_ration_prices() {
+    for (price, meals, cash) in [(10, 3, 220), (100, 1, 150)] {
+        let mut fixture = Fixture::new(&[(PersonId(1), 250)], false, 0);
+        fixture.list(Good::Bread, 3, price);
+        fixture.at_minute(0);
+        fixture.complete_trip();
+        assert_eq!(fixture.stock(fixture.home, Good::Bread), meals);
+        assert_eq!(
+            fixture
+                .app
+                .world()
+                .get::<Wallet>(fixture.people[0].1)
+                .unwrap()
+                .balance(),
+            cash
+        );
+        assert_eq!(fixture.money(), 250);
+    }
+}
+
+#[test]
+fn a_missing_meal_keeps_priority_over_today_fuel() {
+    let mut fixture = Fixture::new(&[(PersonId(1), 20)], false, 4);
+    fixture.list(Good::Bread, 3, 20);
+    fixture.list(Good::Wood, 2, 5);
+    fixture.at_minute(0);
+    fixture.complete_trip();
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 1);
+    assert_eq!(fixture.stock(fixture.home, Good::Wood), 0);
+    assert_eq!(fixture.money(), 20);
+}
+
+#[test]
+fn food_substitution_compares_each_remaining_listing_price() {
+    let mut fixture = Fixture::new(&[(PersonId(1), 1_000)], false, 0);
+    fixture.list(Good::Bread, 1, 10);
+    fixture.list(Good::Bread, 3, 100);
+    fixture.list(Good::Food, 3, 20);
+    fixture.at_minute(0);
+    fixture.complete_trip();
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 1);
+    assert_eq!(fixture.stock(fixture.home, Good::Food), 2);
+    assert_eq!(
+        fixture
+            .app
+            .world()
+            .get::<Wallet>(fixture.people[0].1)
+            .unwrap()
+            .balance(),
+        950
+    );
+    assert_eq!(fixture.money(), 1_000);
+}
+
+#[test]
+fn poor_household_meal_bid_survives_retries_without_pledging_reserve_money() {
+    let mut fixture = Fixture::new(&[(PersonId(1), 10)], false, 0);
+    fixture.list(Good::Bread, 3, 20);
+    for minute in [0, 20, 40] {
+        fixture.at_minute(minute);
+        let day = fixture
+            .app
+            .world()
+            .get::<MootMarket>(fixture.hall)
+            .unwrap()
+            .pool(Good::Bread)
+            .day;
+        assert_eq!(day.unaffordable_units, 3);
+        assert_eq!(day.funded_unmet_at(10), 1);
+        assert_eq!(day.funded_unmet_at(11), 0);
+        assert_eq!(fixture.stock(fixture.home, Good::Bread), 0);
+        assert_eq!(fixture.money(), 10);
+        assert_eq!(
+            fixture
+                .app
+                .world()
+                .get::<HouseholdEconomy>(fixture.account)
+                .unwrap()
+                .pennies,
+            0
+        );
+    }
+    fixture
+        .app
+        .world_mut()
+        .get_mut::<Wallet>(fixture.people[0].1)
+        .unwrap()
+        .credit(20);
+    fixture.at_minute(60);
+    fixture.complete_trip();
+    assert_eq!(fixture.stock(fixture.home, Good::Bread), 1);
+    assert_eq!(fixture.stock(fixture.hall, Good::Bread), 2);
+    assert_eq!(
+        fixture
+            .app
+            .world()
+            .get::<Wallet>(fixture.people[0].1)
+            .unwrap()
+            .balance(),
+        10
+    );
+    assert_eq!(
+        fixture
+            .app
+            .world()
+            .get::<MootMarket>(fixture.hall)
+            .unwrap()
+            .pool(Good::Bread)
+            .day
+            .funded_unmet_units,
+        0
+    );
+    assert_eq!(fixture.money(), 30);
+}
+
+#[test]
+fn actual_observer_interest_cannot_change_physical_household_shopping() {
+    use crate::net::input::ClientInputs;
+    use crate::world::regions::{ClientInterest, update_client_interest, update_region_observers};
+    use bevy::ecs::system::RunSystemOnce;
+    use lightyear::prelude::{ControlledBy, Lifetime, PeerId};
+
+    let mut outcomes = Vec::new();
+    for mode in 0..3 {
+        let mut fixture = Fixture::new(&[(PersonId(1), 1_000)], false, 0);
+        fixture
+            .app
+            .init_resource::<RegionRegistry>()
+            .init_resource::<ClientInterest>()
+            .init_resource::<ClientInputs>();
+        fixture
+            .app
+            .world_mut()
+            .resource_mut::<RegionRegistry>()
+            .set_observers_for_test(RegionCoord::new(0, 0), 0);
+        // Equal shells keep entity-derived scheduling identical across cases.
+        let owner = fixture.app.world_mut().spawn_empty().id();
+        let camera = fixture
+            .app
+            .world_mut()
+            .spawn((
+                PlayerPosition(Vec3::ZERO),
+                ControlledBy {
+                    owner,
+                    lifetime: Lifetime::default(),
+                },
+            ))
+            .id();
+        let peer = PeerId::Local(991);
+        fixture.list(Good::Bread, 3, 10);
+        fixture.at_minute(0);
+        let shopper = fixture.people[0].1;
+        let mut trace = Vec::new();
+        let mut carried = false;
+        for tick in 0..2400 {
+            let active = mode == 1 || (mode == 2 && (tick / 120) % 2 == 0);
+            if active {
+                fixture
+                    .app
+                    .world_mut()
+                    .entity_mut(camera)
+                    .insert(shared::components::Player { client_id: peer });
+            } else {
+                fixture
+                    .app
+                    .world_mut()
+                    .entity_mut(camera)
+                    .remove::<shared::components::Player>();
+            }
+            fixture
+                .app
+                .world_mut()
+                .run_system_once(update_client_interest)
+                .unwrap();
+            fixture
+                .app
+                .world_mut()
+                .run_system_once(update_region_observers)
+                .unwrap();
+            assert_eq!(
+                fixture
+                    .app
+                    .world()
+                    .resource::<RegionRegistry>()
+                    .get(RegionCoord::new(0, 0))
+                    .unwrap()
+                    .observers
+                    > 0,
+                active
+            );
+            fixture
+                .app
+                .world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+            fixture
+                .app
+                .world_mut()
+                .run_system_once(crate::player::hero::step_units)
+                .unwrap();
+            fixture.app.update();
+            let cargo = fixture.stock(shopper, Good::Bread);
+            carried |= cargo > 0;
+            if tick % 20 == 0 {
+                trace.push((
+                    fixture
+                        .app
+                        .world()
+                        .get::<PlayerPosition>(shopper)
+                        .unwrap()
+                        .0,
+                    cargo,
+                    fixture.stock(fixture.home, Good::Bread),
+                    fixture.stock(fixture.hall, Good::Bread),
+                    fixture
+                        .app
+                        .world()
+                        .get::<Wallet>(shopper)
+                        .unwrap()
+                        .balance(),
+                    fixture
+                        .app
+                        .world()
+                        .get::<HouseholdEconomy>(fixture.account)
+                        .unwrap()
+                        .pennies,
+                    fixture.money(),
+                    !fixture.shoppers().is_empty(),
+                ));
+            }
+        }
+        assert!(
+            carried,
+            "the worker must physically carry the purchased basket"
+        );
+        assert!(fixture.shoppers().is_empty());
+        assert_eq!(fixture.stock(fixture.home, Good::Bread), 3);
+        assert_eq!(fixture.stock(fixture.hall, Good::Bread), 0);
+        assert_eq!(fixture.money(), 1_000);
+        outcomes.push(trace);
+    }
+    assert_eq!(
+        outcomes[0], outcomes[1],
+        "observation changed physical movement, cargo or money"
+    );
+    assert_eq!(
+        outcomes[0], outcomes[2],
+        "moving attention changed an unfinished trip"
+    );
 }

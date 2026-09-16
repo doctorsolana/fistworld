@@ -1,7 +1,7 @@
 //! Places keeps a tree directory beside a village/building ledger spread.
 use super::super::places::*;
 use super::super::*;
-use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
 use crate::ui::hud::chrome::{self, HudIcon};
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::PLATE_RULE_SOFT;
@@ -63,6 +63,7 @@ pub(super) fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                         );
                         toolbar.spawn((PlaceCountText, ledger::body("", 16.0)));
                     });
+                search::spawn(directory, EncyclopediaTab::Places);
                 directory
                     .spawn((
                         PlacesListViewport,
@@ -262,6 +263,7 @@ fn spawn_place_card(card: &mut ChildSpawnerCommands<'_>) {
                 });
         }
     });
+    person_links::spawn_workplace_people(card);
     card.spawn((
         WorksiteAssignButton,
         AssignHeroToWorksite(None),

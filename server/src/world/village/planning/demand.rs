@@ -37,18 +37,30 @@ pub(crate) fn development_pipeline_has_capacity(
     worksites.saturating_add(connectors) < concurrent_worksite_capacity(residents)
 }
 
-/// Processing permits depend on an operating upstream building, not merely an
-/// approved plot. Pending sites still count for duplicate suppression in
-/// `have`, but a mill cannot process a Farmstead's promise and a bakery cannot
-/// bake with an unfinished windmill.
-pub(super) fn processing_upstream_is_complete(
+/// A local completed upstream workplace may support one opening trial. A
+/// town importing its inputs can instead establish a processor against actual
+/// affordable stock and funded output demand; it need not duplicate the
+/// exporting town's farms or mills. Neither an unfinished plot nor a future
+/// trade promise supplies a startup batch.
+pub(super) fn processing_inputs_are_available(
     kind: SettlementBuildingKind,
     completed: &HashMap<SettlementBuildingKind, usize>,
+    market: Option<&crate::world::village::development_market::investment::InvestmentMarket>,
 ) -> bool {
     let has = |upstream| completed.get(&upstream).copied().unwrap_or(0) > 0;
     match kind {
-        SettlementBuildingKind::Windmill => has(SettlementBuildingKind::Farmstead),
-        SettlementBuildingKind::Bakery => has(SettlementBuildingKind::Windmill),
+        SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => {
+            let local = match kind {
+                SettlementBuildingKind::Windmill => has(SettlementBuildingKind::Farmstead),
+                _ => has(SettlementBuildingKind::Windmill),
+            };
+            local
+                || market.is_some_and(|market| {
+                    market
+                        .restart_plan(kind, 1.0, market.hiring_wage(), 0, None, None)
+                        .is_some()
+                })
+        }
         _ => true,
     }
 }
@@ -94,4 +106,49 @@ pub(in crate::world::village) fn should_try_complementary_fishing(
     requested == Some(SettlementBuildingKind::Farmstead)
         && planned_farms > 0
         && planned_fishers == 0
+}
+
+#[cfg(test)]
+mod processor_input_tests {
+    use super::*;
+    use crate::world::village::development_market::investment::InvestmentMarket;
+
+    #[test]
+    fn an_importing_town_can_open_a_processor_without_local_upstream_buildings() {
+        let mut market = MootMarket::founding();
+        market.consign(
+            shared::economy::MarketSeller::Treasury(shared::components::SettlementId(1)),
+            Good::Wheat,
+            40,
+            20,
+        );
+        market.record_unmet_demand(Good::Flour, 12, 0, 12, 80);
+        assert!(processing_inputs_are_available(
+            SettlementBuildingKind::Windmill,
+            &HashMap::new(),
+            Some(&InvestmentMarket::new(&market))
+        ));
+    }
+
+    #[test]
+    fn imports_must_be_physical_and_affordable_before_the_upstream_gate_opens() {
+        let mut market = MootMarket::founding();
+        market.record_unmet_demand(Good::Bread, 20, 0, 20, 80);
+        assert!(!processing_inputs_are_available(
+            SettlementBuildingKind::Bakery,
+            &HashMap::new(),
+            Some(&InvestmentMarket::new(&market))
+        ));
+        market.consign(
+            shared::economy::MarketSeller::Treasury(shared::components::SettlementId(1)),
+            Good::Flour,
+            40,
+            300,
+        );
+        assert!(!processing_inputs_are_available(
+            SettlementBuildingKind::Bakery,
+            &HashMap::new(),
+            Some(&InvestmentMarket::new(&market))
+        ));
+    }
 }

@@ -1,6 +1,6 @@
 //! Outdoor dining keeps reservation ownership in the existing authoritative visit.
 use super::*;
-use shared::building::tavern::{outdoor_seat, OUTDOOR_SEATS};
+use shared::building::tavern::{OUTDOOR_SEATS, outdoor_seat};
 
 pub(super) fn reserve(mask: &mut u8) -> Option<u8> {
     let index = (0..OUTDOOR_SEATS).find(|index| *mask & (1 << index) == 0)?;

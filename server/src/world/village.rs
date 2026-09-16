@@ -18,6 +18,7 @@
 pub mod ambient;
 mod businesses;
 pub(crate) mod civic;
+pub(crate) mod civic_labor;
 mod commerce;
 mod companies;
 mod construction;
@@ -43,13 +44,25 @@ mod quarry;
 mod scale_lab;
 pub mod schedule;
 mod settlement_economy;
-pub mod strategic;
 mod tavern;
 mod trade_routes;
 mod trades;
+#[cfg(test)]
+pub(crate) use trades::farmer_admission_diagnostics;
+pub(crate) mod worker_activity;
 mod workplace_access;
 
-pub use businesses::{apply_business_events, review_business_management, BusinessEventQueue};
+#[cfg(test)]
+use worker_activity::doors::WorkplaceDoorPhase;
+pub(crate) use worker_activity::doors::{
+    WorkplaceDoorDirection, WorkplaceInterior, begin_workplace_entry, begin_workplace_exit,
+    begin_workplace_interior_exit, run_workplace_service_handoffs,
+};
+pub use worker_activity::doors::{
+    WorkplaceDoorTransit, run_workplace_door_transits, sync_building_door_demands,
+};
+
+pub use businesses::{BusinessEventQueue, apply_business_events, review_business_management};
 pub use civic::{
     collect_business_profit_taxes, ensure_civic_accounts, review_civic_policies, run_civic_payroll,
     sync_civic_market_policy,
@@ -62,103 +75,101 @@ pub use commerce::{
 };
 pub(crate) use companies::new_company_bundle;
 pub use companies::{
-    cleanup_empty_companies, ensure_companies, ensure_company_branches,
-    post_site_capital_to_company, refresh_company_accounts, refund_company_escrows,
-    review_company_finance, review_company_strategies, CompanyDividendQueue,
-    CompanyEscrowRefundQueue,
+    CompanyDividendQueue, CompanyEscrowRefundQueue, cleanup_empty_companies, ensure_companies,
+    ensure_company_branches, post_site_capital_to_company, refresh_company_accounts,
+    refund_company_escrows, review_company_finance, review_company_strategies,
 };
 pub(crate) use construction::ensure_market_ground_is_level;
 pub use construction::{advance_construction, run_construction_material_logistics};
 pub(crate) use development_market::minimum_startup_capital;
+#[cfg(test)]
 pub(crate) use economy::review_automatic_wage_offer;
 pub use employment::{
     enforce_staffing_targets, fill_vacancies, review_automatic_staffing, review_worker_job_choices,
     sync_company_porters,
 };
-pub use households::{
-    assign_households, ensure_house_appearances, ensure_households, run_household_schedules, run_household_shopping,
-    update_household_budgets_and_pantries,
-};
 pub(crate) use households::HearthState;
+pub use households::{
+    assign_households, ensure_house_appearances, ensure_households, run_household_schedules,
+    run_household_shopping, update_household_budgets_and_pantries,
+};
 #[cfg(test)]
 pub(crate) use moot_services::PermitPickupRoutine;
 pub(crate) use moot_services::{
+    MootMealRoutine, MootQueueClock, MootQueueTicket, MootQueueTransit, MootServiceKind,
     advance_moot_service_queues, complete_moot_permit_pickups, enqueue_moot_service,
-    run_moot_meal_collections, MootMealRoutine, MootQueueClock, MootQueueTicket, MootQueueTransit,
-    MootServiceKind,
+    run_moot_meal_collections,
 };
 pub use mortality::{
-    acquire_businesses_for_sale, advance_nutrition_health, apply_nutrition_condition,
-    ensure_character_vitals, process_character_deaths, recover_orphaned_construction,
-    MortalityLedger,
+    MortalityLedger, acquire_businesses_for_sale, advance_nutrition_health,
+    apply_nutrition_condition, ensure_character_vitals, process_character_deaths,
+    recover_orphaned_construction,
 };
 pub(crate) use movement::ensure_move_target;
 use movement::stable_name_hash;
 pub use objectives::sync_character_objectives;
 #[cfg(test)]
-pub(crate) use planning::find_site;
-#[cfg(test)]
 pub(crate) use planning::SettlementUrbanPlan;
+#[cfg(test)]
+pub(crate) use planning::find_site;
 pub use planning::{
-    consider_permits, ensure_civic_squares, find_fishing_site, PermitPlanningDiagnostics, FREEBOARD,
+    FREEBOARD, PermitPlanningDiagnostics, consider_permits, ensure_civic_squares, find_fishing_site,
+};
+pub(crate) use planning::{
+    ManualPlotApproval, RoadAccessBlocker, nearby_defense_reservations,
+    road_access_blockers_for_new_plot, road_access_blockers_for_plot, site_quality,
+    validate_manual_plot,
 };
 #[cfg(test)]
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
-pub(crate) use planning::{
-    nearby_defense_reservations, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
-    site_quality, validate_manual_plot, ManualPlotApproval, RoadAccessBlocker,
-};
 pub use population::{
     advance_immigration_departures, arrive_at_settlement, recount_residents, seek_settlement,
     tag_villager_intent,
 };
-pub(crate) use processing::ProcessorWorkProgress;
 pub use processing::{
-    assign_processing_routines, run_processing_routines, sync_workplace_operations,
-    ProcessingRoutine,
+    ProcessingRoutine, assign_processing_routines, run_processing_routines,
+    sync_workplace_operations,
 };
 pub use production::sync_business_stock_targets;
 pub(crate) use production::{
+    BusinessStaffingForecast, ProcessingRecipe, SELF_SUPPLY_TREE_YIELD,
     automatic_opening_positions, estimated_staffed_unit_cost, farmer_seconds_per_wheat,
     fisher_seconds_per_food, livestock_seconds_per_meat, lumber_seconds_per_tree,
     lumber_tree_yield, maximum_viable_input_unit_price, process_available_cycles,
     processing_recipe, produce_livestock_cycles, quarry_seconds_per_stone, rated_daily_production,
-    viable_processing_input_purchase, BusinessOperatingPlan, ProcessingRecipe,
-    SELF_SUPPLY_TREE_YIELD,
+    viable_processing_input_purchase,
 };
 pub use property_market::{publish_property_boards, remove_abandoned_businesses};
-pub(crate) use quarry::QuarryWorkProgress;
-pub use quarry::{assign_quarry_routines, run_quarry_routines, QuarryRoutine};
-use settlement_economy::{buy_from_moot, sell_carried_to_moot};
+pub use quarry::{QuarryRoutine, assign_quarry_routines, run_quarry_routines};
 pub use settlement_economy::{
-    ensure_settlement_economies, ensure_village_finances, sync_public_market_storage,
-    update_moot_market_targets, update_settlement_economies, SettlementEconomyRuntime,
+    SettlementEconomyRuntime, ensure_settlement_economies, ensure_village_finances,
+    sync_public_market_storage, update_moot_market_targets, update_settlement_economies,
 };
+use settlement_economy::{buy_from_moot, sell_carried_to_moot};
 pub(crate) use tavern::stage_tavern_review;
 pub use tavern::{
-    assign_tavern_routines, ensure_tavern_services, refresh_character_day_plans,
-    review_tavern_businesses, run_strategic_tavern_visits, run_tavern_routines, TavernVisitRoutine,
-    TavernWorkerRoutine,
+    TavernVisitRoutine, TavernWorkerRoutine, assign_tavern_routines, ensure_tavern_services,
+    refresh_character_day_plans, review_tavern_businesses, run_tavern_routines,
 };
 pub use trade_routes::{
-    manage_company_trade_routes, post_civic_import_contracts, review_autonomous_merchant_trade,
-    run_company_trade_routes, run_merchant_trade_routes, RegionalTradeIntelligence,
-    TradeRouteRoutine,
+    RegionalTradeIntelligence, TradeRouteRoutine, manage_company_trade_routes,
+    post_civic_import_contracts, review_autonomous_merchant_trade, run_company_trade_routes,
+    run_merchant_trade_routes,
 };
 pub(crate) use trades::lumber_plot_has_reachable_tree;
 #[cfg(test)]
 use trades::{
-    advance_failed_tree_candidate, fishing_deck_points, tree_approach_start, TREE_APPROACH_ANGLES,
+    TREE_APPROACH_ANGLES, advance_failed_tree_candidate, fishing_deck_points, tree_approach_start,
+};
+use trades::{
+    TreeCandidateLookup, TreeWorkCandidateCache, build_clip_facing,
+    exterior_door_clearance_position, find_nearby_tree_for_cycle_cached, ground_distance,
+    postpone_construction_store_route, postpone_construction_tree_search,
 };
 pub use trades::{
     assign_farmer_routines, assign_fishing_routines, assign_lumberjack_routines,
     ensure_farm_fields, ensure_fishing_piers, ensure_livestock_pastures, run_farmer_routines,
     run_fishing_routines, run_lumberjack_routines, sync_carried_load, sync_porter_cart_state,
-};
-use trades::{
-    build_clip_facing, exterior_door_clearance_position, find_nearby_tree_for_cycle_cached,
-    ground_distance, postpone_construction_store_route, postpone_construction_tree_search,
-    TreeCandidateLookup, TreeWorkCandidateCache,
 };
 
 use bevy::ecs::system::SystemParam;
@@ -175,45 +186,28 @@ use shared::components::{
     WorldTime,
 };
 use shared::economy::{
-    permit_price_with_subsidy, BusinessAccount, BusinessCondition, BusinessForSale,
-    BusinessInputRule, BusinessLiquidation, BusinessManagementPolicy, BusinessPrivateInputRule,
+    BASIS_POINTS, BusinessAccount, BusinessCondition, BusinessForSale, BusinessInputRule,
+    BusinessLiquidation, BusinessManagementPolicy, BusinessPrivateInputRule,
     BusinessProcurementPolicy, BusinessSalePolicy, BusinessSourcingMode, BusinessStaffingPolicy,
-    BusinessState, BusinessSupplyPolicy, BusinessWageClaim, BusinessWagePolicy, CarriedLoad, Good,
-    GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket, SettlementEconomy, TavernService,
-    Wallet, WorkforceRequirements, BASIS_POINTS, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
-    MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
-    PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY,
+    BusinessState, BusinessSupplyPolicy, BusinessWagePolicy, CarriedLoad,
+    FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE, Good, GoodsInventory, HouseholdEconomy,
+    MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, MarketSeller, MootMarket,
+    PENNIES_PER_COIN, PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY, SettlementEconomy,
+    TavernService, Wallet, WorkforceRequirements, permit_price_with_subsidy,
 };
-use shared::region::{RegionCoord, SimLevel};
+use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::{ChunkCoord, WorldTerrain};
 
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::player::hero::MoveTarget;
 use crate::world::navgrid::VILLAGER_PROP_RADIUS;
+#[cfg(test)]
 use crate::world::regions::RegionRegistry;
 use crate::world::village_roads::{
     NavigationRouteFailed, NavigationRoutePending, PlannedRoadAccess, RoadBuilderRoutine,
     RoadRequest, RouteWaypoint, TravelRoute, VillageRoadGraph,
 };
-
-type PermitBusyFilter = Or<(
-    With<FarmerRoutine>,
-    With<FishingRoutine>,
-    With<LumberjackRoutine>,
-    With<QuarryRoutine>,
-    With<ProcessingRoutine>,
-    With<MarketCollectionRoutine>,
-    With<InternalDeliveryRoutine>,
-    With<TradeRouteRoutine>,
-    With<HouseholdShoppingRoutine>,
-    With<MootQueueTicket>,
-    With<MootMealRoutine>,
-    With<TavernVisitRoutine>,
-    With<TavernWorkerRoutine>,
-    With<WorkplaceDoorTransit>,
-    Or<(With<PierTraversal>, With<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>)>,
-)>;
 
 /// Terrain and collision truth needed while choosing a plot. Keeping these
 /// related resources in one system parameter leaves room for the rest of the
@@ -256,7 +250,7 @@ pub struct PermitPlanningResources<'w, 's> {
     >,
     trade_contracts: Query<'w, 's, &'static shared::components::CivicTradeContract>,
     merchant_demand: Option<Res<'w, trade_routes::RegionalMerchantDemand>>,
-    permit_busy: Query<'w, 's, (), PermitBusyFilter>,
+    permit_busy: Query<'w, 's, (), worker_activity::PermitStartBlocked>,
     portfolios: Query<
         'w,
         's,
@@ -671,6 +665,12 @@ enum ConstructionMaterialPhase {
     Delivering {
         destination: Vec3,
     },
+    /// A physically blocked delivery retains its cargo and site while yielding
+    /// movement to essential needs until the next bounded retry.
+    WaitingForDeliveryAccess {
+        destination: Vec3,
+        retry_after: f64,
+    },
     LeavingDeliveryAccess {
         exit: Vec3,
     },
@@ -709,7 +709,7 @@ enum LumberjackPhase {
     GoingToHut,
     Inside { seconds_left: f32 },
     WalkingToTree { tree: Vec3, stand: Vec3 },
-    Chopping,
+    Chopping { tree: Vec3, stand: Vec3 },
     ReturningToHut,
     EndingShift,
 }
@@ -719,6 +719,8 @@ pub(crate) struct LumberjackWorkProgress {
     hut: Entity,
     cycle: u32,
     chop_seconds: f32,
+    production_day: u32,
+    produced_today: u32,
 }
 
 #[derive(Component, Debug, Clone)]
@@ -767,6 +769,8 @@ pub(crate) struct FarmerHarvestProgress {
     farmstead: Entity,
     field: Entity,
     seconds: f32,
+    production_day: u32,
+    produced_today: u32,
 }
 
 /// A rostered worker who has completed today's job remains employed, but is
@@ -806,6 +810,8 @@ pub(crate) struct FishingWorkProgress {
     hut: Entity,
     pier: Entity,
     seconds: f32,
+    production_day: u32,
+    produced_today: u32,
 }
 
 /// A founding public worker who collects market goods and maintains roads.
@@ -878,6 +884,8 @@ enum InternalDeliveryPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MarketCollectionPhase {
     GoingToBusiness,
+    /// Empty outbound input trip; purchase and title transfer happen at the counter.
+    GoingToInputCounter,
     ReturningToHall,
     ReturningToBusinessAfterFailedSale,
     DeliveringInput,
@@ -960,237 +968,6 @@ impl PierTraversal {
         (point.distance(closest) <= 1.05).then_some(
             self.deck_start.y + (self.deck_end.y - self.deck_start.y) * t.clamp(0.0, 1.0),
         )
-    }
-}
-
-/// Shared threshold choreography for staffed buildings. Job routines choose
-/// what comes after the threshold; this component owns only opening the leaf
-/// and walking the short exterior/interior segment without teleporting.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct WorkplaceDoorTransit {
-    building: Vec3,
-    door: Vec3,
-    inside: Vec3,
-    direction: WorkplaceDoorDirection,
-    phase: WorkplaceDoorPhase,
-    destination_after_exit: Option<Vec3>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WorkplaceDoorDirection {
-    Entering,
-    Leaving,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum WorkplaceDoorPhase {
-    Opening { seconds_left: f32 },
-    Crossing,
-}
-
-pub(super) fn begin_workplace_entry(
-    commands: &mut Commands,
-    worker: Entity,
-    building: Vec3,
-    door: Vec3,
-    inside: Vec3,
-) {
-    commands
-        .entity(worker)
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert(WorkplaceDoorTransit {
-            building,
-            door,
-            inside,
-            direction: WorkplaceDoorDirection::Entering,
-            phase: WorkplaceDoorPhase::Opening {
-                seconds_left: DOOR_OPEN_SECONDS,
-            },
-            destination_after_exit: None,
-        });
-}
-
-pub(super) fn begin_workplace_exit(
-    commands: &mut Commands,
-    worker: Entity,
-    building: Vec3,
-    door: Vec3,
-    inside: Vec3,
-    destination: Vec3,
-) {
-    commands
-        .entity(worker)
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert(WorkplaceDoorTransit {
-            building,
-            door,
-            inside,
-            direction: WorkplaceDoorDirection::Leaving,
-            phase: WorkplaceDoorPhase::Opening {
-                seconds_left: DOOR_OPEN_SECONDS,
-            },
-            destination_after_exit: Some(destination),
-        });
-}
-
-/// Keep the job system paused while the worker crosses the threshold, so its
-/// destination cannot drag them through the wall while the door is opening.
-pub fn run_workplace_door_transits(
-    simulation_time: crate::world::simulation_time::SimulationTime,
-    obstacles: Option<Res<SpatialObstacleGrid>>,
-    mut commands: Commands,
-    mut workers: Query<
-        (
-            Entity,
-            &PlayerPosition,
-            &VillagerIntent,
-            Option<&mut HomeRoutine>,
-            &mut PlayerRotation,
-            &mut CharacterActivity,
-            &mut WorkplaceDoorTransit,
-            Option<&MoveTarget>,
-        ),
-        (With<CharacterKind>, Without<strategic::StrategicPerson>),
-    >,
-) {
-    let dt = simulation_time.world_seconds();
-    for (worker, position, intent, mut home, mut facing, mut activity, mut transit, move_target) in
-        workers.iter_mut()
-    {
-        let leaving_for_home = home
-            .as_deref()
-            .is_some_and(|home| home.phase == HomePhase::LeavingWorkplace);
-        // A resident can receive a construction or road task while still
-        // crossing a workplace threshold. Cancelling the paired transit just
-        // because their intent is no longer the idle Resident variant leaves
-        // HomeRoutine::LeavingWorkplace with no system able to finish it.
-        let invalid_commitment = if leaving_for_home {
-            !intent.counts_as_resident()
-        } else {
-            !intent.is_settled()
-        };
-        if (home.is_some() && !leaving_for_home) || invalid_commitment {
-            commands
-                .entity(worker)
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>();
-            continue;
-        }
-
-        let door_use = BuildingDoorUse {
-            building: transit.building,
-        };
-        commands.entity(worker).insert(door_use);
-        match transit.phase {
-            WorkplaceDoorPhase::Opening { seconds_left } => {
-                let target = match transit.direction {
-                    WorkplaceDoorDirection::Entering => transit.inside,
-                    WorkplaceDoorDirection::Leaving => {
-                        exterior_door_clearance_position(transit.building, transit.door)
-                    }
-                };
-                let to_target = target - position.0;
-                if to_target.length_squared() > 1e-4 {
-                    facing.0 = build_clip_facing(to_target);
-                }
-                let left = seconds_left - dt;
-                if left > 0.0 {
-                    transit.phase = WorkplaceDoorPhase::Opening { seconds_left: left };
-                    continue;
-                }
-                activity.set_if_neq(CharacterActivity::Idle);
-                commands.entity(worker).insert(MoveTarget(target));
-                transit.phase = WorkplaceDoorPhase::Crossing;
-            }
-            WorkplaceDoorPhase::Crossing => {
-                let target = match transit.direction {
-                    WorkplaceDoorDirection::Entering => transit.inside,
-                    WorkplaceDoorDirection::Leaving => {
-                        exterior_door_clearance_position(transit.building, transit.door)
-                    }
-                };
-                activity.set_if_neq(CharacterActivity::Idle);
-                // The entrance marker itself is outside the inflated building
-                // blocker, but DOOR_REACH extends slightly back through the
-                // wall. Do not release collision immunity from a leaving
-                // worker merely because they are close to the door: at that
-                // point their next ordinary route would begin inside the
-                // blocker and can never certify. Walk the final few
-                // centimetres until their actual position is outside too.
-                let still_inside_blocker = transit.direction == WorkplaceDoorDirection::Leaving
-                    && obstacles.as_deref().is_some_and(|grid| {
-                        grid.point_blocked(Vec2::new(position.0.x, position.0.z))
-                    });
-                if ground_distance(position.0, target) > DOOR_REACH || still_inside_blocker {
-                    ensure_move_target(&mut commands, worker, move_target, target);
-                    continue;
-                }
-
-                let destination = transit.destination_after_exit;
-                if transit.direction == WorkplaceDoorDirection::Entering {
-                    activity.set_if_neq(CharacterActivity::Indoors);
-                }
-                let mut worker_commands = commands.entity(worker);
-                worker_commands
-                    .remove::<WorkplaceDoorTransit>()
-                    .remove::<BuildingDoorUse>()
-                    .remove::<MoveTarget>();
-                if let Some(destination) = destination {
-                    worker_commands.insert(MoveTarget(destination));
-                }
-                if leaving_for_home {
-                    home.as_deref_mut().expect("checked above").phase = HomePhase::GoingToDoor;
-                }
-            }
-        }
-    }
-}
-
-/// Fold short-lived actor requests into one stable replicated value per door.
-///
-/// Replicating only [`BuildingDoorUse`] made the visual depend on the client
-/// observing a transient component on an actor at exactly the right network
-/// snapshot. A door belongs to its building, so its aggregate demand lives on
-/// that stable entity and remains present even while its boolean is false.
-pub fn sync_building_door_demands(
-    mut commands: Commands,
-    uses: Query<&BuildingDoorUse>,
-    mut buildings: Query<
-        (Entity, &PlayerPosition, Option<&mut BuildingDoorDemand>),
-        Or<(With<Settlement>, With<SettlementBuilding>)>,
-    >,
-) {
-    let requested: HashSet<[u32; 3]> = uses
-        .iter()
-        .map(|request| request.building.to_array().map(f32::to_bits))
-        .collect();
-    for (entity, position, demand) in buildings.iter_mut() {
-        let open = requested.contains(&position.0.to_array().map(f32::to_bits));
-        if let Some(mut demand) = demand {
-            if demand.open != open {
-                debug!(
-                    "Building door at {:.1},{:.1} demand {}",
-                    position.0.x,
-                    position.0.z,
-                    if open { "OPEN" } else { "CLOSED" }
-                );
-                demand.open = open;
-            }
-        } else {
-            if open {
-                debug!(
-                    "Building door at {:.1},{:.1} demand OPEN",
-                    position.0.x, position.0.z
-                );
-            }
-            commands.entity(entity).insert(BuildingDoorDemand { open });
-        }
     }
 }
 
@@ -1303,3 +1080,6 @@ impl Default for VillageClock {
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+use shared::economy::BusinessWageClaim;

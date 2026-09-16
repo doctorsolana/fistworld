@@ -6,6 +6,8 @@
 //! applicants can judge through their own strategy.  It is deliberately pure:
 //! geography and the authoritative permit transaction remain in `planning`.
 
+pub(crate) mod investment;
+
 use shared::components::{
     PermitMarketOpportunity, SettlementBuildingKind, SettlementOpportunityBoard,
     SettlementPolicies, SettlementTier,
@@ -116,6 +118,10 @@ pub struct DevelopmentMarketSignals {
     /// remains at the company's risk until a real buyer clears it.
     pub merchant_export_bulk: u32,
     pub construction_wood_demand: u32,
+    /// A viable independent restart after a failed incumbent's recovery
+    /// window. Zero means no demand-backed challenger has been demonstrated.
+    pub mill_challenger_units: u32,
+    pub bakery_challenger_units: u32,
 }
 
 impl DevelopmentMarketSignals {
@@ -266,6 +272,22 @@ fn processor_competition_proven(
     signals: DevelopmentMarketSignals,
     market: Option<&MootMarket>,
 ) -> bool {
+    let challenger = match kind {
+        SettlementBuildingKind::Windmill => signals.mill_challenger_units > 0,
+        SettlementBuildingKind::Bakery => signals.bakery_challenger_units > 0,
+        _ => false,
+    };
+    if challenger {
+        return match kind {
+            SettlementBuildingKind::Windmill => {
+                signals.completed_windmills >= signals.windmills && !signals.unproven_windmill
+            }
+            SettlementBuildingKind::Bakery => {
+                signals.completed_bakeries >= signals.bakeries && !signals.unproven_bakery
+            }
+            _ => false,
+        };
+    }
     let Some(market) = market else {
         return false;
     };
@@ -486,6 +508,7 @@ fn opportunity_score(
     if kind != SettlementBuildingKind::House
         && signals.recoverable(kind) > 0
         && !emergency_food_entry
+        && !processor_competition_proven(kind, signals, market)
     {
         // Reopen or buy the existing structure before consuming land, Wood
         // and builder time on an economically identical duplicate. Acute food
@@ -582,7 +605,11 @@ fn opportunity_score(
             }
             let competitive = processor_competition_proven(kind, signals, market);
             if competitive {
-                return competition_score(kind, market.expect("competition has market"));
+                return if signals.mill_challenger_units > 0 {
+                    68.0 + (signals.mill_challenger_units as f32 * 2.0).min(30.0)
+                } else {
+                    competition_score(kind, market.expect("competition has market"))
+                };
             }
             if signals.completed_windmills < signals.windmills || signals.unproven_windmill {
                 return 5.0;
@@ -640,7 +667,11 @@ fn opportunity_score(
             }
             let competitive = processor_competition_proven(kind, signals, market);
             if competitive {
-                return competition_score(kind, market.expect("competition has market"));
+                return if signals.bakery_challenger_units > 0 {
+                    68.0 + (signals.bakery_challenger_units as f32 * 2.0).min(30.0)
+                } else {
+                    competition_score(kind, market.expect("competition has market"))
+                };
             }
             if signals.completed_bakeries < signals.bakeries || signals.unproven_bakery {
                 return 5.0;
@@ -975,6 +1006,7 @@ pub fn expected_daily_profit(
     kind: SettlementBuildingKind,
     site_quality: f32,
     market: Option<&MootMarket>,
+    daily_wage: u64,
 ) -> Option<i64> {
     let (output, output_units, input) = expected_daily_business(kind, site_quality)?;
     let output_price = market.map_or(output.base_price(), |market| market.suggested_price(output));
@@ -986,7 +1018,7 @@ pub fn expected_daily_profit(
         u64::from(units)
             .saturating_mul(market.map_or(good.base_price(), |market| market.suggested_price(good)))
     });
-    let wages = u64::from(kind.positions()).saturating_mul(FOUNDING_DAILY_WAGE);
+    let wages = u64::from(kind.positions()).saturating_mul(daily_wage);
     let costs = input_cost.saturating_add(wages);
     Some(if revenue >= costs {
         revenue.saturating_sub(costs).min(i64::MAX as u64) as i64
@@ -997,11 +1029,9 @@ pub fn expected_daily_profit(
 
 pub fn investor_threshold(strategy: BusinessStrategy) -> f32 {
     match strategy {
-        BusinessStrategy::Opportunistic => 35.0,
-        BusinessStrategy::Growth => 43.0,
+        BusinessStrategy::Aggressive => 43.0,
         BusinessStrategy::Balanced => 49.0,
-        BusinessStrategy::HighMargin => 52.0,
-        BusinessStrategy::Cautious => 58.0,
+        BusinessStrategy::Conservative => 58.0,
     }
 }
 
@@ -1013,6 +1043,7 @@ pub fn investor_score(
     market: Option<&MootMarket>,
     holdings: usize,
     person_seed: u64,
+    daily_wage: u64,
 ) -> f32 {
     if opportunity.score <= 15.0
         && matches!(
@@ -1028,7 +1059,8 @@ pub fn investor_score(
         // extractor capacity already covers demonstrated local/export demand.
         return f32::NEG_INFINITY;
     }
-    let profit = expected_daily_profit(opportunity.kind, site_quality, market).unwrap_or(0);
+    let profit =
+        expected_daily_profit(opportunity.kind, site_quality, market, daily_wage).unwrap_or(0);
     let mut profit_signal =
         (profit as f32 / FOUNDING_DAILY_WAGE.max(1) as f32 * 12.0).clamp(-32.0, 32.0);
     if opportunity.score <= 15.0
@@ -1044,11 +1076,9 @@ pub fn investor_score(
         profit_signal = profit_signal.min(8.0);
     }
     let strategy_signal = match strategy {
-        BusinessStrategy::Opportunistic => 10.0,
-        BusinessStrategy::Growth => 6.0,
+        BusinessStrategy::Aggressive => 6.0,
         BusinessStrategy::Balanced => 0.0,
-        BusinessStrategy::HighMargin => profit_signal.max(0.0) * 0.25,
-        BusinessStrategy::Cautious => {
+        BusinessStrategy::Conservative => {
             if profit < 0 {
                 -10.0
             } else {
@@ -1077,6 +1107,10 @@ pub fn investor_score(
     opportunity.score + profit_signal + strategy_signal + quality_signal + personal
         - holdings as f32 * 5.0
 }
+
+#[cfg(test)]
+#[path = "development_market/entry_tests.rs"]
+mod entry_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1159,10 +1193,16 @@ mod tests {
             supplied.score <= 15.0,
             "demonstrated capacity still closes oversupply"
         );
-        assert!(
-            investor_score(supplied, BusinessStrategy::Opportunistic, 1.0, None, 0, 23)
-                .is_infinite()
-        );
+        assert!(investor_score(
+            supplied,
+            BusinessStrategy::Aggressive,
+            1.0,
+            None,
+            0,
+            23,
+            FOUNDING_DAILY_WAGE
+        )
+        .is_infinite());
     }
 
     #[test]
@@ -1414,8 +1454,15 @@ mod tests {
             .unwrap();
         assert!(local.score <= 15.0);
         assert!((0..100).all(|seed| {
-            investor_score(local, BusinessStrategy::Opportunistic, 1.0, None, 0, seed)
-                < investor_threshold(BusinessStrategy::Opportunistic)
+            investor_score(
+                local,
+                BusinessStrategy::Aggressive,
+                1.0,
+                None,
+                0,
+                seed,
+                FOUNDING_DAILY_WAGE,
+            ) < investor_threshold(BusinessStrategy::Aggressive)
         }));
 
         let exporting = DevelopmentMarketSignals {
@@ -1458,8 +1505,15 @@ mod tests {
             .unwrap();
         assert_eq!(next.score, 5.0);
         assert!((0..100).all(|seed| {
-            investor_score(next, BusinessStrategy::Opportunistic, 0.5, None, 0, seed)
-                < investor_threshold(BusinessStrategy::Opportunistic)
+            investor_score(
+                next,
+                BusinessStrategy::Aggressive,
+                0.5,
+                None,
+                0,
+                seed,
+                FOUNDING_DAILY_WAGE,
+            ) < investor_threshold(BusinessStrategy::Aggressive)
         }));
     }
 
@@ -1483,8 +1537,15 @@ mod tests {
         .unwrap();
         assert_eq!(mill.score, 8.0);
         assert!((0..100).all(|seed| {
-            investor_score(mill, BusinessStrategy::Opportunistic, 0.5, None, 0, seed)
-                < investor_threshold(BusinessStrategy::Opportunistic)
+            investor_score(
+                mill,
+                BusinessStrategy::Aggressive,
+                0.5,
+                None,
+                0,
+                seed,
+                FOUNDING_DAILY_WAGE,
+            ) < investor_threshold(BusinessStrategy::Aggressive)
         }));
     }
 
@@ -1939,16 +2000,25 @@ mod tests {
             civic_priority: false,
             requires_independent_owner: false,
         };
-        let cautious = investor_score(opportunity, BusinessStrategy::Cautious, 0.05, None, 0, 7);
-        let opportunistic = investor_score(
+        let cautious = investor_score(
             opportunity,
-            BusinessStrategy::Opportunistic,
+            BusinessStrategy::Conservative,
             0.05,
             None,
             0,
             7,
+            FOUNDING_DAILY_WAGE,
         );
-        assert!(cautious < investor_threshold(BusinessStrategy::Cautious));
+        let opportunistic = investor_score(
+            opportunity,
+            BusinessStrategy::Aggressive,
+            0.05,
+            None,
+            0,
+            7,
+            FOUNDING_DAILY_WAGE,
+        );
+        assert!(cautious < investor_threshold(BusinessStrategy::Conservative));
         assert!(opportunistic > cautious);
     }
 }

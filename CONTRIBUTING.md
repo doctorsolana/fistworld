@@ -93,12 +93,15 @@ and preserve dates on benchmark/reference results unless that exact measurement 
 - Keep high-frequency network messages compact.
 - Keep verbose logs behind env flags; the default runtime should be quiet in hot loops.
 
-**Scale target.** This game is meant to retain thousands of people while embodying only the
-observed subset. Anything per-person per-frame is a design decision, not a detail:
+**Scale target.** The whole living world uses one authoritative simulation, including
+people and animals no player has ever seen. Camera coverage controls replication and
+presentation, never movement, production, service, construction or combat rules. Thousands
+of active people remain a performance target, not a certified capacity:
 
-- Ordinary off-screen people keep durable identity/economic state without tactical
-  pathfinding, door choreography, seats or animation progress. A previously planned trip
-  may retain the existing cheap `StrategicTravel` cursor. Extend aggregate passes for world-wide rules.
+- Preserve the same durable worker, route, cargo, progress and service ownership everywhere.
+  Do not introduce observer-gated jobs, an alternate aggregate economy or straight-ETA travel.
+  Optimise the shared path with spatial indexes, retained bounded searches, cached derived
+  state and explicit review cadences; prove that the optimisation preserves outcomes.
 - Local village routes use bounded surveys, an obstacle-versioned cache and the shared road
   graph. Per-agent A\* does not scale to a commanded group or shared destination;
   commanded formations already share bounded local fields; regional travel should extend
@@ -139,10 +142,12 @@ observed subset. Anything per-person per-frame is a design decision, not a detai
 
 ## World and Streaming Rules
 
-- `PlayerPosition` (the commander's camera focus) is the **only** anchor for server terrain-collider
-  streaming and client terrain/prop streaming. If it stops being written, the world silently empties
-  and colliders collapse to chunk (0,0) — no crash, no log. `streaming_anchor()` warns once on the
-  `None` path; keep that warning.
+- Server terrain/prop colliders follow authoritative body and building `PlayerPosition`
+  neighborhoods, including wildlife, and explicitly exclude commander camera entities.
+  Movement must wait for its swept collider footprint to be ready; network observation
+  cannot authorize or remove physical collision. Client terrain/prop streaming follows
+  the commander's camera focus separately. Keep the client `streaming_anchor()` warning
+  when that presentation anchor is missing.
 - Runtime collision is server authoritative. Reuse the current terrain/prop query,
   navigation obstacle grid and exact footprint tests; do not create a competing
   client collision model or ad-hoc pushout loops. The current server uses Parry
@@ -180,6 +185,53 @@ Add regression tests when fixing:
 - Visibility/culling bugs.
 - Migration, household, economy, construction, route and time-warp bugs.
 
+Tests should protect current behavior, ownership and invariants, rather than
+repeat a constant or freeze an incidental implementation detail. A fixture must
+contain the data it claims to validate: assert nonempty authored objects before
+checking their identifiers, and exercise the real selector when testing separate
+budgets. Keep absolute wall-clock thresholds in explicitly run performance labs;
+ordinary tests should prefer bounded work and deterministic outcomes. Do not
+remove useful tests merely because their names or creation dates are old.
+
+State each fixture's scope. A recipe-rate test does not prove navigation, a
+serialization roundtrip does not prove compatibility with an older binary, and
+an economy accounting pass does not prove that every staffed workplace produces
+or every resident can afford food. Use connected sessions for physical work and
+inspect per-worker and per-business evidence in longer economy runs.
+
+### Targeted test audit — 2026-09-15
+
+This audit sampled current client/shared contracts and worker/navigation fixtures
+for stale assumptions, vacuous assertions and misleading performance claims. It
+was not a line-by-line review of every workspace test. Useful inventory, protocol,
+LOD, input-focus, ownership and physical-handoff regressions were retained.
+
+- Removed two cases: a client test that only asserted `100 / 4 == 25`, and a
+  historical world-recipe field test whose stated dependency no maintained map used.
+  Current recipe validation, compact serialization and wire roundtrips remain.
+- [Authored-map coverage](shared/src/map/schema.rs) now checks three populated
+  maintained maps, requires nonempty props, and verifies resolution and idempotent
+  normalization. The previous generated-map fixture had an empty object list.
+- [Horse selection](client/src/animals/rendering.rs) now runs the real ECS selector
+  with mixed wild/mounted populations and checks separate budgets, scene eviction,
+  proxy fallback and zoom-out cleanup. Resident scene roots isolate selection;
+  the test does not load animation rigs or measure GPU performance.
+- [Ocean geometry](client/src/water/edge.rs) now checks finite vertices, valid
+  indices, upward winding, coverage and resource ceilings instead of one exact
+  vertex count. It permits cheaper tessellation and makes no FPS claim.
+- The [tavern fixture](server/src/world/village/tavern/outdoor_tests.rs) supplies
+  arrival at the authored exterior target and lets the real door system clear
+  occupancy; it no longer removes those markers itself. This tests handoff,
+  not the intervening navigation. The [120-person migration test](server/src/world/village/tests/immigration_tests.rs)
+  retains deterministic route-admission assertions but reports elapsed time
+  diagnostically; hardware thresholds belong in explicit optimized scale probes.
+
+The subsequent workspace run passed **1,802 tests**: 540 client, 957 server,
+304 shared and one collider-baker test; **29 were ignored**, not passed. These
+results establish the exercised contracts, not an exhaustive test audit, visual
+acceptance or proof that the overall economy is balanced. Connected worker
+captures and longer per-business economy runs remain separate evidence.
+
 ## Definition of Done
 
 - Feature is in the correct crate boundaries.
@@ -192,12 +244,12 @@ Add regression tests when fixing:
 ## Architecture
 
 The netcode model is **decided**: server-authoritative with interest management, not
-deterministic lockstep. The simulation is **two-tier**: a cheap always-on strategic layer
-and a 60 Hz tactical layer, with durable entities promoted/demoted between them. Regions
-currently own interest management and simulation LOD; settlements, not grid squares, are
-the future political and persistence unit.
+deterministic lockstep. There is **one canonical world simulation**. Regions count observers
+and own network interest; they do not select a simulation level or promote/demote people.
+Settlements, not grid squares, are the future political and persistence unit.
 
-Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing simulation code. In
-particular: the strategic tick runs for the entire world forever, so it must contain no
-pathfinding, no physics and no per-person embodied routine. Cheap durable person records are
-intentional; tactical bodies are conditional on observation.
+Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing simulation code and
+[`docs/SIMULATION-PARITY.md`](docs/SIMULATION-PARITY.md) before changing execution budgets.
+A headless server must keep the same authoritative workflows running without any client.
+Bound navigation and decision work, retain progress between slices, and measure complete
+world cost. Old aggregate-simulation benchmarks do not certify this implementation.

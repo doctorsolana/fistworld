@@ -9,20 +9,20 @@ mod construction;
 mod households;
 mod multiplayer;
 
-use super::{CaptureInspection, live_capture_request};
+use super::{live_capture_request, CaptureInspection};
 use crate::{camera_rts::CommanderCamera, capture_artifact::*, states::GameState};
 use bevy::{
     ecs::system::SystemState,
     input::{
-        ButtonState, InputSystems,
         keyboard::{Key, KeyboardInput, NativeKeyCode},
+        ButtonState, InputSystems,
     },
     prelude::*,
     render::view::screenshot::Screenshot,
     ui::{InteractionDisabled, RelativeCursorPosition, UiSystems},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use shared::{
     components::*,
     economy::{Good, GoodsInventory, MarketSeller, MootMarket, Wallet},
@@ -84,6 +84,9 @@ enum Command {
         x: f32,
         z: f32,
         zoom: f32,
+        /// Optional orbit angle in radians for reproducible, unobscured views.
+        #[serde(default)]
+        yaw: Option<f32>,
     },
     Capture {
         name: String,
@@ -238,7 +241,8 @@ fn snapshot(world: &mut World) -> Value {
         .next()
         .map(|clock| json!({"day":clock.day,"time":clock.normalized_time()}));
     let camera = world.query::<&CommanderCamera>().iter(world).next().map(|camera| json!({
-        "focus":camera.focus.to_array(),"target":camera.focus_target.to_array(),"zoom":camera.zoom,"zoom_target":camera.zoom_target}));
+        "focus":camera.focus.to_array(),"target":camera.focus_target.to_array(),"zoom":camera.zoom,"zoom_target":camera.zoom_target,
+        "yaw":camera.yaw,"yaw_target":camera.yaw_target}));
     let buttons: Vec<_> = world
         .query_filtered::<(Entity, &ComputedNode, Has<InteractionDisabled>), With<Button>>()
         .iter(world)
@@ -681,8 +685,12 @@ fn advance(
                 _ => return Ok(true),
             }
         }
-        Command::View { x, z, zoom } => {
-            if !x.is_finite() || !z.is_finite() || !zoom.is_finite() {
+        Command::View { x, z, zoom, yaw } => {
+            if !x.is_finite()
+                || !z.is_finite()
+                || !zoom.is_finite()
+                || yaw.is_some_and(|yaw| !yaw.is_finite())
+            {
                 return Err("invalid view".into());
             }
             let height = world
@@ -691,6 +699,9 @@ fn advance(
             for mut camera in world.query::<&mut CommanderCamera>().iter_mut(world) {
                 camera.focus_target = Vec3::new(*x, height, *z);
                 camera.zoom_target = zoom.clamp(camera.zoom_min, camera.zoom_max);
+                if let Some(yaw) = yaw {
+                    camera.yaw_target = *yaw;
+                }
             }
             return Ok(true);
         }
@@ -780,6 +791,7 @@ fn advance(
                 // its height from terrain. Only the XZ view target can settle.
                 camera.focus.xz().distance(camera.focus_target.xz()) < 0.3
                     && (camera.zoom - camera.zoom_target).abs() < 0.3
+                    && (camera.yaw - camera.yaw_target).abs() < 0.01
             });
             if !frontend
                 && (chunks < 64

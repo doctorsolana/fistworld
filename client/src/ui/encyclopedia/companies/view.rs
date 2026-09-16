@@ -9,13 +9,13 @@ use super::model::{
     CompanyDirectory, CompanyFilter, CompanyPolicyFeedback, CompanyRecord, SelectedCompany,
     TradeRouteEditorState,
 };
-use super::portfolio::{company_ledger_line, spawn_company_row, spawn_portfolio, CompanyRowLedger};
+use super::portfolio::{CompanyRowLedger, company_ledger_line, spawn_company_row, spawn_portfolio};
 use super::route_editor::spawn_trade_route_editor;
 use super::widgets::spawn_empty;
 use crate::ui::encyclopedia::*;
 use crate::ui::foundation::{
-    button_chrome, retained_scroll, subtree_is_interacting, UiButtonLabel, UiButtonVariant,
-    UiRefreshExempt,
+    UiButtonLabel, UiButtonVariant, UiRefreshExempt, button_chrome, retained_scroll,
+    subtree_is_interacting,
 };
 use crate::ui::styles::PLATE_RULE_SOFT;
 use bevy::ecs::system::SystemParam;

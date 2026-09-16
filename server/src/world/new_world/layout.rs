@@ -60,6 +60,8 @@ pub(super) struct Layout {
     pub plots: Vec<Plot>,
     pub population: usize,
     pub square: Option<shared::components::SettlementCivicSquare>,
+    /// Bare-Hall founders have certified clear stands, not fictitious homes.
+    pub frontier_stands: Vec<Vec3>,
 }
 
 impl Layout {
@@ -73,6 +75,9 @@ impl Layout {
         };
         if let Some(square) = &self.square {
             include(square.center, square.half_extents.length());
+        }
+        for stand in &self.frontier_stands {
+            include(*stand, 1.0);
         }
         for plot in &self.plots {
             include(plot.position, plot.kind.clearance());
@@ -426,6 +431,7 @@ pub(super) fn plan(
             plots: planner.plots,
             population: target,
             square: planner.square,
+            frontier_stands: Vec::new(),
         });
     }
     None

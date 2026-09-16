@@ -24,7 +24,7 @@ use shared::economy::{
 
 #[test]
 fn company_selection_styles_change_only_when_selection_changes() {
-    use super::controls::{style_company_controls, CompanyFilterButton, CompanyRow};
+    use super::controls::{CompanyFilterButton, CompanyRow, style_company_controls};
     use super::model::SelectedCompany;
     use crate::ui::foundation::UiButtonStyle;
 
@@ -106,6 +106,7 @@ fn company(id: u64, owner: PersonId, cash: u64, assets: u64, debt: u64) -> Compa
         sites: Vec::new(),
         branches: Vec::new(),
         routes: Vec::new(),
+        fleet: default(),
     }
 }
 
@@ -180,7 +181,10 @@ fn every_company_site_exposes_details_and_management_separately() {
     let mut details = world.query_filtered::<&CompanySiteButton, With<Button>>();
     let mut management = world.query_filtered::<&CompanyManagementButton, With<Button>>();
     assert_eq!(details.single(&world).unwrap().0, site.id);
-    assert_eq!(management.single(&world).unwrap().site, site.entity);
+    assert_eq!(
+        management.single(&world).unwrap().target,
+        crate::ui::business_management::BusinessManagementSelection::Site(site.entity)
+    );
     assert_eq!(management.single(&world).unwrap().company, CompanyId(43));
 }
 
@@ -216,6 +220,7 @@ fn storage_site(id: u64, settlement: SettlementId, name: &str) -> CompanySiteRec
 
 fn merchant_route() -> CompanyRouteRecord {
     CompanyRouteRecord {
+        ship: None,
         id: TradeRouteId(50),
         warehouse: BuildingId(40),
         warehouse_name: "Oakfell Storage Hall #40".into(),
@@ -296,16 +301,19 @@ fn route_editor_exposes_ordered_three_town_timetable_controls() {
                 id: SettlementId(1),
                 name: "Oakfell".into(),
                 has_marketplace: true,
+                port: None,
             },
             CompanySettlementRecord {
                 id: SettlementId(2),
                 name: "Stonefield".into(),
                 has_marketplace: true,
+                port: None,
             },
             CompanySettlementRecord {
                 id: SettlementId(3),
                 name: "Meadowford".into(),
                 has_marketplace: true,
+                port: None,
             },
         ],
         local_person: Some(owner),
@@ -313,6 +321,7 @@ fn route_editor_exposes_ordered_three_town_timetable_controls() {
     };
     let route = merchant_route();
     let draft = TradeRouteDraft {
+        ship: None,
         company: firm.id,
         route: Some(route.id),
         warehouse: route.warehouse,
@@ -478,6 +487,7 @@ fn route_draft_survives_live_snapshot_and_explicit_draft_actions_update_while_ho
     let (mut app, _, detail) = retained_company_app();
     let route = merchant_route();
     let draft = TradeRouteDraft {
+        ship: None,
         company: CompanyId(1),
         route: Some(route.id),
         warehouse: route.warehouse,
@@ -543,5 +553,230 @@ fn route_draft_survives_live_snapshot_and_explicit_draft_actions_update_while_ho
             .unwrap()
             .cargo_target,
         38
+    );
+}
+
+#[test]
+fn company_settings_remain_addressable_without_an_observed_workplace() {
+    use crate::ui::business_management::BusinessManagementSelection;
+    let (mut app, _, _) = retained_company_app();
+    let buttons: Vec<_> = app
+        .world_mut()
+        .query::<&CompanyManagementButton>()
+        .iter(app.world())
+        .map(|button| (button.target, button.company))
+        .collect();
+    assert_eq!(
+        buttons,
+        vec![(
+            BusinessManagementSelection::Company(CompanyId(1)),
+            CompanyId(1)
+        )]
+    );
+}
+
+fn fleet_fixture(kind: shared::components::ShipKind) -> (CompanyRecord, CompanyDirectory) {
+    use shared::components::*;
+    let mut company = company(43, PersonId(8), 50_000, 0, 0);
+    company.fleet.ships.push((
+        ShipId(91),
+        CompanyShip {
+            company: company.id,
+            kind,
+            home_port: BuildingId(71),
+            assigned_route: None,
+            status: ShipStatus::Moored,
+        },
+    ));
+    company
+        .sites
+        .push(storage_site(40, SettlementId(1), "Oakfell"));
+    let directory = CompanyDirectory {
+        records: vec![company.clone()],
+        local_person: Some(PersonId(8)),
+        local_wallet: Some(500),
+        settlements: vec![
+            CompanySettlementRecord {
+                id: SettlementId(1),
+                name: "Oakfell".into(),
+                has_marketplace: true,
+                port: Some(SettlementPortSummary {
+                    port: BuildingId(71),
+                    maximum_ship: ShipKind::Cog,
+                    built: true,
+                }),
+            },
+            CompanySettlementRecord {
+                id: SettlementId(2),
+                name: "Small Quay".into(),
+                has_marketplace: true,
+                port: Some(SettlementPortSummary {
+                    port: BuildingId(72),
+                    maximum_ship: ShipKind::Coaster,
+                    built: true,
+                }),
+            },
+            CompanySettlementRecord {
+                id: SettlementId(3),
+                name: "Unfinished Port".into(),
+                has_marketplace: true,
+                port: Some(SettlementPortSummary {
+                    port: BuildingId(73),
+                    maximum_ship: ShipKind::Cog,
+                    built: false,
+                }),
+            },
+        ],
+    };
+    (company, directory)
+}
+#[test]
+fn ship_timetable_uses_hull_capacity_and_only_compatible_finished_ports() {
+    use shared::components::*;
+    let (coaster, directory) = fleet_fixture(ShipKind::Coaster);
+    let mut draft = super::fleet::new_ship_draft(&coaster, &directory, ShipId(91)).unwrap();
+    assert_eq!(
+        draft.stops.iter().map(|s| s.settlement).collect::<Vec<_>>(),
+        [SettlementId(1), SettlementId(2)]
+    );
+    assert_eq!(
+        draft.stop_actions(),
+        [TradeRouteStopAction::Buy, TradeRouteStopAction::Sell]
+    );
+    draft.good = shared::economy::Good::Iron;
+    assert_eq!(
+        draft.cargo_capacity(),
+        ShipKind::Coaster.capacity() / draft.good.bulk_per_unit()
+    );
+    assert!(
+        draft.cargo_capacity() > shared::economy::capacity::PORTER / draft.good.bulk_per_unit()
+    );
+    assert!(!draft.accepts_settlement(&directory.settlements[2]));
+    let (cog, directory) = fleet_fixture(ShipKind::Cog);
+    assert!(
+        super::fleet::new_ship_draft(&cog, &directory, ShipId(91)).is_err(),
+        "large hull has no valid second port"
+    );
+}
+#[test]
+fn native_ship_cargo_control_respects_ship_capacity_and_preserves_draft() {
+    use bevy::ecs::system::RunSystemOnce;
+    use shared::components::*;
+    let (company, directory) = fleet_fixture(ShipKind::Coaster);
+    let mut draft = super::fleet::new_ship_draft(&company, &directory, ShipId(91)).unwrap();
+    draft.good = shared::economy::Good::Wood;
+    let capacity = draft.cargo_capacity();
+    let mut world = World::new();
+    world.insert_resource(directory);
+    world.insert_resource(crate::ui::encyclopedia::ClickGuard(true));
+    let mut mouse = ButtonInput::<MouseButton>::default();
+    mouse.press(MouseButton::Left);
+    world.insert_resource(mouse);
+    world.insert_resource(TradeRouteEditorState {
+        draft: Some(draft),
+        ..default()
+    });
+    world.spawn((
+        Interaction::Pressed,
+        TradeRouteEditorButton(TradeRouteEditorAction::CargoUp(u32::MAX)),
+    ));
+    world
+        .run_system_once(super::route_actions::handle_trade_route_editor_buttons)
+        .unwrap();
+    let draft = world
+        .resource::<TradeRouteEditorState>()
+        .draft
+        .as_ref()
+        .unwrap();
+    assert_eq!(draft.cargo_target, capacity);
+    assert_eq!(draft.ship, Some((ShipId(91), ShipKind::Coaster)));
+    assert!(!draft.pending);
+    assert_eq!(draft.stops.len(), 2);
+}
+#[test]
+fn fleet_order_buttons_follow_company_authority_and_port_class() {
+    use shared::components::*;
+    let (company, mut directory) = fleet_fixture(ShipKind::Coaster);
+    let mut world = World::new();
+    let host = world.spawn_empty().id();
+    world
+        .commands()
+        .entity(host)
+        .with_children(|p| super::fleet::spawn_fleet(p, &company, &directory));
+    world.flush();
+    let actions: Vec<_> = world
+        .query::<&super::fleet::FleetButton>()
+        .iter(&world)
+        .map(|b| b.action)
+        .collect();
+    assert!(actions.contains(&super::fleet::FleetAction::NewRoute(ShipId(91))));
+    assert!(actions.contains(&super::fleet::FleetAction::Order {
+        port: BuildingId(71),
+        kind: ShipKind::Cog
+    }));
+    assert!(!actions.contains(&super::fleet::FleetAction::Order {
+        port: BuildingId(72),
+        kind: ShipKind::Cog
+    }));
+    assert!(!actions.iter().any(|a| matches!(
+        a,
+        super::fleet::FleetAction::Order {
+            port: BuildingId(73),
+            ..
+        }
+    )));
+    let mut readonly = World::new();
+    let host = readonly.spawn_empty().id();
+    directory.local_person = Some(PersonId(999));
+    readonly
+        .commands()
+        .entity(host)
+        .with_children(|p| super::fleet::spawn_fleet(p, &company, &directory));
+    readonly.flush();
+    assert_eq!(
+        readonly
+            .query::<&super::fleet::FleetButton>()
+            .iter(&readonly)
+            .count(),
+        0
+    );
+    assert!(
+        readonly
+            .query::<&Text>()
+            .iter(&readonly)
+            .any(|text| text.0.contains("480 bulk")),
+        "read-only observers still see fleet facts"
+    );
+}
+
+#[test]
+fn active_ship_route_exposes_graceful_stop_without_offering_unsafe_edit() {
+    use shared::components::*;
+    let mut route = merchant_route();
+    route.ship = Some((ShipId(91), ShipKind::Coaster));
+    route.status = TradeRouteStatus::InTransit;
+    route.assigned_caravaner = Some("Sailor".into());
+    let mut world = World::new();
+    let parent = world.spawn_empty().id();
+    world
+        .commands()
+        .entity(parent)
+        .with_children(|p| spawn_route_card(p, CompanyId(43), &route, true));
+    world.flush();
+    assert_eq!(
+        world.query::<&EditTradeRouteButton>().iter(&world).count(),
+        0
+    );
+    assert!(
+        world
+            .query::<&TradeRouteQuickActionButton>()
+            .iter(&world)
+            .any(|button| button.action == TradeRouteQuickAction::Mothball)
+    );
+    assert!(
+        world
+            .query::<&Text>()
+            .iter(&world)
+            .any(|text| text.0 == "STOP AFTER VOYAGE")
     );
 }

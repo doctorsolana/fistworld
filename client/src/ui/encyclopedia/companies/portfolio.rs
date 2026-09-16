@@ -2,7 +2,7 @@
 
 use super::controls::CompanyRow;
 use super::model::{CompanyDirectory, CompanyRecord};
-use crate::ui::foundation::{button_chrome, UiButtonVariant};
+use crate::ui::foundation::{UiButtonVariant, button_chrome};
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT};
 use bevy::prelude::*;

@@ -1,0 +1,12 @@
+// Existing ordinary opening: complete settlements in a full-size random world.
+(
+    world_area_scale: 1.0,
+    opening: Mature,
+    settlement_count: 10,
+    founders_per_settlement: 6, // Frontier only.
+    immigrants_per_day: None, // Total world-wide arrivals, not per town.
+    world_npc_cap: 5000,
+    seed: None,
+    hall_stock: None,
+    hall_treasury_pennies: None,
+)

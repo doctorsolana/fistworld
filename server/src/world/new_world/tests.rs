@@ -13,6 +13,67 @@ fn founding_names_are_unique_and_seeded() {
     assert_ne!(sites::name(1, 0), sites::name(2, 0));
 }
 
+/// Actual generated geography, props, coastal access and spawning. This is
+/// opt-in because map construction sets the process-wide legacy bounds and
+/// because an ordinary unit-test runner should not generate a 3.7 km world.
+#[test]
+#[ignore = "real small Frontier founding; run with FISTWORLD_WORLD_SEED to audit a seed"]
+fn small_frontier_founds_exactly_four_bare_halls_and_twenty_four_people() {
+    use crate::world::start_config::WorldStartConfig;
+    let config =
+        WorldStartConfig::from_ron(include_str!("../../../../config/worlds/small-frontier.ron"))
+            .unwrap();
+    let seed = std::env::var("FISTWORLD_WORLD_SEED").map_or(91, |raw| raw.parse().unwrap());
+    let terrain =
+        WorldTerrain::from_loaded_map(shared::map::load_session_map(&config.recipe(seed)).unwrap());
+    let mut world = World::new();
+    world.insert_resource(terrain);
+    world.insert_resource(config);
+    world.init_resource::<crate::world::identity::WorldIdAllocator>();
+    world.init_resource::<crate::world::village::PublishedTerrainDeltas>();
+    world
+        .run_system_once(crate::collision::library::setup_baked_colliders)
+        .unwrap();
+    world.run_system_once(populate).unwrap();
+    // Bootstrap is once-only: another startup pass cannot refill or duplicate.
+    let entities = world.entities().len();
+    world.run_system_once(populate).unwrap();
+    assert_eq!(world.entities().len(), entities);
+    let opening = world.resource::<WorldOpening>();
+    assert_eq!((opening.settlements, opening.residents), (4, 24));
+    assert!(!opening.arrivals.is_empty());
+    let halls: Vec<_> = world
+        .query::<(&SettlementId, &Settlement, &PlayerPosition)>()
+        .iter(&world)
+        .map(|(id, settlement, position)| (*id, settlement.residents, position.0))
+        .collect();
+    assert_eq!(halls.len(), 4);
+    for (index, (id, residents, position)) in halls.iter().enumerate() {
+        assert_eq!(*residents, 6);
+        assert!(
+            halls[..index]
+                .iter()
+                .all(|(_, _, other)| other.xz().distance(position.xz()) >= MIN_SETTLEMENT_DISTANCE)
+        );
+        let actual = world
+            .query::<(&PersonId, &ResidentOf, Option<&LivesAt>)>()
+            .iter(&world)
+            .filter(|(_, resident, _)| resident.0 == *id)
+            .map(|(_, _, home)| {
+                assert!(home.is_none());
+                1
+            })
+            .sum::<usize>();
+        assert_eq!(actual, 6);
+    }
+    assert_eq!(world.query::<&SettlementBuilding>().iter(&world).count(), 0);
+    assert_eq!(world.query::<&Company>().iter(&world).count(), 0);
+    assert_eq!(world.query::<&VillageRoad>().iter(&world).count(), 0);
+    eprintln!(
+        "FRONTIER_OPENING seed={seed} halls={halls:?} people=24 prebuilt_private_buildings=0"
+    );
+}
+
 /// Full-size geography is deliberately opt-in; small unit tests cannot prove
 /// that a random 8 km island supports ten connected, buildable settlements.
 #[test]
@@ -136,13 +197,17 @@ fn inhabited_world_has_real_homes_companies_stock_and_access() {
         entities,
         "a second startup/join must not duplicate the society"
     );
-    eprintln!("WORLD_OPENING_ACCEPTANCE seed={seed} settlements={} residents={population} buildings={} entities={entities}", halls.len(), buildings.len());
+    eprintln!(
+        "WORLD_OPENING_ACCEPTANCE seed={seed} settlements={} residents={population} buildings={} entities={entities}",
+        halls.len(),
+        buildings.len()
+    );
 }
 
 #[test]
-#[ignore = "ordinary aggregate economy over eight days on a full-size seeded world"]
+#[ignore = "ordinary physical economy over eight days on a full-size seeded world"]
 fn inhabited_world_continues_without_opening_subsidies() {
-    use crate::world::{regions, village, village_lab};
+    use crate::world::{regions, village_lab};
     use shared::economy::SettlementEconomy;
     let seed = std::env::var("FISTWORLD_WORLD_SEED").map_or(91, |s| s.parse().unwrap());
     let days: u32 = std::env::var("FISTWORLD_WORLD_SOAK_DAYS").map_or(8, |s| s.parse().unwrap());
@@ -152,31 +217,12 @@ fn inhabited_world_continues_without_opening_subsidies() {
         shared::map::load_session_map(&shared::map::new_world_recipe(seed)).unwrap(),
     ));
     app.init_resource::<regions::RegionRegistry>();
-    app.init_resource::<regions::StrategicClock>();
-    app.init_resource::<regions::StrategicStep>();
-    app.init_resource::<village::strategic::StrategicProductionProgress>();
     app.add_systems(
         Startup,
         (
             populate.after(crate::collision::library::setup_baked_colliders),
             regions::build_region_registry.after(populate),
         ),
-    );
-    app.add_systems(
-        Update,
-        village::strategic::update_person_simulation_lod
-            .before(village::schedule::VillageSimulationSet::Core),
-    );
-    app.add_systems(
-        Update,
-        (
-            regions::tick_strategic_world,
-            village::strategic::advance_strategic_travel,
-            village::strategic::advance_strategic_company_deliveries,
-            village::strategic::advance_strategic_villages,
-        )
-            .chain()
-            .after(village::schedule::VillageSimulationSet::Core),
     );
     app.world_mut()
         .spawn((WorldTime::new_default(), TimeWarp(1.0)));
@@ -202,9 +248,16 @@ fn inhabited_world_continues_without_opening_subsidies() {
                 .iter(world)
             {
                 produced = produced.max(economy.recent_food_production);
-                eprintln!("WORLD_SOAK seed={seed} day={day} {} residents={} reserve_days={:.2} food_produced={:.1} hunger={} homeless={} employed={}",
-                    settlement.name, settlement.residents, economy.reserve_days, economy.recent_food_production,
-                    economy.unmet_food, economy.homeless_residents, economy.private_filled_jobs);
+                eprintln!(
+                    "WORLD_SOAK seed={seed} day={day} {} residents={} reserve_days={:.2} food_produced={:.1} hunger={} homeless={} employed={}",
+                    settlement.name,
+                    settlement.residents,
+                    economy.reserve_days,
+                    economy.recent_food_production,
+                    economy.unmet_food,
+                    economy.homeless_residents,
+                    economy.private_filled_jobs
+                );
             }
         }
     }

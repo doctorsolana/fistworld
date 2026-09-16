@@ -3,7 +3,7 @@
 use crate::{
     player::hero::MoveTarget,
     world::{
-        village::{strategic::StrategicPerson, MootQueueTicket, VillagerIntent},
+        village::{MootQueueTicket, VillagerIntent},
         village_roads::{NavigationRouteFailed, NavigationRoutePending, TravelRoute},
     },
 };
@@ -40,25 +40,22 @@ pub(crate) fn install(app: &mut App) {
 
 fn sample(
     mut trace: ResMut<MovementTrace>,
-    actors: Query<
-        (
-            Entity,
-            &PersonId,
-            &PlayerPosition,
-            Option<&CharacterMotion>,
-            Option<&MoveTarget>,
-            Option<&TravelRoute>,
-            Option<&VillagerIntent>,
-            Option<&CharacterObjective>,
-            Option<&CharacterActivity>,
-            Has<PorterCartState>,
-            Has<BuildingDoorUse>,
-            Has<NavigationRoutePending>,
-            Has<NavigationRouteFailed>,
-            Option<&MootQueueTicket>,
-        ),
-        Without<StrategicPerson>,
-    >,
+    actors: Query<(
+        Entity,
+        &PersonId,
+        &PlayerPosition,
+        Option<&CharacterMotion>,
+        Option<&MoveTarget>,
+        Option<&TravelRoute>,
+        Option<&VillagerIntent>,
+        Option<&CharacterObjective>,
+        Option<&CharacterActivity>,
+        Has<PorterCartState>,
+        Has<BuildingDoorUse>,
+        Has<NavigationRoutePending>,
+        Has<NavigationRouteFailed>,
+        Option<&MootQueueTicket>,
+    )>,
 ) {
     if trace.sampled.elapsed() < Duration::from_millis(200) {
         return;

@@ -2,7 +2,10 @@
 //! a seed; society becomes mutable authoritative state after initialization.
 //! Nothing here runs per login, replenishes stores, or directs later growth.
 
+mod acceptance;
 mod connectivity;
+pub(crate) use acceptance::install as install_acceptance_observer;
+mod frontier;
 mod layout;
 mod planning;
 mod sites;
@@ -19,7 +22,9 @@ use crate::player::boat::CoastalVoyage;
 use bevy::prelude::*;
 use shared::terrain::WorldTerrain;
 
+#[cfg(test)]
 const SETTLEMENT_COUNT: usize = 10;
+#[cfg(test)]
 const MIN_SETTLEMENT_COUNT: usize = 8;
 const MIN_SETTLEMENT_DISTANCE: f32 = 480.0;
 
@@ -49,6 +54,7 @@ pub(crate) fn populate(
     mut ids: ResMut<crate::world::identity::WorldIdAllocator>,
     mut deltas: ResMut<crate::world::village::PublishedTerrainDeltas>,
     existing: Option<Res<WorldOpening>>,
+    config: Option<Res<crate::world::start_config::WorldStartConfig>>,
 ) {
     if existing.is_some() || terrain.generator.active_map_id() != shared::map::SESSION_MAP_ID {
         return;
@@ -62,7 +68,11 @@ pub(crate) fn populate(
         .expect("session recipe")
         .seed;
     let start = std::time::Instant::now();
-    let communities = planning::plan_world(&terrain, &library, seed)
+    let config = config.as_deref().cloned().unwrap_or_default();
+    config
+        .validate()
+        .unwrap_or_else(|error| panic!("Invalid world founding configuration: {error}"));
+    let communities = planning::plan_world(&terrain, &library, seed, &config)
         .unwrap_or_else(|error| panic!("World generation failed: {error}"));
     let mut opening = WorldOpening {
         seed,
@@ -81,6 +91,7 @@ pub(crate) fn populate(
             &mut ids,
             &mut deltas,
             &community,
+            &config,
         );
     }
     assert!(

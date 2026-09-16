@@ -5,10 +5,10 @@ use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender, RemoteId};
 
-use shared::components::{settlement_founding_refusal, Hero, TimeWarp};
+use shared::components::{Hero, TimeWarp, settlement_founding_refusal};
 use shared::protocol::{DevCommand, DevStatus, GodAccessResult, ReliableChannel, RequestGodAccess};
 use shared::spatial::SpatialObstacleGrid;
-use shared::terrain::{world_pos_in_bounds, WorldTerrain};
+use shared::terrain::WorldTerrain;
 
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 
@@ -214,7 +214,11 @@ pub(crate) fn safe_villager_spawn_position(
     let mut rejected = [0usize; 5];
 
     let mut validate = |point: Vec2| -> Option<Vec3> {
-        if !world_pos_in_bounds(point.x, point.y) {
+        if !terrain
+            .generator
+            .active_map_bounds()
+            .contains_xz(point.x, point.y)
+        {
             rejected[0] += 1;
             return None;
         }
@@ -325,6 +329,10 @@ pub fn handle_dev_commands(
         Option<&shared::components::CommandedBy>,
         Has<crate::player::combat::WarParty>,
         Option<&crate::world::village::HouseholdShoppingRoutine>,
+        Has<crate::world::regional_roads::RegionalRoadWorker>,
+        Has<crate::world::ports::PortBuilder>,
+        Has<crate::world::shipping::PortHaulRoutine>,
+        Has<crate::world::shipping::crew::ShipCrew>,
     )>,
     settlements: Query<(
         &shared::components::Settlement,
@@ -589,8 +597,18 @@ pub fn handle_dev_commands(
                     // Only VILLAGERS can be conscripted. A hero is somebody's
                     // persisted body; taking one into a retinue would let god
                     // mode hand a player's character to another player.
-                    let Some((unit, _, kind, current_owner, enlisted, shopping)) =
-                        kinds.iter().find(|(_, id, _, _, _, _)| **id == person)
+                    let Some((
+                        unit,
+                        _,
+                        kind,
+                        current_owner,
+                        enlisted,
+                        shopping,
+                        road_contract,
+                        port_builder,
+                        port_hauler,
+                        ship_crew,
+                    )) = kinds.iter().find(|(_, id, ..)| **id == person)
                     else {
                         continue;
                     };
@@ -599,6 +617,17 @@ pub fn handle_dev_commands(
                         continue;
                     }
                     if commanded {
+                        // A funded public contract retains its worker and the
+                        // title to any carried timber until completion/return.
+                        // Conscription must not leave two controllers fighting
+                        // over that worker or confiscate municipal supplies.
+                        if road_contract || port_builder || port_hauler || ship_crew {
+                            let message = "This resident is completing an infrastructure or ship assignment. Recruit them after the work, cargo return or safe disembarkation finishes.";
+                            commands.queue(move |world: &mut World| {
+                                crate::player::orders::feedback(world, link, 0, message.into());
+                            });
+                            continue;
+                        }
                         if shopping.is_some_and(|routine| routine.has_cargo()) {
                             let message = "Let this resident finish delivering household provisions before recruiting them.";
                             info!("Dev: refusing conscription: {message}");

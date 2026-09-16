@@ -8,6 +8,7 @@ use shared::economy::{CivicAccount, Good, GoodsInventory, MarketSeller, MootMark
 use crate::player::hero::MoveTarget;
 use crate::world::settlement_development::CivicHallBuilderRoutine;
 use crate::world::village::BusinessEventQueue;
+use crate::world::village::worker_activity::JobChangeBlocked;
 
 #[derive(Component, Default, Clone)]
 pub(super) struct WallWork {
@@ -125,32 +126,19 @@ fn purchase_batch(
 }
 
 fn free_worker(world: &mut World, id: SettlementId) -> Option<Entity> {
-    let mut query = world.query::<(Entity, &CivicEmployment)>();
+    let mut query = world.query_filtered::<(Entity, &CivicEmployment), (
+        Without<crate::player::hero::MoveTarget>,
+        Without<crate::world::village_roads::TravelRoute>,
+        Without<crate::world::village_roads::NavigationRoutePending>,
+    )>();
+    let mut blocked = world.query_filtered::<(), JobChangeBlocked>();
     query
         .iter(world)
         .filter(|(entity, job)| {
             job.settlement == id
                 && matches!(job.role, CivicRole::CityWorker | CivicRole::MootSteward)
-                && world
-                    .get::<crate::world::village::strategic::StrategicPerson>(*entity)
-                    .is_none()
-                && world.get::<CivicHallBuilderRoutine>(*entity).is_none()
+                && blocked.get(world, *entity).is_err()
                 && world.get::<MoveTarget>(*entity).is_none()
-                && world
-                    .get::<crate::world::village::HomeRoutine>(*entity)
-                    .is_none()
-                && world
-                    .get::<crate::world::village_roads::RoadBuilderRoutine>(*entity)
-                    .is_none()
-                && world
-                    .get::<crate::world::village::MarketCollectionRoutine>(*entity)
-                    .is_none()
-                && world
-                    .get::<crate::world::village::HouseholdShoppingRoutine>(*entity)
-                    .is_none()
-                && world
-                    .get::<crate::world::village::MootQueueTicket>(*entity)
-                    .is_none()
         })
         .map(|(entity, _)| entity)
         .min_by_key(|entity| entity.to_bits())
@@ -327,7 +315,7 @@ pub fn run_fortification_projects(
             }
             world
                 .entity_mut(worker)
-                .insert(CivicHallBuilderRoutine { project: entity });
+                .insert((CivicHallBuilderRoutine { project: entity },));
             work.builder = Some(worker);
             set_destination(
                 world,
@@ -477,6 +465,220 @@ pub fn run_fortification_projects(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn funded_wall_recruits_offscreen_civic_worker_after_journey_and_preserves_work_ownership() {
+        use shared::region::RegionCoord;
+
+        // Assignment, actual material procurement, job ownership and work are
+        // real systems. This focused fixture supplies arrival at each issued
+        // target; the separate shared-schedule lab proves intervening navigation.
+        let mut app = App::new();
+        app.init_resource::<BusinessEventQueue>()
+            .init_resource::<crate::world::regions::RegionRegistry>()
+            .add_systems(Update, run_fortification_projects);
+        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+        let id = SettlementId(1);
+        let mut market = MootMarket::default();
+        market.consign(MarketSeller::Treasury(SettlementId(2)), Good::Wood, 200, 3);
+        let mut stock = GoodsInventory::new(1000);
+        stock.add(Good::Wood, 200);
+        let hall = app
+            .world_mut()
+            .spawn((
+                id,
+                Settlement {
+                    name: "Offscreen walls".into(),
+                    tier: SettlementTier::Village,
+                    residents: 20,
+                    treasury: 10_000,
+                },
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.),
+                market,
+                stock,
+            ))
+            .id();
+        let section = FortificationSegment {
+            settlement_id: id,
+            circuit: 0,
+            start: Vec3::new(-4., 0., -20.),
+            end: Vec3::new(4., 0., -20.),
+            kind: FortificationKind::Wall,
+            material: FortificationMaterial::Palisade,
+            complete: false,
+        };
+        let required = section.material_required(FortificationMaterial::Palisade);
+        let project = app
+            .world_mut()
+            .spawn((section, GoodsInventory::new(1000), WallWork::default()))
+            .id();
+        let worker = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PersonId(1),
+                PlayerPosition(Vec3::X * 40.),
+                PlayerRotation(0.),
+                CharacterActivity::Idle,
+                RegionCoord::from_world_pos(Vec3::X * 40.),
+                CivicEmployment {
+                    settlement: id,
+                    role: CivicRole::CityWorker,
+                },
+                GoodsInventory::new(1000),
+                crate::player::hero::MoveTarget(Vec3::X * 45.),
+                crate::world::village_roads::TravelRoute {
+                    goal: Vec3::X * 45.,
+                    waypoints: vec![crate::world::village_roads::RouteWaypoint {
+                        position: Vec3::X * 45.,
+                        on_road: false,
+                    }],
+                    next: 0,
+                    geometry_version: 0,
+                },
+                crate::world::village::VillagerIntent::Resident { settlement: hall },
+            ))
+            .id();
+        let tick = |app: &mut App| {
+            app.world_mut()
+                .get_mut::<WorldTime>(clock)
+                .unwrap()
+                .advance(0.6, 0.6);
+            app.update();
+        };
+        app.update();
+        tick(&mut app);
+        assert!(
+            app.world()
+                .get::<WallWork>(project)
+                .unwrap()
+                .builder
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .get::<crate::world::village_roads::TravelRoute>(worker)
+                .is_some()
+        );
+        assert_eq!(
+            app.world().get::<Settlement>(hall).unwrap().treasury,
+            10_000
+        );
+
+        // Completing the old journey alone is insufficient while another
+        // accepted civic contract owns the person.
+        let prior_project = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .entity_mut(worker)
+            .remove::<(
+                crate::player::hero::MoveTarget,
+                crate::world::village_roads::TravelRoute,
+            )>()
+            .insert(CivicHallBuilderRoutine {
+                project: prior_project,
+            });
+        tick(&mut app);
+        assert!(
+            app.world()
+                .get::<WallWork>(project)
+                .unwrap()
+                .builder
+                .is_none()
+        );
+        assert_eq!(
+            app.world()
+                .get::<CivicHallBuilderRoutine>(worker)
+                .unwrap()
+                .project,
+            prior_project
+        );
+        app.world_mut()
+            .entity_mut(worker)
+            .remove::<CivicHallBuilderRoutine>();
+
+        tick(&mut app);
+        assert_eq!(
+            app.world().get::<WallWork>(project).unwrap().builder,
+            Some(worker)
+        );
+
+        tick(&mut app);
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(worker)
+                .unwrap()
+                .amount(Good::Wood),
+            0
+        );
+        assert_eq!(
+            app.world().get::<WallWork>(project).unwrap().seconds_worked,
+            0.
+        );
+        assert_eq!(
+            app.world().get::<Settlement>(hall).unwrap().treasury,
+            10_000
+        );
+
+        let pickup = app.world().get::<MoveTarget>(worker).unwrap().0;
+        app.world_mut().get_mut::<PlayerPosition>(worker).unwrap().0 = pickup;
+        tick(&mut app);
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(worker)
+                .unwrap()
+                .amount(Good::Wood),
+            required
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(hall)
+                .unwrap()
+                .amount(Good::Wood),
+            200 - required
+        );
+        assert_eq!(
+            app.world().get::<Settlement>(hall).unwrap().treasury,
+            10_000 - u64::from(required) * 3
+        );
+        let stand = app.world().get::<MoveTarget>(worker).unwrap().0;
+        app.world_mut().get_mut::<PlayerPosition>(worker).unwrap().0 = stand;
+        tick(&mut app);
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(project)
+                .unwrap()
+                .amount(Good::Wood),
+            required
+        );
+        for _ in 0..100 {
+            tick(&mut app);
+            if app
+                .world()
+                .get::<FortificationSegment>(project)
+                .unwrap()
+                .complete
+            {
+                break;
+            }
+        }
+        assert!(
+            app.world()
+                .get::<FortificationSegment>(project)
+                .unwrap()
+                .complete
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(project)
+                .unwrap()
+                .amount(Good::Wood),
+            0
+        );
+        assert!(app.world().get::<CivicHallBuilderRoutine>(worker).is_none());
+        assert!(app.world().get::<MoveTarget>(worker).is_none());
+    }
+
     #[test]
     fn civic_procurement_moves_stock_and_money_into_real_worker_cargo() {
         let mut world = World::new();
@@ -685,6 +887,14 @@ mod tests {
                 return;
             }
         }
-        panic!("defense did not complete: carried={seen_carried}, delivered={seen_delivered}, hammer={seen_hammer}; work={:?}",app.world().get::<WallWork>(section).map(|w|(w.builder,w.carried,w.seconds_worked,w.retry_after)));
+        panic!(
+            "defense did not complete: carried={seen_carried}, delivered={seen_delivered}, hammer={seen_hammer}; work={:?}",
+            app.world().get::<WallWork>(section).map(|w| (
+                w.builder,
+                w.carried,
+                w.seconds_worked,
+                w.retry_after
+            ))
+        );
     }
 }

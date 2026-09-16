@@ -4,8 +4,8 @@ use super::{BusinessAccount, Good, MootMarket, PENNIES_PER_COIN};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Ordinary business wage. Kept equal across founding trades until skills and
-/// a labour market exist; importantly it is paid for holding a real position,
+/// Opening business wage, subsequently reviewed against local labour offers,
+/// sustainable contribution and company reserves. Paid for a real position,
 /// not for each animation loop completed at high time warp.
 pub const FOUNDING_DAILY_WAGE: u64 = PENNIES_PER_COIN;
 
@@ -393,83 +393,68 @@ impl Default for BusinessProcurementPolicy {
     }
 }
 
-/// Owner decisions which are independent from a particular product.
+/// Company risk posture, independent from its current operating state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BusinessStrategy {
     /// Ordinary margins and a three-day payroll reserve.
     #[default]
     Balanced,
-    /// Lower margins, quicker price cuts and a smaller reserve to win volume.
-    Growth,
-    /// Protect a large margin and accept slower sales.
-    HighMargin,
-    /// Hold extra working cash and rescue the firm readily.
-    Cautious,
-    /// React strongly to shortages and accept more cash-flow risk.
-    Opportunistic,
+    /// Competitive prices and smaller cash reserves to support expansion.
+    Aggressive,
+    /// Larger cash and input reserves with slower price adjustments.
+    Conservative,
 }
 
 impl BusinessStrategy {
+    pub const ALL: [Self; 3] = [Self::Aggressive, Self::Balanced, Self::Conservative];
+
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Aggressive => "Aggressive",
             Self::Balanced => "Balanced",
-            Self::Growth => "Low-price growth",
-            Self::HighMargin => "High margin",
-            Self::Cautious => "Cautious reserves",
-            Self::Opportunistic => "Opportunistic",
+            Self::Conservative => "Conservative",
         }
     }
 
     pub const fn target_margin_bps(self) -> u16 {
         match self {
+            Self::Aggressive => 750,
             Self::Balanced => 1_500,
-            Self::Growth => 750,
-            Self::HighMargin => 3_000,
-            Self::Cautious => 2_000,
-            Self::Opportunistic => 2_500,
+            Self::Conservative => 2_000,
         }
     }
 
     pub const fn payroll_reserve_days(self) -> u8 {
         match self {
-            Self::Growth => 2,
-            Self::Balanced | Self::HighMargin | Self::Opportunistic => 3,
-            Self::Cautious => 5,
+            Self::Aggressive => 2,
+            Self::Balanced => 3,
+            Self::Conservative => 5,
         }
     }
 
-    /// Normal input coverage selected by an NPC Company Master. The value is
-    /// deliberately small: physical deliveries and company-first reservation
-    /// prevent stockouts without turning every processor into a warehouse.
+    /// Bounded input buffers; deliveries still move actual stock and the
+    /// production runner works its full shift while inputs/capacity permit.
     pub const fn input_coverage_days(self) -> u8 {
         match self {
-            Self::Balanced | Self::Growth | Self::HighMargin => 2,
-            Self::Cautious => 4,
-            Self::Opportunistic => 1,
+            Self::Aggressive | Self::Balanced => 2,
+            Self::Conservative => 4,
         }
     }
 
     pub const fn daily_price_step_bps(self) -> u16 {
         match self {
-            Self::Cautious => 300,
-            Self::Balanced | Self::HighMargin => 500,
-            Self::Growth => 700,
-            Self::Opportunistic => 900,
+            Self::Aggressive => 700,
+            Self::Balanced => 500,
+            Self::Conservative => 300,
         }
     }
 
-    /// How this owner initially positions a new firm's price against the
-    /// observed local market. This is a private strategy choice, not a Hall
-    /// discount or price control. Growth owners seek volume, balanced and
-    /// cautious owners broadly match the market, high-margin owners ask more,
-    /// and opportunists exploit shortages but discount a well-supplied market.
-    pub const fn opening_market_position_bps(self, scarce: bool) -> u16 {
+    /// Opening prices track the observed market. An aggressive manager seeks
+    /// volume with a modest undercut; other managers initially match it.
+    pub const fn opening_market_position_bps(self) -> u16 {
         match self {
-            Self::Growth => 9_000,
-            Self::Balanced | Self::Cautious => 10_000,
-            Self::HighMargin => 11_500,
-            Self::Opportunistic if scarce => 12_000,
-            Self::Opportunistic => 9_000,
+            Self::Aggressive => 9_000,
+            Self::Balanced | Self::Conservative => 10_000,
         }
     }
 }
@@ -648,9 +633,9 @@ pub struct BusinessLiquidation {
     pub reason: BusinessSaleReason,
     #[serde(default)]
     pub wage_claims: Vec<BusinessWageClaim>,
-    /// Insolvency starts after management has already released the staff.
-    /// Succession liquidation starts in the mortality pass and lets the next
-    /// management review preserve claims before releasing them.
+    /// The last management review confirmed that actual employment has cleared
+    /// after final deliveries and physical exits. Insolvency and succession
+    /// retain named claims while staff complete that handoff.
     #[serde(default = "liquidation_staff_already_released")]
     pub staff_released: bool,
 }

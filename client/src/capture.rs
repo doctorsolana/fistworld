@@ -54,6 +54,9 @@ mod rural_fixtures;
 mod square_fixtures;
 pub(crate) use presentation::{setup_capture_presentation, sync_capture_presentation};
 mod encyclopedia_tour;
+mod economy_navigation;
+mod fleet_ui;
+mod shipping_hulls;
 mod fortification_fixtures;
 mod journey_tour;
 mod ledger_nested;
@@ -413,6 +416,9 @@ pub fn run(mut config: CaptureConfig) {
     music_review::install(&mut app);
     journey_tour::install(&mut app);
     encyclopedia_tour::install(&mut app);
+    economy_navigation::install(&mut app);
+    fleet_ui::install(&mut app);
+    shipping_hulls::install(&mut app);
     ledger_nested::install(&mut app);
     crate::ui::name_entry::capture::install(&mut app);
     startup_tour::install(&mut app);
@@ -474,6 +480,9 @@ pub fn run(mut config: CaptureConfig) {
                 .run_if(music_review::ready)
                 .run_if(journey_tour::ready)
                 .run_if(encyclopedia_tour::ready)
+                .run_if(economy_navigation::ready)
+                .run_if(fleet_ui::ready)
+                .run_if(shipping_hulls::ready)
                 .run_if(ledger_nested::ready)
                 .run_if(startup_tour::ready)
                 .run_if(wildlife::ready)

@@ -2,15 +2,16 @@
 
 use super::districts::SettlementUrbanPlan;
 use super::neighborhood::{
-    affinity_score, house_frontage_candidates, house_frontage_pitch, PlotNeighbor,
+    PlotNeighbor, affinity_score, house_frontage_candidates, house_frontage_pitch,
 };
 use super::road_access::{
-    direct_road_access_is_coarsely_clear, nearest_completed_road_frontage,
-    planned_road_access_path, RoadAccessBlocker,
+    RoadAccessBlocker, direct_road_access_is_coarsely_clear, nearest_completed_road_frontage,
+    planned_road_access_path,
 };
 use super::terrain::{
-    farmstead_earthwork_effort, livestock_earthwork_effort, plot_fits_navigation_bounds,
-    resource_plot_is_viable, site_placement_suitability, slope_at, FREEBOARD, MAX_BUILD_SLOPE,
+    FREEBOARD, MAX_BUILD_SLOPE, building_freeboard, farmstead_earthwork_effort,
+    livestock_earthwork_effort, plot_fits_navigation_bounds, resource_plot_is_viable,
+    site_placement_suitability, slope_at,
 };
 use crate::world::village::*;
 
@@ -670,7 +671,7 @@ pub(super) fn find_site_with_plan_diagnostics(
                 }
                 0.0
             };
-            if !plot_fits_navigation_bounds(kind, candidate, rotation) {
+            if !plot_fits_navigation_bounds(terrain, kind, candidate, rotation) {
                 reject!(bounds);
                 continue;
             }
@@ -679,7 +680,7 @@ pub(super) fn find_site_with_plan_diagnostics(
             // global ocean plane misses inland rivers entirely.
             if shared::components::minimum_building_water_clearance(
                 terrain, candidate, kind, rotation,
-            ) < FREEBOARD
+            ) < building_freeboard(kind)
             {
                 reject!(water);
                 continue;
@@ -1048,8 +1049,11 @@ mod neighborhood_integration_tests {
             .local
         });
         for (i, location) in locations.iter().enumerate() {
-            assert!(locations[..i].iter().all(|other| other.distance(*location) >= SettlementBuildingKind::House.clearance() * 2.0),
-                "nominally adjacent grid slots must not fail their own house reservations: {locations:?}");
+            assert!(
+                locations[..i].iter().all(|other| other.distance(*location)
+                    >= SettlementBuildingKind::House.clearance() * 2.0),
+                "nominally adjacent grid slots must not fail their own house reservations: {locations:?}"
+            );
         }
     }
 

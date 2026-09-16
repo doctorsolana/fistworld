@@ -2,28 +2,60 @@
 
 use super::demand::{
     development_pipeline_has_capacity, has_planned_food_extractor, next_civic_need,
-    processing_upstream_is_complete, should_try_complementary_fishing,
+    processing_inputs_are_available, should_try_complementary_fishing,
 };
 use super::districts::SettlementUrbanPlan;
 use super::fishing::{advance_incremental_fishing_search, find_incremental_fishing_site};
 use super::funding::{
-    debit_company_expansion, CompanyExpansionFunds, NPC_PERSONAL_INVESTMENT_RESERVE,
+    CompanyExpansionFunds, NPC_PERSONAL_INVESTMENT_RESERVE, debit_company_expansion,
 };
 use super::market_signals::accumulate_business_signals;
 use super::neighborhood::PlotNeighbor;
 use super::plots::{
-    advance_land_search, find_permit_site, SiteSearchRejections, MAX_SETTLEMENT_SEARCH_RADIUS,
+    MAX_SETTLEMENT_SEARCH_RADIUS, SiteSearchRejections, advance_land_search, find_permit_site,
 };
 use super::road_access::{
     planned_road_access_path, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
 };
 use super::search_access::refresh_land_search_access;
 use super::terrain::site_quality;
+use crate::world::village::development_market::investment::{InvestmentMarket, RestartPlan};
 use crate::world::village::development_market::{
-    investor_score, investor_threshold, minimum_startup_capital, private_opportunities,
-    replicated_opportunity_board, DevelopmentMarketSignals, DevelopmentOpportunity,
+    DevelopmentMarketSignals, DevelopmentOpportunity, investor_score, investor_threshold,
+    minimum_startup_capital, private_opportunities, replicated_opportunity_board,
 };
 use crate::world::village::*;
+
+const PROCESSOR_RESTART_GRACE_DAYS: u32 = 3;
+
+#[derive(Default)]
+pub struct ProcessorEntryReview {
+    day: Option<u32>,
+    markets:
+        HashMap<shared::components::SettlementId, (InvestmentMarket, [Option<RestartPlan>; 2])>,
+    failed_since: HashMap<shared::components::BuildingId, u32>,
+    challengers: HashSet<shared::components::BuildingId>,
+}
+
+impl ProcessorEntryReview {
+    fn review_site(
+        &mut self,
+        day: u32,
+        id: shared::components::BuildingId,
+        failed: bool,
+        can_restart: bool,
+    ) {
+        if failed && !can_restart {
+            let since = *self.failed_since.entry(id).or_insert(day);
+            if day.saturating_sub(since) >= PROCESSOR_RESTART_GRACE_DAYS {
+                self.challengers.insert(id);
+            }
+        } else {
+            self.failed_since.remove(&id);
+            self.challengers.remove(&id);
+        }
+    }
+}
 
 /// Optional fine-grained permit telemetry used by the deterministic lab.
 ///
@@ -82,6 +114,7 @@ pub fn consider_permits(
             Option<&BusinessWagePolicy>,
             Option<&BusinessStaffingPolicy>,
             Option<&shared::components::HouseAppearance>,
+            Option<&BusinessSalePolicy>,
         )>,
         Query<(
             Entity,
@@ -113,10 +146,10 @@ pub fn consider_permits(
         Option<&WorkStatus>,
         Option<&CharacterAttributes>,
         Option<&shared::components::LivesAt>,
-        Option<&strategic::StrategicPerson>,
+        Has<TravelRoute>,
         Option<&shared::components::CivicEmployment>,
     )>,
-    mut wallets: Query<&mut Wallet>,
+    (mut wallets, mut entry_review): (Query<&mut Wallet>, Local<ProcessorEntryReview>),
 ) {
     let civic_day = world_time
         .iter()
@@ -129,6 +162,48 @@ pub fn consider_permits(
     clock.permit = 0.0;
     clock.permit_round = clock.permit_round.wrapping_add(1);
     let permit_round = clock.permit_round;
+    let day = civic_day.saturating_sub(1);
+    let review_entry = entry_review.day != Some(day);
+    if review_entry {
+        entry_review.day = Some(day);
+        entry_review.markets.clear();
+        entry_review.challengers.clear();
+        let mut local_wages = HashMap::<shared::components::SettlementId, Vec<u64>>::new();
+        for (_, building, building_of, _, condition, _, _, _, _, wage, _, _, _) in
+            buildings.p0().iter()
+        {
+            if is_private_business(building.kind)
+                && condition.is_none_or(|condition| condition.state.accepts_new_workers())
+            {
+                if let Some(wage) = wage {
+                    local_wages
+                        .entry(building_of.0)
+                        .or_default()
+                        .push(wage.daily_wage);
+                }
+            }
+        }
+        for wages in local_wages.values_mut() {
+            wages.sort_unstable();
+        }
+        for (_, _, _, settlement_id, _, _, market, _, _) in settlements.iter() {
+            if let Some(market) = market {
+                let mut reading = InvestmentMarket::new(market);
+                let wage = local_wages
+                    .get(settlement_id)
+                    .map_or(FOUNDING_DAILY_WAGE, |wages| wages[wages.len() / 2]);
+                reading.set_hiring_wage(wage);
+                let plans = [
+                    SettlementBuildingKind::Windmill,
+                    SettlementBuildingKind::Bakery,
+                ]
+                .map(|kind| reading.restart_plan(kind, 1.0, wage, 0, None, None));
+                entry_review
+                    .markets
+                    .insert(*settlement_id, (reading, plans));
+            }
+        }
+    }
 
     let Some(terrain) = planning.terrain.as_deref() else {
         return;
@@ -176,9 +251,10 @@ pub fn consider_permits(
         .collect();
     let mut company_funds = HashMap::<shared::components::CompanyId, CompanyExpansionFunds>::new();
     let mut protected_payroll = HashMap::<shared::components::CompanyId, u64>::new();
+    let mut company_liquidity = HashMap::new();
     {
         let business_read = buildings.p0();
-        for (_, building, _, _, _, _, account, _, operated_by, wage, staffing, _) in
+        for (_, building, _, _, _, _, account, _, operated_by, wage, staffing, _, _) in
             business_read.iter()
         {
             let (Some(_account), Some(operated_by)) = (account, operated_by) else {
@@ -209,6 +285,13 @@ pub fn consider_permits(
     {
         let mut accounts = buildings.p1();
         for (entity, company_id, account) in accounts.iter_mut() {
+            company_liquidity.insert(
+                *company_id,
+                account
+                    .cash
+                    .saturating_sub(account.wage_arrears)
+                    .saturating_sub(account.tax_arrears),
+            );
             let reserve_requirement = account
                 .wage_arrears
                 .saturating_add(account.tax_arrears)
@@ -248,6 +331,10 @@ pub fn consider_permits(
     ) in settlements.iter_mut()
     {
         let policies = policies.copied().unwrap_or_default();
+        let hiring_wage = entry_review
+            .markets
+            .get(settlement_id)
+            .map_or(FOUNDING_DAILY_WAGE, |(market, _)| market.hiring_wage());
         // Count what stands AND what is already approved, or three residents
         // deciding on successive permit ticks all build the same thing.
         let mut have: HashMap<SettlementBuildingKind, usize> = HashMap::new();
@@ -256,13 +343,14 @@ pub fn consider_permits(
         let mut pending_housing_capacity = 0usize;
         let mut house_capacity_by_id = HashMap::new();
         let business_read = buildings.p0();
-        for (_, building, _, _, _, _, _, building_id, _, _, _, appearance) in business_read
-            .iter()
-            .filter(|(_, _, building_of, _, condition, _, _, _, _, _, _, _)| {
-                building_of.0 == *settlement_id
-                    && !condition
-                        .is_some_and(|condition| !condition.state.counts_as_active_capacity())
-            })
+        for (_, building, _, _, _, _, _, building_id, _, _, _, appearance, _) in
+            business_read.iter().filter(
+                |(_, _, building_of, _, condition, _, _, _, _, _, _, _, _)| {
+                    building_of.0 == *settlement_id
+                        && !condition
+                            .is_some_and(|condition| !condition.state.counts_as_active_capacity())
+                },
+            )
         {
             *have.entry(building.kind).or_default() += 1;
             *completed.entry(building.kind).or_default() += 1;
@@ -384,8 +472,21 @@ pub fn consider_permits(
             });
             signals.recent_wheat_export_demand = merchant_demand.units(*settlement_id, Good::Wheat);
         }
-        for (_, building, building_of, _, condition, inventory, account, _, _, _, staffing, _) in
-            business_read.iter()
+        for (
+            _,
+            building,
+            building_of,
+            _,
+            condition,
+            inventory,
+            account,
+            building_id,
+            operated_by,
+            wage,
+            staffing,
+            _,
+            sale,
+        ) in business_read.iter()
         {
             if building_of.0 != *settlement_id {
                 continue;
@@ -399,6 +500,75 @@ pub fn consider_permits(
                 staffing,
                 market,
             );
+            let processor_index = match building.kind {
+                SettlementBuildingKind::Windmill => Some(0),
+                SettlementBuildingKind::Bakery => Some(1),
+                _ => None,
+            };
+            if let (Some(index), Some(id)) = (processor_index, building_id) {
+                if review_entry {
+                    let failed = condition
+                        .is_some_and(|condition| condition.state != BusinessState::New)
+                        && (condition
+                            .is_some_and(|condition| !condition.state.counts_as_active_capacity())
+                            || staffing.is_some_and(|staffing| staffing.enabled_positions == 0)
+                            || account.is_some_and(|account| {
+                                account.previous_day.day != u32::MAX
+                                    && account.previous_day.profit() <= 0
+                            }));
+                    let may_self_restart = condition.is_none_or(|condition| {
+                        condition.state.accepts_new_workers()
+                            || condition.state == BusinessState::Mothballed
+                    });
+                    let can_restart = may_self_restart
+                        && entry_review
+                            .markets
+                            .get(settlement_id)
+                            .is_some_and(|(market, _)| {
+                                let own_sales = account.map_or(0, |account| {
+                                    account
+                                        .current_day
+                                        .sold_units
+                                        .max(account.previous_day.sold_units)
+                                });
+                                let fixed = sale
+                                    .filter(|sale| !sale.automatic_pricing)
+                                    .map(|sale| sale.asking_unit_price);
+                                let cash = operated_by
+                                    .and_then(|operation| {
+                                        company_liquidity.get(&operation.0).copied()
+                                    })
+                                    .unwrap_or_else(|| {
+                                        account
+                                            .map_or(0, |account| account.unposted_company_capital)
+                                    });
+                                market
+                                    .restart_plan(
+                                        building.kind,
+                                        building.quality,
+                                        wage.map_or(FOUNDING_DAILY_WAGE, |wage| wage.daily_wage),
+                                        own_sales,
+                                        inventory,
+                                        fixed,
+                                    )
+                                    .is_some_and(|plan| cash >= plan.working_cash)
+                            });
+                    entry_review.review_site(day, *id, failed, can_restart);
+                }
+                if entry_review.challengers.contains(id) {
+                    if let Some(plan) = entry_review
+                        .markets
+                        .get(settlement_id)
+                        .and_then(|(_, plans)| plans[index])
+                    {
+                        if index == 0 {
+                            signals.mill_challenger_units = plan.output_units;
+                        } else {
+                            signals.bakery_challenger_units = plan.output_units;
+                        }
+                    }
+                }
+            }
         }
         if let Some(market) = market {
             signals.wheat_stock = signals
@@ -489,7 +659,7 @@ pub fn consider_permits(
         let mut storage_holders = HashSet::<shared::components::PersonId>::new();
         let mut holdings_by_kind =
             HashSet::<(shared::components::PersonId, SettlementBuildingKind)>::new();
-        for (_, building, building_of, owner, _, _, _, _, _, _, _, _) in business_read.iter() {
+        for (_, building, building_of, owner, _, _, _, _, _, _, _, _, _) in business_read.iter() {
             if building_of.0 == *settlement_id {
                 if let Some(owner) = owner {
                     *holding_counts.entry(owner.0).or_default() += 1;
@@ -560,7 +730,7 @@ pub fn consider_permits(
                     status,
                     attributes,
                     lives_at,
-                    strategic,
+                    travelling,
                     civic_job,
                 )| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == settlement_entity)
@@ -570,7 +740,7 @@ pub fn consider_permits(
                             status.copied(),
                             attributes.copied(),
                             lives_at.is_some(),
-                            strategic.is_some(),
+                            travelling,
                             civic_job.copied(),
                             planning.permit_busy.get(entity).is_ok(),
                         ))
@@ -647,7 +817,14 @@ pub fn consider_permits(
         let mut selected: Option<(DevelopmentOpportunity, f32)> = None;
         for opportunity in opportunities.iter().copied() {
             if opportunity_is_deferred(opportunity.kind)
-                || !processing_upstream_is_complete(opportunity.kind, &completed)
+                || !processing_inputs_are_available(
+                    opportunity.kind,
+                    &completed,
+                    entry_review
+                        .markets
+                        .get(settlement_id)
+                        .map(|(market, _)| market),
+                )
             {
                 continue;
             }
@@ -660,11 +837,11 @@ pub fn consider_permits(
                         status,
                         attributes,
                         housed,
-                        strategic,
+                        travelling,
                         civic_job,
                         busy,
                     )| {
-                        if *strategic
+                        if *travelling
                             || civic_job.is_some()
                             || *busy
                             || (opportunity.kind == SettlementBuildingKind::House && *housed)
@@ -701,6 +878,7 @@ pub fn consider_permits(
                             market,
                             holding_count,
                             person_id.0,
+                            hiring_wage,
                         );
                         if status.is_some_and(|status| status == WorkStatus::Chilling)
                             && holding_count > 0
@@ -780,8 +958,8 @@ pub fn consider_permits(
         // actual applicant is selected again after geography chooses the exact
         // kind, so this is only a cheap admission guard, never an approval.
         let has_eligible_applicant = permit_candidates.iter().any(
-            |(entity, person_id, _, _, housed, strategic, civic_job, busy)| {
-                if *strategic || *busy || (missing == SettlementBuildingKind::House && *housed) {
+            |(entity, person_id, _, _, housed, travelling, civic_job, busy)| {
+                if *travelling || *busy || (missing == SettlementBuildingKind::House && *housed) {
                     return false;
                 }
                 if missing != SettlementBuildingKind::House
@@ -1236,7 +1414,14 @@ pub fn consider_permits(
             }
             continue;
         }
-        if !processing_upstream_is_complete(kind, &completed) {
+        if !processing_inputs_are_available(
+            kind,
+            &completed,
+            entry_review
+                .markets
+                .get(settlement_id)
+                .map(|(market, _)| market),
+        ) {
             // Alternative-site selection can provisionally pretend an
             // unavailable request exists to discover the next useful plot.
             // Never let that bookkeeping fiction authorize a processor whose
@@ -1329,8 +1514,8 @@ pub fn consider_permits(
         // personal judgement most strongly support this exact site.
         let applicant = villagers
             .iter()
-            .filter(|(_, _, _, intent, _, _, _, strategic, _)| {
-                strategic.is_none()
+            .filter(|(_, _, _, intent, _, _, _, travelling, _)| {
+                !*travelling
                     && matches!(intent, VillagerIntent::Resident { settlement } if *settlement == settlement_entity)
             })
             .filter_map(
@@ -1430,6 +1615,7 @@ pub fn consider_permits(
                         market,
                         holding_count,
                         person_id.0,
+                        hiring_wage,
                     );
                     if status.is_some_and(|status| *status == WorkStatus::Chilling)
                         && holding_count > 0
@@ -1685,6 +1871,7 @@ pub fn consider_permits(
                 .remove::<InternalDeliveryRoutine>()
                 .remove::<MarketCollectionRoutine>()
                 .remove::<WorkplaceDoorTransit>()
+                .remove::<WorkplaceInterior>()
                 .remove::<BuildingDoorUse>()
                 .remove::<PierTraversal>()
                 .remove::<WorkerOffDuty>()
@@ -1695,10 +1882,10 @@ pub fn consider_permits(
                 .remove::<NavigationRouteFailed>();
         }
 
-        // Approval reserves the plot and money immediately, but a tactical
-        // applicant first joins the Moot forecourt line to collect the stamped
-        // permit. Focused unit tests without the shared runtime retain the
-        // direct seam; both paths begin identical physical material work.
+        // Approval reserves the plot and money immediately. The applicant
+        // first joins the Moot forecourt line to collect the stamped permit.
+        // Focused tests without the shared runtime retain the direct seam;
+        // both paths begin identical physical material work.
         if let Some(queue_clock) = queue_clock.as_deref_mut() {
             moot_services::wait_for_permit(
                 &mut commands,
@@ -1736,5 +1923,36 @@ pub fn consider_permits(
             position.x,
             position.z
         );
+    }
+    if review_entry {
+        let alive: HashSet<_> = buildings
+            .p0()
+            .iter()
+            .filter_map(|(_, _, _, _, _, _, _, id, ..)| id.copied())
+            .collect();
+        entry_review.failed_since.retain(|id, _| alive.contains(id));
+        entry_review.challengers.retain(|id| alive.contains(id));
+    }
+}
+
+#[cfg(test)]
+mod processor_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn failed_incumbent_has_a_persistent_daily_grace_then_allows_a_viable_challenger() {
+        let id = shared::components::BuildingId(9);
+        let mut review = ProcessorEntryReview::default();
+        for _ in 0..100 {
+            review.review_site(4, id, true, false);
+        }
+        assert!(!review.challengers.contains(&id));
+        review.review_site(6, id, true, false);
+        assert!(!review.challengers.contains(&id));
+        review.review_site(7, id, true, false);
+        assert!(review.challengers.contains(&id));
+        review.review_site(8, id, true, true);
+        assert!(!review.challengers.contains(&id));
+        assert!(!review.failed_since.contains_key(&id));
     }
 }

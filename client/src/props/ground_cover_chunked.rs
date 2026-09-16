@@ -9,15 +9,15 @@ use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use shared::building::{point_in_any_build_zone_entries, BuildZoneEntry};
-use shared::components::{distance_squared_to_segment, VillageRoad};
+use shared::building::{BuildZoneEntry, point_in_any_build_zone_entries};
+use shared::components::{VillageRoad, distance_squared_to_segment};
 use shared::props::{PropKind, PropSpawn};
-use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
+use shared::terrain::{CHUNK_SIZE, ChunkCoord, WorldTerrain};
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
 use crate::streaming::{
-    camera_view_distance, chunk_stream_priority, streaming_anchor, streaming_view_priority,
-    AnchorCamera, AnchorPlayer,
+    AnchorCamera, AnchorPlayer, camera_view_distance, chunk_stream_priority, streaming_anchor,
+    streaming_view_priority,
 };
 use crate::terrain::{LoadedChunks, TerrainChunk};
 
@@ -932,11 +932,12 @@ mod tests {
             .entity_mut(building)
             .insert(BuildingPosition(Vec3::new(32.0, 1.0, 32.0)));
         app.update();
-        assert!(app
-            .world()
-            .resource::<ChunkedGroundCoverState>()
-            .dirty
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<ChunkedGroundCoverState>()
+                .dirty
+                .is_empty()
+        );
 
         app.world_mut()
             .get_mut::<PlacedBuilding>(building)
@@ -997,11 +998,12 @@ mod tests {
             .unwrap()
             .market_rotation = 0.7;
         app.update();
-        assert!(app
-            .world()
-            .resource::<ChunkedGroundCoverState>()
-            .dirty
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<ChunkedGroundCoverState>()
+                .dirty
+                .is_empty()
+        );
         app.world_mut()
             .get_mut::<SettlementCivicSquare>(square)
             .unwrap()
@@ -1057,21 +1059,23 @@ mod tests {
             ))
             .id();
         app.update();
-        assert!(app
-            .world()
-            .resource::<ChunkedGroundCoverState>()
-            .dirty
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<ChunkedGroundCoverState>()
+                .dirty
+                .is_empty()
+        );
         app.world_mut()
             .get_mut::<Mesh3d>(chunk)
             .unwrap()
             .set_changed();
         app.update();
-        assert!(app
-            .world()
-            .resource::<ChunkedGroundCoverState>()
-            .dirty
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<ChunkedGroundCoverState>()
+                .dirty
+                .is_empty()
+        );
 
         app.world_mut()
             .entity_mut(chunk)
@@ -1099,11 +1103,12 @@ mod tests {
             Mesh3d(handles[1].clone()),
         ));
         app.update();
-        assert!(app
-            .world()
-            .resource::<ChunkedGroundCoverState>()
-            .dirty
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<ChunkedGroundCoverState>()
+                .dirty
+                .is_empty()
+        );
 
         // Terrain currently replaces entities, but both lifetime forms work.
         app.world_mut().despawn(chunk);
@@ -1252,10 +1257,12 @@ mod tests {
         world.clear_trackers();
         world.clear_trackers();
         world.run_system_once(clear_chunked_ground_cover).unwrap();
-        assert!(world
-            .resource::<ChunkedGroundCoverState>()
-            .road_bounds
-            .is_empty());
+        assert!(
+            world
+                .resource::<ChunkedGroundCoverState>()
+                .road_bounds
+                .is_empty()
+        );
         assert!(
             !world
                 .resource::<ChunkedGroundCoverState>()
@@ -1324,6 +1331,73 @@ mod tests {
         assert_eq!(
             range.end_margin,
             GROUND_COVER_END_DISTANCE..GROUND_COVER_END_DISTANCE
+        );
+    }
+    #[test]
+    fn port_board_geometry_dirties_only_affected_grass_chunks() {
+        use shared::components::{PortGeometry, SettlementId, SettlementPort, ShipKind};
+        let mut app = grass_footprint_app();
+        let old = ChunkCoord::new(0, 0);
+        let new = ChunkCoord::new(3, 0);
+        let mut port = SettlementPort {
+            settlement: SettlementId(1),
+            built: true,
+            geometry: PortGeometry {
+                shore: Vec3::new(32., 1., 18.),
+                pier_end: Vec3::new(32., 1., 46.),
+                berth: Vec3::new(37., 0., 46.),
+                departure: Vec3::new(37., 0., 58.),
+                yaw: 0.,
+                maximum_ship: ShipKind::Coaster,
+            },
+        };
+        let entity = app.world_mut().spawn(port).id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old])
+        );
+        accept_grass_footprints(&mut app);
+        port.geometry.shore.y += 1.;
+        port.geometry.pier_end.y += 1.;
+        port.geometry.berth.x += 1.;
+        app.world_mut().entity_mut(entity).insert(port);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ChunkedGroundCoverState>()
+                .dirty
+                .is_empty(),
+            "height/berth changes do not change occupied grass ground"
+        );
+        for point in [
+            &mut port.geometry.shore,
+            &mut port.geometry.pier_end,
+            &mut port.geometry.berth,
+            &mut port.geometry.departure,
+        ] {
+            point.x += 192.;
+        }
+        app.world_mut().entity_mut(entity).insert(port);
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([old, new])
+        );
+        accept_grass_footprints(&mut app);
+        app.world_mut().despawn(entity);
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChunkedGroundCoverState>().dirty,
+            HashSet::from([new])
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ChunkedGroundCoverState>()
+                .chunks
+                .len(),
+            3,
+            "unrelated resident ground is never evicted"
         );
     }
 }

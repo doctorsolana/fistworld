@@ -95,6 +95,16 @@ pub fn run_civic_hall_upgrade_projects(
     clock: Query<&WorldTime>,
     mut commands: Commands,
     mut business_events: ResMut<crate::world::village::BusinessEventQueue>,
+    personal_needs: Query<(), crate::world::village::worker_activity::PersonalNeedsOwnMovement>,
+    new_job_blocked: Query<(), crate::world::village::worker_activity::JobChangeBlocked>,
+    travelling: Query<
+        (),
+        Or<(
+            With<crate::player::hero::MoveTarget>,
+            With<crate::world::village_roads::TravelRoute>,
+            With<crate::world::village_roads::NavigationRoutePending>,
+        )>,
+    >,
     import_contracts: Query<&CivicTradeContract>,
     mut sets: ParamSet<(
         Query<(
@@ -143,10 +153,7 @@ pub fn run_civic_hall_upgrade_projects(
             Option<&crate::world::village_roads::NavigationRouteFailed>,
             Option<&CivicHallBuilderRoutine>,
         ),
-        (
-            With<CharacterKind>,
-            Without<crate::world::village::strategic::StrategicPerson>,
-        ),
+        With<CharacterKind>,
     >,
 ) {
     let Some(clock) = clock.iter().next() else {
@@ -278,6 +285,12 @@ pub fn run_civic_hall_upgrade_projects(
         // A waiting material pile is not construction. One real paid civic
         // worker must be free, walk to the front stand, face the Hall and do
         // the same replicated hammer work shown for an ordinary building.
+        // Retain the assignment and invested labour through a personal trip.
+        // Its owner controls movement, including at dusk; the ordinary stand
+        // check below brings the builder back before any more work is credited.
+        if assigned_builder.is_some_and(|builder| personal_needs.contains(builder)) {
+            continue;
+        }
         if !daylight && !raising {
             if let Some(builder) = assigned_builder {
                 commands
@@ -347,6 +360,9 @@ pub fn run_civic_hall_upgrade_projects(
                         routine,
                     )| {
                         (employment.settlement == settlement_id
+                            && !personal_needs.contains(entity)
+                            && !new_job_blocked.contains(entity)
+                            && !travelling.contains(entity)
                             && matches!(
                                 employment.role,
                                 CivicRole::MootSteward | CivicRole::CityWorker
@@ -998,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn hall_upgrade_buys_private_stone_stages_it_and_only_then_promotes() {
+    fn hall_upgrade_buys_private_stone_then_assigns_offscreen_worker_after_existing_journey() {
         let mut app = development_test_app();
         app.init_resource::<crate::world::village::BusinessEventQueue>()
             .add_systems(
@@ -1077,6 +1093,16 @@ mod tests {
             .world_mut()
             .spawn((
                 CharacterKind::Villager,
+                crate::player::hero::MoveTarget(Vec3::X * 12.),
+                crate::world::village_roads::TravelRoute {
+                    goal: Vec3::X * 12.,
+                    waypoints: vec![crate::world::village_roads::RouteWaypoint {
+                        position: Vec3::X * 12.,
+                        on_road: false,
+                    }],
+                    next: 0,
+                    geometry_version: 0,
+                },
                 CivicEmployment {
                     settlement: settlement_id,
                     role: CivicRole::MootSteward,
@@ -1091,10 +1117,27 @@ mod tests {
             app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = day;
             app.update();
         }
+        assert!(
+            app.world()
+                .get::<CivicHallBuilderRoutine>(civic_builder)
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .get::<crate::world::village_roads::TravelRoute>(civic_builder)
+                .is_some()
+        );
+        // This focused staffing fixture supplies completion of the pre-existing
+        // journey; it must not be cancelled to make construction convenient.
+        app.world_mut().entity_mut(civic_builder).remove::<(
+            crate::player::hero::MoveTarget,
+            crate::world::village_roads::TravelRoute,
+        )>();
         // Assignment is deferred, then the embodied worker reaches the stand
         // and flips the single replicated raising transition.
         app.update();
         app.update();
+
         assert_eq!(
             app.world()
                 .get::<GoodsInventory>(project)
@@ -1137,6 +1180,155 @@ mod tests {
             SettlementTier::Village,
             "materials alone do not skip the raising phase"
         );
+
+        // Feed the actual meal runner an already reserved ration. Arrival at
+        // the counter/commons is supplied by this fixture; navigation is not
+        // under test. The Hall job must neither steal the trip nor earn work
+        // while its named builder is away, even after the queue ticket clears.
+        use crate::player::hero::MoveTarget;
+        use crate::world::village::moot_services::{
+            MootMealRoutine, MootQueueClock, MootQueueTicket, MootServiceKind,
+            advance_moot_service_queues, reserve_meal, run_moot_meal_collections,
+        };
+        use bevy::ecs::system::RunSystemOnce;
+        let counter = Vec3::X * 30.0;
+        app.world_mut()
+            .entity_mut(hall)
+            .insert(PlayerPosition(counter));
+        app.world_mut().entity_mut(civic_builder).insert((
+            PlayerPosition(counter),
+            GoodsInventory::new(shared::economy::capacity::VILLAGER),
+            shared::components::Nutrition::default(),
+        ));
+        reserve_meal(
+            &mut app.world_mut().commands(),
+            &mut MootQueueClock::default(),
+            civic_builder,
+            hall,
+            MootServiceKind::PersonalMeal,
+            Good::Bread,
+            4,
+        );
+        app.world_mut().flush();
+        app.init_resource::<MootQueueClock>();
+        app.init_resource::<Time>();
+        for _ in 0..100 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(0.1));
+            app.world_mut()
+                .run_system_once(advance_moot_service_queues)
+                .unwrap();
+            if app
+                .world()
+                .get::<MootQueueTicket>(civic_builder)
+                .unwrap()
+                .is_ready()
+            {
+                break;
+            }
+            if let Some(target) = app.world().get::<MoveTarget>(civic_builder).copied() {
+                app.world_mut()
+                    .get_mut::<PlayerPosition>(civic_builder)
+                    .unwrap()
+                    .0 = target.0;
+                app.world_mut()
+                    .entity_mut(civic_builder)
+                    .remove::<MoveTarget>();
+            }
+        }
+        assert!(
+            app.world()
+                .get::<MootQueueTicket>(civic_builder)
+                .unwrap()
+                .is_ready()
+        );
+        app.world_mut()
+            .run_system_once(run_moot_meal_collections)
+            .unwrap();
+        let meal_destination = app.world().get::<MoveTarget>(civic_builder).unwrap().0;
+        let invested_work = app
+            .world()
+            .get::<CivicHallUpgradeRuntime>(project)
+            .unwrap()
+            .raise_seconds_left;
+        app.update();
+        assert_eq!(
+            app.world().get::<MoveTarget>(civic_builder).unwrap().0,
+            meal_destination
+        );
+        assert_eq!(
+            app.world()
+                .get::<CivicHallUpgradeRuntime>(project)
+                .unwrap()
+                .raise_seconds_left,
+            invested_work
+        );
+        assert_eq!(
+            app.world()
+                .get::<CivicHallUpgradeRuntime>(project)
+                .unwrap()
+                .builder,
+            Some(civic_builder)
+        );
+        assert!(app.world().get::<MootQueueTicket>(civic_builder).is_none());
+        app.world_mut()
+            .get_mut::<PlayerPosition>(civic_builder)
+            .unwrap()
+            .0 = meal_destination;
+        app.world_mut()
+            .run_system_once(run_moot_meal_collections)
+            .unwrap();
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterActivity>(civic_builder),
+            Some(&CharacterActivity::Sitting)
+        );
+        assert_eq!(
+            app.world()
+                .get::<CivicHallUpgradeRuntime>(project)
+                .unwrap()
+                .raise_seconds_left,
+            invested_work
+        );
+        app.init_resource::<Time>();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(20.0));
+        app.world_mut()
+            .run_system_once(run_moot_meal_collections)
+            .unwrap();
+        assert!(app.world().get::<MootMealRoutine>(civic_builder).is_none());
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(civic_builder)
+                .unwrap()
+                .amount(Good::Bread),
+            0
+        );
+        assert_eq!(
+            app.world()
+                .get::<shared::components::Nutrition>(civic_builder)
+                .unwrap()
+                .last_meal_day,
+            Some(4)
+        );
+        app.update();
+        assert_eq!(
+            app.world().get::<MoveTarget>(civic_builder).unwrap().0,
+            Vec3::ZERO
+        );
+        assert_eq!(
+            app.world()
+                .get::<CivicHallUpgradeRuntime>(project)
+                .unwrap()
+                .raise_seconds_left,
+            invested_work
+        );
+        app.world_mut()
+            .get_mut::<PlayerPosition>(civic_builder)
+            .unwrap()
+            .0 = Vec3::ZERO;
 
         app.world_mut()
             .get_mut::<CivicHallUpgradeRuntime>(project)

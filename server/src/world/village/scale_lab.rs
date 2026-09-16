@@ -1,8 +1,12 @@
-//! Reproducible scale probe for the embodied village simulation.
+//! Synthetic subsystem cost probes for the canonical village simulation.
 //!
-//! This is deliberately separate from `village_lab`: that lab proves a small
-//! settlement's behaviour, while this one measures steady-state costs with a
-//! future-sized roster. Run it optimised with `cargo village-scale-lab`.
+//! These schedules are deliberately not a complete server tick or a growth/
+//! balance test. Production staging and daily resets are reported explicitly;
+//! movement uses a separate dispersed cohort on authored clear dry ground.
+//! Run optimised with `cargo village-scale-lab`, then measure the normal server
+//! separately before claiming sustainable whole-world capacity.
+
+mod active;
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -22,7 +26,7 @@ use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessProcurementPolicy,
     BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, CivicAccount, CompanyAccount,
     CompanyDecisionHistory, CompanyManagementPolicy, Good, GoodsInventory, HouseholdEconomy,
-    MootMarket, SettlementEconomy, Wallet, PENNIES_PER_COIN, STARTING_TREASURY_MONEY,
+    MootMarket, PENNIES_PER_COIN, STARTING_TREASURY_MONEY, SettlementEconomy, Wallet,
 };
 use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
@@ -30,8 +34,10 @@ use shared::terrain::WorldTerrain;
 
 use super::ambient::{self, AmbientClock, AmbientRoutine, AmbientSpotCache};
 use super::collect_business_profit_taxes;
-use super::history::{capture_settlement_history, SettlementHistoryRuntime};
+use super::history::{SettlementHistoryRuntime, capture_settlement_history};
+use super::{BusinessEventQueue, CompanyDividendQueue, apply_business_events};
 use super::{
+    FarmerPhase, FarmerRoutine, HomeAssignment, SettlementEconomyRuntime, VillagerIntent,
     advance_nutrition_health, apply_nutrition_condition, assign_farmer_routines, assign_households,
     ensure_farm_fields, fill_vacancies, post_site_capital_to_company, reconcile_work_statuses,
     recount_residents, refresh_company_accounts, review_business_management, review_civic_policies,
@@ -39,27 +45,21 @@ use super::{
     run_civic_payroll, run_farmer_routines, run_household_schedules, run_workplace_door_transits,
     sync_building_door_demands, sync_carried_load, sync_civic_market_policy,
     sync_public_market_storage, update_household_budgets_and_pantries, update_moot_market_targets,
-    update_settlement_economies, FarmerPhase, FarmerRoutine, HomeAssignment,
-    SettlementEconomyRuntime, VillagerIntent,
+    update_settlement_economies,
 };
-use super::{apply_business_events, BusinessEventQueue, CompanyDividendQueue};
 use crate::collision::library::StaticColliders;
-use crate::player::hero::{step_units, MoveTarget};
+use crate::player::hero::{MoveTarget, step_units};
 use crate::world::pathfinding::PathfindingBudgetSettings;
 use crate::world::regions::RegionRegistry;
-use crate::world::regions::StrategicStep;
-use crate::world::village::strategic::{
-    advance_strategic_villages, StrategicPerson, StrategicProductionProgress,
-};
 use crate::world::village_roads::{
-    plan_villager_travel_routes, queue_villager_travel_routes, NavigationRoutePending,
-    VillageRoadGraph,
+    NavigationRoutePending, VillageRoadGraph, plan_villager_travel_routes,
+    queue_villager_travel_routes,
 };
 
 const DEFAULT_NPCS: usize = 5_000;
 const DEFAULT_TOWNS: usize = 30;
 const DEFAULT_SAMPLES: usize = 60;
-const DEFAULT_TACTICAL_NPCS: usize = 512;
+const DEFAULT_MOVING_NPCS: usize = 512;
 const WARMUP_RUNS: usize = 5;
 const FIXED_BUDGET: Duration = Duration::from_nanos(16_666_667);
 
@@ -82,15 +82,13 @@ struct EconomyDailyBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 struct NutritionHealthBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
-struct TacticalMovementBench;
+struct MovementBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
-struct TacticalRoutingBench;
+struct RoutingBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 struct VillageSteadyBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 struct IdentitySteadyBench;
-#[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
-struct StrategicVillageBench;
 
 fn env_usize(name: &str, fallback: usize) -> usize {
     std::env::var(name)
@@ -333,7 +331,9 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
         }
     }
 
-    world.spawn((WorldTime::new_default(), TimeWarp::clamped(1.0)));
+    let mut clock = WorldTime::new_default();
+    clock.seconds_in_cycle = clock.ordinary_work_start_seconds() + 60.0;
+    world.spawn((clock, TimeWarp::clamped(1.0)));
 }
 
 fn name_for_porter(town_index: usize, porter_index: usize) -> String {
@@ -344,13 +344,12 @@ fn configure_app(towns: usize, npcs: usize) -> App {
     let mut app = App::new();
     app.init_resource::<Time>();
     app.init_resource::<SettlementEconomyRuntime>();
+    app.init_resource::<super::MootQueueClock>();
     app.init_resource::<SettlementHistoryRuntime>();
     app.init_resource::<BusinessEventQueue>();
     app.init_resource::<CompanyDividendQueue>();
     app.init_resource::<crate::world::identity::WorldIdAllocator>();
     app.init_resource::<crate::world::identity::WorldIdentityIndex>();
-    app.init_resource::<StrategicStep>();
-    app.init_resource::<StrategicProductionProgress>();
     app.init_resource::<AmbientClock>();
     app.init_resource::<AmbientSpotCache>();
     app.init_resource::<RegionRegistry>();
@@ -422,7 +421,6 @@ fn configure_app(towns: usize, npcs: usize) -> App {
         )
             .chain(),
     );
-    app.add_systems(TacticalMovementBench, step_units);
     app.add_systems(NutritionHealthBench, advance_nutrition_health);
     app.add_systems(
         IdentitySteadyBench,
@@ -432,16 +430,6 @@ fn configure_app(towns: usize, npcs: usize) -> App {
             crate::world::identity::reconcile_stable_world_relationships,
             crate::world::identity::reconcile_stable_adjunct_relationships,
             crate::world::identity::reconcile_stable_civic_employment,
-        )
-            .chain(),
-    );
-    app.add_systems(StrategicVillageBench, advance_strategic_villages);
-    app.add_systems(
-        TacticalRoutingBench,
-        (
-            queue_villager_travel_routes,
-            plan_villager_travel_routes,
-            step_units,
         )
             .chain(),
     );
@@ -508,12 +496,23 @@ fn percentile(sorted: &[Duration], percentile: usize) -> Duration {
     sorted[index]
 }
 
+fn advance_clock(world: &mut World, seconds: f32) {
+    world
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_secs_f32(seconds));
+    for mut clock in world.query::<&mut WorldTime>().iter_mut(world) {
+        clock.advance(seconds, seconds);
+    }
+}
+
 fn bench_schedule<L: ScheduleLabel + Clone>(world: &mut World, label: L, samples: usize) -> Timing {
     for _ in 0..WARMUP_RUNS {
+        advance_clock(world, 1.0 / 60.0);
         world.run_schedule(label.clone());
     }
     let mut durations = Vec::with_capacity(samples);
     for _ in 0..samples {
+        advance_clock(world, 1.0 / 60.0);
         let started = Instant::now();
         world.run_schedule(label.clone());
         durations.push(started.elapsed());
@@ -580,9 +579,7 @@ fn bench_nutrition_health(world: &mut World, samples: usize) -> Timing {
             entity.get_mut::<Health>().expect("fixture Health").current = 50.0;
             entity.insert(super::mortality::NutritionHealthAdjustment::recovering());
         }
-        world
-            .resource_mut::<Time>()
-            .advance_by(Duration::from_secs_f32(5.0));
+        advance_clock(world, 5.0);
         let started = Instant::now();
         world.run_schedule(NutritionHealthBench);
         if serial >= WARMUP_RUNS {
@@ -598,72 +595,6 @@ fn bench_nutrition_health(world: &mut World, samples: usize) -> Timing {
         p99: percentile(&durations, 99),
         max: *durations.last().expect("at least one sample"),
     }
-}
-
-fn bench_strategic_villages(world: &mut World, samples: usize) -> Timing {
-    let residents: Vec<Entity> = world
-        .query_filtered::<Entity, With<CharacterKind>>()
-        .iter(world)
-        .collect();
-    for resident in &residents {
-        world.entity_mut(*resident).insert(StrategicPerson);
-    }
-
-    let mut durations = Vec::with_capacity(samples);
-    for serial in 1..=(WARMUP_RUNS + samples) {
-        {
-            let mut step = world.resource_mut::<StrategicStep>();
-            step.serial = serial as u64;
-            // Enough elapsed work to execute real output/storage/porter paths,
-            // rather than benchmarking only their early-return checks.
-            step.elapsed_world_seconds = 300.0;
-        }
-        let started = Instant::now();
-        world.run_schedule(StrategicVillageBench);
-        if serial > WARMUP_RUNS {
-            durations.push(started.elapsed());
-        }
-    }
-    for resident in residents {
-        world.entity_mut(resident).remove::<StrategicPerson>();
-    }
-
-    durations.sort_unstable();
-    let total: Duration = durations.iter().copied().sum();
-    Timing {
-        average: total / samples as u32,
-        p50: percentile(&durations, 50),
-        p95: percentile(&durations, 95),
-        p99: percentile(&durations, 99),
-        max: *durations.last().expect("at least one sample"),
-    }
-}
-
-fn activate_tactical_movers(world: &mut World, count: usize) -> usize {
-    // This patch of the generated map is already used by the obstacle-routing
-    // tests: it provides a realistic, local forty-metre order without letting
-    // arbitrary fixture town coordinates turn the routing probe into a water
-    // or out-of-bounds test.
-    let (start, goal) = {
-        let terrain = world.resource::<WorldTerrain>();
-        (
-            Vec3::new(1700.0, terrain.get_height(1700.0, 0.0), 0.0),
-            Vec3::new(1740.0, terrain.get_height(1740.0, 0.0), 0.0),
-        )
-    };
-    let movers: Vec<Entity> = world
-        .query_filtered::<Entity, With<CharacterKind>>()
-        .iter(world)
-        .take(count)
-        .collect();
-    for entity in &movers {
-        world.entity_mut(*entity).insert((
-            PlayerPosition(start),
-            RegionCoord::from_world_pos(start),
-            MoveTarget(goal),
-        ));
-    }
-    movers.len()
 }
 
 fn milliseconds(duration: Duration) -> f64 {
@@ -695,13 +626,77 @@ fn resident_memory_mb() -> Option<f64> {
     Some(kib / 1024.0)
 }
 
+fn assert_ambient_preserves_committed_work(world: &mut World) -> (usize, usize) {
+    let ambient = world.query::<&AmbientRoutine>().iter(world).count();
+    let farmers = world.query::<&FarmerRoutine>().iter(world).count();
+    let interrupted: Vec<_> = world
+        .query_filtered::<(&PersonId, &CharacterName), (
+            With<AmbientRoutine>,
+            super::worker_activity::AmbientStartBlocked,
+        )>()
+        .iter(world)
+        .map(|(id, name)| (*id, name.0.clone()))
+        .collect();
+    assert!(
+        interrupted.is_empty(),
+        "ambient work interrupted committed production/service owners: {interrupted:?}"
+    );
+    (ambient, farmers)
+}
+
+#[test]
+fn scale_ambient_probe_allows_idle_people_without_interrupting_work() {
+    let mut app = configure_app(1, 12);
+    let world = app.world_mut();
+    // Explicitly stage one released civic worker; daily-review samples can
+    // produce this same legitimate idle state after unpaid wages. The other
+    // steward and all ten farmers still own their normal committed work.
+    let idle = world
+        .query::<(Entity, &PersonId)>()
+        .iter(world)
+        .find(|(_, id)| id.0 == 1)
+        .unwrap()
+        .0;
+    world
+        .entity_mut(idle)
+        .remove::<super::MootSteward>()
+        .remove::<CivicEmployment>()
+        .insert((Occupation(None), WorkStatus::LookingForWork));
+    let workers: Vec<_> = world
+        .query::<(Entity, &FarmerRoutine)>()
+        .iter(world)
+        .map(|(entity, routine)| {
+            let FarmerPhase::Inside { seconds_left } = routine.phase else {
+                panic!("fixture farmer is not waiting inside its workplace");
+            };
+            (entity, seconds_left)
+        })
+        .collect();
+    app.add_systems(Update, ambient::run_ambient_routines);
+    app.update();
+    assert!(app.world().get::<AmbientRoutine>(idle).is_some());
+    let (ambient, farmers) = assert_ambient_preserves_committed_work(app.world_mut());
+    assert_eq!((ambient, farmers), (1, 10));
+    for (worker, remaining) in workers {
+        assert!(matches!(
+            app.world().get::<FarmerRoutine>(worker).unwrap().phase,
+            FarmerPhase::Inside { seconds_left } if seconds_left == remaining
+        ));
+        assert!(app.world().get::<MoveTarget>(worker).is_none());
+    }
+}
+
 #[test]
 #[ignore = "run with `cargo village-scale-lab` so workspace code is release-optimised"]
 fn village_scale_lab() {
     let npcs = env_usize("FISTWORLD_SCALE_NPCS", DEFAULT_NPCS);
     let towns = env_usize("FISTWORLD_SCALE_TOWNS", DEFAULT_TOWNS).min(npcs);
     let samples = env_usize("FISTWORLD_SCALE_SAMPLES", DEFAULT_SAMPLES);
-    let tactical_npcs = env_usize("FISTWORLD_SCALE_TACTICAL_NPCS", DEFAULT_TACTICAL_NPCS).min(npcs);
+    let moving_npcs = env_usize("FISTWORLD_SCALE_MOVING_NPCS", DEFAULT_MOVING_NPCS).min(npcs);
+    println!(
+        "SCALE scope=synthetic_subsystems not_full_server_tick=true daily_probe=calendar_jump_and_food_refill active_farm_probe=staged_batch_completion"
+    );
+    active::bench_farm_batches(towns, npcs, samples);
     let mut app = configure_app(towns, npcs);
     let entities_before = app.world().entities().len();
     let archetypes = app.world().archetypes().len();
@@ -733,7 +728,7 @@ fn village_scale_lab() {
             bench_schedule(app.world_mut(), RoutineAssignmentBench, samples),
         ),
         (
-            "physical work loops",
+            "farm routines waiting",
             bench_schedule(app.world_mut(), PhysicalWorkBench, samples),
         ),
         (
@@ -741,39 +736,24 @@ fn village_scale_lab() {
             bench_schedule(app.world_mut(), EconomyIdleBench, samples),
         ),
         (
-            "economy daily burst",
+            "staged daily reviews",
             bench_daily_economy(app.world_mut(), samples),
         ),
         (
-            "nutrition active 5k",
+            "nutrition active cohort",
             bench_nutrition_health(app.world_mut(), samples),
         ),
         (
-            "village steady bundle",
+            "selected village systems",
             bench_schedule(app.world_mut(), VillageSteadyBench, samples),
         ),
         (
             "identity steady pass",
             bench_schedule(app.world_mut(), IdentitySteadyBench, samples),
         ),
-        (
-            "strategic villages",
-            bench_strategic_villages(app.world_mut(), samples),
-        ),
     ] {
         print_timing(name, &timing);
     }
-
-    let movers = activate_tactical_movers(app.world_mut(), tactical_npcs);
-    let movement = bench_schedule(app.world_mut(), TacticalMovementBench, samples);
-    print_timing(&format!("tactical movement ({movers})"), &movement);
-    let routing = bench_schedule(app.world_mut(), TacticalRoutingBench, samples);
-    print_timing(&format!("route burst cap16 ({movers})"), &routing);
-    let pending_routes = app
-        .world_mut()
-        .query::<&NavigationRoutePending>()
-        .iter(app.world())
-        .count();
 
     let entities_after = app.world().entities().len();
     let counted: usize = app
@@ -782,11 +762,10 @@ fn village_scale_lab() {
         .iter(app.world())
         .map(|settlement| settlement.residents as usize)
         .sum();
-    let ambient = app
-        .world_mut()
-        .query::<&AmbientRoutine>()
-        .iter(app.world())
-        .count();
+    // The daily probe advances finite public payroll by many calendar days.
+    // Former civic staff may legitimately resign and acquire ambient life;
+    // committed producer/service routines must never be interrupted by it.
+    let (ambient, farmers) = assert_ambient_preserves_committed_work(app.world_mut());
     let person_ids: std::collections::HashSet<PersonId> = app
         .world_mut()
         .query::<&PersonId>()
@@ -794,7 +773,7 @@ fn village_scale_lab() {
         .copied()
         .collect();
     println!(
-        "SCALE result residents={counted} entities={entities_after} entity_growth={} ambient_orders={ambient} pending_routes={pending_routes} rss={:.1}MiB",
+        "SCALE result residents={counted} entities={entities_after} entity_growth={} ambient_orders={ambient} committed_ambient_overlaps=0 retained_farmers={farmers} rss={:.1}MiB",
         entities_after as isize - entities_before as isize,
         resident_memory_mb().unwrap_or(f64::NAN),
     );
@@ -809,9 +788,12 @@ fn village_scale_lab() {
         entities_after, entities_before,
         "steady ticks leaked entities"
     );
-    assert_eq!(
-        ambient, 0,
-        "strategic residents received tactical ambient work"
-    );
-    assert_eq!(pending_routes, 0, "bounded route queue failed to drain");
+    if npcs > towns * 2 {
+        assert!(
+            farmers > 0,
+            "the work-ownership probe lost its producer cohort"
+        );
+    }
+    drop(app);
+    active::bench_movement(npcs, moving_npcs, samples);
 }

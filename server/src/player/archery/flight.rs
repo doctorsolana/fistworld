@@ -26,7 +26,7 @@ pub fn advance_arrows(
             Or<(With<CharacterKind>, With<Catapult>)>,
             Without<OfflineHero>,
             Without<AboardBoat>,
-            Without<crate::world::village::strategic::StrategicPerson>,
+            Without<shared::components::AboardShip>,
         ),
     >,
     mut cells: Local<std::collections::HashMap<(i32, i32), Vec<Entity>>>,

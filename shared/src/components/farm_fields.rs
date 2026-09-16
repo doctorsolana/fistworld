@@ -370,7 +370,10 @@ pub fn fit_farm_field_shapes_on_terrain(
         })
         .collect();
     fit_farm_field_shapes(farm, rotation, seed, |point| {
-        if !crate::terrain::world_pos_in_bounds(point.x, point.y)
+        if !terrain
+            .generator
+            .active_map_bounds()
+            .contains_xz(point.x, point.y)
             || blockers.iter().any(|zone| zone.contains_point(point))
             || roads
                 .iter()
@@ -420,10 +423,11 @@ mod tests {
                 .collect(),
         };
         assert!(notched.area() > old.area());
-        assert!(old
-            .boundary_points()
-            .iter()
-            .all(|p| notched.contains_local_point(*p, 0.05)));
+        assert!(
+            old.boundary_points()
+                .iter()
+                .all(|p| notched.contains_local_point(*p, 0.05))
+        );
         assert!(!notched.contains_local_point(Vec2::new(-3.0, 0.0), 0.05));
         assert!(!notched.contains_shape(&old, 0.05));
 

@@ -8,8 +8,8 @@ use shared::components::{
 use shared::region::RegionCoord;
 
 use super::{
-    PendingLanding, VesselGoal, VesselNavigation, VesselNavigationQueue, VesselRoute, WreckExpiry,
-    HELM_LOCAL,
+    HELM_LOCAL, PendingLanding, VesselGoal, VesselNavigation, VesselNavigationQueue, VesselRoute,
+    WreckExpiry,
 };
 
 /// The retained route and landing stay on the hull. A request that had not
@@ -135,6 +135,18 @@ mod tests {
                 CharacterActivity::Sitting,
             ))
             .id();
+        let terrain = world.resource::<WorldTerrain>();
+        let waypoints = super::super::water_route(terrain, voyage.start.xz(), voyage.mooring)
+            .expect("fixture voyage must have a real hull-safe corridor");
+        let revision =
+            super::super::clearance::WaterNavigationGeometry::default().revision(terrain);
+        let proof = super::super::VesselRouteCertification::new(
+            terrain,
+            revision,
+            super::super::clearance::WatercraftClearance::DINGHY,
+            voyage.start.xz(),
+            &waypoints,
+        );
         let boat = world
             .spawn((
                 PlayerBoat,
@@ -145,10 +157,8 @@ mod tests {
                 PlayerRotation(voyage.yaw),
                 RegionCoord::from_world_pos(voyage.start),
                 CharacterMotion::STATIONARY,
-                VesselRoute {
-                    waypoints: vec![voyage.mooring],
-                    next: 0,
-                },
+                VesselRoute { waypoints, next: 0 },
+                proof,
             ))
             .id();
         (hero, boat)
@@ -159,15 +169,17 @@ mod tests {
         let terrain = WorldTerrain::default();
         let coasts = super::super::coastal_voyages(&terrain, 0);
         let mut app = App::new();
-        app.insert_resource(terrain).add_systems(
-            Update,
-            (
-                super::super::step_boats,
-                super::super::finish_player_landings,
-                super::super::sync_aboard_heroes,
-            )
-                .chain(),
-        );
+        app.insert_resource(terrain)
+            .init_resource::<VesselNavigationQueue>()
+            .add_systems(
+                Update,
+                (
+                    super::super::step_boats,
+                    super::super::finish_player_landings,
+                    super::super::sync_aboard_heroes,
+                )
+                    .chain(),
+            );
         let (hero_a, boat_a) = pair(app.world_mut(), "leaver", coasts[0]);
         let (hero_b, boat_b) = pair(app.world_mut(), "stayer", coasts[1]);
         app.update();
@@ -259,6 +271,7 @@ mod tests {
         let terrain = WorldTerrain::default();
         let coast = super::super::coastal_voyages(&terrain, 0)[0];
         let mut world = World::new();
+        world.insert_resource(terrain);
         world.init_resource::<VesselNavigationQueue>();
         let (_, boat) = pair(&mut world, "queued", coast);
         let other = world.spawn_empty().id();
@@ -292,6 +305,7 @@ mod tests {
         let terrain = WorldTerrain::default();
         let coast = super::super::coastal_voyages(&terrain, 0)[0];
         let mut world = World::new();
+        world.insert_resource(terrain);
         world.init_resource::<VesselNavigationQueue>();
         let (_, dead_boat) = pair(&mut world, "fallen", coast);
         let (_, other_boat) = pair(&mut world, "survivor", coast);

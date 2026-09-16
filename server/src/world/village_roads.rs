@@ -7,6 +7,10 @@
 //! reuse the complete obstacle-versioned route in either certified direction.
 
 mod construction;
+mod regional_access;
+pub(crate) use regional_access::{
+    regional_bridge_footprint_clear, regional_section_clear, regional_tree_clearance,
+};
 mod geometry;
 mod routing;
 mod start_recovery;
@@ -14,20 +18,20 @@ mod steward;
 
 pub(crate) use construction::hall_connected_road_keys;
 use construction::{
-    absolute_world_seconds, building_road_status, hall_road_network, BuildingRoadStatus,
+    BuildingRoadStatus, absolute_world_seconds, building_road_status, hall_road_network,
 };
 pub use construction::{build_village_roads, plan_requested_roads};
 use routing::graph_key;
 pub use routing::{
-    plan_villager_travel_routes, queue_villager_travel_routes, rebuild_village_road_graph,
-    retry_failed_routes_after_obstacle_change, NavigationLoad, VillageRoadGraph,
+    NavigationLoad, VillageRoadGraph, plan_villager_travel_routes, queue_villager_travel_routes,
+    rebuild_village_road_graph, retry_failed_routes_after_obstacle_change,
 };
 
 pub(crate) fn road_point_key(point: Vec2) -> (i32, i32) {
     graph_key(point)
 }
 #[cfg(test)]
-use routing::{reverse_route_clears_goal_prop_exemption, RoadGraphNode};
+use routing::{RoadGraphNode, reverse_route_clears_goal_prop_exemption};
 #[cfg(test)]
 pub use steward::staff_moot_stewards as staff_and_pay_moot_stewards;
 pub use steward::{
@@ -47,19 +51,19 @@ use shared::components::{
 };
 #[cfg(test)]
 use shared::economy::Wallet;
-use shared::economy::MOOT_STEWARD_DAILY_SALARY;
 use shared::spatial::SpatialObstacleGrid;
-use shared::terrain::{world_pos_in_bounds, ChunkCoord, WorldTerrain, CHUNK_SIZE};
+use shared::terrain::{CHUNK_SIZE, ChunkCoord, WorldTerrain};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::player::hero::MoveTarget;
+use crate::world::bridges::BridgeDecks;
 use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_PROP_RADIUS};
 use crate::world::village::{
-    ambient::AmbientRoutine, FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine,
-    InternalDeliveryRoutine, LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket,
-    MootSteward, PierTraversal, TradeRouteRoutine, UnderConstruction, VillagerIntent,
+    FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine, InternalDeliveryRoutine,
+    LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket, MootSteward, PierTraversal,
+    TradeRouteRoutine, UnderConstruction, VillagerIntent, ambient::AmbientRoutine,
 };
 use crate::{
     collision::library::{DerivedColliderLibrary, StaticColliders},
@@ -97,6 +101,7 @@ pub(crate) fn building_has_connected_road(
 /// is blocked by a streamed tree or rock.
 #[derive(SystemParam)]
 pub struct TravelCollisionResources<'w> {
+    decks: Option<Res<'w, BridgeDecks>>,
     obstacles: Option<Res<'w, SpatialObstacleGrid>>,
     colliders: Option<Res<'w, StaticColliders>>,
     derived: Option<Res<'w, DerivedColliderLibrary>>,
@@ -364,6 +369,9 @@ pub struct RoadBuilderRoutine {
     pub settlement: Entity,
     attempt: u8,
     phase: RoadBuildPhase,
+    /// An essential meal/shopping trip can pause an accepted work stand. Keep
+    /// its physical location with the timer so resuming cannot work from the Hall.
+    resume_work_at: Option<Vec2>,
 }
 
 #[derive(Component, Debug, Clone)]
@@ -418,6 +426,18 @@ pub(crate) struct RoadTreeClearancePlan {
 }
 
 impl RoadBuilderRoutine {
+    /// Regional contracts use the same activity ownership and embodied dirt
+    /// work as local connectors; their project owns procurement and wages.
+    pub(crate) fn regional(road: Entity, settlement: Entity) -> Self {
+        Self {
+            road,
+            settlement,
+            attempt: 0,
+            phase: RoadBuildPhase::GoingTo { point: 0 },
+            resume_work_at: None,
+        }
+    }
+
     /// Night sends a builder home. Morning resumes from the last completed
     /// point, never from a half-finished timer beside their bed.
     pub fn restart_from_built_road(&mut self, road: &VillageRoad) {
@@ -425,6 +445,7 @@ impl RoadBuilderRoutine {
             .min(road.points.len())
             .saturating_sub(1);
         self.phase = RoadBuildPhase::GoingTo { point: last_built };
+        self.resume_work_at = None;
     }
 
     pub(crate) const fn objective(&self) -> shared::components::CharacterObjective {
@@ -454,10 +475,14 @@ pub struct TravelRoute {
 pub(crate) fn navigation_geometry_version(
     obstacles: Option<&SpatialObstacleGrid>,
     colliders: Option<&StaticColliders>,
+    decks: Option<&BridgeDecks>,
 ) -> u64 {
     let building_version = obstacles.map_or(0, |grid| grid.version);
     let prop_version = colliders.map_or(0, |props| props.version);
-    building_version ^ prop_version.rotate_left(29) ^ 0x9E37_79B9_7F4A_7C15
+    building_version
+        ^ prop_version.rotate_left(29)
+        ^ decks.map_or(0, |decks| decks.version).rotate_left(47)
+        ^ 0x9E37_79B9_7F4A_7C15
 }
 
 /// A changed destination waits here until its one-time route is ready. Units
@@ -505,6 +530,10 @@ pub(crate) struct NavigationRouteBackoff {
     /// a new walkable ribbon can create an opportunity, but cannot make a
     /// previously certified route unsafe.
     geometry_version: u64,
+    /// Dryness and slope are also part of an unsuccessful survey. Terrain
+    /// edits do not wake retries early, but their next scheduled survey must
+    /// not reuse a rejection proved against older terrain.
+    terrain_version: u32,
     /// Revision of road points close enough to affect either route endpoint.
     road_opportunity_version: u64,
 }
@@ -514,6 +543,7 @@ impl NavigationRouteBackoff {
         previous: Option<Self>,
         goal: Vec3,
         geometry_version: u64,
+        terrain_version: u32,
         road_opportunity_version: u64,
         now: f64,
         entity: Entity,
@@ -522,6 +552,7 @@ impl NavigationRouteBackoff {
             .filter(|state| {
                 state.goal.distance_squared(goal) <= 0.01
                     && state.geometry_version == geometry_version
+                    && state.terrain_version == terrain_version
                     && state.road_opportunity_version == road_opportunity_version
             })
             .map_or(1, |state| state.failures.saturating_add(1));
@@ -537,11 +568,12 @@ impl NavigationRouteBackoff {
             failures,
             retry_after: now + delay * jitter,
             geometry_version,
+            terrain_version,
             road_opportunity_version,
         }
     }
 
-    fn matches(self, goal: Vec3) -> bool {
+    pub(crate) fn matches(self, goal: Vec3) -> bool {
         self.goal.distance_squared(goal) <= 0.01
     }
 
@@ -699,6 +731,7 @@ impl PropBlockers {
 }
 
 struct RoadSurvey<'a> {
+    decks: Option<&'a BridgeDecks>,
     terrain: &'a WorldTerrain,
     buildings: &'a [BuildingBlocker],
     live_buildings: Option<&'a SpatialObstacleGrid>,
@@ -818,7 +851,31 @@ impl RoadSurvey<'_> {
         {
             1
         } else {
-            self.coarse_stride
+            // Towns can grow past the fixed endpoint apron. A six-metre
+            // regional lattice cannot enter a two-metre lane or gate even
+            // when ordinary movement can. Refine only near real built
+            // footprints, with enough approach room to join the fine grid;
+            // open country keeps the coarse, bounded search.
+            let clearance = self.cell_size * self.coarse_stride as f32 * 2.0;
+            let near_bridge = self.decks.is_some_and(|decks| decks.near(point, clearance));
+            let near_building = self.live_buildings.map_or_else(
+                || {
+                    self.buildings.iter().any(|building| {
+                        let local = shared::rotation::world_to_local_xz(
+                            point - building.center,
+                            building.rotation,
+                        );
+                        local.x.abs() <= building.half.x + clearance
+                            && local.y.abs() <= building.half.y + clearance
+                    })
+                },
+                |grid| grid.point_near_obstacle(point, clearance),
+            );
+            if near_building || near_bridge {
+                1
+            } else {
+                self.coarse_stride
+            }
         }
     }
 
@@ -847,15 +904,20 @@ impl RoadSurvey<'_> {
             || point.y < self.min.y
             || point.x > self.max.x
             || point.y > self.max.y
-            || !road_sample_is_dry(self.terrain, point)
+            || (!road_sample_is_dry(self.terrain, point)
+                && self
+                    .decks
+                    .and_then(|decks| decks.height_at(point, CHARACTER_NAV_RADIUS))
+                    .is_none())
         {
             return true;
         }
-        // Preserve interaction-target exemptions for props only. Building and
-        // fence geometry never receives an endpoint exemption.
-        let endpoint_clear = point.distance_squared(self.start)
-            <= (NAVIGATION_SAMPLE_STEP * 0.25).powi(2)
-            || point.distance_squared(self.goal) < 2.0f32.powi(2);
+        // A work target must be outside live props, just like the movement
+        // certificate. Exempting the last two metres produced routes through
+        // trunks that were repeatedly rejected by final certification.
+        // Only the exact starting sample retains its small recovery tolerance.
+        let endpoint_clear =
+            point.distance_squared(self.start) <= (NAVIGATION_SAMPLE_STEP * 0.25).powi(2);
         !endpoint_clear && self.props.blocks(point)
     }
 
@@ -870,7 +932,12 @@ impl RoadSurvey<'_> {
         if let Some(height) = scratch.heights.get(&key).copied() {
             return height;
         }
-        let height = self.terrain.get_height(point.x, point.y);
+        let height = crate::world::bridges::ground_height(
+            self.terrain,
+            self.decks,
+            point,
+            CHARACTER_NAV_RADIUS,
+        );
         scratch.heights.insert(key, height);
         height
     }
@@ -1123,16 +1190,20 @@ fn resume_survey_a_star(
                 }
                 let next_height = survey.height(next_point, scratch);
                 let rise = (next_height - current_height).abs();
-                if rise > 1.15 {
+                // Keep the same allowed gradient on fine and coarse edges. An
+                // absolute rise cap made gentle hills impassable at regional stride.
+                let edge_length = current_point.distance(next_point);
+                if rise > 1.15 * (edge_length / (SURVEY_CELL * std::f32::consts::SQRT_2)).max(1.0) {
                     continue;
                 }
-                let distance = current_point.distance(next_point) / survey.cell_size;
+                let distance = edge_length / survey.cell_size;
                 // A tiny deterministic unevenness stops equal-cost open ground
                 // from producing ruler-perfect spokes while remaining stable.
                 let hash = (next.x as u32).wrapping_mul(73_856_093)
                     ^ (next.z as u32).wrapping_mul(19_349_663);
                 let texture = (hash & 255) as f32 / 255.0 * 0.06;
-                let step_cost = distance * (1.0 + rise * 0.7 + texture);
+                let step_cost = distance
+                    * (1.0 + rise / edge_length.max(SURVEY_CELL) * SURVEY_CELL * 0.7 + texture);
                 let tentative = current_score + step_cost;
                 if tentative >= scratch.score.get(&next).copied().unwrap_or(f32::INFINITY) {
                     continue;
@@ -1194,6 +1265,7 @@ pub(crate) fn overland_trade_corridor_exists(
     let started = Instant::now();
     let props = PropBlockers::default();
     let survey = RoadSurvey {
+        decks: None,
         terrain,
         buildings: &[],
         live_buildings: None,
@@ -1273,6 +1345,14 @@ impl IncrementalOverlandCorridorSearch {
         }
     }
 
+    /// Conservative envelope of every terrain read made by this corridor.
+    pub(crate) fn terrain_bounds(&self) -> (Vec2, Vec2) {
+        (
+            self.start.min(self.goal) - Vec2::splat(INTERSETTLEMENT_SURVEY_PADDING),
+            self.start.max(self.goal) + Vec2::splat(INTERSETTLEMENT_SURVEY_PADDING),
+        )
+    }
+
     /// Advance one retained search for no more than the caller's wall-time
     /// slice after the survey's small guaranteed-progress floor. Keeping the
     /// deadline outside the A* state means a throttled hosted CPU can yield and
@@ -1284,6 +1364,7 @@ impl IncrementalOverlandCorridorSearch {
     ) -> IncrementalCorridorResult {
         let props = PropBlockers::default();
         let survey = RoadSurvey {
+            decks: None,
             terrain,
             buildings: &[],
             live_buildings: None,
@@ -1452,6 +1533,7 @@ fn survey_village_road(
     scratch: &mut SurveyScratch,
 ) -> Vec<Vec2> {
     let survey = RoadSurvey {
+        decks: None,
         terrain,
         buildings,
         live_buildings: None,
@@ -2197,10 +2279,35 @@ fn survey_agent_route(
     scratch: &mut SurveyScratch,
     max_nodes: usize,
 ) -> Vec<Vec2> {
+    survey_agent_route_with_decks(
+        terrain,
+        None,
+        start,
+        goal,
+        buildings,
+        live_buildings,
+        props,
+        scratch,
+        max_nodes,
+    )
+}
+
+fn survey_agent_route_with_decks(
+    terrain: &WorldTerrain,
+    decks: Option<&BridgeDecks>,
+    start: Vec2,
+    goal: Vec2,
+    buildings: &[BuildingBlocker],
+    live_buildings: Option<&SpatialObstacleGrid>,
+    props: &PropBlockers,
+    scratch: &mut SurveyScratch,
+    max_nodes: usize,
+) -> Vec<Vec2> {
     if start.distance_squared(goal) <= 0.01 {
         return vec![start, goal];
     }
     let survey = RoadSurvey {
+        decks,
         terrain,
         buildings,
         live_buildings,
@@ -2434,7 +2541,13 @@ impl NavigationBuildingCache {
             ),
         >,
     ) -> Vec<BuildingBlocker> {
-        self.rebuild_with_fields(placed, defenses, yards, std::iter::empty())
+        self.rebuild_with_fields(
+            placed,
+            defenses,
+            yards,
+            std::iter::empty(),
+            std::iter::empty(),
+        )
     }
     fn rebuild_with_fields<'a>(
         &mut self,
@@ -2448,6 +2561,7 @@ impl NavigationBuildingCache {
             ),
         >,
         fields: impl Iterator<Item = shared::spatial::ObstacleEntry>,
+        ports: impl Iterator<Item = &'a shared::components::SettlementPort>,
     ) -> Vec<BuildingBlocker> {
         let previous = std::mem::take(&mut self.blockers);
         self.buildings.clear();
@@ -2502,6 +2616,20 @@ impl NavigationBuildingCache {
             self.spatial.insert(obstacle);
         }
         for obstacle in fields {
+            self.blockers.push(BuildingBlocker {
+                center: obstacle.center,
+                half: obstacle.half_extents,
+                rotation: obstacle.rotation,
+            });
+            self.spatial.insert(obstacle);
+        }
+        // The same authored solids as the movement grid: office, supported
+        // cargo, posts and rails. The deck's central walking lane stays open,
+        // and none of these solids invent a building-door escape endpoint.
+        for obstacle in ports
+            .filter(|port| port.built)
+            .flat_map(|port| port.geometry.ground_obstacles())
+        {
             self.blockers.push(BuildingBlocker {
                 center: obstacle.center,
                 half: obstacle.half_extents,

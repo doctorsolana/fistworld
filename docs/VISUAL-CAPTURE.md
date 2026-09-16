@@ -41,6 +41,12 @@ The implementation separates orchestration from fixture data:
   It never inserts cargo or forces production. Its deposit evidence correlates
   public load disappearance with a nearby farm-stock increase; private personal
   inventory is inspected only when normal replication already exposes it.
+- `capture/regional_bridge_session.py` stages a finite funded public contract on
+  the shared Village Lab river, then observes real collection, hauling, building,
+  pedestrian deck crossing and boat passage underneath. Use separate fresh output
+  directories under `logs/` with `--warp 1` and `--warp 25`. Its server JSONL proves
+  material and wage accounting; its PNGs and `.capture.json` files prove the actual
+  presentation. See [REGIONAL-TRAVEL.md](REGIONAL-TRAVEL.md) for scope and limits.
 - `client/src/capture_artifact.rs` owns scenario RON, readiness, semantic assertions, Bevy
   screenshot observers, PNG/JSON artifacts and baseline comparison.
 
@@ -93,6 +99,62 @@ its configured tolerances.
 
 Run `cargo run -p client --bin capture -- --help` for all one-off flags. Existing presets and
 fixture environment variables remain supported.
+
+## Cargo ship and public pier views
+
+`capture/scenarios/shipping-hulls.ron` stages both production hull classes on the
+unchanged Village Lab water. Its Coaster uses the full-footprint surveyed shore
+at (248, 152), with the loading head at (274, 152); the Cog remains a separately
+depth-checked offshore specimen, not a claim that a Coaster berth
+admits a larger ship. Eleven scene captures cover deck, stern and low waterline angles,
+the ordinary boarding plank, terrain-grounded pier supports, wider context and
+close office/day-night views.
+The fixture verifies real terrain depth and dry shore, then waits for both cached
+hull meshes, all ten authored port meshes, twelve named anchors, both door clips
+and the production gangway mesh/materials to exist. The port uses the same
+shared projection and landing/approach/T-head footprint as the server.
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture --scenario capture/scenarios/shipping-hulls.ron --out logs/captures/shipping-hulls-review
+```
+
+Inspect every PNG, `.capture.json` and `.shipping.json` sidecar. The sidecar records
+actual mesh vertex/index counts, dimensions, transforms and port geometry. This is
+presentation evidence only: paid construction, crew boarding, water navigation and
+market transactions require the separate connected port session. Defining this
+scenario does not itself establish that its views have passed visual inspection.
+
+Initial review on 2026-09-15 in `logs/captures/shipping-hulls-20260915/` inspected
+all nine views and their metadata: both production hulls use 1,272 vertices and
+424 triangles each; every shot passed its terrain assertion with zero pending
+building LOD or ground paint. Deck, sail, stern and boarding-plank views were
+reviewed. The shore close-up exposed grass crossing the pier boards. The authored
+port landing, approach and T-head now participate in the existing vegetation-claim index, with only
+changed/removed footprint chunks invalidated; height/berth-only updates leave
+surrounding grass resident. The initial nine images show the former procedural pier.
+
+The 2026-09-16 authored-port rerun in
+`logs/captures/authored-port-final-plane-20260916/` inspected all eleven PNGs and
+their capture/shipping metadata. The server-surveyed shore plane is now 1.8206187 m;
+the landing foundation stays above the terrain, cargo rests on its pallet/deck,
+and the gangway reaches the hull. All captures have zero pending ground paint and
+building LOD work. The runtime asset has ten meshes, 19,500 GPU vertices, 9,812
+triangles, twelve anchors and two door clips. Night glass and lantern emission
+were also inspected. This establishes presentation for this surveyed site, not
+successful trade or general terrain-placement acceptance.
+
+`capture/scenarios/port-office-cycle.ron` uses the same fitted scene and a rendered
+fixture visitor moving laterally toward/away from the office door. The ordinary
+proximity test and authored clips run continuously for 240 frames; screenshots
+are sampled every fifteen frames. Sidecars record the production door phase and
+whether opening and a subsequent return to shut were observed. The final frame
+requires both. No clip seek or injected door state is used. This is cosmetic
+proximity/animation evidence, not a server worker or office-navigation test.
+
+The matching `logs/captures/authored-port-final-door-20260916/` rerun completed
+240 continuous frames and seventeen captures. The open (105), closing (195) and
+closed (239) images were inspected with their sidecars; the last sidecar records
+both opening and subsequent closure. All capture assertions passed.
 
 ## Medieval HUD
 
@@ -1295,6 +1357,23 @@ army, battle or ambience banks, or establish a sound-on/off performance benchmar
 
 ## Shared UI theme gallery and motion rehearsal
 
+The maintained [business-strategy scenario](../capture/scenarios/ui-business-strategies.ron)
+opens the real encyclopedia business controls at **1600×900**, with the strategy
+row in view. The inspected final artifact is
+[`three-management-strategies.png`](../logs/economy-reform-final/three-strategies-ui-final/three-management-strategies.png),
+with its [capture metadata](../logs/economy-reform-final/three-strategies-ui-final/three-management-strategies.capture.json).
+Visual inspection shows exactly three strategy buttons: **Aggressive, Balanced,
+Conservative**. Metadata records both scene assertions passing, zero pending
+building LOD changes and zero pending ground-paint chunks. The button count is
+visual evidence; the two automated assertions check populated settlements and
+villagers, not server policy behavior.
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
+  --scenario capture/scenarios/ui-business-strategies.ron \
+  --out logs/captures/ui-business-strategies
+```
+
 `capture/scenarios/ui-music.ron` tests the actual Escape-menu music switch and
 Bevy audio sinks at 1280×720. Its seven shots cover background playback, off,
 resume on the same decoder while moving the camera, opening-cue priority, stopping
@@ -1700,6 +1779,36 @@ handlers, inspect local draft edits across a changed company snapshot, and retur
 through real Back/Cancel controls. Inspect each PNG, `.capture.json` and `.nested.json`;
 these offline fixtures do not validate successful server transactions.
 
+### Directory search and management navigation
+
+`capture/scenarios/ui-economy-navigation.ron` exercises People/Places search with
+native keyboard events, clear and no-match states, company and workplace settings,
+worker profile links and their return paths. Two workers deliberately share a name:
+navigation must resolve the requested `PersonId`, not the first matching name.
+It also checks separate retained scroll positions for the Site and Company tabs
+and opens company settings when no workplaces are observed.
+
+```sh
+cargo build --profile playtest -p client --bin capture
+BEVY_ASSET_ROOT="$PWD/client/assets" ./target/playtest/capture \
+  --scenario capture/scenarios/ui-economy-navigation.ron
+```
+
+Repeat with `--resolution 1280x720` and a separate output directory. Inspect all
+PNGs together with their `.capture.json` and `.economy-ui.json` sidecars. The
+fixture uses offline directory/employment facts and production UI handlers; it
+does not establish successful network transactions, worker production or frame
+performance. Its hidden-window input driver supplies window focus explicitly so
+native text input follows the same focus guard as an interactive game window.
+
+The 2026-09-15 acceptance produced 18 passing captures at each of 1600×1000 and
+1280×720 in ignored `logs/captures/economy-navigation-20260915-1600-v4/` and
+`logs/captures/economy-navigation-20260915-1280/`. Visual inspection found no
+material overflow or navigation defects in those views. The tab tour retained
+43 controls and independent 220/240 scroll offsets; it does not inspect every
+control at the bottom of the longer pricing and share sections. Workspace
+all-target checking and 1,828 tests passed (29 existing tests ignored).
+
 ## Connected chat
 
 `capture/chat_session.py` runs two real clients against a fresh local Village Lab
@@ -1744,25 +1853,51 @@ Shared validation/wire tests passed 4 and real server packet tests passed 9.
 ## Connected NPC movement and porter regression
 
 `capture/construction_delivery_session.py` observes ordinary self-supplied
-construction in the inland Village Lab at 10x. It grants no timber or ownership:
-founders cut trees, carry Wood and complete homes through their normal routines.
+construction in the inland Village Lab at 1x, 10x or 25x (default 10x). It grants
+no timber or ownership: founders cut trees, carry Wood and complete homes through
+their normal routines. The world starts at 1x until the actual connected opening
+finishes, then the driver sets the requested speed through the ordinary God menu.
 
 ```sh
-cargo build -p server
+cargo build -p server --profile playtest
 cargo build -p client --profile playtest --bin client
-python3 capture/construction_delivery_session.py
+python3 capture/construction_delivery_session.py --port 0 --warp 25 --timeout 360
 ```
 
-The driver refuses an occupied UDP5000, uses a fresh ignored output directory and
-stops only its own processes. It records tree work, loaded travel, site deliveries
-and completed housing. Inspect the PNG sequences with their capture/session
-metadata and the debug server's `Village material delivery start` breadcrumbs.
-The milestones prove construction progresses; they do not automatically prove a
-shortest route. Freshly cut timber should approach a plot or nearby retained road
+The driver selects its own free UDP port (`--port 0`) or refuses an occupied
+explicit port, connects through the real launcher, uses a fresh ignored output
+directory and stops only its own processes. It can run alongside a separately
+owned economy soak without joining or changing that world. It records binary
+hashes, continuous server movement and client state, tree work, loaded travel,
+site deliveries and completed housing. Inspect the PNG sequences with their
+capture/session metadata and the debug server's `Village material delivery start`
+breadcrumbs. The milestones prove construction progresses; they do not by
+themselves prove a tree-blocked goal, queue detour or shortest route. Freshly cut timber should approach a plot or nearby retained road
 entry, with the original public corridor available when that approach fails.
 Empty egress should reuse the reached entry. Buying stock at the Hall remains a
 separate, intentional trip. Capture readbacks make this unsuitable as a frame-rate
 benchmark.
+
+For an additional natural interruption observation, use the same connected
+construction fixture with `--observe-meals --timeout 600`. The optional check
+binds a self-building `PersonId` only while actually Building at one unique
+replicated work stand. It then requires the same construction assignment through
+a food trip, actual food service with displacement, and resumed building within
+the ordinary reach of that original stand. It preserves the existing
+construction milestones. No meal, worker order or resource grant is injected.
+Read-only server movement samples and continuous client snapshots survive camera
+readbacks; `meal-observation.json` separates semantic transitions from completed
+PNG/capture/session artifacts. Missing short phases or a fixture with no qualifying
+interruption is an evidence gap, not a pass or automatically a simulation failure.
+The optional criterion may remain unobserved while ordinary construction succeeds;
+report those outcomes separately rather than forcing a meal to satisfy the test.
+This is not a hired house-extension
+contractor test, and a semantic event does not establish that a later screenshot
+still shows it. Inspect the actual sidecars and images. `--server` and `--client`
+can select the current binaries explicitly; defaults retain the launch paths above.
+`python3 capture/construction_meals.py --replay RUN_DIRECTORY` rechecks the saved
+server/client journals without running or controlling the game; the separate
+`meal-replay.json` retains acceptance gaps and creates no new visual evidence.
 
 `capture/npc_movement.py` runs an ordinary generated world, creates a character
 through the real UI and observes a populated town. It does not stage NPCs, grant
@@ -1797,6 +1932,71 @@ The session command `record` accepts a name, 2–180 frames and an `interval_ms`
 50–1,000, for at most 60 seconds. Screenshot completion can make the actual cadence
 slower than requested; inspect capture metadata and recording timestamps, and do
 not treat these readback/instrumentation runs as frame-rate benchmarks.
+
+## Connected port provisioning and sailing
+
+`capture/port_trade_session.py` uses finite staged coastal Towns and a manual
+Coaster order, then observes actual material hauling, hull work, the captain's
+counter trip, boarding and Buy/Sell travel. Run separate fresh output directories
+with `--warp 1` and `--warp 25`; inspect PNGs with their `.capture.json` and
+`.session.json` alongside `port.jsonl` and `report.json`. The detailed accounting
+and scope are in [REGIONAL-TRAVEL.md](REGIONAL-TRAVEL.md#canonical-connected-port-verification--2026-09-16).
+
+On **2026-09-16**, both `logs/canonical-port-final-20260916-1x/` and
+`logs/canonical-port-final-20260916-25x/` passed. The 1×
+`client/provisioning-0000.png`, `provisioning-0011.png` and `sailing-0005.png`
+and their capture metadata were personally inspected: the red captain visibly
+walks to the real counter before boarding, and the loaded ship later sails.
+The inspected 25× `provisioning-0000`/`0005` frames had already missed the fast
+captain, so the 1× sequence is the primary visual proof of that trip. All inspected
+metadata reported zero pending building LOD and ground-paint chunks.
+
+The server journals independently show actual counter purchase and moving
+land-provision samples without stale `Indoors` activity. These images do not prove
+occupied-warehouse exit, partial-food departure or cancellation; those cases have
+separate 1×/25× unit regressions. This is controlled manual Coaster presentation
+and lifecycle evidence, not autonomous investment, whole-world observation parity,
+audio acceptance or a performance benchmark.
+
+## Connected small Frontier world
+
+`capture/small_world_session.py` launches an ordinary generated world using
+`config/worlds/small-frontier.ron`, seed 91 by default, then joins through the real
+launcher, name form and character creator. Its default run observes three additional
+world days at 25×. God capability is enabled solely for the ordinary speed controls;
+the driver never grants goods/money, moves actors, places buildings or chooses towns.
+
+```bash
+python3 capture/small_world_session.py --out logs/small-frontier-review --seed 91 --days 3 --warp 25
+```
+
+Build the server/client beforehand. `--server` can select the current server binary;
+the maintained client helper uses `target/playtest/client`. Only owned child processes
+are stopped. `--resolution`, `--timeout` and `--minimum-arrivals` are configurable.
+This runner and its images are acceptance evidence, not an FPS benchmark.
+
+`FISTWORLD_SMALL_WORLD_TRACE_DIR` installs a read-only server observer. `opening.json`
+captures the immutable four-Hall/24-founder opening, terrain bounds/seed, exact finite
+Hall stocks/treasuries, personal purses and absence of prebuilt private buildings.
+`small-world.jsonl` then samples every world second, including genuine resident IDs,
+houses/businesses, incoming boats and their bounded-map route cursors. Retained arrival
+timestamps and selection scores distinguish entering the world, choosing a destination,
+and completing ordinary Hall registration. A boat alone does not count as an arrival;
+towns are not required or promised to receive equal immigration. The default acceptance
+requires three actual registered newcomers, each with an observed voyage and an
+authoritative entry-before-choice sequence. Every sampled newcomer still sailing,
+walking, queuing or leaving the registration counter must have no `ResidentOf`,
+home or workplace and must not count as a resident. Both the connected runner and
+the headless runner reject premature participation; older captures predate this
+stricter assertion and do not certify it retroactively.
+
+The client captures all four Halls on first visit and again at the end, plus a continuous
+immigrant-boat sequence. First-visit images show the live town at that time, not a frozen
+copy of the startup manifest. The voyage is briefly viewed at 1× to make movement readable,
+then the configured speed is restored. Inspect PNGs together with `.capture.json`,
+`.session.json`, `opening.json` and `report.json`; parser assertions do not prove appearance
+or that the wider economy is balanced. No observer system or file writer is installed
+without the opt-in trace setting.
 
 ## Connected God-mode exit
 

@@ -54,10 +54,11 @@ fn different_player_heroes_stay_peaceful_after_meeting_and_stopping() {
     tick_combat(&mut app, clock, 30);
     for e in [a, b] {
         assert!(app.world().get::<AttackOrder>(e).is_none());
-        assert!(app
-            .world()
-            .get::<shared::components::EngagedWith>(e)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<shared::components::EngagedWith>(e)
+                .is_none()
+        );
         assert_eq!(app.world().get::<Health>(e).unwrap().current, 100.0);
         assert_eq!(
             *app.world().get::<CharacterActivity>(e).unwrap(),
@@ -268,3 +269,6 @@ fn replacing_an_attack_cannot_reset_a_ready_weapon_deadline() {
         now + SWING_SECONDS
     );
 }
+
+#[path = "observation_tests.rs"]
+mod observation_tests;

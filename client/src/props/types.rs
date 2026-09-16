@@ -106,6 +106,7 @@ pub struct PropChunkIndex {
 pub(crate) struct PropFootprintSources {
     pub(super) buildings: HashMap<Entity, Vec<BuildZoneEntry>>,
     pub(super) squares: HashMap<Entity, BuildZoneEntry>,
+    pub(super) ports: HashMap<Entity, Vec<BuildZoneEntry>>,
     pub(super) field_revision: u64,
     pub(super) initialized: bool,
 }

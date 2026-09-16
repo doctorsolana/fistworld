@@ -35,6 +35,8 @@ pub struct MootAdministration {
     /// erase a municipal debt.
     #[serde(default)]
     pub payroll: Vec<CivicPayrollEntry>,
+    /// Current offered daily pay for civic roles; payroll entries retain the
+    /// rate agreed for their last accrual period.
     pub steward_daily_salary: u64,
     pub wage_arrears: u64,
     pub roadless_buildings: u16,
@@ -103,26 +105,25 @@ impl CivicStrategy {
 }
 
 /// Whether the treasury may buy food for residents who cannot afford a meal.
-/// `SurplusOnly` never creates stock or ignores scarcity: recent production
-/// must cover the population and the enacted reserve floor must remain after
-/// the purchase.
+/// `EmergencyBudget` buys actual listed stock with a bounded share of
+/// discretionary public cash after protecting payroll and outstanding debts.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PoorReliefMode {
     #[default]
     Off,
-    SurplusOnly,
+    EmergencyBudget,
 }
 
 impl PoorReliefMode {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Off => "Off",
-            Self::SurplusOnly => "Surplus only",
+            Self::EmergencyBudget => "Emergency budget",
         }
     }
 
     pub const fn allows_purchase(self) -> bool {
-        matches!(self, Self::SurplusOnly)
+        matches!(self, Self::EmergencyBudget)
     }
 }
 
@@ -194,7 +195,7 @@ impl CivicPolicyReason {
             Self::None => "No adjustment",
             Self::PayrollArrears => "Civic payroll arrears",
             Self::TreasuryStress => "Low treasury runway",
-            Self::SustainableRelief => "Sustainable food surplus",
+            Self::SustainableRelief => "Funded emergency relief",
             Self::FoodStress => "Food reserve stress",
             Self::HealthySurplus => "Healthy civic surplus",
         }
@@ -237,12 +238,10 @@ impl CivicPolicyAdjustment {
 
 /// Public rules chosen by a settlement rather than hidden simulation switches.
 ///
-/// The first policy is deliberately narrow: it does not make food free. When
-/// enabled, the settlement treasury may buy one market ration for a resident
-/// whose personal wallet cannot, but only from sustainable surplus above the
-/// configured emergency reserve. Public money, production and physical stock
-/// can all constrain relief, so it softens unemployment without deleting
-/// scarcity.
+/// When relief is enabled, the treasury may buy one ready meal for an unfed
+/// resident within a bounded daily emergency budget. Existing arrears and the
+/// civic payroll reserve remain protected. This is separate from the normal
+/// food-stock target; all relief still requires physical offers and real cash.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettlementPolicies {
     #[serde(default = "default_poor_relief")]
@@ -276,7 +275,7 @@ pub struct SettlementPolicies {
 }
 
 const fn default_poor_relief() -> PoorReliefMode {
-    PoorReliefMode::SurplusOnly
+    PoorReliefMode::EmergencyBudget
 }
 
 const fn default_food_reserve_target_days() -> u8 {
@@ -337,7 +336,7 @@ impl SettlementPolicies {
 
     pub const fn poor_relief() -> Self {
         Self {
-            poor_relief: PoorReliefMode::SurplusOnly,
+            poor_relief: PoorReliefMode::EmergencyBudget,
             food_reserve_target_days: default_food_reserve_target_days(),
             strategy: CivicStrategy::Balanced,
             autopilot: true,

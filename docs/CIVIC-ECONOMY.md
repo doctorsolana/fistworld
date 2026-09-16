@@ -2,7 +2,7 @@
 
 This document is the authoritative guide to the settlement treasury, enacted policy,
 public employment and their interaction with the private market. It describes the live
-implementation as of 2026-08-15. Broader economic direction remains in
+implementation, including the 2026-09-15 labour and market review. Broader economic direction remains in
 [WORLD-DESIGN.md](WORLD-DESIGN.md). Company ownership, shares, pooled finance and
 vertical integration are specified in [COMPANY-ECONOMY-IMPLEMENTATION.md](COMPANY-ECONOMY-IMPLEMENTATION.md);
 business pricing and production are mentioned here only where money crosses the civic boundary.
@@ -14,7 +14,8 @@ business pricing and production are mentioned here only where money crosses the 
 - The settlement exchange is a physical consignment market. Its authoritative stock starts
   in the Moot Hall, with an independent 1,200-bulk compartment for every resource. A completed
   Marketplace adds a second counter and 600 bulk to every compartment rather than creating
-  another inventory or order book.
+  another inventory or order book. A completed public port is another authorized
+  waterfront access point to that same stock and price book.
 - A buyer pays only when a real listed good is purchased. The seller receives the price
   minus the enacted market fee; the fee enters the treasury.
 - Private companies pay an enacted levy only on a completed day's positive consolidated
@@ -24,9 +25,8 @@ business pricing and production are mentioned here only where money crosses the 
   discounts only businesses the settlement has actually requested.
 - Public salaries, relief and construction materials spend real treasury coin. Wage and
   tax shortfalls become liabilities instead of disappearing.
-- Poor Relief purchases one real market ration for an insolvent resident only when
-  sustainable food remains above the enacted reserve floor. In a tactical region the
-  resident then queues outside the Moot, visibly collects it and eats in the commons.
+- Emergency Budget relief can spend up to one third of discretionary treasury cash
+  on real meals after protecting public wages and their reserve. Every recipient queues outside the Moot, collects a ration and eats in the commons.
 - Civic autopilot reviews weekly, requires a Reeve and changes at most one policy lever
   per review. Manual mode leaves all enacted values untouched.
 - There is no household tax and no separate food-consumption tax. Food bought at the Moot
@@ -35,6 +35,49 @@ business pricing and production are mentioned here only where money crosses the 
 
 Coin uses integer pennies. `100` internal units equal `1.00 coin`; percentages use basis
 points, where `100` basis points equal `1%`.
+
+## Paid regional infrastructure
+
+A bounded daily review can commission short dirt-road sections and a validated short
+bridge from repeated delivered cargo, not offered prices alone. Approval protects public
+arrears/payroll reserves, buys the complete real material basket with seller title intact,
+and reserves a finite worker wage. An unemployed resident owns this piecework contract;
+no parallel civic salary is created. Verified road progress and actual on-site bridge
+labour release wages; the final bridge share requires the complete supplied deck.
+Interrupted projects retain paid road prefixes, return tracked carried
+materials physically, and refund only unearned escrow. The money census includes this
+regional escrow. See [REGIONAL-TRAVEL.md](REGIONAL-TRAVEL.md) for geometry, ownership,
+scheduling and remaining limitations; this is distinct from existing local stone paving.
+
+## Public ports and finite harbour work
+
+Town and City settlements may commission one suitable waterfront port. Nomination
+reviews one settlement per day; a retained shore survey checks one candidate or one
+bounded land-access slice per update. Funding retries are bounded, with at most two
+active public port projects. The selected shore needs dry Hall access and a berth
+certified for the allowed hull, depth and overhead clearance; tier alone cannot
+create a working coast.
+
+A pier costs 48 real Wood, 16 Stone and 180 seconds of on-site labour. Approval
+protects civic liabilities and payroll reserves, buys the complete listed material
+basket, and escrows finite construction and delivery wages before starting. Local
+unemployed residents haul reserved materials from the Hall in real capacity-limited
+loads, then build at the shore. They do not also receive a permanent civic salary.
+Meals and household shopping retain movement ownership; resumed work requires arrival
+at the construction point. Ship orders also pay the town one penny per construction
+bulk as a public harbour service fee; this is actual company cash, not a subsidy.
+
+The port adds access, not a separate inventory, price book or permanent idle payroll.
+Ordinary market fees still apply to ship purchases/sales through the town market.
+Cancellation returns tracked carried construction materials before releasing the
+hauler and refunds only unearned cash. Cancelled hull supplies at the Hall or a
+completed port return to the same town market under company warehouse title; full
+stores retain the exact remainder, with bounded retries. An unfinished public pier
+is not market access, so its shore stock retains its physical location and civic
+title. Money census and owner traces separately include builder escrow and
+remaining delivery escrow, never ship book value. See `server/src/world/ports` and
+`server/src/world/shipping/logistics.rs`; connected acceptance is recorded separately
+from these implemented contracts.
 
 ## Balanced founding charter
 
@@ -45,7 +88,7 @@ chooses streets and centre form, never policy.
 |---|---:|---:|---|
 | Market fee | 5% | 2–10% | Treasury share of every completed Moot sale |
 | Positive-profit levy | 10% | 0–15% | Assessed on positive daily operating profit |
-| Poor Relief | Surplus Only | Off / Surplus Only | Whether the treasury may buy food for insolvent residents |
+| Poor Relief | Emergency Budget | Off / Emergency Budget | Whether the treasury may buy food for insolvent residents |
 | Food reserve target | 3 resident-days | 1–30 | Relief floor and food-capacity planning threshold |
 | Civic payroll reserve | 7 funded days | 0–30 | Cash runway protected before another public hire or discretionary purchase |
 | Staffing posture | Balanced | Essential / Balanced / Full | Number of tier-bounded civic vacancies advertised |
@@ -64,7 +107,7 @@ the settlement treasury. They bootstrap circulation; they are not recurring inco
 | Company | One authoritative `CompanyAccount` treasury | Goods remain at settlement-local sites/listings | 1,000-share cap table, Company Master, consolidated obligations, profit, capital and dividends |
 | Business site | No wallet | Workplace inventory plus seller-owned Moot listings | `BusinessAccount` cost-centre ledger: attributed revenue, expenses, labour, policy, production, liabilities and solvency |
 | Settlement | `Settlement::treasury` | Treasury-owned hall stock only | `CivicAccount`, enacted policy and public payroll |
-| Public market | No independent wallet | One compartmentalised Hall-owned inventory, expanded and accessible at either counter after a Marketplace is built | Seller-aware offers, completed trades and market quotes |
+| Public market | No independent wallet | One compartmentalised Hall inventory; Hall/Marketplace counters and completed port share its stock and offers | Seller-aware offers, completed trades and market quotes |
 
 A good stored at the Moot is not automatically public property. Every listing retains a
 `MarketSeller`: a `BusinessId`, `PersonId` or the settlement treasury. The physical shared
@@ -116,8 +159,10 @@ Ordinary founded towns have server-only certified land-group tags. Civic supplie
 selection and tender eligibility exclude different known groups before reserving escrow;
 binding and dispatch check again. This prevents an overseas opportunity from becoming an
 impossible caravan obligation. Same-group journeys still need ordinary route validation.
-Unclassified authored labs keep their existing checks; shipping and connectivity changes
-from future bridges remain separate work. See [NEW-WORLD.md](NEW-WORLD.md).
+Unclassified authored labs keep their existing checks. Paid short bridges may replace a
+land detour already proven by delivered trade; this does not add shipping contracts or
+reclassify disconnected founding land groups. See [NEW-WORLD.md](NEW-WORLD.md) and
+[REGIONAL-TRAVEL.md](REGIONAL-TRAVEL.md).
 
 Independent player merchant routes use the same company asset and Company Porter but never
 borrow civic escrow. Their ordered timetable contains two to eight Marketplace towns. `Buy` spends the
@@ -174,7 +219,7 @@ flowchart LR
     Shareholder["Shareholder"] -->|"capital contribution"| Business
     Business -->|"pro-rata dividend"| Shareholder
     Treasury -->|"daily wages"| CivicWorker["Civic workers"]
-    Treasury -->|"surplus-only ration"| Moot
+    Treasury -->|"budgeted emergency ration"| Moot
     Treasury -->|"public material purchase"| Moot
 ```
 
@@ -190,12 +235,15 @@ All arrows move existing coin. Neither the market nor policy review creates mone
    treasury receives the fee.
 6. The business records units sold, gross revenue and the fee as an operating expense.
 
-The market also records the part of a once-per-day request which did not clear. `Unavailable`
+The market also records the part of a request which did not clear. `Unavailable`
 means there was no eligible physical listing; `unaffordable` means stock existed but the
 buyer's cash or maximum bid rejected it. Successful, unavailable and unaffordable demand are
-separate daily history series. `Funded unmet` additionally records how many missing units the
-buyer could have purchased at the good's stable reference price; this is the conservative demand
-signal available to regional merchants. Substitute foods do not each claim the same wholly empty pantry
+separate daily history series. `Funded unmet` retains quantities at their observed bid prices,
+so a producer or merchant can ask how much demand is affordable at its proposed price.
+There are at most twelve bands per good/day. Overflow rounds bids down into canonical
+power-of-two price buckets; compression can understate purchasing power, never invent it.
+Household retries replace their original price-and-epoch claims. These observations are
+neither escrow nor guaranteed orders. Substitute foods do not each claim the same wholly empty pantry
 request: a household records product-specific rejection only for a good actually offered to it,
 while settlement food pressure records a market with no food at all.
 
@@ -215,13 +263,13 @@ markdown and temporarily remove the target profit margin, while real shortages a
 sell-outs support increases. Only a live stocked offer is a competing price; an old
 clearance sale cannot suppress an empty market indefinitely. An empty producer can quote
 a viable batch from its actual wages, inputs and capacity when observed funded demand
-supports that price. Funded unmet demand retains a conservative buyer price ceiling;
+supports that price. Funded unmet demand retains conservative buyer price bands;
 these observations expire with the daily window and are not escrowed orders. Manual
 owners may still choose any positive price.
 
-A household normally protects two personal discretionary coins per member while funding
-its three-day pantry target. That floor disappears when the pantry holds fewer than one
-ration per resident: preventing today's hunger outranks discretionary saving. Likewise,
+A household normally protects two local ration-days of personal cash per member while
+funding its pantry and hearth. Today's food and fuel take priority over restocking;
+immediate necessities may use that personal reserve. Likewise,
 an autonomous founder protects three personal coins before contributing to a company;
 player contributions remain explicit. When a cabin loses its final member, it cannot
 remain a ghost owner: the final member's death sends the empty household purse and current pantry
@@ -320,6 +368,13 @@ Company cash falls only when a living worker, supplier, tax authority or shareho
 the corresponding money. This distinction is covered by both a focused ledger test and the
 Village Lab's per-update conservation audit.
 
+The server-only named payroll ledger transfers into liquidation and back into an
+acquired operating site without recreating debts from the current staff roster.
+A worker's death first pays the affordable part of their own claim into their estate;
+the unpaid remainder is recorded as a default under the current mortality policy.
+Other workers' claims remain untouched. This is explicit settlement, not inherited
+family debt; family succession remains future work.
+
 An owner death creates the takeover listing immediately, but also starts this same
 liquidation path. A solvent resident may buy and continue the firm before its stock is
 cleared. Every new listing remains on the settlement's public property board for one complete
@@ -327,6 +382,12 @@ world day before automatic resident investors may acquire it; this keeps success
 and prevents a death and takeover collapsing into an unreadable single server tick. If nobody
 can buy, staff claims are preserved, production stops and the goods enter
 the market instead of remaining forever inside an ownerless property.
+Automatic buyers review once daily against actual affordable demand, physical input
+costs, local hiring wages and restart capital, while retaining personal necessities
+cash. An exposed property's price falls, but even a free shell may have no viable
+buyer. Candidates reserve their forecast output within the review, so one shortage
+cannot justify every simultaneous takeover. A successful acquisition contributes
+the required price/startup cash and preserves liabilities; it does not grant money.
 If a person dies in the brief interval after selling a consignment but before the queued
 payment settles, that payment becomes an unclaimed estate receipt for the local treasury;
 the buyer's coin can never disappear into a permanently missing `PersonId`. Unsold Moot
@@ -385,9 +446,9 @@ the processor's opening input cash during a food emergency. A speculative Windmi
 other speculative business receive no subsidy. The
 discount is foregone permit revenue, not a treasury payment and not newly minted coin.
 For an autonomous resident, the permit fee moves from the applicant's wallet into the treasury
-when the resident and Hall approve a legal plot. Approval reserves that plot immediately. An observed applicant then joins the shared
+when the resident and Hall approve a legal plot. Approval reserves that plot immediately. The applicant then joins the shared
 FIFO line in the Moot forecourt and only begins sourcing construction Wood after collecting
-the stamped permit. This visible administration is compressed away in strategic regions;
+the stamped permit. The same physical administration runs in unobserved towns;
 it never changes the fee, ownership or material requirement.
 
 An embodied player uses the same market without pretending that the Hall chooses their
@@ -421,6 +482,9 @@ owner cash is unavailable. The worksite then follows the ordinary construction, 
 business-initialisation pipeline rather than a player-only shortcut.
 
 One Windmill and one Bakery may be speculative once their upstream physical trade exists.
+Affordable input listings and replenishment can support that trade through imports;
+a local upstream building is not mandatory. Entry forecasts use published local
+private wages, falling back to the founding offer only without a local observation.
 Additional processors are advertised only when the existing stage used at least 60% of its
 two-day input capacity, sold at least 30% of capacity-equivalent output, made a positive
 recent profit, and real upstream flow still exceeds installed capacity. Stockpiles are
@@ -432,7 +496,7 @@ changing markets without allowing rows of empty ovens.
 
 There is a second, independent **competitive-entry** route. For two observed days, the output
 must have real demand; the incumbent stage must have sold goods and made positive profit; its
-recent asking price must remain at least 50% above the sustainable local input, founding-wage,
+recent asking price must remain at least 50% above the sustainable local input, hiring-wage,
 fee and Balanced-margin estimate; and buyers must either be rejected or find less than half the
 target stock listed. Real upstream input must exist. This route does not require the monopolist
 to use 60% of nominal capacity: an overpriced incumbent cannot prevent competition merely by
@@ -441,14 +505,19 @@ its three-day probation before another review, and an owner who already owns tha
 is ineligible for the competitive permit. The competition score begins at 68, above the Hall's
 60-point incentive threshold, so this route is explicitly advertised as a subsidized permit.
 
+A failed incumbent is a separate case: it receives a three-day recovery opportunity,
+then blocks a challenger only if its own funded restart remains credible. Pending
+construction and newly opened plants still prevent duplicate investment. This permits
+a viable entrant without requiring a failed owner to recover first.
+
 A processor permit decision recommends enough company cash for at least one complete recipe batch
 plus its one-position opening payroll. An unquoted input is budgeted at 2.6x base value so an empty
 young firm can survive the first real offer; that is an entry estimate, never a price cap or a
 separate escrow. The cash remains in the single company treasury. The Hall does
 not set the entrant's price. The owner observes the current and preceding day's local quote and
-chooses an opening position through their private strategy: Growth seeks volume below the market,
-Balanced and Cautious broadly match it, High Margin asks more, and Opportunistic owners charge
-more during scarcity but discount a well-supplied market. The physical recipe, wages, market fee
+chooses an opening position through their private strategy: Aggressive seeks volume below the
+observed market, while Balanced and Conservative initially match it. All three subsequently
+respond to real scarcity, competing listings and affordable demand. The physical recipe, wages, market fee
 and that owner's margin provide a solvency floor. If several independent owners keep prices high
 and demand remains unfilled after the probation window, another competitive permit can become
 attractive. Thereafter each firm's ordinary daily pricing rules apply independently.
@@ -474,15 +543,20 @@ budget or physical offer is insufficient.
 
 ### Civic payroll and arrears
 
-Every current civic role earns `1.00 coin` per completed world day. Wages accrue whether
-or not the treasury can immediately pay them. Available treasury cash settles claims in a
+All public roles use the settlement's enacted daily salary offer, initially `1.00 coin`.
+Automatic salary review responds to local food costs and eligible private vacancies,
+subject to treasury runway. Completed days accrue at each worker's previous agreed rate
+before the next offer is applied. Wages accrue whether or not the treasury can pay them.
+Available treasury cash settles claims in a
 deterministic, daily rotated order so one stable identity cannot always capture the last
 coin. A person leaving public employment keeps an inactive payroll entry until their debt
 is paid.
 
-Private-company payroll follows the same completed-shift convention: at dawn the company
-treasury pays each workplace roster and the expense is attributed to the world day which
-just ended. Consequently an open `TODAY` ledger can show zero wages before its shift closes;
+Private-company payroll follows the same completed-shift convention: at dawn each
+workplace records named creditors by `PersonId`, and company cash pays those claims.
+Leaving a job preserves earned arrears; a replacement never inherits the former worker's
+debt. Partial payments are proportional with rotating penny remainders. The expense is
+attributed to the world day which just ended. Consequently an open `TODAY` ledger can show zero wages before its shift closes;
 `PREVIOUS DAY` must preserve the posted expense. Site history and consolidated company
 history use that same day boundary.
 
@@ -499,46 +573,54 @@ arrears honestly accumulate.
 
 ### Poor Relief
 
-Solvent households and unhoused residents shop first. `Surplus Only` then considers the
-residents who could not afford a ration. For each candidate, all of these must remain true:
-
-- recent food production is active; it may temporarily trail a sudden population
-  increase because the protected stock floor below is the actual surplus test;
-- a physical ready-to-eat Bread or Fish listing exists at the Moot (raw Wheat and
-  household-only Flour are never relief rations);
-- the treasury can pay its actual listed price;
-- after the purchase, hall food remains at or above
-  `residents × food-reserve-target-days`.
+Solvent households and unhoused residents shop first. `Emergency Budget` then
+considers unfed residents. Its daily cap is one third of discretionary treasury
+cash after unpaid public salaries and the enacted payroll reserve. It buys at most
+one real ready-to-eat ration per recipient, choosing the cheapest available food.
+There is no local-production prerequisite or multi-day stockpile veto: emergency
+meals and ordinary reserve replenishment are distinct spending decisions. A rotating
+daily recipient order shares partial relief over time. No cash or eligible food
+means no purchase; `Off` disables relief.
 
 The treasury purchases the ration through the ordinary market, so the seller is paid and
 the market fee still applies. At that moment one listed unit is removed from hall stock and
-reserved to the named recipient; it cannot be sold twice while they walk. In an observed
-tactical region the recipient takes a stable FIFO place outside the Moot, receives the
+reserved to the named recipient; it cannot be sold twice while they walk. Every recipient takes a stable FIFO place outside the Moot, receives the
 ration as visible carried cargo, walks to a small commons spot and eats it. Nutrition is
-recorded only at that final collection/eating boundary. A failed last-metre route resolves
-the already-paid ration rather than destroying it or wedging the recipient forever.
-Strategic regions settle the identical purchase and meal directly without creating an NPC
-route. Relief stops as soon as any constraint fails. `Off` means an insolvent resident
+recorded only at that physical eating boundary. A full bag may eat the served ration
+at the counter; otherwise a failed commons walk can eat the ration already carried.
+Losing a queue ticket reissues service without charging again. A temporarily unavailable
+Hall retains the paid claim; destroying the Hall loses its still-uncollected ration and
+releases the recipient, without inventing nutrition or a refund.
+Unobserved people follow this same paid collection and consumption lifecycle. Relief stops as soon as any constraint fails. `Off` means an insolvent resident
 misses the meal and becomes hungry.
 
 ### Moot service line
 
-Permits, tactical household shopping, personal food purchases and Poor Relief share one
+Permits, household shopping, personal food purchases and Poor Relief share one
 server-owned FIFO queue per Moot Hall. Every ticket has a stable serial and its own authored
 forecourt position, so residents no longer target and overlap at one door coordinate. Only
 the head is served; the remaining places advance when it leaves. The queue uses ordinary
 cached village navigation and master world-time scaling. Repeated terminal route failures
-have a bounded counter fallback so one bad prop cannot halt construction or nutrition.
-Walking toward the counter resets that fallback, so distance is never mistaken for a stuck
-route. Food purchases and relief handovers take one world second at the counter, immigration
+or a stationary head release that queue place for a bounded retry while retaining the
+paid ticket and its reserved ration or cargo. Neither a timeout nor a failed route grants
+service remotely: the person must reach the physical counter along certified local ground.
+An in-flight route is retained, and only short forecourt steps bypass town-scale planning.
+The head's watchdog measures progress along its current route leg and waypoint cursor,
+as well as distance to the counter. A real detour can therefore move away from the Hall
+without losing its place. Replacing a route alone earns no progress. Fifteen world seconds
+without movement progress, excluding pending route searches, yields admission for a
+30-world-second retry while retaining the claim; this uses the same world clock at 1×
+and accelerated speeds. Routine removal is not evidence of successful collection.
+A migrant still travelling from landfall cannot acquire a local town meal ticket merely
+because its chosen town is already known; ordinary residency begins after registration. Food purchases and relief handovers take one world second at the counter, immigration
 registration takes two, and a stamped permit takes three. A regression moves 100 household
 shoppers through the physical wave queue in under five world minutes at both 1x and 10x;
 daily restocking must not survive into the next morning.
 
 The hall planning clearance is 16 metres. This reserves a real civic forecourt and commons
 for the line without adding character-to-character collision or per-frame crowd simulation.
-Villagers without an active hall service still use the cheap ambient system, and off-screen
-services remain aggregate.
+Villagers without an active hall service still use the bounded ambient system.
+The same physical service queue runs in every town, independent of observation.
 
 The food reserve target informs the permit-market food signal. Low reserve days and weak
 recent production raise farming, fishing and livestock opportunities, but none is a civic
@@ -565,7 +647,7 @@ A Livestock Farm is a Hamlet-tier private extractor with two Herder positions. O
 cycle creates one Meat ration and one Wool by-product; neither half can be created if the
 bounded carrier or workplace lacks room for the complete pair. Full staffing on perfect
 pasture rates about six paired units per ordinary day. Meat is ready-to-eat and may satisfy
-households or Surplus Only relief; Wool is non-edible input for the later textile chain.
+households or Emergency Budget relief; Wool is non-edible input for the later textile chain.
 A private Tavern unlocks at Village and uses the ordinary company, payroll and procurement
 model. Its pantry buys Meat, Bread and Wheat, preserving Wheat as the future ale input. An
 Innkeeper opens from 12:00 to 21:30 and supplies eight paid meals per worker-day. Residents
@@ -580,7 +662,7 @@ gets one compact deterministic day plan with wake, work, meal, discretionary and
 Employment, hunger, cash after a protected personal floor and a small person/day preference
 roll determine whether discretionary time becomes a Tavern meal or free local time. Job
 seekers protect more cash than employed residents; hunger loosens, but does not remove, the
-floor. The same decision settles statistically off-screen without a route. The person panel
+floor. The same route, queue, dining and payment lifecycle runs offscreen. The person panel
 shows the plan and its completed, unaffordable, unavailable or unreachable result; the Tavern
 panel shows visits, meals, direct revenue, turnaways, staffing and occupancy.
 
@@ -641,22 +723,28 @@ is therefore a target, not a promise that every slot is instantly filled.
 
 ### Labour-market response
 
-Private firms already review their own wage offer from staffing, cash, arrears and recent
-results. Employees now review those offers once per world day as well. A worker can move
-directly to an open job in the same settlement when it pays at least 20% and 0.10 coin more
-per day. Requiring both thresholds gives employment inertia: neighbouring firms changing
-their offer by one ordinary ten-penny review step do not swap the whole workforce every dawn.
-Three days' worth of workplace wage arrears overrides that inertia; a non-owner worker then
-takes the best open alternative or returns to `LookingForWork`. They finish an in-flight
-delivery, door crossing or carried load first so changing jobs cannot duplicate or strand
-physical goods. An owner does not quit their own site through the employee rule—the ordinary
-business lifecycle decides whether that branch closes.
+Private offers review once daily after completed-shift payroll. Persistent
+vacancies and competing local offers create upward pressure; living costs help
+set the target. Each step needs demonstrated/forecast contribution and extra cash
+after the company's other sites, inputs, two payroll days and liabilities. Each
+raise is capped at the larger of 10% or ten pennies, within the existing 0.50–3.00
+bounds. Arrears take precedence over raises, including at understaffed sites.
+Manual business wage policies remain untouched.
 
-Civic contracts follow the same principle. An idle public worker resigns after three unpaid
-days while their durable payroll claim remains payable; a Moot Steward first completes any
-promised cart or road task. Marketplaces, Churches and other public architecture do not
-advertise fictional private `EmployedAt` slots. Taverns are the deliberate exception: they
-are private companies with real Innkeeper jobs, company wages and pantry procurement.
+Workers decide once per day, with hourly retries when cargo or door work makes a
+transition unsafe. Private choices check skill requirements and compare wages
+against commuting time from the household's home. Normal inertia is 10% and ten
+pennies; a worker with less than two local ration-days of personal cash accepts a
+smaller 5%/five-penny improvement. Three unpaid days can still trigger resignation.
+Owners retain their separate business-leadership decisions.
+
+Public salaries use the enacted `steward_daily_salary` offer. Payroll accrues the
+old agreed salary before publishing the next offer, and former public employees'
+claims remain payable. Automatic towns review offers against local food costs and
+private vacancies within treasury runway. Hiring respects better eligible private
+offers, and public workers can change to better paid private work at a safe cargo
+and construction boundary. Hourly indexed vacancy reviews keep these decisions
+out of per-frame economy work.
 
 Every replicated `SettlementEconomy` reading exposes private and civic positions, filled and
 vacant counts, residents looking for work, and the highest wage among open private positions.
@@ -670,11 +758,11 @@ the same figures. These counts distinguish “people are idle because no job exi
 
 | Strategy | Market fee | Profit levy | Relief | Staffing | Permit subsidy |
 |---|---:|---:|---|---|---:|
-| Balanced | 5% | 10% | Surplus Only | Balanced | 45% |
+| Balanced | 5% | 10% | Emergency Budget | Balanced | 45% |
 | Frugal | 3% | 5% | Off | Essential | 20% |
-| Mercantile | 4% | 7.5% | Surplus Only | Balanced | 35% |
-| Mutual Aid | 6% | 12.5% | Surplus Only | Full | 40% |
-| Growth | 4% | 7.5% | Surplus Only | Full | 65% |
+| Mercantile | 4% | 7.5% | Emergency Budget | Balanced | 35% |
+| Mutual Aid | 6% | 12.5% | Emergency Budget | Full | 40% |
+| Growth | 4% | 7.5% | Emergency Budget | Full | 65% |
 
 Food-reserve and payroll-reserve days are enacted values but are not currently adjusted by
 strategy autopilot. They begin at three and seven days respectively and stay there until a
@@ -713,7 +801,7 @@ It then attempts exactly the first possible response in this order:
 When not stressed, the review attempts the first applicable response:
 
 1. Move relief toward the strategy target. Enabling it additionally requires unmet food
-   need, sustainable food, the reserve floor and protected payroll cash.
+   need, physical edible stock and discretionary cash after protected public payroll.
 2. Move staffing one step toward the strategy target.
 3. Move permit subsidy by 10 percentage points toward the strategy target.
 4. If treasury exceeds fourteen current payroll days and review income exceeds spending,
@@ -750,8 +838,11 @@ Stone shortage, the project becomes the real remote buyer: it reserves treasury 
 open `CivicTradeContract` tender with a price ceiling before a supplier exists. A complete real
 listing later binds the origin and exact seller. A source company must own a completed Storage
 Hall and employ an available Company Porter before it accepts the route. Small partial loads use
-a two-coin minimum carrier call-out fee; larger loads retain the ordinary per-bulk freight rate,
-so a legitimate remainder can still cover the fixed porter-and-wagon cost.
+a two-coin minimum carrier call-out fee; distance and actual porter wages can raise
+that allowance, while the ordinary per-bulk rate remains a floor. Open, unaccepted
+tenders review affordable landed quotes daily, preferring executable suppliers. They
+expire after seven days and refund unused escrow, with a two-day retry cooldown.
+Terms already attached to a carrier or cargo remain committed.
 Payment credits the source seller at physical collection, the destination owns the in-transit
 cargo, and the carrier earns its separate freight fee only upon worksite delivery. Material and
 freight spending remain separate civic-ledger lines; unused escrow returns to the destination.
@@ -870,9 +961,15 @@ settlements and must remain green as policy decisions grow more sophisticated.
 | Money units, accounts, market, permit and planning formulas | `shared/src/economy.rs` |
 | Company identity, 1,000-share cap table and share offers | `shared/src/components/identity.rs` |
 | Company migration, pooled finance, dividends and executive review | `server/src/world/village/companies.rs` |
-| Direct same-company tactical supply | `server/src/world/village/commerce.rs` |
-| Direct same-company strategic supply | `server/src/world/village/strategic.rs` |
+| Same-company physical supply everywhere | `server/src/world/village/commerce.rs` |
 | Civic payroll, levy, protected budget and policy review | `server/src/world/village/civic.rs` |
+| Daily private wage review and company-wide raise reserves | `server/src/world/village/economy.rs` |
+| Hourly civic labour offers and safe public job changes | `server/src/world/village/civic_labor.rs` |
+| Private employee choices and hourly safe-boundary retries | `server/src/world/village/employment.rs` |
+| Named private wage claims and death settlement | `server/src/world/village/commerce/payroll_claims.rs`, `server/src/world/village/mortality/payroll.rs` |
+| Bounded conservative demand bands | `shared/src/economy/demand.rs` |
+| Daily investment evidence and property acquisition | `server/src/world/village/development_market/investment.rs`, `server/src/world/village/mortality/takeovers.rs` |
+| Merchant quote review and civic tender repricing | `server/src/world/village/trade_routes/merchant_economics.rs`, `server/src/world/village/trade_routes/civic_review.rs` |
 | Permit selection and fee collection | `server/src/world/village/planning.rs` |
 | Meals, relief, reserves and prosperity | `server/src/world/village/settlement_economy.rs` |
 | Public hiring and Moot Steward duties | `server/src/world/village_roads/steward.rs` |
@@ -897,7 +994,8 @@ When adding a tax, benefit, public job or civic purchase:
 5. Protect stable `PersonId`, `SettlementId` and `BuildingId` joins. Names are display only.
 6. Add the rule to the shared live/lab schedule and use `SimulationDelta` for time.
 7. Add a focused conservation test, a policy-decision test and relevant history fields.
-8. Keep off-screen decisions aggregate. Do not introduce per-tick, world-wide person scans.
+8. Use the same authoritative routines everywhere. Bound reviews and navigation; never
+   substitute aggregate transactions or reset a trip when camera coverage changes.
 9. Update this document, WORLD-DESIGN and ROADMAP in the same change.
 
 The key invariant is simple: policy may redirect incentives and existing resources, but it

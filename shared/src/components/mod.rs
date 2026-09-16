@@ -29,8 +29,12 @@ mod permits;
 mod placement;
 mod settlements;
 mod trade;
+mod shipping;
+pub use shipping::*;
 mod village_life;
 mod village_roads;
+mod road_bridges;
+pub use road_bridges::*;
 mod world;
 
 pub use actors::{

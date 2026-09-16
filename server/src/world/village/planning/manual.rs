@@ -2,10 +2,11 @@
 
 use super::fishing::fishing_water_quality;
 use super::plots::MAX_SETTLEMENT_SEARCH_RADIUS;
-use super::road_access::{planned_road_access_path, RoadAccessBlocker};
+use super::road_access::{RoadAccessBlocker, planned_road_access_path};
 use super::terrain::{
-    farmstead_earthwork_effort, livestock_earthwork_effort, plot_fits_navigation_bounds,
-    resource_plot_is_viable, site_quality, slope_at, FREEBOARD, MAX_BUILD_SLOPE,
+    FREEBOARD, MAX_BUILD_SLOPE, building_freeboard, farmstead_earthwork_effort,
+    livestock_earthwork_effort, plot_fits_navigation_bounds, resource_plot_is_viable, site_quality,
+    slope_at,
 };
 use crate::world::village::*;
 
@@ -81,11 +82,11 @@ pub(crate) fn validate_manual_plot(
     } else if slope_at(terrain, position.x, position.z) > MAX_BUILD_SLOPE {
         return Err("The ground is too steep for this building.".into());
     }
-    if !plot_fits_navigation_bounds(kind, position, rotation) {
+    if !plot_fits_navigation_bounds(terrain, kind, position, rotation) {
         return Err("Part of this plot would lie outside the playable world.".into());
     }
     if shared::components::minimum_building_water_clearance(terrain, position, kind, rotation)
-        < FREEBOARD
+        < building_freeboard(kind)
     {
         return Err("The building and its doorway must remain safely above the waterline.".into());
     }
@@ -300,4 +301,57 @@ pub(crate) fn validate_manual_plot(
         road_access,
         road_snapped,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "loads isolated village_lab bounds; run this regression by name with --ignored"]
+    fn manual_and_automatic_fishing_share_the_shoreline_clearance() {
+        let terrain = WorldTerrain::from_loaded_map(shared::map::load_map("village_lab").unwrap());
+        let hall = Vec3::new(112.0, terrain.get_height(112.0, -158.0), -158.0);
+        let kind = SettlementBuildingKind::FishermansHut;
+        // An actual automatically approved, built and worked bank. The manual
+        // permit used to reject it solely because its margin was 1.5m while
+        // automatic fishing and the player preview both required 0.35m.
+        let position = Vec3::new(163.55515, 1.3808655, -164.78734);
+        let rotation = std::f32::consts::FRAC_PI_2;
+        let clearance = shared::components::minimum_building_water_clearance(
+            &terrain, position, kind, rotation,
+        );
+        assert!(clearance >= building_freeboard(kind) && clearance < FREEBOARD);
+        let occupied = [(hall, SettlementBuildingKind::Hall.clearance())];
+        let validate = |at| {
+            validate_manual_plot(
+                &terrain,
+                hall,
+                kind,
+                at,
+                rotation,
+                &occupied,
+                &[],
+                &[],
+                &[],
+                None,
+                None,
+                None,
+                &[],
+            )
+        };
+        let approval =
+            validate(position).expect("safe automatic fishing bank must allow a manual permit");
+        assert!(approval.road_access.len() >= 2);
+        assert!(crate::world::village_roads::road_corridor_is_dry(
+            &terrain,
+            &approval.road_access,
+            RoadClass::Lane.initial_reserved_width(),
+        ));
+        let submerged_tip = kind.fishing_position(position, rotation).unwrap();
+        assert!(
+            validate(submerged_tip).is_err(),
+            "a submerged pier point is not a valid hut pad"
+        );
+    }
 }

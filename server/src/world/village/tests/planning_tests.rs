@@ -304,23 +304,54 @@ fn secure_food_history_reports_wellbeing_without_changing_tier() {
         (ensure_settlement_economies, update_settlement_economies).chain(),
     );
     let clock = app.world_mut().spawn(WorldTime::new_default()).id();
-    let mut stock = GoodsInventory::new(shared::economy::capacity::HALL);
-    // Three days are consumed during the observation window and the final
-    // state must still retain the advertised three-day reserve.
-    let starting_food = VILLAGE_MIN_RESIDENTS * 6;
-    assert_eq!(stock.add(Good::Flour, starting_food), starting_food);
+    let settlement_id = shared::components::SettlementId(91);
     let hall = app
         .world_mut()
         .spawn((
+            settlement_id,
             Settlement {
-                name: "Plenty".to_string(),
+                name: "Plenty".into(),
                 tier: shared::components::SettlementTier::Hamlet,
                 residents: VILLAGE_MIN_RESIDENTS,
                 treasury: 0,
             },
-            stock,
+            GoodsInventory::new(shared::economy::capacity::HALL),
+            MootMarket::founding(),
         ))
         .id();
+    // This fixture tests summary evidence, not shopping navigation. Residents
+    // already own six days of actual ready-to-eat food in their home pantries;
+    // the real daily consumption system must debit one ration each day.
+    for group in 0..VILLAGE_MIN_RESIDENTS.div_ceil(4) {
+        let occupants = (VILLAGE_MIN_RESIDENTS - group * 4).min(4);
+        let mut pantry = GoodsInventory::new(shared::economy::capacity::HOUSE);
+        assert_eq!(pantry.add(Good::Bread, occupants * 6), occupants * 6);
+        let home = app
+            .world_mut()
+            .spawn((
+                shared::components::BuildingId(100 + u64::from(group)),
+                shared::components::BuildingOf(settlement_id),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::House,
+                    settlement: "Plenty".into(),
+                    owner: None,
+                    quality: 1.,
+                    workers: Vec::new(),
+                },
+                pantry,
+            ))
+            .id();
+        for index in 0..occupants {
+            app.world_mut().spawn((
+                CharacterName(format!("Resident-{group}-{index}")),
+                CharacterKind::Villager,
+                VillagerIntent::Resident { settlement: hall },
+                shared::components::ResidentOf(settlement_id),
+                HomeAssignment { home },
+                Nutrition::default(),
+            ));
+        }
+    }
 
     app.update();
     for day in 1..=3 {
@@ -418,8 +449,10 @@ fn food_and_housing_permits_are_approved_without_waiting_for_construction() {
             break;
         }
     }
-    assert_eq!(site_count, 2,
-        "both independent permits must finish their bounded searches without any construction progress");
+    assert_eq!(
+        site_count, 2,
+        "both independent permits must finish their bounded searches without any construction progress"
+    );
 
     let mut world = std::mem::take(&mut *app.world_mut());
     let sites: Vec<_> = world

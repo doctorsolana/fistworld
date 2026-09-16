@@ -3,10 +3,11 @@
 use super::businesses::market_response::{
     MarketResponseShare, MarketResponseSite, MarketResponses,
 };
+use super::commerce::business_outputs;
 use super::*;
 
 const UNPAID_DAYS_BEFORE_PRIVATE_RESIGNATION: u64 = 3;
-const JOB_SWITCH_MINIMUM_RAISE_BPS: u64 = 2_000;
+const JOB_SWITCH_MINIMUM_RAISE_BPS: u64 = 1_000;
 const JOB_SWITCH_MINIMUM_RAISE_PENNIES: u64 = 10;
 
 fn materially_better_wage(current: u64, candidate: u64) -> bool {
@@ -39,7 +40,7 @@ fn signed_profit(revenue: u64, cost: u64) -> i64 {
 
 /// Household food already contributes to the public reserve target. The
 /// remaining coverage must be kept in circulation by producers; their own
-/// listed stock is deducted separately by the operating plan, exactly once.
+/// listed stock is deducted separately by the staffing forecast, exactly once.
 fn food_replacement_buffer_days(target_days: u8, residents: u32, pantry_food: u32) -> f32 {
     let target = f32::from(target_days.min(shared::economy::MAXIMUM_FOOD_RESERVE_TARGET_DAYS));
     let pantry_days = pantry_food as f32 / residents.max(1) as f32;
@@ -47,7 +48,7 @@ fn food_replacement_buffer_days(target_days: u8, residents: u32, pantry_food: u3
 }
 
 #[allow(clippy::too_many_arguments)]
-fn marginal_operating_plan(
+fn marginal_staffing_forecast(
     day: u32,
     building: &SettlementBuilding,
     inventory: &GoodsInventory,
@@ -62,12 +63,12 @@ fn marginal_operating_plan(
     external_output_bid: Option<u64>,
     food_buffer_days: f32,
     opening_trial: bool,
-) -> BusinessOperatingPlan {
+) -> BusinessStaffingForecast {
     let positions = building.kind.positions();
     let Some(capacity) = rated_daily_production(building.kind, building.quality) else {
-        return BusinessOperatingPlan {
+        return BusinessStaffingForecast {
             day,
-            target_output_units: 0,
+            expected_sales_units: 0,
             produced_output_units: 0,
             optimal_positions: 0,
             marginal_daily_profit: 0,
@@ -129,11 +130,9 @@ fn marginal_operating_plan(
         output_quote = output_quote.max(external_output_bid.unwrap_or_default());
     }
     let strategy_buffer = match management.strategy {
-        shared::economy::BusinessStrategy::Growth
-        | shared::economy::BusinessStrategy::Opportunistic => demand_variation,
+        shared::economy::BusinessStrategy::Aggressive => demand_variation,
         shared::economy::BusinessStrategy::Balanced => demand_variation.div_ceil(2),
-        shared::economy::BusinessStrategy::HighMargin
-        | shared::economy::BusinessStrategy::Cautious => 0,
+        shared::economy::BusinessStrategy::Conservative => 0,
     };
     let one_worker_capacity = capacity
         .output_units
@@ -157,7 +156,7 @@ fn marginal_operating_plan(
     // at every competing site. Wheat keeps a day's replacement for milling.
     // A profitable, funded shift can rebuild the buffer up to real capacity;
     // capping it at one dispatch would leave depleted reserves unable to
-    // recover while daily meals continue. Unsold stock still stops output,
+    // recover while daily meals continue. Unsold stock reduces projected sales,
     // and no observed demand creates no speculative reserve production.
     let replacement_buffer = if output.is_edible() {
         (proven_daily_sales as f32 * food_buffer_days.max(0.0)).ceil() as u32
@@ -209,13 +208,10 @@ fn marginal_operating_plan(
             best_units = possible;
         }
     }
-    // A processor deliberately opens with one physical recipe batch so a new
-    // bakery cannot dump a full shift into an untested market. That learning
-    // batch is smaller than the worker's normal daily throughput, however, so
-    // charging the entire daily wage only against those first units can make a
-    // viable mill refuse ever to begin. Admit the one-position trial when the
-    // same worker's rated day has positive contribution, while retaining the
-    // small production budget above.
+    // A processor's first sales forecast may be only one recipe batch. Do not
+    // reject a one-position opening trial solely because that tiny sample
+    // cannot yet cover a full wage: admit it when a normal staffed day's
+    // contribution is positive. This forecast never caps actual shift output.
     if opening_trial && best_positions == 0 && output_gap > 0 {
         let mut rated_units = one_worker_capacity;
         let rated_input_cost = if let Some(recipe) = processing_recipe(building.kind) {
@@ -238,9 +234,9 @@ fn marginal_operating_plan(
             best_profit = rated_profit;
         }
     }
-    BusinessOperatingPlan {
+    BusinessStaffingForecast {
         day,
-        target_output_units: best_units,
+        expected_sales_units: best_units,
         produced_output_units: 0,
         optimal_positions: best_positions,
         marginal_daily_profit: best_profit,
@@ -543,7 +539,7 @@ pub fn review_automatic_staffing(
         if !management.autopilot {
             commands
                 .entity(entity)
-                .insert(BusinessOperatingPlan::uncapped(
+                .insert(BusinessStaffingForecast::manual(
                     day,
                     staffing.target_for(building.kind),
                 ));
@@ -557,9 +553,9 @@ pub fn review_automatic_staffing(
                 | BusinessState::Closed
         ) {
             staffing.enabled_positions = 0;
-            commands.entity(entity).insert(BusinessOperatingPlan {
+            commands.entity(entity).insert(BusinessStaffingForecast {
                 day,
-                target_output_units: 0,
+                expected_sales_units: 0,
                 produced_output_units: 0,
                 optimal_positions: 0,
                 marginal_daily_profit: 0,
@@ -616,9 +612,9 @@ pub fn review_automatic_staffing(
                 .saturating_sub(u8::from(staffing.enabled_positions > optimal))
                 .saturating_add(u8::from(staffing.enabled_positions < optimal))
                 .min(building.kind.positions());
-            commands.entity(entity).insert(BusinessOperatingPlan {
+            commands.entity(entity).insert(BusinessStaffingForecast {
                 day,
-                target_output_units: 0,
+                expected_sales_units: 0,
                 produced_output_units: 0,
                 optimal_positions: optimal,
                 marginal_daily_profit: 0,
@@ -670,9 +666,9 @@ pub fn review_automatic_staffing(
             } else {
                 current
             };
-            commands.entity(entity).insert(BusinessOperatingPlan {
+            commands.entity(entity).insert(BusinessStaffingForecast {
                 day,
-                target_output_units: 0,
+                expected_sales_units: 0,
                 produced_output_units: 0,
                 optimal_positions: desired,
                 marginal_daily_profit: 0,
@@ -717,11 +713,21 @@ pub fn review_automatic_staffing(
                 };
             local_restart.max(external_trade.0)
         });
-        let opening_trial = state == BusinessState::New
-            && account.gross_revenue == 0
+        // Liquidity describes the cash runway, not whether the site has had
+        // a chance to make its first product. A late-day opening can be cash
+        // tight at midnight before its first complete shift. Keep the same
+        // bounded opening trial across that label change; actual sales/output
+        // or the ordinary age limit end it without inventing ongoing demand.
+        let opening_trial = condition.as_deref().is_some_and(|condition| {
+            if condition.opened_day == u32::MAX {
+                condition.state == BusinessState::New
+            } else {
+                day.saturating_sub(condition.opened_day) < super::businesses::NEW_BUSINESS_DAYS
+            }
+        }) && account.gross_revenue == 0
             && account.current_day.produced_units == 0
             && account.previous_day.produced_units == 0;
-        let mut plan = marginal_operating_plan(
+        let mut plan = marginal_staffing_forecast(
             day,
             building,
             inventory,
@@ -744,6 +750,7 @@ pub fn review_automatic_staffing(
             })
         });
         let mature_and_unwanted = !matches!(state, BusinessState::New | BusinessState::Mothballed)
+            && !opening_trial
             && plan.optimal_positions == 0
             && sale.days_without_sales >= 2
             && !has_unavailable_demand
@@ -783,7 +790,7 @@ pub fn review_automatic_staffing(
                     .saturating_mul(u32::from(staffing.enabled_positions))
                     / u32::from(building.kind.positions().max(1))
             });
-        plan.target_output_units = plan.target_output_units.min(staffed_capacity);
+        plan.expected_sales_units = plan.expected_sales_units.min(staffed_capacity);
         commands.entity(entity).insert(plan);
     }
 }
@@ -835,6 +842,7 @@ pub fn fill_vacancies(
         Or<(
             With<ConstructionMaterialRoutine>,
             With<RoadBuilderRoutine>,
+            With<crate::world::regional_roads::RegionalRoadWorker>,
             With<moot_services::PermitPickupRoutine>,
             With<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
         )>,
@@ -877,6 +885,7 @@ pub fn fill_vacancies(
                 .insert(WorkStatus::LookingForWork)
                 .remove::<shared::components::EmployedAt>()
                 .remove::<WorkplaceDoorTransit>()
+                .remove::<WorkplaceInterior>()
                 .remove::<BuildingDoorUse>()
                 .remove::<MoveTarget>()
                 .remove::<TravelRoute>()
@@ -1096,9 +1105,9 @@ pub fn fill_vacancies(
                             },
                         )
                         .min_by(|a, b| {
-                            a.3 .0
+                            a.3.0
                                 .distance_squared(plot)
-                                .total_cmp(&b.3 .0.distance_squared(plot))
+                                .total_cmp(&b.3.0.distance_squared(plot))
                         })
                         .map(|(entity, name, _, _, _, _, _, _, _, _)| (entity, name.0.clone()))
                 });
@@ -1145,6 +1154,10 @@ pub fn fill_vacancies(
                 }
             }
             let mut employee = commands.entity(taker_entity);
+            // A completed shift/access wait belongs to the previous job.
+            // The new workplace still checks hours and its own road readiness.
+            employee.remove::<WorkerOffDuty>();
+            employee.remove::<super::workplace_access::AwaitingWorkplaceAccess>();
             employee.insert(WorkStatus::Employed);
             employee.insert(shared::components::EmployedAt(*building_id));
             info!(
@@ -1160,9 +1173,14 @@ pub fn fill_vacancies(
 /// Release positions closed by an operator before the vacancy matcher runs.
 /// The lowest stable PersonIds retain their jobs, making retries and save/load
 /// deterministic. Released workers re-enter the ordinary labour market and
-/// all job-specific movement state is cleared in the same ordered pass.
+/// production first completes its final load and physical exit. Releasing a
+/// position must not strand its former employee on a pier or inside a doorway.
 pub fn enforce_staffing_targets(
     mut commands: Commands,
+    busy: Query<(), super::worker_activity::JobReleaseBlocked>,
+    release_requests: Query<(), With<super::worker_activity::EmploymentReleaseRequested>>,
+    changed_targets: Query<(), Changed<BusinessStaffingPolicy>>,
+    changed_employment: Query<(), Changed<shared::components::EmployedAt>>,
     buildings: Query<(
         &shared::components::BuildingId,
         &SettlementBuilding,
@@ -1178,11 +1196,22 @@ pub fn enforce_staffing_targets(
         Has<InternalDeliveryRoutine>,
         Has<MarketCollectionRoutine>,
         Has<TradeRouteRoutine>,
+        Option<&mut CharacterActivity>,
     )>,
 ) {
+    // Most ticks have neither an operator decision nor an unfinished handoff.
+    // Avoid allocating and sorting a world-wide roster in that steady state.
+    if release_requests.is_empty() && changed_targets.is_empty() && changed_employment.is_empty() {
+        return;
+    }
     let targets: HashMap<_, _> = buildings
         .iter()
-        .map(|(id, building, policy)| (*id, policy.target_for(building.kind) as usize))
+        .map(|(id, building, policy)| {
+            (
+                *id,
+                (policy.target_for(building.kind) as usize, building.kind),
+            )
+        })
         .collect();
     let mut workers: HashMap<
         shared::components::BuildingId,
@@ -1198,22 +1227,57 @@ pub fn enforce_staffing_targets(
     }
     for (building, roster) in workers.iter_mut() {
         roster.sort_unstable_by_key(|(person, entity)| (*person, entity.to_bits()));
-        let target = targets.get(building).copied().unwrap_or(roster.len());
+        let Some(&(target, kind)) = targets.get(building) else {
+            continue;
+        };
+        for (_, entity) in roster.iter().take(target) {
+            if release_requests.contains(*entity) {
+                commands
+                    .entity(*entity)
+                    .remove::<super::worker_activity::EmploymentReleaseRequested>();
+            }
+        }
         for (_, entity) in roster.iter().skip(target) {
-            let Ok((_, _, _, mut occupation, mut status, carrier, internal, market, trade_route)) =
-                villagers.get_mut(*entity)
+            let Ok((
+                _,
+                _,
+                _,
+                mut occupation,
+                mut status,
+                carrier,
+                internal,
+                market,
+                trade_route,
+                activity,
+            )) = villagers.get_mut(*entity)
             else {
                 continue;
             };
-            // Closing a porter position is graceful. Keep the employment until
-            // an already-promised shipment reaches its destination and the
-            // carrier is empty; otherwise the same person can be hired into a
-            // second job while physically holding somebody else's goods.
-            if internal || market || trade_route || !carrier.is_empty() {
+            // Active owners retain their cargo and final handoff. Unrelated
+            // personal materials must not imprison an otherwise finished
+            // employee in a closed position (e.g. a quarrier's leftover Wood
+            // from building a home). Freight staff can carry any company good;
+            // producers still owe their own output, including by-products.
+            let pending_output = if kind == SettlementBuildingKind::StorageHall {
+                !carrier.is_empty()
+            } else {
+                business_outputs(kind)
+                    .iter()
+                    .any(|good| carrier.amount(*good) > 0)
+            };
+            if busy.contains(*entity) || internal || market || trade_route || pending_output {
+                if !release_requests.contains(*entity) {
+                    commands
+                        .entity(*entity)
+                        .insert(super::worker_activity::EmploymentReleaseRequested);
+                }
                 continue;
             }
             occupation.0 = None;
             *status = WorkStatus::LookingForWork;
+            if let Some(mut activity) = activity {
+                activity.set_if_neq(CharacterActivity::Idle);
+            }
             commands
                 .entity(*entity)
                 .remove::<shared::components::EmployedAt>()
@@ -1223,13 +1287,15 @@ pub fn enforce_staffing_targets(
                 .remove::<QuarryRoutine>()
                 .remove::<ProcessingRoutine>()
                 .remove::<WorkplaceDoorTransit>()
+                .remove::<WorkplaceInterior>()
                 .remove::<BuildingDoorUse>()
                 .remove::<PierTraversal>()
                 .remove::<MoveTarget>()
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()
                 .remove::<NavigationRouteFailed>()
-                .remove::<WorkerOffDuty>();
+                .remove::<WorkerOffDuty>()
+                .remove::<super::worker_activity::EmploymentReleaseRequested>();
         }
     }
 }
@@ -1244,12 +1310,15 @@ struct JobOfferSnapshot {
     arrears: u64,
     accepts_workers: bool,
     target: usize,
+    position: Option<Vec3>,
+    requirements: WorkforceRequirements,
 }
 
 /// Let employees react to the same wage offers businesses already manage.
 ///
-/// The decision is daily and requires a material 20% raise, so ordinary
-/// ten-penny wage reviews do not produce constant churn. Three days of unpaid
+/// Each worker decides once daily after finishing cargo/door work. Hourly retries
+/// let busy workers participate without per-frame scans. A 10%/ten-penny raise
+/// gives a meaningful alternative while limiting churn. Three days of unpaid
 /// wages override that inertia. Owners do not abandon their own shop through
 /// this employee path; its business lifecycle remains their decision.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1265,6 +1334,9 @@ pub fn review_worker_job_choices(
         Option<&BusinessStaffingPolicy>,
         Option<&shared::components::OwnedBy>,
         Option<&BusinessCondition>,
+        Option<&PlayerPosition>,
+        Option<&WorkforceRequirements>,
+        Option<&super::commerce::payroll_claims::PrivatePayrollClaims>,
     )>,
     mut workers: Query<(
         Entity,
@@ -1277,24 +1349,81 @@ pub fn review_worker_job_choices(
         Has<MarketCollectionRoutine>,
         Has<TradeRouteRoutine>,
         Has<WorkplaceDoorTransit>,
+        Option<&shared::components::HouseholdMember>,
+        Option<&shared::components::CharacterAttributes>,
+        Option<&Wallet>,
     )>,
-    mut last_day: Local<Option<u32>>,
+    households: Query<(
+        &shared::components::HouseholdId,
+        &shared::components::HouseholdMembers,
+    )>,
+    dwellings: Query<(&shared::components::BuildingId, &PlayerPosition)>,
+    markets: Query<(&shared::components::SettlementId, &MootMarket)>,
+    funded_offers: Option<Res<super::civic_labor::CivicLaborMarket>>,
+    committed: Query<(), super::worker_activity::JobChangeBlocked>,
+    mut review_clock: Local<Option<(u32, u32)>>,
+    mut reviewed: Local<HashMap<shared::components::PersonId, u32>>,
 ) {
-    let day = world_time.iter().next().map_or(0, |clock| clock.day);
-    if *last_day == Some(day) {
+    let Some(clock) = world_time.iter().next() else {
+        return;
+    };
+    let day = clock.day;
+    let hour = ((clock.seconds_in_cycle / clock.cycle_duration()) * 24.0).floor() as u32;
+    if *review_clock == Some((day, hour)) {
         return;
     }
-    *last_day = Some(day);
+    if review_clock.is_none_or(|(prior, _)| prior != day) {
+        reviewed.clear();
+    }
+    *review_clock = Some((day, hour));
 
+    let house_positions: HashMap<_, _> = dwellings
+        .iter()
+        .map(|(id, position)| (*id, position.0))
+        .collect();
+    let homes: HashMap<_, _> = households
+        .iter()
+        .filter_map(|(id, members)| {
+            members.dwelling.and_then(|dwelling| {
+                house_positions
+                    .get(&dwelling)
+                    .map(|position| (*id, *position))
+            })
+        })
+        .collect();
+    let living_costs: HashMap<_, _> = markets
+        .iter()
+        .map(|(id, market)| (*id, super::commerce::owner_daily_living_cost(Some(market))))
+        .collect();
     let mut worker_counts = HashMap::<shared::components::BuildingId, usize>::new();
     for (_, _, employment, ..) in workers.iter() {
         *worker_counts.entry(employment.0).or_default() += 1;
     }
+    let mut named_claims = HashMap::new();
+    let mut named_accounts = HashSet::new();
     let offers: Vec<_> = businesses
         .iter()
         .filter(|(_, _, building, ..)| is_private_business(building.kind))
         .map(
-            |(id, building_of, building, wage, account, staffing, owner, condition)| {
+            |(
+                id,
+                building_of,
+                building,
+                wage,
+                account,
+                staffing,
+                owner,
+                condition,
+                position,
+                requirements,
+                claims,
+            )| {
+                if let Some(claims) = claims {
+                    named_accounts.insert(*id);
+                    for claim in &claims.claims {
+                        named_claims.insert((*id, claim.worker), claim.pennies);
+                    }
+                }
                 let accepts_workers =
                     condition.is_none_or(|condition| condition.state.accepts_new_workers());
                 JobOfferSnapshot {
@@ -1305,6 +1434,8 @@ pub fn review_worker_job_choices(
                     owner: owner.map(|owner| owner.0),
                     arrears: account.map_or(0, |account| account.wage_arrears),
                     accepts_workers,
+                    position: position.map(|p| p.0),
+                    requirements: requirements.copied().unwrap_or_default(),
                     target: staffing.map_or_else(
                         || usize::from(building.kind.positions()),
                         |staffing| usize::from(staffing.target_for(building.kind)),
@@ -1317,6 +1448,15 @@ pub fn review_worker_job_choices(
         .iter()
         .map(|offer| (offer.building, *offer))
         .collect();
+    // An hourly review still must not compare each worker with every business
+    // in the world. Workers compete for jobs in their own settlement.
+    let mut local_offers = HashMap::<shared::components::SettlementId, Vec<_>>::new();
+    for offer in &offers {
+        local_offers
+            .entry(offer.settlement)
+            .or_default()
+            .push(*offer);
+    }
     let mut vacancies: HashMap<_, usize> = offers
         .iter()
         .filter(|offer| offer.accepts_workers)
@@ -1336,6 +1476,9 @@ pub fn review_worker_job_choices(
     ordered_workers.sort_unstable_by_key(|(person, entity)| (*person, entity.to_bits()));
 
     for (person_id, worker) in ordered_workers {
+        if reviewed.get(&person_id) == Some(&day) {
+            continue;
+        }
         let Ok((
             _,
             _,
@@ -1347,6 +1490,9 @@ pub fn review_worker_job_choices(
             market_collection,
             trade_route,
             door_transit,
+            household,
+            attributes,
+            wallet,
         )) = workers.get_mut(worker)
         else {
             continue;
@@ -1355,6 +1501,7 @@ pub fn review_worker_job_choices(
             continue;
         };
         if current.owner == Some(person_id)
+            || committed.contains(worker)
             || !inventory.is_empty()
             || internal_delivery
             || market_collection
@@ -1363,26 +1510,65 @@ pub fn review_worker_job_choices(
         {
             continue;
         }
+        reviewed.insert(person_id, day);
         let coworkers = worker_counts
             .get(&current.building)
             .copied()
             .unwrap_or(1)
             .max(1) as u64;
-        let estimated_personal_arrears = current.arrears.div_ceil(coworkers);
+        let estimated_personal_arrears = if named_accounts.contains(&current.building) {
+            named_claims
+                .get(&(current.building, person_id))
+                .copied()
+                .unwrap_or(0)
+        } else {
+            current.arrears.div_ceil(coworkers)
+        };
         let chronically_unpaid = estimated_personal_arrears
             >= current
                 .wage
                 .saturating_mul(UNPAID_DAYS_BEFORE_PRIVATE_RESIGNATION);
-        let alternative = offers
-            .iter()
+        let home = household.and_then(|home| homes.get(&home.0)).copied();
+        let net_offer = |offer: &JobOfferSnapshot| {
+            let commute = home.zip(offer.position).map_or(0.0, |(home, work)| {
+                ground_distance(home, work) * 2.0 / shared::player::HERO_MOVE_SPEED
+            });
+            // A preference for time at home, not a synthetic charge to the wallet.
+            offer
+                .wage
+                .saturating_sub((offer.wage as f64 * f64::from(commute) / 720.0) as u64)
+        };
+        let living_cost = living_costs
+            .get(&current.settlement)
+            .copied()
+            .unwrap_or(FOUNDING_DAILY_WAGE);
+        let urgent = wallet.is_some_and(|wallet| wallet.balance() < living_cost.saturating_mul(2));
+        let current_value = net_offer(&current);
+        let alternative = local_offers
+            .get(&current.settlement)
+            .into_iter()
+            .flatten()
             .filter(|offer| {
                 offer.building != current.building
                     && offer.settlement == current.settlement
                     && offer.accepts_workers
+                    && offer.arrears == 0
+                    && funded_offers
+                        .as_ref()
+                        .is_none_or(|market| market.is_funded(offer.building))
                     && vacancies.get(&offer.building).copied().unwrap_or(0) > 0
-                    && (chronically_unpaid || materially_better_wage(current.wage, offer.wage))
+                    && offer
+                        .requirements
+                        .is_met_by(attributes.copied().unwrap_or_default())
+                    && (chronically_unpaid
+                        || if urgent {
+                            net_offer(offer)
+                                >= current_value.saturating_add(current_value.div_ceil(20).max(5))
+                        } else {
+                            materially_better_wage(current_value, net_offer(offer))
+                        })
             })
-            .max_by_key(|offer| (offer.wage, std::cmp::Reverse(offer.building)));
+            .max_by_key(|offer| (net_offer(offer), std::cmp::Reverse(offer.building)));
         if !chronically_unpaid && alternative.is_none() {
             continue;
         }
@@ -1395,6 +1581,7 @@ pub fn review_worker_job_choices(
             .remove::<QuarryRoutine>()
             .remove::<ProcessingRoutine>()
             .remove::<WorkplaceDoorTransit>()
+            .remove::<WorkplaceInterior>()
             .remove::<BuildingDoorUse>()
             .remove::<PierTraversal>()
             .remove::<MoveTarget>()
@@ -1559,8 +1746,8 @@ mod tests {
 
     #[test]
     fn a_job_offer_needs_a_material_raise_to_overcome_inertia() {
-        assert!(!materially_better_wage(100, 119));
-        assert!(materially_better_wage(100, 120));
+        assert!(!materially_better_wage(100, 109));
+        assert!(materially_better_wage(100, 110));
         assert!(!materially_better_wage(40, 49));
         assert!(materially_better_wage(40, 50));
     }
@@ -1602,6 +1789,36 @@ mod tests {
     }
 
     #[test]
+    fn a_better_advertised_wage_does_not_hide_existing_unpaid_workers() {
+        let mut app = App::new();
+        app.add_systems(Update, review_worker_job_choices);
+        app.world_mut().spawn(WorldTime::new_default());
+        let settlement = shared::components::SettlementId(1);
+        app.world_mut().spawn(workplace(
+            10,
+            settlement,
+            SettlementBuildingKind::Farmstead,
+            100,
+            0,
+        ));
+        app.world_mut().spawn(workplace(
+            11,
+            settlement,
+            SettlementBuildingKind::Windmill,
+            200,
+            50,
+        ));
+        let worker = app.world_mut().spawn(employee(1, 10)).id();
+        app.update();
+        assert_eq!(
+            app.world().get::<shared::components::EmployedAt>(worker),
+            Some(&shared::components::EmployedAt(
+                shared::components::BuildingId(10)
+            ))
+        );
+    }
+
+    #[test]
     fn chronically_unpaid_employee_quits_when_no_alternative_exists() {
         let mut app = App::new();
         app.add_systems(Update, review_worker_job_choices);
@@ -1618,10 +1835,11 @@ mod tests {
 
         app.update();
 
-        assert!(app
-            .world()
-            .get::<shared::components::EmployedAt>(worker)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<shared::components::EmployedAt>(worker)
+                .is_none()
+        );
         assert_eq!(
             app.world().get::<WorkStatus>(worker),
             Some(&WorkStatus::LookingForWork)
@@ -1642,7 +1860,7 @@ mod tests {
         inventory.add(Good::Wheat, 2);
         let mut account = BusinessAccount::default();
         account.current_day.sold_units = 2;
-        let plan = marginal_operating_plan(
+        let plan = marginal_staffing_forecast(
             4,
             &building,
             &inventory,
@@ -1658,7 +1876,7 @@ mod tests {
             1.0,
             false,
         );
-        assert_eq!(plan.target_output_units, 2);
+        assert_eq!(plan.expected_sales_units, 2);
         assert_eq!(plan.optimal_positions, 1);
         assert!(plan.marginal_daily_profit > 0);
     }
@@ -1676,7 +1894,7 @@ mod tests {
         inventory.add(Good::Wheat, 5);
         let mut account = BusinessAccount::default();
         account.current_day.sold_units = 2;
-        let plan = marginal_operating_plan(
+        let plan = marginal_staffing_forecast(
             4,
             &building,
             &inventory,
@@ -1692,7 +1910,7 @@ mod tests {
             1.0,
             false,
         );
-        assert_eq!(plan.target_output_units, 0);
+        assert_eq!(plan.expected_sales_units, 0);
         assert_eq!(plan.optimal_positions, 0);
     }
 
@@ -1721,10 +1939,10 @@ mod tests {
         market.consign(seller, Good::Food, 2, Good::Food.base_price());
         let mut wage = BusinessWagePolicy::default();
         let management =
-            BusinessManagementPolicy::for_strategy(shared::economy::BusinessStrategy::Cautious);
+            BusinessManagementPolicy::for_strategy(shared::economy::BusinessStrategy::Conservative);
         let plan_for =
             |day: u32, market: &MootMarket, wage: &BusinessWagePolicy, reserve_days: f32| {
-                marginal_operating_plan(
+                marginal_staffing_forecast(
                     day,
                     &building,
                     &inventory,
@@ -1748,14 +1966,14 @@ mod tests {
         for day in 4..8 {
             let plan = plan_for(day, &market, &wage, 1.0);
             assert_eq!(plan.optimal_positions, 1);
-            assert_eq!(plan.target_output_units, 2);
+            assert_eq!(plan.expected_sales_units, 2);
             assert!(plan.marginal_daily_profit > 0);
             let purchase = market.purchase(Good::Food, 2, u64::MAX, None, None);
             assert_eq!(purchase.trade.units, 2);
             market.consign(
                 seller,
                 Good::Food,
-                plan.target_output_units,
+                plan.expected_sales_units,
                 Good::Food.base_price(),
             );
             assert_eq!(market.seller_listed_units(seller, Good::Food), 2);
@@ -1765,7 +1983,7 @@ mod tests {
         // today's dispatch, rather than making recovery mathematically
         // impossible while daily consumption continues.
         let high_reserve = plan_for(8, &market, &wage, 3.0);
-        assert!(high_reserve.target_output_units > 2);
+        assert!(high_reserve.expected_sales_units > 2);
         assert!(high_reserve.optimal_positions > 0);
 
         // The buffer never overrides the owner's contribution margin.
@@ -1778,12 +1996,12 @@ mod tests {
         market.consign(seller, Good::Food, 2, Good::Food.base_price());
         let surplus = plan_for(9, &market, &wage, 1.0);
         assert_eq!(surplus.optimal_positions, 0);
-        assert_eq!(surplus.target_output_units, 0);
+        assert_eq!(surplus.expected_sales_units, 0);
         market.consign(seller, Good::Food, 4, Good::Food.base_price());
-        assert_eq!(plan_for(10, &market, &wage, 3.0).target_output_units, 0);
+        assert_eq!(plan_for(10, &market, &wage, 3.0).expected_sales_units, 0);
 
         account.previous_day.sold_units = 0;
-        let no_demand = marginal_operating_plan(
+        let no_demand = marginal_staffing_forecast(
             12,
             &building,
             &inventory,
@@ -1799,7 +2017,7 @@ mod tests {
             3.0,
             false,
         );
-        assert_eq!(no_demand.target_output_units, 0);
+        assert_eq!(no_demand.expected_sales_units, 0);
         assert_eq!(no_demand.optimal_positions, 0);
     }
 
@@ -1812,7 +2030,7 @@ mod tests {
             quality: 1.0,
             workers: Vec::new(),
         };
-        let plan = marginal_operating_plan(
+        let plan = marginal_staffing_forecast(
             1,
             &building,
             &GoodsInventory::new(building.kind.storage_bulk_capacity()),
@@ -1829,7 +2047,7 @@ mod tests {
             true,
         );
         assert_eq!(
-            plan.target_output_units,
+            plan.expected_sales_units,
             processing_recipe(SettlementBuildingKind::Bakery)
                 .unwrap()
                 .output_units
@@ -1850,7 +2068,7 @@ mod tests {
             10,
             Good::Wheat.base_price(),
         );
-        let mill_plan = marginal_operating_plan(
+        let mill_plan = marginal_staffing_forecast(
             1,
             &mill,
             &GoodsInventory::new(mill.kind.storage_bulk_capacity()),
@@ -1866,7 +2084,7 @@ mod tests {
             1.0,
             true,
         );
-        assert_eq!(mill_plan.target_output_units, 1);
+        assert_eq!(mill_plan.expected_sales_units, 1);
         assert_eq!(mill_plan.optimal_positions, 1);
         assert!(mill_plan.marginal_daily_profit > 0);
     }
@@ -1887,7 +2105,7 @@ mod tests {
             10,
             Good::Wheat.base_price(),
         );
-        let plan = marginal_operating_plan(
+        let plan = marginal_staffing_forecast(
             8,
             &mill,
             &GoodsInventory::new(mill.kind.storage_bulk_capacity()),
@@ -1904,9 +2122,148 @@ mod tests {
             false,
         );
 
-        assert_eq!(plan.target_output_units, 5);
+        assert_eq!(plan.expected_sales_units, 5);
         assert_eq!(plan.optimal_positions, 1);
         assert!(plan.marginal_daily_profit > 0);
+    }
+
+    #[test]
+    fn late_opening_cash_tight_food_site_gets_its_bounded_first_production_trial() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (review_business_management, review_automatic_staffing).chain(),
+        );
+        let mut clock = WorldTime::new_default();
+        clock.day = 7;
+        clock.seconds_in_cycle = 23.0 * 60.0 + 59.0;
+        let clock_entity = app.world_mut().spawn(clock).id();
+        let settlement = shared::components::SettlementId(7);
+        app.world_mut().spawn((
+            settlement,
+            Settlement {
+                name: "Lateford".into(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 6,
+                treasury: 0,
+            },
+            MootMarket::founding(),
+        ));
+        let company_id = shared::components::CompanyId(70);
+        let company = app
+            .world_mut()
+            .spawn((
+                company_id,
+                shared::economy::CompanyAccount {
+                    cash: 188,
+                    ..default()
+                },
+            ))
+            .id();
+        let site_id = shared::components::BuildingId(71);
+        let worker = app
+            .world_mut()
+            .spawn((
+                shared::components::PersonId(72),
+                shared::components::EmployedAt(site_id),
+                Wallet::new(0),
+                Occupation(None),
+                WorkStatus::Employed,
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((
+                site_id,
+                shared::components::BuildingOf(settlement),
+                shared::components::OperatedBy(company_id),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::LivestockFarm,
+                    settlement: "Lateford".into(),
+                    owner: None,
+                    quality: 1.0,
+                    workers: vec!["Founder".into()],
+                },
+                GoodsInventory::new(SettlementBuildingKind::LivestockFarm.storage_bulk_capacity()),
+                BusinessManagementPolicy::default(),
+                BusinessCondition::default(),
+                BusinessAccount::default(),
+                BusinessSalePolicy::for_good(Good::Meat),
+                BusinessWagePolicy::default(),
+                BusinessStaffingPolicy::new(1),
+            ))
+            .id();
+
+        // The completed building opens after the shift. Its first review and
+        // the following midnight are not evidence of a failed productive day.
+        app.update();
+        let condition = app.world().get::<BusinessCondition>(site).unwrap();
+        assert_eq!(condition.opened_day, 7);
+        assert_eq!(condition.state, BusinessState::CashTight);
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(site)
+                .unwrap()
+                .enabled_positions,
+            1
+        );
+        for day in [8, 9] {
+            {
+                let mut clock = app.world_mut().get_mut::<WorldTime>(clock_entity).unwrap();
+                clock.day = day;
+                clock.seconds_in_cycle = 0.0;
+            }
+            app.update();
+            assert_eq!(
+                app.world().get::<BusinessCondition>(site).unwrap().state,
+                BusinessState::CashTight
+            );
+            assert_eq!(
+                app.world()
+                    .get::<BusinessStaffingPolicy>(site)
+                    .unwrap()
+                    .enabled_positions,
+                1
+            );
+            assert!(
+                app.world()
+                    .get::<BusinessStaffingForecast>(site)
+                    .unwrap()
+                    .marginal_daily_profit
+                    > 0
+            );
+        }
+
+        // With no actual output or customers throughout the bounded window,
+        // the ordinary review is still free to stop the unproven site.
+        app.world_mut()
+            .get_mut::<WorldTime>(clock_entity)
+            .unwrap()
+            .day = 10;
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(site)
+                .unwrap()
+                .enabled_positions,
+            0
+        );
+        assert_eq!(
+            app.world().get::<BusinessCondition>(site).unwrap().state,
+            BusinessState::Mothballed
+        );
+        assert_eq!(
+            app.world().get::<GoodsInventory>(site).unwrap().used_bulk(),
+            0
+        );
+        assert_eq!(
+            app.world()
+                .get::<shared::economy::CompanyAccount>(company)
+                .unwrap()
+                .cash,
+            188
+        );
+        assert_eq!(app.world().get::<Wallet>(worker).unwrap().balance(), 0);
     }
 
     #[test]
@@ -2021,7 +2378,7 @@ mod tests {
         let mut market = MootMarket::founding();
         market.purchase_recording_demand(Good::Wood, 4, u64::MAX, None, None);
 
-        let plan = marginal_operating_plan(
+        let plan = marginal_staffing_forecast(
             8,
             &lumber,
             &GoodsInventory::new(lumber.kind.storage_bulk_capacity()),
@@ -2039,7 +2396,7 @@ mod tests {
         );
 
         assert_eq!(plan.optimal_positions, 0);
-        assert_eq!(plan.target_output_units, 0);
+        assert_eq!(plan.expected_sales_units, 0);
     }
 
     #[test]
@@ -2114,9 +2471,12 @@ mod tests {
 
             app.update();
 
-            let plan = app.world().get::<BusinessOperatingPlan>(business).unwrap();
+            let plan = app
+                .world()
+                .get::<BusinessStaffingForecast>(business)
+                .unwrap();
             assert_eq!(plan.optimal_positions, 1);
-            assert!(plan.target_output_units >= 6);
+            assert!(plan.expected_sales_units >= 6);
             assert!(plan.marginal_daily_profit > 0);
             assert_eq!(
                 app.world()
@@ -2142,7 +2502,7 @@ mod tests {
             for competitor in competitors.iter().filter(|entity| **entity != business) {
                 assert_eq!(
                     app.world()
-                        .get::<BusinessOperatingPlan>(*competitor)
+                        .get::<BusinessStaffingForecast>(*competitor)
                         .unwrap()
                         .optimal_positions,
                     0,
@@ -2171,7 +2531,7 @@ mod tests {
         for (budget, ceiling) in [(0, 50), (300, 4)] {
             let mut market = MootMarket::founding();
             market.purchase_recording_demand(Good::Wood, 6, budget, Some(ceiling), None);
-            let plan = marginal_operating_plan(
+            let plan = marginal_staffing_forecast(
                 8,
                 &lumber,
                 &GoodsInventory::new(lumber.kind.storage_bulk_capacity()),
@@ -2188,7 +2548,7 @@ mod tests {
                 false,
             );
             assert_eq!(plan.optimal_positions, 0);
-            assert_eq!(plan.target_output_units, 0);
+            assert_eq!(plan.expected_sales_units, 0);
         }
     }
 
@@ -2210,7 +2570,7 @@ mod tests {
                 for available in [0, requested] {
                     let mut stock = GoodsInventory::new(10_000);
                     stock.add(Good::Wood, available);
-                    let plan = marginal_operating_plan(
+                    let plan = marginal_staffing_forecast(
                         8,
                         &lumber,
                         &stock,
@@ -2228,12 +2588,12 @@ mod tests {
                     );
                     if available >= requested || requested <= 1 {
                         assert_eq!(plan.optimal_positions, 0);
-                        assert_eq!(plan.target_output_units, 0);
+                        assert_eq!(plan.expected_sales_units, 0);
                     } else {
                         assert!(plan.optimal_positions > 0);
-                        assert!(plan.target_output_units <= requested);
+                        assert!(plan.expected_sales_units <= requested);
                         assert!(
-                            plan.target_output_units
+                            plan.expected_sales_units
                                 <= rated_daily_production(lumber.kind, quality)
                                     .unwrap()
                                     .output_units
@@ -2400,9 +2760,9 @@ mod tests {
         );
         assert!(
             app.world()
-                .get::<BusinessOperatingPlan>(quarry)
+                .get::<BusinessStaffingForecast>(quarry)
                 .unwrap()
-                .target_output_units
+                .expected_sales_units
                 > 0
         );
     }

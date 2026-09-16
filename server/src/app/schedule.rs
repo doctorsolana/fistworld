@@ -55,7 +55,6 @@ fn configure_server_fixed_schedule(app: &mut App) {
             world::village::schedule::VillageSimulationSet::Core
                 .in_set(ServerSet::WorldTick)
                 .after(world::navgrid::sync_obstacle_grid)
-                .before(world::regions::tick_strategic_world)
                 .run_if(server_is_started),
             world::village::schedule::VillageSimulationSet::Navigation
                 .in_set(ServerSet::NetIngress)
@@ -70,7 +69,6 @@ fn configure_server_fixed_schedule(app: &mut App) {
         (
             world::time::handle_set_time_of_day,
             world::dev::handle_dev_commands,
-            world::village::strategic::update_person_simulation_lod,
             world::village::claim_settlement_hall_obstacles,
             world::time::update_world_time,
             crate::city::buildings::sync_authored_plot_buildings,
@@ -78,12 +76,6 @@ fn configure_server_fixed_schedule(app: &mut App) {
             collision::streaming::update_static_collider_streaming,
             world::navgrid::sync_obstacle_grid,
             world::wildlife::populate,
-            world::wildlife::update_observation,
-            world::regions::tick_strategic_world,
-            world::village::strategic::advance_strategic_travel,
-            world::village::strategic::advance_strategic_company_deliveries,
-            world::village::strategic::advance_strategic_villages,
-            world::regions::log_region_telemetry,
         )
             .chain()
             .in_set(ServerSet::WorldTick)
@@ -110,7 +102,11 @@ fn configure_server_fixed_schedule(app: &mut App) {
             player::companies::handle_hero_company_founding,
             player::business::handle_hero_business_orders,
             player::business::handle_hero_company_orders,
-            player::trade_routes::handle_hero_trade_route_orders,
+            (
+                player::trade_routes::handle_hero_trade_route_orders,
+                player::maritime::handle_hero_maritime_orders,
+            )
+                .chain(),
             player::market::handle_hero_market_orders,
             (
                 player::hero::ensure_player_permit_ledgers,
@@ -120,7 +116,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
                 .chain(),
             world::regions::update_client_interest,
             world::regions::apply_region_visibility,
-            world::regions::update_region_sim_levels,
+            world::regions::update_region_observers,
         )
             .chain()
             .in_set(ServerSet::NetIngress)
@@ -173,6 +169,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
         (
             player::boat::handle_disembark_requests,
             player::boat::handle_sail_to_landing_requests,
+            player::boat::clearance::rebuild_water_navigation_geometry,
             player::boat::plan_vessel_routes,
             player::boat::step_boats,
             // Landings complete after the hull moves and BEFORE aboard heroes
@@ -217,7 +214,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
             // search look like a navigation stall.
             telemetry::perf::handle_perf_core_phase_end
                 .after(world::village::schedule::VillageSimulationSet::Core)
-                .before(world::regions::tick_strategic_world),
+                .before(ServerSet::NetIngress),
             telemetry::perf::handle_perf_navigation_phase_begin
                 .after(player::orders::handle_unit_orders)
                 .before(world::village::schedule::VillageSimulationSet::Navigation),

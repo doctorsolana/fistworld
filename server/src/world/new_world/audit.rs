@@ -148,12 +148,13 @@ fn ordinary_openings_report_land_aware_distribution() {
                 .unwrap();
             }
         }
-        let towns = planning::plan_world(&terrain, library, seed).unwrap_or_else(|error| {
-            if let Some(out) = &out {
-                std::fs::write(out.join(format!("{seed}-error.txt")), &error).unwrap();
-            }
-            panic!("{error}")
-        });
+        let towns = planning::plan_world(&terrain, library, seed, &Default::default())
+            .unwrap_or_else(|error| {
+                if let Some(out) = &out {
+                    std::fs::write(out.join(format!("{seed}-error.txt")), &error).unwrap();
+                }
+                panic!("{error}")
+            });
         let points: Vec<_> = towns.iter().map(|c| c.site.hall.xz()).collect();
         let town_regions: Vec<_> = towns
             .iter()

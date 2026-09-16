@@ -56,7 +56,7 @@ fn attach_sections(
         let geometry = if !section.complete {
             // Accepted land is visibly surveyed; no unbuilt section looks like
             // an impassable completed wall. Stakes have no ground collider.
-            let mut survey = mesh::MasonryMesh::default();
+            let mut survey = super::structure_mesh::StructureMesh::default();
             let color = Vec3::new(0.52, 0.32, 0.12);
             for point in [a, b] {
                 survey.beam(

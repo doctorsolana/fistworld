@@ -119,6 +119,11 @@ pub fn setup_footprint_assets(
     commands.insert_resource(FootprintAssets { mesh, snow, sand });
 }
 
+/// A raised deck or wet riverbed cannot receive a terrain footprint.
+fn touches_dry_ground(feet: f32, ground: f32, water: Option<f32>) -> bool {
+    (feet - ground).abs() <= 0.45 && water.is_none_or(|surface| ground >= surface + 0.3)
+}
+
 /// Track every visible walker's travelled distance and stamp prints on soft
 /// ground each stride.
 #[allow(clippy::too_many_arguments)]
@@ -163,19 +168,17 @@ pub fn stamp_footprints(
     };
     let phase = shared::worldgen::climate_phase(generated.seed);
     let half_extent = generated.half_extent;
-    let water = map.heightmap.water_level.unwrap_or(f32::NEG_INFINITY);
     let now = time.elapsed_secs();
     let focus = camera.focus;
 
     let mut seen: Vec<Entity> = Vec::new();
     for (entity, transform, visual, activity, aboard, mounted) in walkers.iter() {
         let pos = transform.translation();
-        if shared::character::locomotion::swimming_at(
-            terrain.get_height(pos.x, pos.z),
-            terrain.get_water_height(pos.x, pos.z),
-            pos.y,
-            aboard,
-        ) || aboard
+        let h = terrain.get_height(pos.x, pos.z);
+        // Decks and piers carry the person above terrain. Their footsteps
+        // must never be projected down onto the ground or riverbed beneath.
+        if !touches_dry_ground(pos.y, h, terrain.water_surface_height(pos.x, pos.z))
+            || aboard
             || mounted
             || matches!(
                 activity,
@@ -215,10 +218,6 @@ pub fn stamp_footprints(
 
         // Soft ground only: the same snow the terrain paints (slope-shed
         // included), or dry dune sand. Skip anything at or under water.
-        let h = terrain.get_height(pos.x, pos.z);
-        if h < water + 0.3 {
-            continue;
-        }
         const SLOPE_STEP: f32 = 2.0;
         let dx = terrain.get_height(pos.x + SLOPE_STEP, pos.z) - h;
         let dz = terrain.get_height(pos.x, pos.z + SLOPE_STEP) - h;
@@ -321,5 +320,25 @@ pub fn fade_footprints(
                 assets.snow[stage].clone()
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn footprints_require_real_dry_ground_contact_including_inland_water() {
+        assert!(touches_dry_ground(12.1, 12.0, Some(0.0)));
+        assert!(touches_dry_ground(12.1, 12.0, None));
+        assert!(
+            !touches_dry_ground(18.0, 12.0, None),
+            "raised deck above sand"
+        );
+        assert!(
+            !touches_dry_ground(11.9, 11.9, Some(12.0)),
+            "inland river above sea level"
+        );
+        assert!(!touches_dry_ground(12.2, 12.2, Some(12.0)), "wet shoreline");
     }
 }

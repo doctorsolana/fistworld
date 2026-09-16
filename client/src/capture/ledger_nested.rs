@@ -5,10 +5,10 @@ use crate::ui::{
     business_management::BusinessManagementTarget,
     company_founding::{AdjustFoundingCapital, CompanyFoundingDraft, FoundingPageOpen},
     encyclopedia::{
-        companies::{self, TradeRouteEditorAction as RouteAction},
-        places::{SelectedPlace, SelectedPlaceEntry},
         ClickGuard, EncyclopediaOpen, EncyclopediaPageBack, EncyclopediaPageHost,
         EncyclopediaPanel, EncyclopediaTab, TabBody,
+        companies::{self, TradeRouteEditorAction as RouteAction},
+        places::{SelectedPlace, SelectedPlaceEntry},
     },
     history::{CompanyHistoryButton, HistoryPanelTarget, HistoryView},
     ledger::{IllustrationMaterial, LedgerArtwork, LedgerIllustration},
@@ -69,7 +69,7 @@ pub(super) fn install(app: &mut App) {
     app.add_systems(Last, inspect);
 }
 
-fn entities<T: Component>(world: &mut World) -> Vec<Entity> {
+pub(super) fn entities<T: Component>(world: &mut World) -> Vec<Entity> {
     world
         .query_filtered::<Entity, With<T>>()
         .iter(world)
@@ -156,7 +156,7 @@ fn stage(world: &mut World) {
     world.resource_mut::<Rehearsal>().staged = true;
 }
 
-fn shot(world: &World) -> Option<(usize, String)> {
+pub(super) fn shot(world: &World) -> Option<(usize, String)> {
     let index = match *world.resource::<CaptureState>() {
         CaptureState::Warmup { .. } => 0,
         CaptureState::Settling { shot, .. } | CaptureState::AwaitingCapture { shot, .. } => shot,
@@ -168,7 +168,7 @@ fn shot(world: &World) -> Option<(usize, String)> {
     ))
 }
 
-fn bounds(world: &World, entity: Entity) -> Option<Rect> {
+pub(super) fn bounds(world: &World, entity: Entity) -> Option<Rect> {
     let half = world.get::<ComputedNode>(entity)?.size() * 0.5;
     let pose = world.get::<UiGlobalTransform>(entity)?;
     let mut min = Vec2::splat(f32::INFINITY);
@@ -186,7 +186,7 @@ fn bounds(world: &World, entity: Entity) -> Option<Rect> {
     Some(Rect { min, max })
 }
 
-fn visible(world: &World, mut entity: Entity) -> bool {
+pub(super) fn visible(world: &World, mut entity: Entity) -> bool {
     let Some(rect) = bounds(world, entity) else {
         return false;
     };
@@ -265,7 +265,7 @@ fn scrolls_vertically(world: &World, entity: Entity) -> bool {
         .is_some_and(|node| node.overflow.y == OverflowAxis::Scroll)
 }
 
-fn scroll_ancestor(world: &World, mut entity: Entity) -> Option<Entity> {
+pub(super) fn scroll_ancestor(world: &World, mut entity: Entity) -> Option<Entity> {
     while let Some(parent) = world.get::<ChildOf>(entity) {
         entity = parent.parent();
         if scrolls_vertically(world, entity) {
@@ -275,7 +275,7 @@ fn scroll_ancestor(world: &World, mut entity: Entity) -> Option<Entity> {
     None
 }
 
-fn scroll_limit(world: &World, entity: Entity) -> f32 {
+pub(super) fn scroll_limit(world: &World, entity: Entity) -> f32 {
     let c = world.get::<ComputedNode>(entity).unwrap();
     ((c.content_size().y - c.size().y) * c.inverse_scale_factor()).max(0.0)
 }
@@ -377,6 +377,10 @@ fn input(world: &mut World) {
         let button = match page {
             Page::Business => control::<companies::CompanyManagementButton>(world, |b| {
                 b.company == CompanyId(501)
+                    && matches!(
+                        b.target,
+                        crate::ui::business_management::BusinessManagementSelection::Site(_)
+                    )
             }),
             Page::History => {
                 control::<CompanyHistoryButton>(world, |b| b.company == CompanyId(501))

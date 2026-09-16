@@ -6,7 +6,7 @@ use shared::{components::*, terrain::WorldTerrain};
 use shared::{
     props::generate_chunk_blocking_props,
     terrain::ChunkCoord,
-    worldgen::{splitmix64, WorldBiome},
+    worldgen::{WorldBiome, splitmix64},
 };
 
 const CELL_SIZE: f32 = 256.0;
@@ -144,5 +144,7 @@ pub fn populate(world: &mut World) {
         }
     }
     world.insert_resource(Populated);
-    info!("Wildlife: {horses} persistent horses in {herds} meadow herds; at most {MAX_ACTIVE_HORSES} wander near observers");
+    info!(
+        "Wildlife: {horses} persistent horses in {herds} meadow herds; behavior runs independently of observers"
+    );
 }

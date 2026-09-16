@@ -467,7 +467,7 @@ pub(super) fn desired_body_animation(
 pub(super) fn drive_hero_locomotion(
     time: Res<Time>,
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
-    aboard: Query<(), With<shared::components::AboardBoat>>,
+    aboard: Query<(), Or<(With<shared::components::AboardBoat>, With<shared::components::AboardShip>)>>,
     mut heroes: Query<(
         Entity,
         &HeroVisual,

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use noise::NoiseFn;
 
-use crate::terrain::{ChunkCoord, TerrainGenerator, CHUNK_SIZE};
+use crate::terrain::{CHUNK_SIZE, ChunkCoord, TerrainGenerator};
 
 use crate::props::{PropKind, PropRenderTuning};
 
@@ -83,7 +83,7 @@ impl RiverReach {
 /// tight radius; the server, which only wants colliders, never asks for it.
 pub fn generate_chunk_prop_spawns(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<PropSpawn> {
     let mut out = Vec::new();
-    if !chunk.in_world_bounds() {
+    if !chunk.in_map_bounds(terrain.active_map_bounds()) {
         return out;
     }
 
@@ -155,7 +155,7 @@ pub fn generate_chunk_blocking_props(
     terrain: &TerrainGenerator,
     chunk: ChunkCoord,
 ) -> Vec<BlockingPropSpawn> {
-    if !chunk.in_world_bounds() {
+    if !chunk.in_map_bounds(terrain.active_map_bounds()) {
         return Vec::new();
     }
     let river_reach = RiverReach::for_chunk(terrain, chunk, TREE_RIVER_CLEARANCE_EXTRA);
@@ -286,7 +286,7 @@ struct ScatterHit {
 /// hand-authored maps (no recipe): scattering into a map somebody placed by
 /// hand would be vandalism, same rule as ground cover.
 fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<ScatterHit> {
-    use crate::worldgen::{climate_at_with_phase, fbm, rand01, splitmix64, WorldBiome, SEA_LEVEL};
+    use crate::worldgen::{SEA_LEVEL, WorldBiome, climate_at_with_phase, fbm, rand01, splitmix64};
 
     let map = terrain.loaded_map();
     let (Some(field), Some(generated)) =
@@ -843,6 +843,41 @@ pub fn generate_chunk_grass_at_density(
 mod tests {
     use super::*;
     use crate::terrain::WorldTerrain;
+
+    #[test]
+    fn detached_map_keeps_its_authored_tree_and_navigation_blocker() {
+        let mut map = WorldTerrain::default().generator.loaded_map().clone();
+        let chunk = ChunkCoord::new(10_000, 10_000);
+        let low = 10_000.0 * crate::terrain::CHUNK_SIZE;
+        let bounds = crate::map::MapBounds {
+            min: [low, low],
+            max: [
+                low + crate::terrain::CHUNK_SIZE,
+                low + crate::terrain::CHUNK_SIZE,
+            ],
+        };
+        map.definition.bounds = bounds;
+        map.definition.generated = None;
+        map.heightmap = crate::map::HeightmapData::new(bounds, 2, 2, vec![4.0; 4], Some(0.0));
+        map.rivers = std::sync::Arc::new(Vec::new());
+        map.river_segments_by_chunk.clear();
+        map.objects_by_chunk.clear();
+        map.objects_by_chunk.insert(
+            (chunk.x, chunk.z),
+            vec![crate::map::ResolvedMapObject {
+                kind: Some(PropKind::OakA),
+                scene_path: PropKind::OakA.scene_path().into(),
+                position: [low + 2.0, 4.0, low + 2.0],
+                rotation: Quat::IDENTITY,
+                scale: 1.0,
+            }],
+        );
+        // This generator's map differs from process-wide startup bounds.
+        let generator = TerrainGenerator::from_loaded_map(map);
+        assert_eq!(generate_chunk_prop_spawns(&generator, chunk).len(), 1);
+        assert_eq!(generate_chunk_blocking_props(&generator, chunk).len(), 1);
+        assert!(generate_chunk_prop_spawns(&generator, ChunkCoord::new(0, 0)).is_empty());
+    }
 
     /// The lightweight blocking view (server road/collider surveys) must
     /// agree exactly with the full render spawn list on which props block —

@@ -11,7 +11,7 @@ use shared::protocol::CharacterRoster;
 
 use super::*;
 use crate::input::InputState;
-use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
+use crate::ui::foundation::{UiButtonStyle, UiButtonVariant, button_chrome};
 use crate::ui::hud::GodCapability;
 use crate::ui::styles::INK_MUTED;
 
@@ -526,12 +526,15 @@ pub(super) fn rebuild_people_list(
     mut commands: Commands,
     people: Res<KnownPeople>,
     filter: Res<PeopleFilter>,
+    search: Res<search::EncyclopediaSearch>,
     god: Res<GodCapability>,
     mut selected: ResMut<SelectedPerson>,
     content: Query<Entity, With<PeopleListContent>>,
     existing_rows: Query<Entity, With<PersonRow>>,
     mut count_text: Query<&mut Text, With<PeopleCountText>>,
     mut last: Local<Option<u64>>,
+    mut last_search: Local<u64>,
+    mut scroll: Query<&mut ScrollPosition, With<PeopleListViewport>>,
     ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
     let mut _ui_scope = ui_perf.scope("rebuild_people_list");
@@ -543,12 +546,31 @@ pub(super) fn rebuild_people_list(
     // 75 ms. Hash the ROW projection and rebuild only when it moves; a fresh
     // (just respawned) list container always rebuilds.
     let fresh = existing_rows.is_empty();
-    let dirty = people.is_changed() || filter.is_changed() || god.is_changed();
+    let search_changed = *last_search != search.revision(EncyclopediaTab::People);
+    let dirty = people.is_changed() || filter.is_changed() || god.is_changed() || search_changed;
     if !dirty && !fresh && last.is_some() {
         return;
     }
-    let visible = people.visible(*filter, god.0);
-    let signature = people_rows_signature(&visible);
+    // Privacy/filter changes may revoke selection; text search never does.
+    let permitted = people.visible(*filter, god.0);
+    if selected
+        .0
+        .is_some_and(|id| !permitted.iter().any(|record| record.id == id))
+    {
+        selected.0 = None;
+    }
+    let total = permitted.len();
+    let visible: Vec<_> = permitted
+        .into_iter()
+        .filter(|record| search.matches_person(record))
+        .collect();
+    if search_changed {
+        *last_search = search.revision(EncyclopediaTab::People);
+        for mut position in &mut scroll {
+            position.y = 0.0;
+        }
+    }
+    let signature = people_rows_signature(&visible, total, search.active(EncyclopediaTab::People));
     if !fresh && *last == Some(signature) {
         return;
     }
@@ -562,18 +584,14 @@ pub(super) fn rebuild_people_list(
         commands.entity(row).despawn();
     }
 
-    // Drop a selection the filter just hid, so the detail pane never describes
-    // someone who is no longer listed.
-    if let Some(id) = selected.0 {
-        if !visible.iter().any(|record| record.id == id) {
-            selected.0 = None;
-        }
-    }
-
     for mut text in count_text.iter_mut() {
-        let label = match visible.len() {
-            1 => "1 person".to_string(),
-            n => format!("{n} people"),
+        let label = if search.active(EncyclopediaTab::People) {
+            format!("{} of {total}", visible.len())
+        } else {
+            match visible.len() {
+                1 => "1 person".to_string(),
+                n => format!("{n} people"),
+            }
         };
         if text.0 != label {
             text.0 = label;
@@ -590,7 +608,11 @@ pub(super) fn rebuild_people_list(
                     id: shared::components::PersonId::default(),
                     name: String::new(),
                 },
-                Text::new("No one here yet"),
+                Text::new(if search.active(EncyclopediaTab::People) {
+                    "No people match this search"
+                } else {
+                    "No one here yet"
+                }),
                 crate::ui::typography::text(15.0),
                 TextColor(INK_MUTED),
                 Node {
@@ -607,9 +629,11 @@ pub(super) fn rebuild_people_list(
 }
 
 /// Hash of exactly what [`spawn_person_row`] renders, in display order.
-fn people_rows_signature(visible: &[&PersonRecord]) -> u64 {
+fn people_rows_signature(visible: &[&PersonRecord], total: usize, searching: bool) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    total.hash(&mut hasher);
+    searching.hash(&mut hasher);
     visible.len().hash(&mut hasher);
     for record in visible {
         record.id.0.hash(&mut hasher);

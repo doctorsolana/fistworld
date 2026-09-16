@@ -32,6 +32,14 @@ impl Default for SimulationDelta {
     }
 }
 
+impl SimulationDelta {
+    /// The same captured delta used by SystemParam consumers, for bounded
+    /// exclusive transactions which must edit several related accounts.
+    pub(crate) fn world_seconds(self) -> f32 {
+        self.world_seconds
+    }
+}
+
 /// Capture the master speed once, at the start of the shared simulation
 /// schedule. This is the only production system that multiplies by TimeWarp.
 pub fn refresh_simulation_delta(
@@ -75,10 +83,6 @@ impl SimulationTime<'_, '_> {
             },
             |delta| delta.real_seconds,
         )
-    }
-
-    pub fn real_seconds_f64(&self) -> f64 {
-        f64::from(self.real_seconds())
     }
 
     pub fn world_seconds(&self) -> f32 {

@@ -3,7 +3,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use shared::components::{AttachedTo, BuildingId, FarmField, FARM_FIELDS_PER_FARMSTEAD};
+use shared::components::{AttachedTo, BuildingId, FARM_FIELDS_PER_FARMSTEAD, FarmField};
 
 #[derive(Default)]
 struct CapacityIndex {

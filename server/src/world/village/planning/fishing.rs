@@ -1,6 +1,6 @@
 //! Bounded shoreline searches and resumed fishing-site certification.
 
-use super::terrain::{plot_fits_navigation_bounds, slope_at, MAX_BUILD_SLOPE};
+use super::terrain::{MAX_BUILD_SLOPE, building_freeboard, plot_fits_navigation_bounds, slope_at};
 use crate::world::village::*;
 
 /// Find a dry Fisherman's Hut plot whose authored rear pier reaches genuine
@@ -68,12 +68,12 @@ pub(super) fn find_fishing_site_with_limits(
 
             for facing in 0..FACINGS {
                 let rotation = facing as f32 / FACINGS as f32 * std::f32::consts::TAU;
-                if !plot_fits_navigation_bounds(kind, candidate, rotation) {
+                if !plot_fits_navigation_bounds(terrain, kind, candidate, rotation) {
                     continue;
                 }
                 if shared::components::minimum_building_water_clearance(
                     terrain, candidate, kind, rotation,
-                ) < shared::components::SETTLEMENT_FREEBOARD
+                ) < building_freeboard(kind)
                 {
                     continue;
                 }

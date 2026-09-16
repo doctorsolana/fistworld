@@ -14,7 +14,7 @@ use crate::collision::building_index::BuildingSpatialIndex;
 use crate::collision::library::DerivedColliderLibrary;
 
 mod state;
-use state::{HouseLocations, HouseSource, RoadLand, SiteContext, SITE_RADIUS};
+use state::{HouseLocations, HouseSource, RoadLand, SITE_RADIUS, SiteContext};
 #[cfg(test)]
 mod tests;
 
@@ -395,7 +395,6 @@ pub fn refresh_household_yards(
         (
             Or<(With<CharacterKind>, With<Horse>)>,
             Without<crate::player::hero::OfflineHero>,
-            Without<crate::world::village::strategic::StrategicPerson>,
             Without<AboardBoat>,
         ),
     >,

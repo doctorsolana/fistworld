@@ -8,10 +8,10 @@ use crate::ui::encyclopedia::*;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use shared::components::{
-    BuildingId, BuildingOf, CharacterName, Company, CompanyId, CompanyLeadership, CompanyOwnership,
-    CompanyShareMarket, CompanyTradeRoute, Hero, OperatedBy, PersonId, SettlementBuilding,
-    SettlementBuildingKind, SettlementId, SettlementSummary, TradeRouteHistory, TradeRouteId,
-    TradeRouteSchedule,
+    BuildingId, BuildingOf, CharacterName, Company, CompanyFleet, CompanyId, CompanyLeadership,
+    CompanyOwnership, CompanyShareMarket, CompanyTradeRoute, Hero, OperatedBy, PersonId,
+    SettlementBuilding, SettlementBuildingKind, SettlementId, SettlementPortSummary,
+    SettlementSummary, TradeRouteHistory, TradeRouteId, TradeRouteSchedule,
 };
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessProcurementPolicy, BusinessStaffingPolicy,
@@ -35,6 +35,7 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
         Option<&CompanyBranchPolicies>,
         &CompanyDecisionHistory,
         &CompanyShareMarket,
+        Option<&CompanyFleet>,
     )>,
     sites: Query<(
         Entity,
@@ -56,7 +57,7 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
         &TradeRouteSchedule,
         &TradeRouteHistory,
     )>,
-    settlements: Query<&SettlementSummary>,
+    settlements: Query<(&SettlementSummary, Option<&SettlementPortSummary>)>,
     people: Query<(&PersonId, &CharacterName, Option<&GoodsInventory>)>,
     heroes: Query<(&Hero, &PersonId, Option<&Wallet>)>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
@@ -105,7 +106,7 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
 
     let settlement_names: HashMap<SettlementId, (String, bool)> = settlements
         .iter()
-        .map(|settlement| {
+        .map(|(settlement, _)| {
             (
                 settlement.id,
                 (settlement.name.clone(), settlement.has_marketplace),
@@ -118,12 +119,17 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
             .map(|(name, _)| name.clone())
             .unwrap_or_else(|| format!("Settlement #{}", settlement.0))
     };
+    let ports: HashMap<_, _> = settlements
+        .iter()
+        .filter_map(|(town, port)| port.map(|port| (town.id, *port)))
+        .collect();
     let mut known_settlements: Vec<_> = settlement_names
         .iter()
         .map(|(id, (name, has_marketplace))| CompanySettlementRecord {
             id: *id,
             name: name.clone(),
             has_marketplace: *has_marketplace,
+            port: ports.get(id).copied(),
         })
         .collect();
     known_settlements.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
@@ -150,6 +156,7 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
             .or_default()
             .push(CompanyRouteRecord {
                 id: *id,
+                ship: None,
                 warehouse: route.warehouse,
                 warehouse_name: warehouse_names
                     .get(&route.warehouse)
@@ -276,6 +283,7 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
         branch_policies,
         decisions,
         share_market,
+        fleet,
     ) in companies.iter()
     {
         let mut holders: Vec<_> = ownership
@@ -346,6 +354,18 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
         let mut branches: Vec<_> = branches_by_settlement.into_values().collect();
         branches.sort_by(|a, b| a.settlement.cmp(&b.settlement));
 
+        let fleet = fleet.cloned().unwrap_or_default();
+        let mut company_routes = routes_by_company.remove(id).unwrap_or_default();
+        for route in &mut company_routes {
+            route.ship = fleet
+                .ships
+                .iter()
+                .find(|(_, ship)| ship.assigned_route == Some(route.id))
+                .map(|(id, ship)| (*id, ship.kind));
+            if let Some((id, _)) = route.ship {
+                route.cargo_onboard = fleet.cargo.iter().find(|(ship, good, _)| *ship == id && *good == route.good).map_or(0, |(_, _, units)| *units);
+            }
+        }
         records.push(CompanyRecord {
             id: *id,
             name: company.name.clone(),
@@ -359,7 +379,8 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
             decisions: decisions.entries().to_vec(),
             sites: company_sites,
             branches,
-            routes: routes_by_company.remove(id).unwrap_or_default(),
+            routes: company_routes,
+            fleet,
         });
     }
     records.sort_by(|a, b| {

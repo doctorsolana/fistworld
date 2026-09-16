@@ -6,21 +6,28 @@ sword and ends up running a realm. Companion to [ARCHITECTURE.md](ARCHITECTURE.m
 which says how the engine carries this; this document says what the world *is*.
 The build order for both lives in [ROADMAP.md](ROADMAP.md).
 
+> **Execution contract revised 2026-09-16.** The entire living world now uses one
+> authoritative set of physical routines, whether observed or not. Camera coverage
+> controls network/render interest only. The former aggregate economy, derived-ETA
+> bodies and promotion/demotion simulation proposal are superseded, including older
+> design passages below. Future caravans and armies must preserve this same rule.
+> Current parity, balance and world-scale performance remain unverified; see
+> [SIMULATION-PARITY.md](SIMULATION-PARITY.md).
+
 > **Status reconciled 2026-09-09.** The autonomous village slice in §1b is live:
 > stable identities, named residents, seeded layouts, permits, physical construction,
 > builder-made roads, occupations, bounded inventories, farming/fishing/lumber work,
 > households, local prices, payroll, daily consumption and civic jobs. The positive tier
 > ladder reaches City, with authored Moot/Village/Town Halls, Market and Church;
 > a distinct City Hall remains absent and Tavern art is not yet bound to its runtime kind.
-> Ordinary off-screen residents now use
-> aggregate production and commerce. Player Hall trading, physical permit construction,
+> Ordinary off-screen residents use the same actual production, needs and commerce routines. Player Hall trading, physical permit construction,
 > company treasuries, 1,000-share ownership, vertical integration, Storage Halls, local
 > private porters, the first buyer-funded inter-settlement Stone routes, compact resident day
 > plans and private Tavern meal service are also live.
 > Player merchant timetables and bounded autonomous company merchant trials are live.
 > Non-dev Hero/Dinghy arrival, battalions, flexible melee, archers and catapults are live too;
 > recruitment is still a developer action and military supply/upkeep remain open.
-> World-state persistence, strategic travelling-party promotion, closing/siege of walls and clans
+> World-state persistence, broader travelling-party gameplay, closing/siege of walls and clans
 > remain future work. Read §1b as implementation detail and the remaining sections as
 > design unless explicitly marked current. The [plan review](PLAN-REVIEW-2026-09.md)
 > records the next-step recommendations without changing the agreed game direction.
@@ -34,7 +41,7 @@ one persistent, always-simulating multiplayer world.
 ## Design pillars
 
 1. **The world lives without players.** Villages farm, caravans roll, clans
-   feud at the strategic tick whether or not anyone is watching. Players are
+   continue whether or not anyone is watching. Players are
    participants in an economy that already works, not the reason it runs.
 2. **Everything is somewhere.** No abstract global markets. Food is grown on
    actual farmland-rich meadows, iron comes out of actual vein sites, goods
@@ -66,7 +73,7 @@ one persistent, always-simulating multiplayer world.
    (slowed caravans, delayed sailing) can read the exact same field.
 
    > **[current implementation]** `BiomeField::resources()` now drives Farmstead plot
-   > quality and therefore observed and strategic output. Lumber sites additionally
+   > quality and therefore worker output everywhere. Lumber sites additionally
    > require reachable generated trees, while fishing sites require a dry hut and broad
    > open water at the authored pier end. Windmills prefer open, low-tree plots during
    > placement, but that visual/wind-access preference is not an output multiplier;
@@ -74,27 +81,16 @@ one persistent, always-simulating multiplayer world.
    > founding or future resource districts; current permit planning evaluates legal
    > candidate plots directly. The climate and surface-band rules also drive rendering,
    > so the first local economy is grounded in the same geography the player sees.
-3. **Statistical at distance, concrete when observed** — but this applies to
-   BEHAVIOUR, not to IDENTITY. The strategic layer moves numbers (stocks,
-   prices, positions along a route); the tactical layer spawns real bodies only
-   inside someone's view bubble. Every system below must define both halves and
-   keep them statistically consistent.
+3. **The same world at every distance.** Every named person keeps the same
+   actual job, incomplete work, route, position, cargo, home and service commitments.
+   Watching does not instantiate a new body or replace an abstract outcome. A village
+   is thirty-four real people, not a population counter which rerolls when observed.
 
-   **Identity is never statistical.** Every person in the world is a specific
-   named person with a trade, a home and a workplace, whether or not anyone is
-   looking at them — see §1a. What is abstracted at distance is what they are
-   *doing* and exactly where they are standing, not *who they are*. A village is
-   never "population 34"; it is thirty-four people, one of whom is Gudrun the
-   Forester, and if she dies the sawmill she worked stops producing.
-
-   Earlier compact-record microbenchmarks reported ~24 bytes per identity with a
-   seed-derived name (30,000 such records = 0.69 MB) and 13 microseconds for 10,000
-   cached route cursors. Those are not current full-person memory or live simulation
-   benchmarks: inventories, relationships, economic state and ECS storage add cost.
-   What does NOT scale, and is
-   therefore forbidden, is per-person pathfinding over the heightfield,
-   continuously evaluated need trees and frame-rate schedules, and global detailed replication.
-   Compact once-daily plans and statistical off-screen outcomes are intentionally bounded.
+   Cost is controlled through bounded planning, shared routes and spatial indexes,
+   cached derived state and staggered decisions. Detailed replication and animation
+   remain client-interest dependent. Historical compact-record/route-interpolation
+   microbenchmarks are not evidence that the full economy, navigation and collision
+   world can sustain that population. Measure the canonical implementation directly.
 4. **Society persists, terrain regenerates.** The map is a seed recipe;
    settlements, clans, stocks, and claims are mutable server state. This is the intended
    durability boundary; today a server process restart resets society without loading
@@ -218,8 +214,9 @@ founding systems. The present generator does not claim to simulate centuries of 
 > and never read the resource field at all. Treat it as deleted prior art worth
 > rewriting, not as a shortcut.
 
-**Production is people in jobs, not population times a multiplier.** Each
-strategic-economy tick (§7), a settlement produces from its FILLED work slots:
+**Production is people in jobs, not population times a multiplier.** Rated capacity
+comes from filled work slots; actual output additionally requires the worker's physical
+access, productive time, inputs, carrying and storage (§7):
 
 ```
 output(good) = Σ over filled slots producing that good:
@@ -320,7 +317,7 @@ A struggling hamlet is better content than a deleted one, and it leaves the
 raid that finally ends it something to mean.
 
 Population grows from births against a food-supported cap and migrates toward
-prosperous settlements (a trickle, at the strategic tick) — as PEOPLE moving
+prosperous settlements (a bounded world-time trickle) — as PEOPLE moving
 between rosters, not as a float moving between counters.
 
 **The settlement plan: seeded preferences, mutable development.** The live planner
@@ -436,37 +433,12 @@ turns the seed into "Gudrun the Forester" on demand, deterministically, in about
 200 nanoseconds. Thirty thousand people is under a megabyte, and their names
 cost nothing until something needs to print one.
 
-**Everyone always has a position. Almost nobody has a Transform.**
-
-This is the distinction that makes the whole thing work, and it is not the
-obvious one. A person's location is ALWAYS knowable — you can find anyone on the
-map at any zoom, at any moment, and zoom to them. What scales with observation is
-not whether they have a position but whether that position is a *simulated body*.
-
-Every person is in exactly one of three states:
-
-| State | What is stored | Where they are |
-|---|---|---|
-| **AtPlace** | the place (home, workplace, inn, shrine) | that place's activity point |
-| **Travelling** | `route`, `departed_at`, `speed` | DERIVED: evaluate the route at the current world time |
-| **Embodied** | a real Transform, animation, collision | wherever the tactical sim has walked them |
-
-The load-bearing word is DERIVED. A traveller's position is a pure function of
-`(route, departed_at, speed, now)` — so an unobserved person walking to the
-tavern costs **nothing per tick at all**. Nothing advances them. You evaluate
-their position only when something asks: a minimap marker, a zoom-in, a search.
-Ten thousand people walking across the world is ten thousand small records and
-zero per-frame work.
-
-That is why the fantasy survives contact with the budget. Aldric leaves his house
-for the bakery at world-time T; the server records the destination, the route and
-T. Zoom into that street ninety seconds later and Aldric is exactly where ninety
-seconds of walking put him — because his position was always that expression,
-not a number someone had to keep updating. Walk away and his body is discarded;
-his progress along the route is not.
-
-So a village is never a spawner emitting anonymous villagers. The bodies that
-appear ARE the roster, at the positions they already had.
+**Everyone retains an actual authoritative position and activity.** People follow
+one movement/work/service lifecycle throughout the world. An unobserved traveller
+still owns a certified route and carried cargo; a worker still pays commute,
+handling, storage and service costs. Camera changes cannot discard a body or derive
+its arrival from an alternate straight-distance timer. Visible models and network
+detail may be reduced independently.
 
 **Reading the world at every zoom.** The simulation can locate ten thousand
 people; showing ten thousand markers would be unreadable. The map shows:
@@ -483,8 +455,8 @@ tracked keeps a marker at every zoom.** Find Gudrun in the encyclopedia, track
 her, and she is findable from realm view forever — that is what makes the
 encyclopedia a tool rather than a list.
 
-**Movement runs on a graph, and the graph is hierarchical.** People never search
-the heightfield. They route over a movement graph with three tiers:
+**Movement combines shared road graphs and bounded geometric certification.**
+The intended hierarchy remains:
 
 ```
 building entrances  ->  village paths and squares  ->  settlement exits  ->  regional roads
@@ -502,16 +474,10 @@ routes between settlements; traffic then UPGRADES a route (track, trail, road),
 making it faster and more attractive, which concentrates more traffic on it.
 Roads are the visible record of use, never the precondition for it.
 
-Cost, measured on this repo's scale: routing the entire network is ~21µs per
-origin, and advancing ten thousand travellers costs ~13µs per tick — though note
-that with positions derived rather than stepped, even that is only paid for
-travellers something is actually looking at.
-
-To be precise about what that measurement covers, since it is easy to over-read:
-it measured route interpolation and graph search, and nothing else. It is
-evidence that STRATEGIC MOVEMENT is cheap. It is not evidence that ten thousand
-scheduled, deciding, colliding, replicated NPCs are cheap — which is exactly why
-those things live behind observation.
+Old graph/interpolation microbenchmarks measured neither full agents nor actual
+physical transactions. They are superseded as capacity evidence. Shared route
+ownership still avoids duplicate geometric work, but every route must remain valid
+and every actor/cargo state must survive independently of camera interest.
 
 That is what makes **refugee migration** cheap enough to be a real mechanic
 rather than a fantasy. Raze a town and its roster does not evaporate, it walks:
@@ -569,7 +535,7 @@ with a player who does nothing but found the hall and put people on the map.
    spawning one woodshed per unfinished cabin.
 
    Each eligible resident evaluates those signals through a stable business
-   strategy (Cautious, Balanced, Growth, High Margin or Opportunistic), expected
+   strategy (Aggressive, Balanced or Conservative), expected
    output and input prices, wages, site quality, current holdings and a small
    deterministic personal bias. The highest willing applicant wins that review.
    Poor businesses are therefore possible: prices can move, labour can vanish,
@@ -614,7 +580,7 @@ with a player who does nothing but found the hall and put people on the map.
    Bakery and Lumberjack Hut permits debit the applicant's wallet into the
    general settlement treasury; high-signal businesses are discounted and
    speculative firms pay full price. Approval reserves its plot and
-   transfers any fee immediately, but an observed applicant then takes a stable
+   transfers any fee immediately, then the applicant takes a stable
    FIFO place in the Moot forecourt and collects the stamped permit before material
    work begins. Accepting a private construction project is itself a full-time
    commitment: an off-shift employee resigns their existing workplace before the
@@ -622,7 +588,7 @@ with a player who does nothing but found the hall and put people on the map.
    builder. An employee already performing their shift is not interrupted, and a
    Reeve may still carry an explicitly civic project as part of that one civic job.
    This prevents porter, farm or processor orders from competing with the worksite
-   for the same villager. Strategic regions compress this short administrative trip.
+   for the same villager. The same physical administrative trip runs in every town.
    The current physical search envelope is capped at 320 metres from the Moot
    Hall. That is a hard implementation boundary, not the final land-market model:
    continued immigration can still fill the envelope with free housing. The
@@ -748,8 +714,10 @@ with a player who does nothing but found the hall and put people on the map.
    employ nobody. Each private site exposes an enabled-position target from zero to
    that architectural maximum. NPC firms open one position, then move the target by
    at most one per day toward the roster whose marginal sellable output covers its
-   recipe inputs, fee and wage. Stock already onsite or listed consumes that day's
-   production budget; cash stress caps the target at one. Equal-wage founding hiring
+   recipe inputs, fee and wage. Stock already onsite or listed reduces the case for
+   hiring more staff; cash stress caps the staffing target at one. Employed workers
+   continue their full shift while resources, inputs and storage are available;
+   the sales forecast is not a daily production quota. Equal-wage founding hiring
    staffs each essential production link once before filling a workplace's second
    position; an owner's higher wage still overrides that tie-break.
 11. Every villager and completed building has bounded bulk storage. Fish, Wheat,
@@ -784,8 +752,8 @@ with a player who does nothing but found the hall and put people on the map.
     produces four ready-to-eat Bread, so Bread is the first level-two,
     higher-efficiency food. Both processors retain partial labour between shifts,
     stop when inputs are absent or output storage is full, enter through their doors,
-    receive wages, adjust prices, can fail financially, and run the same recipe when
-    strategically simulated off-screen. Neither exposes a land-quality percentage or
+    receive wages, adjust prices and can fail financially. Every site uses the same
+    worker lifecycle, including when offscreen. Neither exposes a land-quality percentage or
     multiplies production by the ground beneath it. Windmills still prefer open plots;
     Bakeries use ordinary accessible town plots. Permit investors derive rated daily
     capacity from these same worker slots, shift duration and recipe times (currently
@@ -801,7 +769,7 @@ with a player who does nothing but found the hall and put people on the map.
     and eligible for Poor Relief. Wool is non-edible stock for the later cloth chain.
     Sheep are deterministic client-side presentation attached to the replicated pasture,
     so they do not become networked pathfinding agents. The business owns both outputs;
-    porters, warehouses, markets and strategic simulation handle both generically.
+    porters, warehouses and markets handle both generically.
 14c. The selected-person UI separates visible animation from intent. The compact
     `CharacterActivity` still drives animation, while a replicated
     `CharacterObjective` says why the person is moving or waiting and an independent
@@ -822,8 +790,8 @@ with a player who does nothing but found the hall and put people on the map.
     fisher, lumberjack or processor interrupts the shift and carries one personal load.
     The fallback never services another firm: it prevents a missing logistics hire from
     deadlocking the market while preserving the value of a cart, whose six-times-larger
-    capacity keeps the specialist at work. Strategic regions deduct the same distance-
-    and-trip-based travel time from production instead of granting free teleportation.
+    capacity keeps the specialist at work. The same actual self-haul and return-to-work
+    lifecycle applies in unobserved towns; no distance-based aggregate substitute runs.
     Delivery is not a sale: the firm receives revenue only when a household,
     builder or another business buys the stock. The Moot keeps no dealer fund or
     founding inventory; its fee is credited to the civic treasury. Business
@@ -831,11 +799,14 @@ with a player who does nothing but found the hall and put people on the map.
     market fees, positive-profit levies, profit and attributed shareholder distributions.
     Payroll pays real workers and old
     arrears before profit can be distributed, while each strategy protects several
-    payroll days plus working cash. Each owner exposes a daily wage offer. NPC owners raise it after two
-    affordable vacancy days and lower it only after persistent payroll stress (or
-    a long fully-staffed but cash-tight spell); an authorised Company Master edits the
-    same policy directly. Higher offers recruit first. Owners also choose Balanced,
-    Growth, High-Margin, Cautious or Opportunistic autopilot; the same replicated
+    payroll days plus working cash. Each owner exposes a daily wage offer. Automatic
+    offers respond to persistent vacancies, competing employers and local living costs,
+    bounded by site contribution and company-wide payroll/input reserves. Arrears
+    prevent raises; persistent stress can reduce the offer. Earned debt remains owed
+    to the named worker even after changing jobs. An authorised Company Master edits
+    the same policy directly. Higher eligible offers compete for workers, who also
+    consider their commute and finish committed work before switching. Owners also choose Aggressive,
+    Balanced or Conservative autopilot; the same replicated
     policy can later be placed in manual player control. Asking prices move only by
     a bounded daily step using realised unit cost, sell-through, stale stock and
     solvency. Generic input rules now supply Windmills and Bakeries and are the same
@@ -851,9 +822,9 @@ with a player who does nothing but found the hall and put people on the map.
     fee and target margin; it is not pinned forever to a multiple of an input's base
     price. A processor's entry decision recommends cash for its first complete input batch at
     the observed price—or a 2.6x-base unquoted-risk estimate—plus its one-position
-    opening payroll; that cash remains in the company treasury. The Hall never sets the entrant's asking price: Growth owners may open
-    below the recent quote, Balanced or Cautious owners may match it, and High-Margin
-    or scarcity-seeking Opportunistic owners may ask more. Persistent high prices and
+    opening payroll; that cash remains in the company treasury. The Hall never sets the entrant's asking price: Aggressive owners may open
+    below the recent quote, while Balanced and Conservative owners initially match it.
+    Every strategy subsequently responds to actual prices and demand. Persistent high prices and
     unmet demand can therefore attract another independent entrant after the bounded
     probation window. A firm that
     cannot meet payroll progresses through cash-tight, distressed and insolvent
@@ -901,7 +872,7 @@ with a player who does nothing but found the hall and put people on the map.
     into the cabin. Bad local collision geometry therefore cannot leave one
     resident outdoors, flood route warnings or prevent work the next morning.
 17. During daylight, a resident who is unemployed OR still lacks a cabin no
-    longer waits in one place. In an observed tactical region they occasionally
+    longer waits in one place. In every town they occasionally
     reuse the shared path graph to walk to a collision-checked Moot gathering
     point or the verge of a finished village path, then stand or play the
     authored seated rest loop facing the road. A wall-clock token budget spreads
@@ -915,32 +886,28 @@ with a player who does nothing but found the hall and put people on the map.
     streamed props. A new house therefore cannot force the whole crowd to
     resurvey every old road verge, and cosmetic loitering cannot create a queue
     of cross-town routes. 100x warp scales dwell time rather than decision
-    frequency. An
-    unobserved strategic region creates no ambient route or movement work;
-    unhoused residents gather outside the Moot after dark.
-18. Each cabin has a shared necessities purse and bounded pantry. Once per world
-    day its residents contribute only enough to refill a three-day target while
-    retaining two personal discretionary coins whenever today's ration is already
-    covered. An empty same-day pantry removes that floor: households spend discretionary
-    coin before accepting hunger. An available household member is named as shopper.
-    Residents fund this shared purse only for food physically offered that day. Empty
-    shelves still record one preferred unavailable order—Bread first—so demand restarts
-    the Bakery → Windmill → Farm chain without trapping investment coin in an unspendable
-    pantry budget or multiplying one missing ration across every substitute.
-    In a tactical region that shopper joins the Moot's shared FIFO
-    service line, buys physical stock at the counter and carries it home; strategic
-    households settle the same bounded purchase directly. Each housed resident consumes
+    frequency. The same routines run without observers; unhoused residents
+    gather outside the Moot after dark.
+18. Each stable household has a shared necessities purse; its dwelling holds the
+    physical pantry and hearth. Members contribute proportionally to spendable cash,
+    normally retaining two local ration-days of personal savings. Today's food and
+    fuel take priority over reserve restocking and may draw on those savings. Price
+    determines the affordable food basket; preference breaks equal-price ties.
+    Procurement retries within the day through staggered deadlines, and an available
+    member becomes the shopper. Empty shelves record bounded, budget-backed unmet
+    demand without multiplying one missing ration across every substitute or retry.
+    That shopper joins the Moot's shared FIFO service line, buys physical stock
+    at the counter and carries it home. Unobserved households use this same trip. Each housed resident consumes
     exactly one physical pantry portion per day. Unhoused residents still buy one
     ration personally. If neither can afford food they go hungry unless the
-    settlement has Poor Relief enabled. Solvent residents buy first; relief then
-    spends general treasury coin at the same market ask only when recent production
-    is active and the subsidised ration leaves a full three-day emergency reserve.
-    Production may temporarily trail a sudden population increase while that protected
-    stock exists. Public money, sustainable production and surplus stock can
-    all run out. Housed households prefer Bread, then Fish, then Flour; Flour represents
-    bread made in the cabin and raw Wheat is never edible. Unhoused personal buyers and
-    Poor Relief require ready-to-eat Bread or Fish and also queue
-    outside the observed Moot, collect one reserved ration as visible cargo and eat
+    settlement has Poor Relief enabled. Solvent residents buy first; Emergency Budget
+    relief may then spend one third of discretionary treasury cash after public wage
+    claims and payroll reserves. It buys at most one cheapest available ready meal per
+    unfed resident that day, without requiring an established producer or surplus
+    stockpile. Both goods and money can run out. Flour represents bread made in the
+    cabin; raw Wheat is never edible. Unhoused personal buyers and Poor Relief choose
+    among ready-to-eat Bread, Meat and Fish and also queue
+    outside the Moot, collect one reserved ration as visible cargo and eat
     it in the civic commons. Payment and seller settlement happen when the ration is
     reserved, while personal nutrition is recorded only when it is collected; the
     reservation prevents the hall selling the same unit again. The
@@ -964,11 +931,9 @@ with a player who does nothing but found the hall and put people on the map.
     route for every person. Food handovers take one world second, immigration two and
     permits three; a hundred-household resident line must clear in under five world
     minutes at both 1x and 10x. The stuck-head fallback counts only time without
-    measurable movement, never an ordinary long walk. A tactical migrant becomes a resident only after reaching
-    the hall, taking a place and being served; strategic migration uses the same
-    settlement choice without manufacturing an off-screen local line. Only active
-    service users pay for these local routes; ordinary ambient crowds and every
-    off-screen settlement retain the cheaper simulation paths.
+    measurable movement, never an ordinary long walk. Every migrant becomes a resident
+    only after reaching the Hall, taking a place and being served. Camera coverage
+    does not compress registration or bypass local route/service ownership.
 19. Prosperity is a visible 0–100 breakdown, not an unexplained counter: food
     reserve contributes 40, recent production 30, housing coverage 20 and
     employment coverage 10, while hunger can subtract 30. This is a living-condition
@@ -1108,12 +1073,13 @@ tried would be refused — a silent failure that reads as "the village is broken
 triggers one bounded 1.5m-grid A* survey. The resulting compact polyline is
 replicated once, progressively revealed through a built-prefix counter, and folded
 into a cached shared movement graph. Ordinary villagers route over that graph and
-receive a modest path-speed advantage; they never run per-frame or long-distance
-individual pathfinding.
+receive a modest path-speed advantage. Longer journeys use the bounded retained queue
+and shared certified route cache rather than synchronous per-frame searches.
 The movement step can consume several graph points in one tick, so 100x simulation
 does not become slower merely because the visual spline is finely sampled. These
-are local door-to-door village paths, not Phase 5's regional caravan network and
-not Phase 6's group flow fields.
+local door-to-door paths also support the first paid regional connections described in
+[REGIONAL-TRAVEL.md](REGIONAL-TRAVEL.md). Strategic caravan parties and group flow fields
+remain separate architectural concerns.
 
 An embodied trip still needs short connectors from its actual position to that
 graph and back. Destination changes therefore enter a five-priority bounded queue:
@@ -1177,13 +1143,11 @@ than converting a migration burst into an unbounded collection of half-supplied
 sites. Farmers, fishers, woodcutters, millers and bakers are not assigned until their workplace's
 completed connector belongs to the Moot Hall road component.
 
-Ambient behaviour and ordinary-villager LOD now exercise the first half of §1a's
-embodiment boundary. Region interest prevents unobserved people reaching clients;
-outside tactical regions ordinary residents gain `StrategicPerson`, shed routes,
-doors, seats, shopping trips and work-animation state, and contribute through aggregate
-workplace/household passes. Re-observation rebuilds those routines from durable IDs and
-economic/social state. Phase 2 still owns derived-route `Travelling` records and the
-lossless traveller/army promotion contract.
+Ambient, work, travel, needs and services now follow one canonical physical
+lifecycle throughout the world. Network interest can hide their detail from a
+client but cannot strip or rebuild simulation routines. Observed/unobserved matched
+acceptance and full-world throughput still require the evidence recorded in
+[SIMULATION-PARITY.md](SIMULATION-PARITY.md).
 
 **Deliberately not in this slice:** births, route escorts and bandit risk,
 recipes beyond Flour and Bread, tree
@@ -1191,7 +1155,9 @@ depletion/regrowth, decline, closing/destructible walls and guard patrol/combat 
 The first boat slice is now live: a new Hero arrives by one-use Dinghy, follows a distinct
 server-authoritative water route, responds physically and visually to shared wind, and
 disembarks onto nearby dry shore. This proves the generic `Vessel` navigation seam; docks,
-draft, cargo ships, boarding and naval combat remain future work.
+draft, cargo ships, boarding and naval combat remain future work. Water and landfall
+searches retain bounded progress across ticks; a lost immigration water route retries its
+certified mooring with backoff while keeping the real passenger and hull.
 Natural newcomers now use that same seam rather than appearing beside a Hall. Each arrival
 first receives a real edge coast, evaluates public settlement conditions with personal noise
 and a capped distance preference, then sails to the reachable coast nearest its chosen Moot.
@@ -1217,29 +1183,28 @@ than decided against:
 - Buildings are standalone region-scoped entities with stable `BuildingId`, `BuildingOf`
   and `OwnedBy` relationships. That is intentional tactical/detail state; the globally
   replicated directory carries only compact settlement summaries.
-- Residency remains durable per person, but bodies and detailed components are interest
-  scoped. Strategic people retain identity, household and work joins without paying for
-  an embodied routine.
+- Residency and physical routines remain durable per person everywhere. Only their
+  replicated client detail is interest scoped.
 - Positive progression now reaches Village and Town; City is reserved for later. Regression,
   abandonment and Ruins still have no implementation; promotion requirements
   are the current playable tuning, not a final balance promise.
 
-**The acceptance test is code**, not a checklist: `village::tests::
-three_villagers_settle_and_build_a_village_unaided` runs the real scheduled
-systems including `step_units`, so the walking, the arrival radius, the permit
-clock and the water rule are all under test. It asserts three residents joined
-unaided, all three buildings went up in order, every one is owned by a named
-person, nothing was built in the lake, and the woodcutter was
-observed indoors, farming, chopping and carrying wheat and wood without
-overfilling storage. A focused test also proves a 75%-full hut sends one bounded
-load to the hall without losing goods. Two construction tests prove that the
+**Validation is layered.** `village::tests::three_villagers_settle_and_build_a_village_unaided`
+is a focused bootstrap regression using real decisions and `step_units`. It
+asserts three voluntary residents, a Farmstead and House with beds, named
+ownership, dry building sites, and observed construction chopping and carrying.
+Its calendar stays in the opening shift; it does not install the full route
+planner, personal needs or market economy, and it does not require a fixed
+three-building sequence. Focused freight tests separately verify bounded
+physical loads, seller title and exact stock conservation. Two construction tests prove that the
 first village can chop its own Wood without a lumber hut and that raising stays
 locked until the last required bundle arrives. A permit test proves three
 distinct sites can be approved concurrently, without duplicate kinds, plot
 overlap or one resident taking every first permit. `hundred_x_world_runs_complete_visible_supply_loops`
 runs migration, permits, incremental worksite supply, building, field planting,
-both work loops and hauling at 100x, so accelerated simulation cannot silently
-bypass the physical world. It includes the live route queue, path planner and
+work and hauling at 100x. It stops issuing permits after the initial sites are
+admitted and omits needs, commerce and business management, so it is a focused
+supply-loop regression rather than a complete economy soak. It includes the route queue, path planner and
 solid authored hall obstacle; migration must target the hall door rather than
 deadlocking against its blocked centre. A focused test locks that destination to
 the authored entrance. A second 100x test drives an assigned resident through sunset entry and sunrise
@@ -1247,8 +1212,9 @@ exit, including both door requests and a geometric check that the person really
 crossed the exterior wall plane rather than disappearing in front of it.
 The road suite separately proves obstacle wrapping and bidirectional route-cache
 reuse, then runs both the original-builder handoff and multi-waypoint travel at
-100x. Focused economy tests lock one portion per resident per day, Food-before-
-Wheat consumption, exact buyer-to-business/treasury payment, profit accounting,
+100x. Focused economy tests check daily meals, affordable ready-food selection,
+the household Flour fallback and the prohibition on eating raw Wheat,
+exact buyer-to-business/treasury payment, profit accounting,
 generic input procurement, durable bankruptcy, coin conservation, unmet demand
 and dated development qualification independent of temporary hunger. `cargo
 village-lab` is the broader regression laboratory: it loads a dedicated 1km map
@@ -1315,17 +1281,17 @@ market fee, public-stock sale receipts, and an enacted 0–15% levy on positive 
 profit after wages, inputs and market charges. The Balanced founding levy is 10%;
 losses and contributed capital are never taxed. Wage and tax underpayments remain
 explicit liabilities. The Reeve's weekly review reacts to payroll arrears, treasury
-runway, recent income/spending and sustainable food surplus instead of using a
+runway, recent income/spending and funded emergency food need instead of using a
 fictional market-buying pool.
 
 **Enacted civic policy.** New settlements begin with one explicit Balanced charter:
-5% market fee, 10% levy on positive business profit, Surplus-Only Poor Relief, a
+5% market fee, 10% levy on positive business profit, Emergency Budget relief, a
 three-day food reserve target, seven funded civic-payroll days, Balanced staffing and
 a 45% discount on settlement-requested private business permits. There is no household
 or food-consumption tax. `Essential`, `Balanced` and `Full` staffing postures choose how
 many tier-bounded public jobs are advertised, but the payroll reserve still prevents an
-unfunded hire. The food target controls both the relief floor and when food capacity is
-requested. Growth subsidy is foregone permit revenue—not invented cash—and never applies
+unfunded hire. The food target informs reserve/capacity planning; it does not veto
+an affordable emergency meal. Growth subsidy is foregone permit revenue—not invented cash—and never applies
 to speculative firms. NPC Reeve autopilot reviews at most weekly and changes at most one
 lever; manual mode freezes the enacted values for future player control. Visual layout
 seeds deliberately do not randomise politics.
@@ -1441,13 +1407,17 @@ The later player inventory/eating interaction will record outcomes on the same
 
 At zero Health the server resolves relationships before despawning the body. The
 stable `PersonId` leaves every private or civic job available; household membership
-is removed; personal money and carried goods enter the home purse/pantry, then the
+is removed; affordable named private wage claims are paid into the estate and any
+unpaid remainder is explicitly defaulted. Personal money and carried goods enter the home purse/pantry, then the
 settlement hall if there is no home or capacity. If the deceased was the cabin's final
 member, the now-ownerless shared purse and pantry also return to the local treasury/hall
 instead of remaining trapped in an empty building. Owned houses become unowned without
 evicting survivors. Productive businesses and unfinished private firms receive a
-replicated takeover listing. A local buyer pays the listed price into the firm's
-working capital—never into a ghost seller—and becomes its stable owner. Supplied
+replicated takeover listing. A daily investor review tests affordable demand, input
+costs, hiring wages, restart cash and personal reserves. Prices decline with exposure,
+but unwanted buildings need not find a buyer. A successful buyer contributes the
+required acquisition/startup cash into the firm's working capital and becomes its
+stable owner; outstanding employee claims remain attributable. Supplied
 non-business worksites retain their material and are adopted by another available
 resident. Heroes are also removed from their account's live hero slot. A bounded
 mortality ledger keeps the name, identity, attributes, day and cause available to
@@ -1455,10 +1425,22 @@ the encyclopedia and Village Lab without retaining dead pathfinding entities.
 
 ## 3. Trade: caravans and roads
 
+**Current paid connection slice (2026-09-15):** real delivered company cargo provides
+expiring evidence for a bounded daily road review. A protected treasury funds an eligible
+resident's finite wage escrow and buys actual bridge materials; the worker physically lays
+short dirt sections or hauls and constructs a validated short bridge. Completed infrastructure
+changes travel cost and presentation, never the terrain recipe. Water searches are now retained
+and sliced, including natural arrivals. See [REGIONAL-TRAVEL.md](REGIONAL-TRAVEL.md) for
+ownership, geometry, performance bounds and remaining work.
+
+The following describes broader future gameplay. Its old observation-dependent party
+representation is superseded by the canonical simulation contract; escorts,
+tolls and automatic economic responses that are not all implemented:
+
 - Settlements periodically dispatch **caravans** toward the best price within
-  range: a strategic-layer entity (position, cargo, owner, speed) moving at
-  1Hz along region-level paths. Observed caravans promote to real wagons with
-  guards; unobserved ambushes resolve by formula (architecture invariant).
+  range, with actual cargo ownership, routes and elapsed physical movement.
+  Wagons, guards and encounters must use the same rules whether watched or not;
+  map icons are presentation, not an alternate formula outcome.
 - Caravans carry coin home; that income feeds the origin's prosperity — trade
   literally builds towns.
 - **Roads emerge from use.** Route segments that carry repeated traffic get
@@ -1505,7 +1487,7 @@ clan hold" is an index over settlements, not clan state that can drift.
 - The world seeds a few **NPC clans** at founding, each holding a cluster of
   settlements (a starting political map, visible as region tint in the
   strategic view — the political layer regions were built for). Their AI runs
-  at the strategic tick on simple goals per disposition: fund a caravan, hire
+  on bounded decision cadences with simple goals per disposition: fund a caravan, hire
   a warband, claim a neighbouring village, feud with a rival.
 - **Ownership = claim + upkeep.** Owning a settlement yields a tax cut of its
   trade income and the right to place businesses cheaply; it costs garrison
@@ -1551,7 +1533,7 @@ RegionControl = Clan(ClanId)
 
 **Recompute on events, not ticks.** The propagation is a multi-source
 shortest-path over ~hundreds of regions — cheap, but it still must not run
-every strategic tick (the no-strategic-pathfinding rule). Mark the map dirty
+every tick; retain bounded route work and invalidate only affected proofs. Mark the map dirty
 when a settlement is founded, captured, changes tier, or falls to ruins; a
 fort is built or destroyed; a garrison changes substantially; an important
 road upgrades or disappears. Recompute asynchronously under a budget;
@@ -1602,11 +1584,10 @@ garrisons → sieges) so coin keeps mattering.
 
 ## 7. How it runs on the engine
 
-- **Ticks.** The live server uses the shared 60 Hz schedule, bounded 1 Hz strategic
-  passes and explicit daily/staggered decision cadences. Ordinary resident travel and
-  aggregate economy already use these boundaries. Regional caravan/warband aggregation
-  and broader settlement work staggering remain future work; their cost must be measured
-  with real inventories and transactions rather than estimated as a few floats per town.
+- **Ticks.** The live server uses one shared 60 Hz authoritative schedule with bounded
+  navigation and daily/staggered decision cadences. Work, movement, needs, service and
+  cargo use the same rules everywhere. Full-world cost must be measured with actual
+  routes and growing societies, not inferred from the retired aggregate design.
 - **Replication.** Settlement summaries (position, tier, name, owner, top
   prices) replicate globally like WorldTime — they're the map screen. Full
   detail (stocks, slots) replicates on interest. Caravans/warbands are
@@ -1620,7 +1601,7 @@ garrisons → sieges) so coin keeps mattering.
   >
   > There is a second prize for getting this right: once a global directory carries the
   > map screen, the map screen no longer justifies whole-world interest, so the view
-  > radius can be clamped hard. That is simultaneously the render-LOD/sim-LOD decoupling
+  > radius can be clamped hard. That is simultaneously the render/replication-versus-authority boundary
   > ARCHITECTURE §4 demands and the structural fix for zoom-driven replication cost.
 - **Persistence.** One future versioned world-state snapshot must retain accounts,
   people, settlements, companies/shares, physical buildings and roads, inventories,
@@ -1635,11 +1616,10 @@ garrisons → sieges) so coin keeps mattering.
   rotation and recovery from a corrupt newest snapshot. Accounts and society must
   share one save/reset boundary. `fly.toml` still has no storage volume; deploying
   durable hosted worlds needs that storage plus a real restart/restore test.
-- **Promotion contract.** Every strategic entity defines its tactical
-  spawn (caravan → wagons+guards, settlement → buildings+villagers,
-  warband → soldiers) and the demotion back to numbers must lose nothing the
-  strategic layer tracks. Formula-resolved fights must statistically match
-  played-out ones (architecture invariant — test it early with auto-battles).
+- **Observation invariance.** Moving a camera may change rendered models, icons and
+  network detail, never travel time, cargo custody, productive work, service availability
+  or combat rules. No formula-resolved offscreen replacement is permitted. Test matched
+  observation schedules and a real no-client server before declaring parity.
 - **Determinism boundary.** Terrain/biomes/sites derive from the seed;
   society state mutates live and persists. Nothing in the economy may write
   to the map recipe.
@@ -1654,10 +1634,10 @@ The narrative order this section proposed (settlements, then food, then trade, t
 caravans) survives largely intact as ROADMAP Phases 1 and 3-5. Three things changed, all
 from auditing the code rather than the doc:
 
-- **The promotion/demotion seam moved EARLY** (ROADMAP Phase 2). This section stacked four
-  phases of economy on top of a seam it never validated, which violates ARCHITECTURE §7's
-  own closing advice. Its next proof is one regional traveller, measured by arrival time,
-  extending the resident route-cursor tests without needing combat code.
+- **The former promotion/demotion milestone is superseded** (2026-09-16, ROADMAP Phase 2).
+  One physical lifecycle now runs everywhere. The acceptance requirement is continuity
+  of actual travel, work, needs and cargo when observation changes; see
+  [SIMULATION-PARITY.md](SIMULATION-PARITY.md) for executed checks and remaining gaps.
 - **Flow-field pathfinding moved LATE** (ROADMAP Phase 6). This section's closing note said
   flow fields were "needed by Phase 3's cart". They are not: a hand cart is one unit
   following one order, which the hero loop already does end to end. Flow fields are gated on
@@ -1679,20 +1659,10 @@ Two smaller corrections to this section's assumptions, both verified against the
 
 ## 9. Deliberately NOT building (yet)
 
-- Deep per-villager BEHAVIOUR simulation — many needs and continuously evaluated schedules. Note
-  this is not the same as saying villagers are anonymous: §1a makes every person
-  a specific named individual with a trade and a workplace, permanently. What is
-  deferred is simulating what they DO minute to minute. Identity is ~24 bytes;
-  behaviour is unbounded.
-
-  **Amended by §1b:** per-person walking over the terrain is no longer deferred
-  for EMBODIED people — villagers walk to the hall they chose, on the real
-  ground. What §1a forbids is per-person pathfinding at strategic scale, for
-  people who are `AtPlace` or `Travelling`. A handful of villagers standing in
-  a village you are looking at is not that population. The farmer and lumberjack
-  observed work loops are also live. A compact once-daily wake/work/meal/leisure/sleep calendar
-  and physical private Tavern visit now form the bounded scheduling seam; continuously evaluated
-  happiness, comfort and other Sims-style needs remain deliberately deferred.
+- Additional deep social/comfort needs beyond the current bounded work, food, home,
+  leisure and service routines. Existing minute-to-minute physical activities do run
+  for every resident, including offscreen. Families, comfort and continuously evaluated
+  Sims-style behaviour remain separate design decisions, not a reason to freeze people.
 - Additional production chains beyond the current nine physical goods and coin.
   Livestock already produces Meat and Wool; crafted equipment, clothing and luxuries
   still need production and useful demand before expanding the catalogue.
@@ -1735,3 +1705,17 @@ the server and retain their identity when the camera leaves; distant animals
 remain inexpensive stationary records. They are ambient wildlife in this pass.
 Stables, ownership and cavalry are the next separate gameplay decisions, and
 horses do not yet feed livestock production or combat. See [WILDLIFE.md](WILDLIFE.md).
+
+### Economic decisions implemented 2026-09-15
+
+Affordability is carried through local demand, production, investment and merchant
+forecasts. Firms compete for workers within contribution and company cash limits;
+public hiring/pay also responds to local opportunities. Imported inputs can support
+processors without local upstream buildings. Daily takeover and freight reviews may
+decline, reprice or abandon unviable commitments rather than guarantee activity.
+Households fund immediate food and fuel ahead of reserve restocking, and optional
+emergency relief spends discretionary treasury money on actual listed meals.
+Earned private wages survive ordinary job changes and property takeover as named
+liabilities. Family relationships, clothing and recurring building maintenance are
+outside this implementation. The closed-32 growth profile tests a finite starting
+money stock without immigration; successful warmup is not proof of sustained balance.

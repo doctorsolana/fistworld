@@ -1,7 +1,7 @@
 //! Standing policies and impact-driven defensive repositioning. No projectile
 //! prediction: a nearby impact alerts idle troops, who keep their new ground.
 use crate::player::{
-    combat::{fronts, AttackOrder, SkirmishOrder},
+    combat::{AttackOrder, SkirmishOrder, fronts},
     hero::MoveTarget,
     orders::{CommandStance, MarchOrder},
 };

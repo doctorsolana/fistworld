@@ -36,6 +36,7 @@ pub(super) fn plan_world(
     terrain: &WorldTerrain,
     library: &DerivedColliderLibrary,
     seed: u64,
+    config: &crate::world::start_config::WorldStartConfig,
 ) -> Result<Vec<Community>, String> {
     let mut candidates = sites::survey(terrain, seed);
     let surveyed = candidates.len();
@@ -75,7 +76,7 @@ pub(super) fn plan_world(
         "World founding survey: {} viable sites across {} coastal land regions ({} surveyed), {} ocean approaches",
         candidates.len(), coastal_regions.len(), surveyed, voyages.len()
     );
-    while communities.len() < SETTLEMENT_COUNT {
+    while communities.len() < config.settlement_count {
         candidates.retain(|site| {
             communities
                 .iter()
@@ -174,7 +175,19 @@ pub(super) fn plan_world(
                 "Founding layout attempt at {:?}, population={}",
                 site.hall, site.potential_population
             );
-            let Some(layout) = layout::plan(terrain, site, &colliders, library) else {
+            let layout = match config.opening {
+                crate::world::start_config::OpeningProfile::Mature => {
+                    layout::plan(terrain, site, &colliders, library)
+                }
+                crate::world::start_config::OpeningProfile::Frontier => frontier::plan(
+                    terrain,
+                    site,
+                    &colliders,
+                    library,
+                    config.founders_per_settlement,
+                ),
+            };
+            let Some(layout) = layout else {
                 invalid_layouts.insert(site.salt);
                 rejected[3] += 1;
                 continue;
@@ -192,11 +205,11 @@ pub(super) fn plan_world(
             break;
         }
         let Some((index, layout, arrival, linked, neighbours)) = accepted else {
-            if communities.len() >= MIN_SETTLEMENT_COUNT {
-                info!("World geography supports {} communities with coastal access; keeping valid plans instead of forcing the ten-place target", communities.len());
+            if communities.len() >= config.minimum_settlements() {
+                info!("World geography supports {} communities with coastal access; keeping valid plans instead of forcing the {}-place target", communities.len(), config.settlement_count);
                 break;
             }
-            return Err(format!("Seed {seed} could support only {} settlements with certified coastal access (rejected arrival/connection/door/layout={rejected:?}); no incomplete world was published", communities.len()));
+            return Err(format!("Seed {seed} could support only {} of {} required {:?} settlements with certified coastal access (rejected arrival/connection/door/layout={rejected:?}); no incomplete world was published", communities.len(), config.minimum_settlements(), config.opening));
         };
         let site = candidates.remove(index);
         let network = linked.map_or(communities.len() as u64 + 1, |i| {

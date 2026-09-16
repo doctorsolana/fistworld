@@ -10,7 +10,9 @@
 //! - Should be consumed by other domains through explicit APIs/resources.
 
 pub mod bootstrap;
+pub mod bridges;
 pub mod dev;
+pub(crate) mod economic_accounting;
 pub mod fortifications;
 pub mod household_yards;
 pub mod house_upgrades;
@@ -21,9 +23,13 @@ pub mod navgrid;
 pub(crate) mod new_world;
 pub mod pathfinding;
 pub mod regions;
+pub(crate) mod regional_roads;
+pub(crate) mod ports;
+pub(crate) mod shipping;
 pub mod settlement_development;
 pub mod settlement_directory;
 pub mod simulation_time;
+pub(crate) mod start_config;
 pub mod time;
 pub mod village;
 #[cfg(test)]

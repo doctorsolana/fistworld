@@ -52,7 +52,6 @@ impl HouseUpgradeProjects {
             .sum()
     }
 
-    #[cfg(test)]
     pub fn total_escrow_pennies(&self) -> u64 {
         self.entries.values().map(|project| project.escrow).sum()
     }
@@ -117,7 +116,6 @@ pub(super) struct UpgradeProject {
     pub worker: Option<Entity>,
     pub phase: Phase,
     pub work_done: f32,
-    pub travel_left: f32,
     pub last_time: f64,
     pub next_attempt: f64,
     pub claim: DemandClaim,

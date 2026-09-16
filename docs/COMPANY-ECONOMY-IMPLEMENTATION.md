@@ -65,7 +65,10 @@ There are only four person/company cash boundaries:
    expense attributed to that site and ordinary personal income for the worker.
 3. **Dividend:** the Company Master may distribute drawable retained profit.
    The payment is divided pro rata over the current 1,000-share cap table. It is
-   not a wage or operating cost.
+   not a wage or operating cost. Wide integer arithmetic preserves share ratios;
+   only whole-penny rounding goes to the stable first shareholder. Every receiving
+   wallet is checked before any treasury debit. If one cannot accept its payment,
+   the whole distribution and its profit entitlement remain with the company.
 4. **Share sale:** a buyer pays the selling shareholder and receives already
    issued shares. This moves no money into or out of the company unless a later
    primary-issuance mechanic is deliberately introduced.
@@ -100,7 +103,30 @@ becomes attractive relative to their security, they may also return by choice.
 Observed resting Masters use the bounded ambient-life system and prefer cached
 spots around a local Market when one exists. Private Tavern meal service and compact
 daily plans already attach real purchases to civilian routines. Clothing, house
-improvements and other future trades can extend that boundary.
+maintenance and other future trades can extend that boundary; owner-funded house
+extensions are already implemented separately.
+
+## Three management strategies
+
+The player and NPC Company Masters use the same three choices. These are risk
+postures; `Mothballed`, `Liquidating` and other operating states are separate.
+
+| Strategy | Ordinary margin | Payroll reserve | Input cover | Normal daily price step |
+| --- | --- | --- | --- | --- |
+| Aggressive | 7.5% | 2 days | 2 days | 7% |
+| Balanced | 15% | 3 days | 2 days | 5% |
+| Conservative | 20% | 5 days | 4 days | 3% |
+
+These are authored starting preferences, not fixed prices, wages or daily output
+quotas. Actual sales, funded demand, stock, inputs, debts and available cash drive
+reviews. Staff work their scheduled shifts while real inputs and storage permit.
+A company with arrears becomes Conservative; financially healthy expansion can
+justify Aggressive. Explicit player strategy remains authoritative until company
+autopilot is re-enabled, and reaches every automatic sibling site on the same day
+without waiting for the next executive review. Sites with their own autopilot
+disabled retain their manual overrides. A temporarily mothballed business still
+allows policy edits; an explicit positive staffing target requests its reopening. Liquidation
+and completed closure cannot be undone by changing a wage or strategy button.
 
 ## Formation, acting company and funding a new site
 
@@ -115,8 +141,8 @@ oldest company and never silently falls back to a personal wallet.
 An established NPC company considers its prudent cash position before opening a
 site. Its most recently reviewed company strategy—not the founder's original
 temperament—is authoritative for subsequent investment. This lets a profitable
-firm deliberately enter Growth while a company with arrears or distressed sites
-moves to Cautious and stops compounding its problems. If one NPC happens to master
+firm deliberately become Aggressive while a company with arrears or distressed sites
+becomes Conservative and stops compounding its problems. If one NPC happens to master
 several firms, autonomous planning selects the oldest stable `CompanyId`
 deterministically; player-issued permits still require the explicit `ACTING AS`
 selection described above. Before the planner calls retained money "available",
@@ -153,7 +179,13 @@ Autonomous firms open one position first. After that, a cached daily operating
 plan tests every additional position against the output that can plausibly sell,
 the site's own stock and listings, current recipe/input quotes, market fees and
 the offered wage. Hiring and release move by at most one position per day; a
-cash-tight or distressed site cannot expose more than one. The processor's recommended reserve covers one complete recipe
+cash-tight or distressed site cannot expose more than one. This is a staffing
+forecast, not an output quota: employed workers continue through their full shift
+while physical resources, purchased inputs and storage permit, and input
+procurement is not capped by the forecast. Public input purchases retain one
+planned payroll day after existing liabilities, including the first purchase;
+an unproven processor cannot spend that wage on a multi-day input stockpile.
+The processor's recommended reserve covers one complete recipe
 batch plus that prudent opening payroll. If the input market is temporarily
 unquoted, the applicant budgets against 260% of the input's base value so an
 otherwise viable Bakery does not spend all of its first cash on idle wages
@@ -200,6 +232,20 @@ may deliberately retain a funded empty company for a later investment. If an
 ownerless disconnected record has no known branch, the server preserves it rather
 than destroying money or guessing a recipient.
 
+Private wage creditors are retained by `PersonId` in the server-only
+`PrivatePayrollClaims` ledger; `BusinessAccount.wage_arrears` remains the one
+replicated aggregate liability. Ordinary job changes never erase these claims or
+give them to replacement staff. Scarce payroll is apportioned by debt, with daily
+rotation for indivisible pennies. Liquidation takes the existing named claims,
+and an early takeover returns them to the operating ledger. Recipient availability
+is checked before money and debt are reduced.
+
+When a worker dies, the mortality pass settles the affordable portion of that
+person's claims into the estate before distributing it to the household or Hall.
+The remaining unpaid amount is explicitly defaulted under the current mortality
+policy; other workers' debts remain owed. This does not implement family inheritance
+or long-lived estate creditors. The claim scan occurs only when there are deaths.
+
 ## Runtime design
 
 - Stable identity: `CompanyId`, `Company`, `CompanyShare`, `OperatedBy`.
@@ -209,11 +255,22 @@ than destroying money or guessing a recipient.
 - Site accounting: `BusinessAccount` and its bounded ledgers; per-building history remains the place for production, local costs and settings, never a second wallet.
 - Supply policy: every enabled processor input has a player-facing stock-coverage target of 0–7 days, a sourcing mode and an optional preferred supplier `BuildingId`. The server converts days into bounded unit targets from the recipe, current staffing and storage capacity; its lower reorder threshold is internal hysteresis rather than another owner setting.
 - Branch stock policy: `CompanyBranchPolicies` stores absolute retain units plus the public-sale toggle per local good. This is separate from processor input cover and uses stable `SettlementId`, so identical company operations in two towns cannot leak policy or inventory into each other.
-- Staffing policy: `BusinessStaffingPolicy` is the operator's enabled-position target from zero to the building's architectural maximum. Closing a porter position waits for any active shipment and carried stock to reach a safe boundary before releasing the worker.
+- Staffing policy: `BusinessStaffingPolicy` is the operator's enabled-position target from zero to the building's architectural maximum. Closing a position requests a graceful release: active production deposits its last load, service workers leave through their door, and carriers settle their shipment before employment is removed. Reopening the position before that handoff cancels the release request.
 - Matching: build settlement/company/good indexes once per bounded economy pass; do not perform an all-company scan for every NPC.
 - Delivery: persistent internal orders use stable building identities. An embodied civic or private porter receives a server-only routine only while performing one physical trip. If neither service covers a workplace, one of its employees may interrupt production and carry only a personal-capacity load to or from the public market; that employee cannot act as a general porter for another firm.
-- Strategic simulation: collapse the identical order, goods, fee and ledger transaction without spawning a body. Self-haul uses the real Hall-to-workplace round trip and personal-capacity trip count to deduct labour time, while a specialist cart carries six personal loads without stopping the producer.
+- Observation-independent delivery: the same worker physically loads, carries and unloads goods everywhere. Employee self-haul pauses production for the actual trip; specialist cart delivery leaves the producer available to work. No aggregate transaction or estimated labour deduction replaces that lifecycle.
 - Decisions: exact own books plus public market observations, smoothed over several days. Daily operational reviews and staggered weekly capital reviews use deterministic `CompanyId` offsets.
+
+Production first deposits at its own workplace. If its final load cannot fit,
+there is no applicable porter and the sale/reserve policy allows consignment,
+an employee safely outside may carry that existing output directly to the public
+counter. The production routine remains attached while freight owns movement,
+keeping other outputs and the final return obligation intact. Goods retain
+company title; partial deliveries decrement only the units actually moved,
+including failed-sale returns and purchased inputs. Closing a producer's position
+waits for its output and active commitments, but unrelated personal materials
+are preserved without blocking release. These contracts are implemented in
+`village/commerce.rs`, `employment.rs` and `worker_activity/`.
 
 ## Player-facing controls
 
@@ -239,9 +296,60 @@ than destroying money or guessing a recipient.
   Creation, edits, reopening and dispatch reject schedules spanning different known
   founding land groups, including through unclassified intermediate stops. Automatic
   merchant opportunities use the same gate. These server-only tags prevent unsupported
-  overland commitments; they do not replace the normal navigation checks or add shipping.
-- Company sites link into their settlement/building records; shareholders link into People. Each site exposes separate `View Details` and `Manage Site` actions. Both drill-down paths provide `Back to Company`, and repeated management clicks preserve scroll position. `Company Controls` opens the existing authoritative management surface instead of duplicating mutation controls in a read-oriented directory.
+  overland commitments; they do not replace normal navigation. Explicit maritime
+  routes use their own port, crew and class-certified water path instead of this land gate.
+- Company sites link into their settlement/building records; shareholder and observed worker names link to durable People records, with a return action. Each site exposes `View Details` and `Site Settings`. Both drill-down paths provide `Back to Company`, and repeated management clicks preserve scroll position. `Company Settings` opens by `CompanyId`, without choosing an arbitrary site or requiring one to be observed or operating.
+- Company direction, executive autopilot, dividends, Master appointments and share offers use `HeroCompanyOrder`; site wages, positions, asking prices, procurement and local strategy use `HeroBusinessOrder`. The server resolves the actual company or site and authenticates the player again. Company replies include the company identity; site replies include their mapped site entity, so late results stay with their originating control context.
+- Choosing a company strategy pauses automatic executive strategy changes and reaches only sites still following company policy. A local strategy choice pauses that site's management and leaves company defaults and siblings untouched. Re-enabling site autopilot immediately adopts the current company default; re-enabling company autopilot resumes executive review without erasing manual site overrides. Separate manual wage and asking-price switches remain authoritative.
+- Company finance/governance remains available when its only site is closed or absent. Physical branch-stock controls still require an owned site in the named settlement. Operating decisions require the appointed Master; appointing a Master requires more than 500 shares and a shareholder candidate. Shareholders can list only their own interest, and purchases settle the exact cap table against real wallets. Sole-owner capital contributions reject insufficient funds or receiving-ledger overflow before any debit. Dividends remain requests to the existing liability/reserve-aware finance pass, never an immediate site withdrawal.
 - **Full Ledger** pulls up to 365 completed days on demand by stable `CompanyId`. It consolidates sites across every settlement, eliminates internal supplier credits/buyer charges from profit, and retains those equal amounts as an audit memo. Charts cover P&L, cash/debt/assets, dividends/capital spending and internal flow; tables retain per-site contribution and recent daily records.
+
+## Company ships and the public market
+
+Company Masters order hulls by company and completed public port identity. The home
+town must contain an operating company Storage Hall. A Coaster carries 480 bulk and
+requires 48 Wood, 8 Iron, 12 Wool and 180 seconds of building; a Cog carries 1,200 bulk
+and requires 96 Wood, 20 Iron, 24 Wool and 360 seconds. Orders wait for real listed
+materials and protected company funding; Iron production remains future work, so an
+ordinary world without Iron cannot conjure a finished ship. Limits are eight owned or
+pending hulls per company, 32 open orders globally and one funded hull per port.
+
+Construction reserves a complete purchased basket at the Hall, pays finite physical
+Hall-to-shore deliveries and on-site labour, then consumes the recipe only on a safe
+launch. Occupied berths delay launch; they do not retain an already-paid builder.
+Cancelling an unfunded order creates no asset or refund. Funded cancellation preserves
+company-owned materials and earned claims while returning only unused escrow. Capital
+costs move from the order ledger to the finished hull exactly once; this book value is
+not spendable company cash.
+
+Cancelled hull orders first finish any carried-material return. Remaining goods
+at the Hall or its completed public port are reconsigned to that town market under
+an existing company warehouse's title, without paying the company early. A full
+store preserves the exact remainder and keeps cancellation pending; retries occur
+every thirty world seconds. After recovery, historical asset basis moves from the
+order to the warehouse exactly once. Historical capex stays recorded, so company
+capital is neither erased nor counted twice. This is the existing historical-cost
+book model, not a new inventory valuation or depreciation system.
+
+Maritime routes use the existing ordered Buy/Sell timetable with a particular company
+ship and real warehouse porter as crew. The port accesses its town's existing
+`MootMarket` and shared stock, rather than making another exchange or demanding an
+additional inland freight economy. Only the ship's actual cargo crosses settlements.
+Operating sales, purchases and port/market charges enter the home warehouse cost centre,
+so existing company consolidation, taxes, payroll and dividend reserves continue to
+apply. Hull orders, crew admission and water navigation remain server-authoritative;
+class-specific depth, mast clearance and single-berth occupancy gates still apply.
+The captain collects company-funded provisions at a real completed Marketplace or
+Hall counter before returning to the port and boarding. Restocking while moored
+requires disembarkation and the same physical trip; assignment remains owned and
+departure waits. The purchase uses current listings and stock, records seller
+claims and charges the home warehouse's input ledger only at actual collection.
+Cancelling cannot refund spent cash while retaining the food or erase collected
+meals. This 2026-09-16 revision awaits fresh connected acceptance; earlier dated
+port captures retain their original scope.
+This first slice does not implement Iron production, naval combat or a whole harbour
+traffic scheduler. Sources: `server/src/world/ports`, `server/src/world/shipping` and
+`shared/src/components/shipping.rs`; live evidence is tracked separately.
 
 ## NPC company decisions
 
@@ -252,8 +360,13 @@ than destroying money or guessing a recipient.
   private construction permit resigns first and relinquishes every old workplace
   routine; someone in the middle of a shift is ineligible until that work is clear.
   Civic construction remains part of the Reeve's single civic appointment.
-- New sites receive a probation period. The executable lifecycle is `New`, `Operating`,
-  `Cash tight`, `Distressed`, `Insolvent`, `Mothballed`, `Liquidating`, `For sale` and `Closed`.
+- New sites have a bounded opening trial until their first output/sale or the third
+  daily boundary after opening. It survives a `Cash tight` classification so a
+  late-day opening is not mistaken for an unsuccessful full shift. The trial still
+  requires positive expected shift contribution; it creates no stock, money or
+  perpetual staffing entitlement. Insolvency and closure still stop recruitment.
+  The executable lifecycle is `New`, `Operating`, `Cash tight`, `Distressed`,
+  `Insolvent`, `Mothballed`, `Liquidating`, `For sale` and `Closed`.
   A solvent mature site gradually releases staff and mothballs after a completed
   no-sale observation window with no unavailable demand and no profitable position.
   Its stock remains saleable; profitable unmet demand reopens the same plant with
@@ -276,18 +389,15 @@ than destroying money or guessing a recipient.
   payroll; it only makes that cost-based correction when recorded buyer budgets
   cover the offer. This prevents a six-unit order being priced as though a full
   factory's hypothetical output could pay the wage.
-- The market records funded unfilled quantities with their conservative shared
-  price ceiling. The lowest funded ceiling wins within a day's aggregate, so
-  rich buyers cannot make cheap rejected orders appear more valuable. Current
-  and previous-day observations expire normally; they are signals, not escrow
-  or guaranteed future purchases. Local operating plans value them at the
-  producer's published ask and retain the existing gradual staffing, physical
-  production and ordinary payments. No demand, unaffordable demand or enough
-  unsold stock still permits contraction. Explicit regional tenders keep their
-  separate funded contract ceilings.
-  Retrying household buyers replace their own outstanding claims rather than
-  repeatedly adding them. A market ledger epoch invalidates those handles when
-  history closes the day, independently of the simulation-clock update order.
+- Funded unfilled demand keeps up to twelve exact bid bands per good/day before
+  overflow coarsens canonical power-of-two price buckets. Each bucket rounds down,
+  so compression cannot overstate purchasing power and does not depend on claim
+  arrival order. Withdrawal maps the original bid to its current bucket, preserving
+  the other quantities. Storage is fixed; there is no per-person market order book.
+  These observations expire normally
+  and are neither escrow nor guaranteed purchases. Production/restart estimates
+  evaluate quantity actually affordable at each proposed price. Household retries
+  replace their own epoch-scoped claims instead of multiplying demand.
 - Staffed suppliers share shortage forecasts with exact stable remainders, so
   the sum of their claims cannot multiply the observed order. If their rated
   capacity at affordable bids and actual assigned-worker count
@@ -313,6 +423,44 @@ than destroying money or guessing a recipient.
   Permit-market diagnostics retain their separate opportunity scores; a full alternative-by-
   alternative executive score breakdown remains future work.
 
+## Labour, entry and trade review (2026-09-15)
+
+Daily wage offers respond to vacancies and competing employers, bounded by the
+site's contribution and one consolidated company reserve. Two payroll days, inputs
+and unpaid liabilities are protected before raises; separate sites cannot promise
+the same spare cash. The raise budget uses the larger of enabled positions and the
+actual roster, so a staffing reduction cannot immediately spend still-owed payroll.
+Completed shifts retain their agreed wage. See [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md)
+for public pay and safe worker transitions. Automatic offers require funded employers;
+a published but insolvent vacancy must not drive wage competition.
+
+Processor entry accepts affordable physical imported inputs and demonstrated
+supply; a local upstream building is no longer mandatory. Forecasts use the local
+published wage distribution. Existing failed plants get a three-day recovery
+opportunity, then suppress a challenger only when their restart is economically
+credible. Pending/new plants still prevent simultaneous duplicate investment.
+
+NPC takeovers review daily using actual demand, input costs, payroll runway and
+personal reserves. Asking prices decline with exposure; a zero-price unwanted
+plant is not automatically a good investment. Exact startup cash is contributed
+alongside acquisition, and simultaneous buyers cannot reuse one demand forecast.
+
+Merchant observations carry bounded bid curves. Empty shelves do not invent a
+125%-of-base selling price. Automatic routes review executable quantities, actual
+porter wages, competing prices, cash and protected working capital. Unsold imports
+block repeat purchases and receive gradual cost-aware markdowns; aged stock may
+be liquidated. Explicit player route control disables automatic management, and
+shared listings containing manual-route cargo are protected from automatic repricing.
+Civic freight prices include distance and wage costs, with affordable rebidding and
+expiry/refund of unaccepted orders; existing escrow and seller payment remain real.
+
+The daily owners are `village/economy.rs`, `development_market/investment.rs`,
+`mortality/takeovers.rs` and `trade_routes/{merchant_economics,civic_review}.rs`.
+They reuse per-market/company snapshots rather than rescanning all listings for each
+candidate. `civic_labor.rs` and `employment.rs` gate safe job-choice retries hourly,
+with at most one completed personal review per day. `commerce/payroll_claims.rs`
+owns named debt; these decisions add no per-person tactical path searches.
+
 ## Acceptance scenarios
 
 - One owner, one business continues to behave like the present economy.
@@ -320,14 +468,14 @@ than destroying money or guessing a recipient.
 - The same company operating in two settlements has one treasury but independent branch inventory, capacity and public-sale rules; goods cross the boundary only through an explicit physical trade route.
 - A three-town merchant timetable follows its stop order exactly. Public `Buy`/`Sell` works in any known settlement; private `Load`/`Unload` is accepted only where that company owns a completed Storage Hall.
 - A Storage Hall accepts local overflow, its Company Porters supply local owned processors without a civic delivery fee, and closing a porter position cannot lose an in-flight load.
-- A workplace with no applicable porter can still buy inputs and consign output through bounded employee self-haul, with visibly and strategically equivalent lost production time.
+- A workplace with no applicable porter can still buy inputs and consign output through bounded employee self-haul, pausing production for the actual trip regardless of observation.
 - A different owner's processor cannot consume privately committed stock.
 - `PreferOwned` falls back to the public market; `OwnedOnly` does not.
 - Internal transfers remain possible with several suppliers/receivers without duplicate reservations.
 - Municipal fees appear as receiving-site cost, company cost and civic income.
 - Individual site internal revenue/input charges cancel exactly in company consolidation.
-- Worker death/vacancy, owner death, share transfer, site sale, company insolvency and route failure preserve goods, coin, jobs and claims.
-- Tactical 1x/10x/25x and strategic simulation agree on economic outcomes within physical timing tolerances.
+- Worker vacancy, owner death, share transfer, site sale, company insolvency and route failure preserve goods, coin and attributable claims. Worker death settles or explicitly defaults that worker's wages before distributing the estate.
+- At 1×/10×/25×, the canonical physical routines preserve cargo ownership, accounting and unfinished work through observation changes. Matched timing and economic outcomes require the bounded comparisons described in [SIMULATION-PARITY.md](SIMULATION-PARITY.md).
 - Long-run multi-seed scenarios show both entry and exit, no repeated processor spam, no permanently stranded edible stock and no decision/request leaks.
 - The 1,000-NPC test remains within the existing server performance envelope.
 

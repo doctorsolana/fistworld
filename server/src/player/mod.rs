@@ -26,6 +26,7 @@ pub mod riding;
 pub mod roster;
 pub mod spawn;
 pub mod trade_routes;
+pub(crate) mod maritime;
 
 pub mod siege;
 mod swimming;

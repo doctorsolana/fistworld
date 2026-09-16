@@ -33,11 +33,14 @@ pub(super) fn community(
     ids: &mut WorldIdAllocator,
     deltas: &mut village::PublishedTerrainDeltas,
     community: &Community,
+    config: &crate::world::start_config::WorldStartConfig,
 ) {
     let id = ids.settlement();
     let hall = community.site.hall;
     let population = community.layout.population;
-    let tier = if population >= 48 {
+    let tier = if config.opening == crate::world::start_config::OpeningProfile::Frontier {
+        SettlementTier::Hamlet
+    } else if population >= 48 {
         SettlementTier::Town
     } else if population >= 24 {
         SettlementTier::Village
@@ -47,12 +50,9 @@ pub(super) fn community(
     let level = CivicHallLevel::for_tier(tier);
     let mut inventory = GoodsInventory::new_partitioned(capacity::HALL);
     let mut market = MootMarket::founding();
-    for (good, amount) in [
-        (Good::Bread, population as u32 * 2),
-        (Good::Wheat, population as u32),
-        (Good::Wood, 12),
-    ] {
+    for (good, amount) in config.opening_stock(population).goods() {
         let stocked = inventory.add(good, amount);
+        assert_eq!(stocked, amount, "validated opening stock must fit the Hall");
         market.consign(MarketSeller::Treasury(id), good, stocked, good.base_price());
     }
     let entity = commands
@@ -63,7 +63,9 @@ pub(super) fn community(
                 name: community.name.clone(),
                 tier,
                 residents: population as u32,
-                treasury: (20 + population as u64 / 2) * PENNIES_PER_COIN,
+                treasury: config
+                    .hall_treasury_pennies
+                    .unwrap_or((20 + population as u64 / 2) * PENNIES_PER_COIN),
             },
             inventory,
             market,
@@ -155,6 +157,18 @@ pub(super) fn community(
         }
     }
     let mut people = Vec::new();
+    for (ordinal, position) in community.layout.frontier_stands.iter().enumerate() {
+        let person = ids.person();
+        let seed = shared::worldgen::splitmix64(community.site.salt ^ ordinal as u64);
+        let resident = crate::player::hero::spawn_villager(commands, terrain, seed, *position);
+        commands.entity(resident).insert((
+            person,
+            Residence(community.name.clone()),
+            ResidentOf(id),
+            village::VillagerIntent::Resident { settlement: entity },
+        ));
+        people.push((person, shared::names::person_name(seed)));
+    }
     for (home_index, (home, home_id, plot)) in homes.into_iter().enumerate() {
         let mut household = Household::default();
         for member in 0..4 {
@@ -190,7 +204,7 @@ pub(super) fn community(
     assert_eq!(
         people.len(),
         population,
-        "opening housing must match its actual residents"
+        "opening founding plan must match its actual residents"
     );
     for (index, (building, kind)) in businesses.into_iter().enumerate() {
         let (owner, name) = &people[index % people.len()];

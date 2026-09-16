@@ -86,8 +86,8 @@ pub(super) fn resume_staff_after_road_completion(
                 )
             });
         if ready {
-            // Ordinary assignment still enforces working hours, daily output
-            // plans, and employment. A road opening does not grant overtime.
+            // Ordinary assignment still enforces working hours and employment.
+            // A road opening does not grant overtime or impose an output quota.
             commands
                 .entity(employee)
                 .remove::<AwaitingWorkplaceAccess>()

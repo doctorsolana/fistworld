@@ -1,0 +1,18 @@
+// Standalone harbour art review; all asset mounts live in ignored logs/.
+(version: 1, name: "port-draft", map: "village_lab",
+ output_dir: "logs/captures/port-draft", resolution: (1600, 1200),
+ fixed_delta_seconds: 0.016666667, target: scene, show_window: false, warmup_frames: 240,
+ readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+ environment: {"FISTFORCE_CAPTURE_ASSET": "port-draft/PortReview.glb#Scene0", "FISTFORCE_CAPTURE_CLOUDS": "clear"},
+ shots: [
+(name: "anchor", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 68.0, time_of_day: 0.43),
+(name: "harbour", focus: (16.000000, 0.0, -53.000000),
+        yaw: 2.33671643, zoom: 50.0, pitch: Some(0.54143787), eye: 42.885553, time_of_day: 0.43,
+        assertions: [loaded_chunks_at_least(count: 25), prop_roots_at_most(count: 0), grass_batches_at_most(count: 0)]),
+(name: "shore-office", focus: (4.000000, 0.0, -28.000000),
+        yaw: 2.15654414, zoom: 50.0, pitch: Some(0.43727872), eye: 28.885553, time_of_day: 0.43,
+        assertions: [loaded_chunks_at_least(count: 25), prop_roots_at_most(count: 0), grass_batches_at_most(count: 0)]),
+(name: "dock-head", focus: (-37.000000, 0.0, -51.000000),
+        yaw: -2.26732032, zoom: 50.0, pitch: Some(0.43708107), eye: 29.885553, time_of_day: 0.43,
+        assertions: [loaded_chunks_at_least(count: 25), prop_roots_at_most(count: 0), grass_batches_at_most(count: 0)])
+])

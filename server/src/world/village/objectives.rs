@@ -17,6 +17,14 @@ pub fn sync_character_objectives(
         Option<&PlayerConstructionAssignment>,
         Option<&crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
         (
+            Option<&crate::world::shipping::crew::ShipCrew>,
+            Has<crate::world::ports::PortBuilder>,
+            Has<crate::world::shipping::PortHaulRoutine>,
+            Has<crate::world::regional_roads::bridge::BridgeBuilder>,
+            Option<&crate::world::immigration::ImmigrantArrival>,
+            Has<shared::components::AboardBoat>,
+        ),
+        (
             Option<&VillagerIntent>,
             Option<&MigrationCooldown>,
             Option<&moot_services::MootQueueTicket>,
@@ -57,6 +65,7 @@ pub fn sync_character_objectives(
         kind,
         player_construction,
         house_upgrade,
+        (ship_crew, port_builder, port_hauler, bridge_builder, arrival, aboard),
         (
             intent,
             migration_cooldown,
@@ -105,18 +114,20 @@ pub fn sync_character_objectives(
             continue;
         }
 
-        let objective = if let Some(upgrade) = house_upgrade {
-            if upgrade.carrying {
-                CharacterObjective::CarryingConstructionWood
-            } else if move_target.is_some() {
-                CharacterObjective::CollectingConstructionWood
-            } else {
-                CharacterObjective::ConstructingBuilding
-            }
-        } else if player_construction.is_some() && construction.is_none() {
+        let objective = if aboard && arrival.is_some_and(|arrival| arrival.chosen_at.is_none()) {
+            CharacterObjective::ChoosingSettlement
+        } else if let Some(crew) = ship_crew {
+            crew.objective()
+        } else if port_builder {
             CharacterObjective::ConstructingBuilding
+        } else if port_hauler {
+            CharacterObjective::HaulingConstructionSupplies
+        } else if bridge_builder {
+            CharacterObjective::BuildingBridge
         } else {
             objective_for(
+                player_construction.is_some(),
+                house_upgrade,
                 intent,
                 migration_cooldown,
                 queue,
@@ -168,6 +179,8 @@ pub fn sync_character_objectives(
 
 #[allow(clippy::too_many_arguments)]
 fn objective_for(
+    player_construction: bool,
+    house_upgrade: Option<&crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
     intent: Option<&VillagerIntent>,
     migration_cooldown: Option<&MigrationCooldown>,
     queue: Option<&moot_services::MootQueueTicket>,
@@ -197,11 +210,42 @@ fn objective_for(
     if immigration_departure.is_some() {
         return CharacterObjective::LeavingImmigrationCounter;
     }
+    // A reserved errand waits while construction completes its current
+    // physical load/corridor. Report the same owner that execution uses.
+    if let Some(construction) =
+        construction.filter(|routine| routine.finishes_before_personal_needs())
+    {
+        if meal.is_some()
+            || shopping.is_some()
+            || queue.is_some_and(|ticket| ticket.kind != MootServiceKind::ConstructionMaterial)
+        {
+            return construction_objective(construction);
+        }
+    }
     if let Some(queue) = queue {
         return queue.objective();
     }
     if let Some(meal) = meal.copied() {
         return meal.objective();
+    }
+    if let Some(shopping) = shopping {
+        return match shopping.phase {
+            HouseholdShoppingPhase::GoingToMarket => CharacterObjective::GoingHouseholdShopping,
+            HouseholdShoppingPhase::ReturningHome => CharacterObjective::ReturningWithHouseholdFood,
+            HouseholdShoppingPhase::ReturningToMarket => CharacterObjective::DeliveringMarketGoods,
+        };
+    }
+    if let Some(upgrade) = house_upgrade {
+        return if upgrade.carrying {
+            CharacterObjective::CarryingConstructionWood
+        } else if moving {
+            CharacterObjective::CollectingConstructionWood
+        } else {
+            CharacterObjective::ConstructingBuilding
+        };
+    }
+    if player_construction && construction.is_none() {
+        return CharacterObjective::ConstructingBuilding;
     }
     if let Some(visit) = tavern_visit.copied() {
         return visit.objective();
@@ -239,20 +283,7 @@ fn objective_for(
         return CharacterObjective::CollectingPermit;
     }
     if let Some(construction) = construction {
-        return match construction.phase {
-            ConstructionMaterialPhase::Seeking
-            | ConstructionMaterialPhase::UnloadingAtHall { .. }
-            | ConstructionMaterialPhase::CollectingFromStore { .. }
-            | ConstructionMaterialPhase::WalkingToTree { .. }
-            | ConstructionMaterialPhase::LeavingDeliveryAccess { .. } => {
-                CharacterObjective::FindingConstructionWood
-            }
-            ConstructionMaterialPhase::Chopping { .. } => CharacterObjective::ChoppingTimber,
-            ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
-            | ConstructionMaterialPhase::Delivering { .. } => {
-                CharacterObjective::CarryingConstructionWood
-            }
-        };
+        return construction_objective(construction);
     }
     if let Some(road) = road {
         return road.objective();
@@ -272,16 +303,11 @@ fn objective_for(
             }
         };
     }
-    if let Some(shopping) = shopping {
-        return match shopping.phase {
-            HouseholdShoppingPhase::GoingToMarket => CharacterObjective::GoingHouseholdShopping,
-            HouseholdShoppingPhase::ReturningHome => CharacterObjective::ReturningWithHouseholdFood,
-            HouseholdShoppingPhase::ReturningToMarket => CharacterObjective::DeliveringMarketGoods,
-        };
-    }
     if let Some(collection) = market_collection {
         return match collection.phase {
-            MarketCollectionPhase::GoingToBusiness => CharacterObjective::CollectingMarketGoods,
+            MarketCollectionPhase::GoingToBusiness | MarketCollectionPhase::GoingToInputCounter => {
+                CharacterObjective::CollectingMarketGoods
+            }
             MarketCollectionPhase::ReturningToHall
             | MarketCollectionPhase::ReturningToBusinessAfterFailedSale
             | MarketCollectionPhase::DeliveringInput
@@ -327,7 +353,7 @@ fn objective_for(
             LumberjackPhase::GoingToHut
             | LumberjackPhase::Inside { .. }
             | LumberjackPhase::WalkingToTree { .. } => CharacterObjective::GoingToLumberWork,
-            LumberjackPhase::Chopping => CharacterObjective::ChoppingTimber,
+            LumberjackPhase::Chopping { .. } => CharacterObjective::ChoppingTimber,
             LumberjackPhase::ReturningToHut => CharacterObjective::ReturningTimber,
             LumberjackPhase::EndingShift => CharacterObjective::EndingWorkShift,
         };
@@ -354,9 +380,237 @@ fn objective_for(
     }
 }
 
+fn construction_objective(construction: &ConstructionMaterialRoutine) -> CharacterObjective {
+    match construction.phase {
+        ConstructionMaterialPhase::Seeking
+        | ConstructionMaterialPhase::UnloadingAtHall { .. }
+        | ConstructionMaterialPhase::CollectingFromStore { .. }
+        | ConstructionMaterialPhase::WalkingToTree { .. }
+        | ConstructionMaterialPhase::LeavingDeliveryAccess { .. } => {
+            CharacterObjective::FindingConstructionWood
+        }
+        ConstructionMaterialPhase::Chopping { .. } => CharacterObjective::ChoppingTimber,
+        ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
+        | ConstructionMaterialPhase::Delivering { .. }
+        | ConstructionMaterialPhase::WaitingForDeliveryAccess { .. } => {
+            CharacterObjective::CarryingConstructionWood
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn household_trip_outranks_building_intent_after_the_committed_load_finishes() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_character_objectives);
+        let site = app.world_mut().spawn_empty().id();
+        let shopper = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                VillagerIntent::Building {
+                    settlement: site,
+                    site,
+                },
+                HouseholdShoppingRoutine {
+                    account: site,
+                    household: shared::components::HouseholdId(1),
+                    home: site,
+                    hall: site,
+                    counter: Vec3::ZERO,
+                    phase: HouseholdShoppingPhase::ReturningHome,
+                    cargo: [0; Good::COUNT],
+                },
+                MoveTarget(Vec3::X * 10.0),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(shopper),
+            Some(&CharacterObjective::ReturningWithHouseholdFood)
+        );
+        assert_eq!(
+            app.world().get::<CharacterNavigationStatus>(shopper),
+            Some(&CharacterNavigationStatus::Walking)
+        );
+
+        let mut material = ConstructionMaterialRoutine::new(site);
+        material.phase = ConstructionMaterialPhase::Delivering {
+            destination: Vec3::ZERO,
+        };
+        app.world_mut().entity_mut(shopper).insert(material);
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(shopper),
+            Some(&CharacterObjective::CarryingConstructionWood)
+        );
+        app.world_mut()
+            .get_mut::<ConstructionMaterialRoutine>(shopper)
+            .unwrap()
+            .phase = ConstructionMaterialPhase::Seeking;
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(shopper),
+            Some(&CharacterObjective::ReturningWithHouseholdFood)
+        );
+    }
+
+    #[test]
+    fn pending_meal_reports_the_committed_material_owner_until_it_yields() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.init_resource::<MootQueueClock>()
+            .add_systems(Update, sync_character_objectives);
+        let site = app.world_mut().spawn_empty().id();
+        let mut material = ConstructionMaterialRoutine::new(site);
+        material.phase = ConstructionMaterialPhase::ApproachingDeliveryAccess { entry: Vec3::ZERO };
+        let builder = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                VillagerIntent::Building {
+                    settlement: site,
+                    site,
+                },
+                material,
+            ))
+            .id();
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands, mut clock: ResMut<MootQueueClock>| {
+                    moot_services::reserve_meal(
+                        &mut commands,
+                        &mut clock,
+                        builder,
+                        site,
+                        MootServiceKind::PersonalMeal,
+                        Good::Bread,
+                        1,
+                    );
+                },
+            )
+            .unwrap();
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(builder),
+            Some(&CharacterObjective::CarryingConstructionWood)
+        );
+        app.world_mut()
+            .get_mut::<ConstructionMaterialRoutine>(builder)
+            .unwrap()
+            .phase = ConstructionMaterialPhase::Seeking;
+        app.update();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(builder),
+            Some(&CharacterObjective::QueuedForPersonalFood)
+        );
+    }
+
+    #[test]
+    fn house_upgrade_reports_the_actual_queue_then_carried_meal() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        let at = Vec3::new(1700.0, 80.0, 0.0);
+        let mut terrain = WorldTerrain::default();
+        terrain.apply_flatten_rect(at, Vec2::splat(40.0), 0.0, 4.0);
+        app.insert_resource(terrain)
+            .init_resource::<Time>()
+            .init_resource::<MootQueueClock>();
+        app.world_mut().spawn(WorldTime::new_default());
+        let hall = app
+            .world_mut()
+            .spawn((
+                Settlement {
+                    name: "Objective test".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 1,
+                    treasury: 20,
+                },
+                PlayerPosition(at + Vec3::X * 12.0),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        let builder = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                VillagerIntent::Resident { settlement: hall },
+                PlayerPosition(at),
+                PlayerRotation(0.0),
+                RegionCoord::from_world_pos(at),
+                CharacterActivity::Idle,
+                GoodsInventory::new(shared::economy::capacity::VILLAGER),
+                Nutrition::default(),
+                crate::world::house_upgrades::HouseUpgradeBuilderRoutine {
+                    project: hall,
+                    carrying: true,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands, mut clock: ResMut<MootQueueClock>| {
+                    moot_services::reserve_meal(
+                        &mut commands,
+                        &mut clock,
+                        builder,
+                        hall,
+                        MootServiceKind::PersonalMeal,
+                        Good::Bread,
+                        1,
+                    );
+                },
+            )
+            .unwrap();
+        app.world_mut()
+            .run_system_once(sync_character_objectives)
+            .unwrap();
+        assert_eq!(
+            app.world().get::<CharacterObjective>(builder),
+            Some(&CharacterObjective::QueuedForPersonalFood)
+        );
+        app.add_systems(
+            Update,
+            (
+                advance_moot_service_queues,
+                run_moot_meal_collections,
+                crate::player::hero::step_units,
+                sync_character_objectives,
+            )
+                .chain(),
+        );
+        for _ in 0..1000 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(0.1));
+            app.update();
+            if app.world().get::<CharacterObjective>(builder)
+                == Some(&CharacterObjective::CollectingFood)
+            {
+                break;
+            }
+        }
+        assert!(app.world().get::<MootQueueTicket>(builder).is_none());
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(builder)
+                .unwrap()
+                .amount(Good::Bread),
+            1
+        );
+        assert_eq!(
+            app.world().get::<CharacterObjective>(builder),
+            Some(&CharacterObjective::CollectingFood)
+        );
+        assert!(
+            app.world()
+                .get::<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>(builder)
+                .is_some()
+        );
+    }
 
     #[test]
     fn commanded_hero_reports_supply_chop_build_and_clears_after_cancellation() {

@@ -1,7 +1,6 @@
 //! Assign objectives once at the command boundary. Per-soldier contact stays
 //! local; this never turns an army click into N independent pursuit searches.
 use super::*;
-use crate::world::village::strategic::StrategicPerson;
 use shared::{formation::FormationBlock, protocol::AttackMode};
 
 pub(super) fn distribute_targets(
@@ -26,7 +25,7 @@ pub(super) fn distribute_targets(
         .query_filtered::<(&MemberOfBattalion, &CommandedBy, &PlayerPosition, &Health), (
             Without<OfflineHero>,
             Without<AboardBoat>,
-            Without<StrategicPerson>,
+
         )>()
         .iter(world)
     {

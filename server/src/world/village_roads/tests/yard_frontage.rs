@@ -109,7 +109,10 @@ fn fitted_street_gates_support_actual_house_routes_at_rotated_lattice_offsets() 
                             &mut scratch,
                             AGENT_SURVEY_MAX_NODES,
                         );
-                        assert!(!route.is_empty(), "street gate trapped {appearance:?}, yaw={yaw}, offset={offset:?}, start={start:?}, goal={goal:?}");
+                        assert!(
+                            !route.is_empty(),
+                            "street gate trapped {appearance:?}, yaw={yaw}, offset={offset:?}, start={start:?}, goal={goal:?}"
+                        );
                         assert!(route.first().unwrap().distance_squared(start) < 0.01);
                         assert!(route.last().unwrap().distance_squared(goal) < 0.01);
                         assert!(

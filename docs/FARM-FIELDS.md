@@ -55,11 +55,11 @@ walkable.
 
 Each subarea contributes `clamp(area / 88m², 0, 1)` to capacity. Every worker uses
 the average of the two capacities, regardless of its visual work stand. Missing
-subareas contribute zero. Tactical and strategic production use the same cached
-farm capacity and current Farmstead quality, so changing observation distance
-does not change these inputs. More decorative acreage never exceeds the existing
-labour-limited output cap. Ordinary shifts, autonomous output budgets, harvesting
-progress, carrying baskets and actual workplace inventory remain unchanged.
+subareas contribute zero. The same producer routine uses cached farm capacity and
+current Farmstead quality everywhere; observation does not change inputs or work phases. More decorative acreage never exceeds the existing
+labour-limited production rate. Workers harvest throughout their ordinary shift while
+workplace storage permits; the autonomous sales forecast changes staffing, not a daily
+harvest quota. Harvest progress, carrying baskets and physical inventory remain authoritative.
 
 The existing route certifier selects an inset point inside accepted ground and
 proves access from the real front doorway around the Farmstead shell and through
@@ -82,7 +82,7 @@ compatibility is separate from the versioned positional network protocol.
 - `server/src/world/village/field_parcels.rs`: permanent-prop collision predicate.
 - `server/src/world/village/trades.rs`: field ownership and physical work loop.
 - `server/src/world/village/farm_productivity.rs`: incremental capacity index used
-  by both tactical and strategic production.
+  by the same physical producer routine in every town.
 - `shared/src/components/farm_fields/boundaries.rs`: accepted perimeter, openings and fence obstacles.
 - `shared/src/building/field_claims.rs`: exact accepted-field clearing and chunk revisions.
 - `server/src/world/farm_boundaries.rs`: geometry-only navigation source cache.
@@ -167,7 +167,7 @@ inspected frames 000/120/240 show subtle changing grain poses with stable soil,
 fence joins and an open entrance. Both motion runs precede the uniform-soil
 colour cleanup; they cover the unchanged crop geometry, LOD ranges and wind.
 
-Verification requires shared shape/snapshot tests, the tactical and strategic
+Verification requires shared shape/snapshot tests, observed and unobserved
 production regressions, the authored farm-door route regression, workspace checks,
 real Bevy near/far/reverse captures and a connected farmer work/carry/deposit loop.
 Keep capture PNGs, metadata and connected logs under ignored `logs/` directories.
@@ -230,7 +230,8 @@ observer supplied no workers, cargo, stock, orders or forced field shape. The la
 configured 10× simulation speed is separate from the read-only observer. This is
 post-fence work/carry/deposit evidence, not an FPS benchmark or approval of later
 crop-art revisions. The related full-size bootstrap and eight-day aggregate
-checks are recorded in [NEW-WORLD.md](NEW-WORLD.md#verification).
+checks are recorded in [NEW-WORLD.md](NEW-WORLD.md#verification). Those aggregate
+results are historical and do not certify the revised canonical world simulation.
 
 ## Town streaming regression
 

@@ -13,11 +13,16 @@ use crate::world::new_world::trade_access::{FoundingLandNetwork, LandTradeAccess
 use lightyear::prelude::{NetworkTarget, Replicate};
 use shared::components::{
     CharacterObjective, CivicHallUpgradeWorksite, CivicTradeContract, CompanyTradeRoute,
-    ConstructionSite, SettlementId, TradeContractId, TradeContractStatus, TradeRouteHistory,
-    TradeRouteId, TradeRouteMode, TradeRouteSchedule, TradeRouteStatus, TradeRouteStop,
-    TradeRouteStopAction, TradeRouteTrip,
+    ConstructionSite, MaritimeTradeRoute, SettlementId, TradeContractId, TradeContractStatus,
+    TradeRouteHistory, TradeRouteId, TradeRouteMode, TradeRouteSchedule, TradeRouteStatus,
+    TradeRouteStop, TradeRouteStopAction, TradeRouteTrip,
 };
-use shared::economy::{MarketSeller, FOUNDING_DAILY_WAGE};
+use shared::economy::{FOUNDING_DAILY_WAGE, MarketSeller};
+
+mod civic_review;
+
+mod merchant_economics;
+use merchant_economics::*;
 
 /// Three pennies per bulk makes one eight-Stone Town Works load worth 1.44
 /// coin to the carrier: enough to cover one ordinary daily wage while keeping
@@ -64,7 +69,8 @@ struct CompanyTradeObservation {
     recent_units_sold: u32,
     recent_sale_price: u64,
     funded_unmet_units: u32,
-    target_stock: u32,
+    funded_demand: shared::economy::FundedDemandCurve,
+    substitute_demand: shared::economy::FundedDemandCurve,
     market_fee_bps: u16,
 }
 
@@ -129,6 +135,7 @@ impl CompanyTradeKnowledge {
 pub struct RegionalTradeIntelligence {
     processed_day: Option<u32>,
     companies: HashMap<shared::components::CompanyId, CompanyTradeKnowledge>,
+    protected_company_cash: HashMap<shared::components::CompanyId, u64>,
 }
 
 /// Demonstrated or publicly advertised external demand fed back into the
@@ -203,10 +210,16 @@ pub(crate) struct AutonomousMerchantRoute {
     disappointing_reviews: u8,
     expected_trip_profit: i64,
     confidence: u8,
+    unsold_since_day: Option<u32>,
+    minimum_cargo_net: u64,
+    freight_cost: u64,
+    minimum_return_bps: u64,
+    destination_fee_bps: u16,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct PublicMarketSnapshot {
+    entity: Entity,
     settlement: shared::components::SettlementId,
     position: Vec3,
     observations: [CompanyTradeObservation; Good::COUNT],
@@ -222,6 +235,10 @@ struct MerchantOpportunity {
     minimum_sale_price: u64,
     expected_profit: i64,
     confidence: u8,
+    minimum_cargo_net: u64,
+    freight_cost: u64,
+    minimum_return_bps: u64,
+    destination_fee_bps: u16,
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -300,6 +317,17 @@ fn hall_trade_approach(hall: HallSnapshot, failed_approaches: u8) -> Vec3 {
     offset_trade_approach(hall_entrance(hall), hall.rotation, failed_approaches)
 }
 
+fn contract_delivery_approach(
+    hall: HallSnapshot,
+    site: Option<&ConstructionSite>,
+    failed_approaches: u8,
+) -> Vec3 {
+    site.map_or_else(
+        || hall_trade_approach(hall, failed_approaches),
+        |site| offset_trade_approach(site.stand, site.rotation, failed_approaches),
+    )
+}
+
 fn warehouse_trade_approach(warehouse: WarehouseSnapshot, failed_approaches: u8) -> Vec3 {
     let entrance = SettlementBuildingKind::StorageHall
         .entrance_position(warehouse.position, warehouse.rotation);
@@ -356,6 +384,7 @@ fn absolute_world_seconds(clock: &WorldTime) -> f64 {
     f64::from(clock.day) * f64::from(clock.cycle_duration()) + f64::from(clock.seconds_in_cycle)
 }
 
+#[cfg(test)]
 fn contract_delivery_pennies_per_bulk(good: Good, units: u32) -> u64 {
     let total_bulk = u64::from(units.max(1)).saturating_mul(u64::from(good.bulk_per_unit()));
     CONTRACT_DELIVERY_PENNIES_PER_BULK.max(CONTRACT_MINIMUM_DELIVERY_PENNIES.div_ceil(total_bulk))
@@ -389,23 +418,24 @@ fn market_observation(
         .day
         .funded_unmet_units
         .saturating_add(pool.previous_day.funded_unmet_units);
-    // Households choose among substitutable foods and record their residual
-    // ration demand only against the final attempted good. A merchant does
-    // not know every preference, but ordinary food sales are evidence that a
-    // much cheaper edible alternative can find buyers. Share only one quarter
-    // of aggregate demand with each edible to avoid cloning one hungry
-    // household into four simultaneous full-strength markets.
-    let (units_sold, funded_unmet) = if good.is_edible() {
-        let aggregate_units_sold = Good::ALL
+    let mut funded_demand = pool.day.funded_demand;
+    funded_demand.merge(&pool.previous_day.funded_demand);
+    let mut substitute_demand = shared::economy::FundedDemandCurve::default();
+    if good.is_edible() {
+        for candidate in Good::ALL
             .into_iter()
             .filter(|candidate| candidate.is_edible())
-            .map(|candidate| {
-                let flow = market.pool(candidate);
-                flow.day
-                    .consumer_units
-                    .saturating_add(flow.previous_day.consumer_units)
-            })
-            .fold(0u64, u64::saturating_add);
+        {
+            let alternative = market.pool(candidate);
+            substitute_demand.merge(&alternative.day.funded_demand);
+            substitute_demand.merge(&alternative.previous_day.funded_demand);
+        }
+    }
+    // A residual ration bid can support a conservative substitute-food
+    // opportunity at that same funded price. Completed sales stay paired
+    // with their own good's realised price: cheap Fish buyers are not evidence
+    // that the same quantity will buy expensive Bread.
+    let funded_unmet = if good.is_edible() {
         let aggregate_funded_unmet = Good::ALL
             .into_iter()
             .filter(|candidate| candidate.is_edible())
@@ -416,12 +446,9 @@ fn market_observation(
                     .saturating_add(flow.previous_day.funded_unmet_units)
             })
             .fold(0u64, u64::saturating_add);
-        (
-            direct_units_sold.max(aggregate_units_sold.div_ceil(4)),
-            direct_funded_unmet.max(aggregate_funded_unmet.div_ceil(4)),
-        )
+        direct_funded_unmet.max(aggregate_funded_unmet.div_ceil(4))
     } else {
-        (direct_units_sold, direct_funded_unmet)
+        direct_funded_unmet
     };
     let sale_coin = pool
         .day
@@ -434,10 +461,11 @@ fn market_observation(
         confidence: 100,
         asking_price: market.suggested_price(good).max(1),
         listed_units: market.listed_units(good),
-        recent_units_sold: units_sold.min(u64::from(u32::MAX)) as u32,
-        recent_sale_price: sale_coin.checked_div(units_sold).unwrap_or(0),
+        recent_units_sold: direct_units_sold.min(u64::from(u32::MAX)) as u32,
+        recent_sale_price: sale_coin.checked_div(direct_units_sold).unwrap_or(0),
         funded_unmet_units: funded_unmet.min(u64::from(u32::MAX)) as u32,
-        target_stock: pool.target_stock,
+        funded_demand,
+        substitute_demand,
         market_fee_bps: market.market_fee_bps(),
     }
 }
@@ -489,11 +517,9 @@ fn strategy_trade_terms(strategy: shared::economy::BusinessStrategy) -> (u64, u8
     match strategy {
         // minimum return on committed cargo, minimum confidence and minimum
         // absolute trip profit in pennies.
-        BusinessStrategy::Growth => (800, 35, 60),
+        BusinessStrategy::Aggressive => (800, 35, 60),
         BusinessStrategy::Balanced => (1_500, 45, 100),
-        BusinessStrategy::HighMargin => (2_800, 50, 150),
-        BusinessStrategy::Cautious => (2_000, 65, 140),
-        BusinessStrategy::Opportunistic => (1_100, 30, 80),
+        BusinessStrategy::Conservative => (2_000, 65, 140),
     }
 }
 
@@ -509,137 +535,6 @@ fn uncertain_purchase_limit(asking_price: u64, confidence: u8) -> u64 {
         .max(asking_price)
 }
 
-fn evaluate_merchant_opportunity(
-    source: CompanyTradeObservation,
-    destination: CompanyTradeObservation,
-    source_position: Vec3,
-    destination_position: Vec3,
-    strategy: shared::economy::BusinessStrategy,
-    incoming_units: u32,
-) -> Option<MerchantOpportunity> {
-    if source.settlement == destination.settlement
-        || source.good != destination.good
-        || source.listed_units == 0
-    {
-        return None;
-    }
-    let (minimum_return_bps, minimum_confidence, minimum_profit) = strategy_trade_terms(strategy);
-    let confidence = source.confidence.min(destination.confidence);
-    if confidence < minimum_confidence {
-        return None;
-    }
-
-    let recent_demand = destination
-        .funded_unmet_units
-        .saturating_add(destination.recent_units_sold.div_ceil(2));
-    if recent_demand == 0 {
-        return None;
-    }
-    let shelf_gap = destination
-        .target_stock
-        .saturating_sub(destination.listed_units);
-    let demand_units = recent_demand
-        .saturating_add(shelf_gap.min(destination.recent_units_sold))
-        .saturating_sub(incoming_units);
-    if demand_units == 0 {
-        return None;
-    }
-
-    let unit_capacity =
-        (shared::economy::capacity::PORTER / source.good.bulk_per_unit().max(1)).max(1);
-    let cargo_units = source.listed_units.min(demand_units).min(unit_capacity);
-    if cargo_units == 0 {
-        return None;
-    }
-
-    let scarcity_price =
-        source
-            .good
-            .base_price()
-            .saturating_mul(if destination.funded_unmet_units > 0 {
-                125
-            } else {
-                100
-            })
-            / 100;
-    let expected_sale_price = if destination.listed_units > 0 {
-        destination.asking_price.saturating_sub(1).max(1)
-    } else {
-        destination
-            .recent_sale_price
-            .max(destination.asking_price)
-            .max(scarcity_price)
-    };
-    if expected_sale_price <= source.asking_price {
-        return None;
-    }
-
-    let gross_revenue = expected_sale_price.saturating_mul(u64::from(cargo_units));
-    let destination_fee = gross_revenue
-        .saturating_mul(u64::from(destination.market_fee_bps))
-        .div_ceil(BASIS_POINTS);
-    let distance = Vec2::new(
-        destination_position.x - source_position.x,
-        destination_position.z - source_position.z,
-    )
-    .length();
-    let journey_cost = FOUNDING_DAILY_WAGE.saturating_add(
-        ((distance * 2.0 / 100.0).ceil() as u64).saturating_mul(JOURNEY_PENNIES_PER_100_METRES),
-    );
-    let economics = |unit_purchase_price: u64| {
-        let purchase_cost = unit_purchase_price.saturating_mul(u64::from(cargo_units));
-        let uncertainty_cost =
-            purchase_cost.saturating_mul(u64::from(100_u8.saturating_sub(confidence))) / 500;
-        let total_cost = purchase_cost
-            .saturating_add(destination_fee)
-            .saturating_add(journey_cost)
-            .saturating_add(uncertainty_cost);
-        let profit = i128::from(gross_revenue) - i128::from(total_cost);
-        let return_bps = if profit <= 0 {
-            0
-        } else {
-            (profit as u128).saturating_mul(u128::from(BASIS_POINTS))
-                / u128::from(purchase_cost.max(1))
-        };
-        (profit, return_bps)
-    };
-    let (expected_profit, return_bps) = economics(source.asking_price);
-    let acceptable = |profit: i128, return_bps: u128| {
-        profit >= i128::from(minimum_profit) && return_bps >= u128::from(minimum_return_bps)
-    };
-    if !acceptable(expected_profit, return_bps) {
-        return None;
-    }
-
-    // Find the highest small quote miss this trip can tolerate without
-    // violating the Master's own decision rule. This is a limit order, not a
-    // forced price: the market still fills at the seller's actual ask.
-    let mut maximum_purchase_price = source.asking_price;
-    let mut high = uncertain_purchase_limit(source.asking_price, confidence);
-    while maximum_purchase_price < high {
-        let candidate = maximum_purchase_price + (high - maximum_purchase_price).div_ceil(2);
-        let (profit, candidate_return) = economics(candidate);
-        if acceptable(profit, candidate_return) {
-            maximum_purchase_price = candidate;
-        } else {
-            high = candidate.saturating_sub(1);
-        }
-    }
-
-    Some(MerchantOpportunity {
-        origin: source.settlement,
-        destination: destination.settlement,
-        good: source.good,
-        cargo_units,
-        maximum_purchase_price,
-        // A merchant tries to undercut the observed destination without
-        // pricing below the return which justified dispatching the wagon.
-        minimum_sale_price: expected_sale_price,
-        expected_profit: expected_profit.min(i128::from(i64::MAX)) as i64,
-        confidence,
-    })
-}
-
 /// Give autonomous companies bounded, stale commercial knowledge and let a
 /// small number of solvent Company Masters open physical trial routes. This
 /// runs once per world day; no villager performs a global market scan.
@@ -650,12 +545,13 @@ pub fn review_autonomous_merchant_trade(
     mut intelligence: ResMut<RegionalTradeIntelligence>,
     mut merchant_demand: ResMut<RegionalMerchantDemand>,
     land_networks: Query<(&SettlementId, &FoundingLandNetwork), With<Settlement>>,
-    halls: Query<
+    mut halls: Query<
         (
             &shared::components::SettlementId,
             &PlayerPosition,
             &GoodsInventory,
-            &MootMarket,
+            &mut MootMarket,
+            Entity,
         ),
         With<Settlement>,
     >,
@@ -681,18 +577,25 @@ pub fn review_autonomous_merchant_trade(
         &SettlementBuilding,
         &GoodsInventory,
         Option<&BusinessCondition>,
+        Option<&BusinessWagePolicy>,
     )>,
     porters: Query<&CompanyPorter>,
-    mut routes: Query<(
-        Entity,
-        Option<&TradeRouteId>,
-        &mut CompanyTradeRoute,
-        &TradeRouteSchedule,
-        &TradeRouteHistory,
-        Option<&mut AutonomousMerchantRoute>,
-    )>,
+    mut routes: Query<
+        (
+            Entity,
+            Option<&TradeRouteId>,
+            &mut CompanyTradeRoute,
+            &TradeRouteSchedule,
+            &TradeRouteHistory,
+            Option<&mut AutonomousMerchantRoute>,
+        ),
+        Without<MaritimeTradeRoute>,
+    >,
 ) {
-    let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    let Some(clock) = world_time.iter().next() else {
+        return;
+    };
+    let day = clock.day;
     if intelligence.processed_day == Some(day) {
         return;
     }
@@ -701,9 +604,10 @@ pub fn review_autonomous_merchant_trade(
 
     let mut markets: Vec<_> = halls
         .iter()
-        .filter(|(_, _, _, market)| market.supports_regional_trade())
+        .filter(|(_, _, _, market, _)| market.supports_regional_trade())
         .map(
-            |(settlement, position, _inventory, market)| PublicMarketSnapshot {
+            |(settlement, position, _inventory, market, entity)| PublicMarketSnapshot {
+                entity,
                 settlement: *settlement,
                 position: position.0,
                 observations: std::array::from_fn(|index| {
@@ -763,10 +667,19 @@ pub fn review_autonomous_merchant_trade(
         )
         .collect();
     company_snapshots.sort_unstable_by_key(|company| company.id);
-    let autopilot_companies: HashSet<_> = company_snapshots
-        .iter()
-        .filter_map(|company| company.policy.autopilot.then_some(company.id))
-        .collect();
+    intelligence.protected_company_cash.clear();
+    for company in &company_snapshots {
+        intelligence.protected_company_cash.insert(
+            company.id,
+            payroll_by_company
+                .get(&company.id)
+                .copied()
+                .unwrap_or(0)
+                .saturating_mul(u64::from(company.policy.payroll_reserve_days))
+                .saturating_add(company.account.wage_arrears)
+                .saturating_add(company.account.tax_arrears),
+        );
+    }
 
     #[derive(Clone, Copy)]
     struct AiWarehouse {
@@ -774,34 +687,58 @@ pub fn review_autonomous_merchant_trade(
         company: shared::components::CompanyId,
         settlement: shared::components::SettlementId,
         stock: [u32; Good::COUNT],
+        daily_wage: u64,
     }
     let mut warehouse_snapshots: Vec<_> = warehouses
         .iter()
-        .filter(|(_, _, _, building, _, condition)| {
+        .filter(|(_, _, _, building, _, condition, _)| {
             building.kind == SettlementBuildingKind::StorageHall
                 && condition.is_none_or(|condition| condition.state.can_operate())
         })
-        .map(|(id, company, building_of, _, inventory, _)| AiWarehouse {
-            id: *id,
-            company: company.0,
-            settlement: building_of.0,
-            stock: std::array::from_fn(|index| inventory.amount(Good::ALL[index])),
-        })
+        .map(
+            |(id, company, building_of, _, inventory, _, wage)| AiWarehouse {
+                id: *id,
+                company: company.0,
+                settlement: building_of.0,
+                stock: std::array::from_fn(|index| inventory.amount(Good::ALL[index])),
+                daily_wage: wage.map_or(FOUNDING_DAILY_WAGE, |wage| wage.daily_wage),
+            },
+        )
         .collect();
     warehouse_snapshots.sort_unstable_by_key(|warehouse| warehouse.id);
+    let warehouse_by_id: HashMap<_, _> = warehouse_snapshots
+        .iter()
+        .map(|warehouse| (warehouse.id, *warehouse))
+        .collect();
 
     let porter_count: HashMap<_, usize> =
         porters.iter().fold(HashMap::new(), |mut counts, porter| {
             *counts.entry(porter.company).or_default() += 1;
             counts
         });
+    let porter_count_by_warehouse: HashMap<_, usize> =
+        porters.iter().fold(HashMap::new(), |mut counts, porter| {
+            *counts
+                .entry((porter.company, porter.storage_hall))
+                .or_default() += 1;
+            counts
+        });
     let mut routes_per_company = HashMap::<shared::components::CompanyId, usize>::new();
     let mut active_routes_per_company = HashMap::<shared::components::CompanyId, usize>::new();
+    let mut active_routes_by_warehouse = HashMap::<shared::components::BuildingId, usize>::new();
+    let mut committed_purchases = HashMap::<shared::components::CompanyId, u64>::new();
     let mut incoming = HashMap::<(shared::components::SettlementId, Good), u32>::new();
     let mut existing_lanes = HashSet::new();
+    let mut route_entities_by_company =
+        HashMap::<shared::components::CompanyId, Vec<Entity>>::new();
+    let mut manual_listing_keys = HashSet::new();
     let mut recent_arrival_reports =
         HashMap::<shared::components::CompanyId, Vec<CompanyTradeObservation>>::new();
-    for (_, _, route, schedule, history, _) in routes.iter_mut() {
+    for (entity, _, route, schedule, history, autonomous) in routes.iter_mut() {
+        route_entities_by_company
+            .entry(route.company)
+            .or_default()
+            .push(entity);
         *routes_per_company.entry(route.company).or_default() += 1;
         // An idle reusable contract lane owns no porter and must not prevent
         // that employee from taking a merchant opportunity. Conversely, a
@@ -812,11 +749,42 @@ pub fn review_autonomous_merchant_trade(
             TradeRouteStatus::Idle | TradeRouteStatus::Mothballed
         ) {
             *active_routes_per_company.entry(route.company).or_default() += 1;
+            *active_routes_by_warehouse
+                .entry(route.warehouse)
+                .or_default() += 1;
         }
         existing_lanes.insert((route.company, route.origin, route.destination, route.good));
-        if route.mode == TradeRouteMode::Merchant && route.status != TradeRouteStatus::Mothballed {
+        if route.mode == TradeRouteMode::Merchant
+            && (!route.autonomous_management || autonomous.is_none())
+        {
+            for stop in schedule
+                .stops()
+                .iter()
+                .filter(|stop| stop.action == TradeRouteStopAction::Sell)
+            {
+                manual_listing_keys.insert((route.warehouse, stop.settlement, route.good));
+            }
+        }
+        if route.mode == TradeRouteMode::Merchant
+            && !matches!(
+                route.status,
+                TradeRouteStatus::Idle | TradeRouteStatus::Mothballed | TradeRouteStatus::Returning
+            )
+        {
             let units = incoming.entry((route.destination, route.good)).or_default();
             *units = units.saturating_add(route.cargo_target);
+            if schedule
+                .stops()
+                .get(usize::from(route.current_stop))
+                .is_some_and(|stop| stop.action == TradeRouteStopAction::Buy)
+            {
+                let cash = committed_purchases.entry(route.company).or_default();
+                *cash = cash.saturating_add(
+                    route
+                        .maximum_purchase_price
+                        .saturating_mul(u64::from(route.cargo_target)),
+                );
+            }
         }
 
         // A completed physical visit is better intelligence than hearsay.
@@ -855,7 +823,9 @@ pub fn review_autonomous_merchant_trade(
     merchant_demand.import_logistics_bulk.clear();
     for source in &markets {
         for destination in &markets {
-            if source.settlement == destination.settlement {
+            if source.settlement == destination.settlement
+                || !land_access.allows(source.settlement, destination.settlement)
+            {
                 continue;
             }
             for good in Good::ALL {
@@ -869,6 +839,7 @@ pub fn review_autonomous_merchant_trade(
                     source.position,
                     destination.position,
                     shared::economy::BusinessStrategy::Balanced,
+                    FOUNDING_DAILY_WAGE,
                     committed,
                 ) else {
                     continue;
@@ -882,84 +853,17 @@ pub fn review_autonomous_merchant_trade(
         }
     }
 
-    // Learn from embodied routes and decide whether each NPC trial deserves
-    // another circuit. Unsold cargo is intentionally visible as failure; a
-    // consignment is not revenue merely because a porter reached town.
-    for (_, route_id, mut route, schedule, history, autonomous) in routes.iter_mut() {
-        let Some(mut autonomous) = autonomous else {
-            continue;
-        };
-        if !autopilot_companies.contains(&route.company) {
-            continue;
-        }
-        if autonomous.last_review_day == day {
-            continue;
-        }
-        autonomous.last_review_day = day;
-        let completed_now = route.completed_trips > autonomous.last_completed_trips;
-        if completed_now {
-            let last_trip = history.trips().last().copied();
-            let unsold = halls
-                .iter()
-                .find(|(settlement, ..)| **settlement == route.destination)
-                .map_or(0, |(_, _, _, market)| {
-                    market.seller_listed_units(MarketSeller::Business(route.warehouse), route.good)
-                });
-            let disappointing =
-                last_trip.is_none_or(|trip| trip.units == 0) || unsold >= route.cargo_target.max(1);
-            autonomous.disappointing_reviews = if disappointing {
-                autonomous.disappointing_reviews.saturating_add(1)
-            } else {
-                0
-            };
-            autonomous.last_completed_trips = route.completed_trips;
-        }
-
-        if autonomous.disappointing_reviews >= 2 {
-            let mothballed_day = *autonomous.mothballed_day.get_or_insert(day);
-            if day.saturating_sub(mothballed_day) >= AUTONOMOUS_ROUTE_RETRY_DAYS
-                && route.assigned_caravaner.is_none()
-                && active_routes_per_company
-                    .get(&route.company)
-                    .copied()
-                    .unwrap_or(0)
-                    < porter_count.get(&route.company).copied().unwrap_or(0)
-            {
-                autonomous.disappointing_reviews = 1;
-                autonomous.mothballed_day = None;
-                route.status = TradeRouteStatus::WaitingForPorter;
-                *active_routes_per_company.entry(route.company).or_default() += 1;
-                info!(
-                    "Company #{} reopened autonomous {} route #{} after a seven-day market pause",
-                    route.company.0,
-                    route.good.label(),
-                    route_id.map_or(0, |id| id.0),
-                );
-                continue;
+    let mut reviewed_consignments = HashSet::new();
+    let mut unsold_consignments = HashSet::new();
+    for (settlement, _, _, market, _) in halls.iter() {
+        for listing in market.listings() {
+            if let MarketSeller::Business(warehouse) = listing.seller {
+                if warehouse_by_id.contains_key(&warehouse) && listing.units > 0 {
+                    unsold_consignments.insert((warehouse, *settlement, listing.good));
+                }
             }
-            if route.status != TradeRouteStatus::Mothballed {
-                info!(
-                    "Company #{} mothballed autonomous {} route #{} after repeated empty or stranded cargo (expected {} coin/trip, confidence {}%)",
-                    route.company.0,
-                    route.good.label(),
-                    route_id.map_or(0, |id| id.0),
-                    shared::economy::format_money(autonomous.expected_trip_profit.max(0) as u64),
-                    autonomous.confidence,
-                );
-            }
-            route.automatic = false;
-            if route.assigned_caravaner.is_none() {
-                route.status = TradeRouteStatus::Mothballed;
-            }
-            continue;
         }
-        if route.status == TradeRouteStatus::Idle {
-            route.status = TradeRouteStatus::WaitingForPorter;
-            *active_routes_per_company.entry(route.company).or_default() += 1;
-        }
-        debug_assert!(schedule.stops().len() >= 2);
     }
-
     for company in company_snapshots {
         let master_attributes = attributes.get(&company.master).copied().unwrap_or_default();
         let knowledge = intelligence.companies.entry(company.id).or_default();
@@ -982,6 +886,214 @@ pub fn review_autonomous_merchant_trade(
             for observation in reports.iter().copied() {
                 knowledge.observe(observation);
             }
+        }
+
+        let protected_payroll = payroll_by_company
+            .get(&company.id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_mul(u64::from(company.policy.payroll_reserve_days));
+        let free_cash = company
+            .account
+            .cash
+            .saturating_sub(protected_payroll)
+            .saturating_sub(company.account.wage_arrears)
+            .saturating_sub(company.account.tax_arrears);
+        let mut pending_purchases = committed_purchases.get(&company.id).copied().unwrap_or(0);
+        let mut available_cash = free_cash.saturating_sub(pending_purchases);
+        // A completed trial owns real stock until somebody buys it. Review its
+        // local consignment daily and require fresh profitable terms before
+        // spending on another shipment. Manual timetables are never touched.
+        for entity in route_entities_by_company
+            .get(&company.id)
+            .into_iter()
+            .flatten()
+        {
+            let Ok((_, _, mut route, schedule, history, autonomous)) = routes.get_mut(*entity)
+            else {
+                continue;
+            };
+            let Some(mut autonomous) = autonomous else {
+                continue;
+            };
+            if route.company != company.id
+                || !route.autonomous_management
+                || !company.policy.autopilot
+                || autonomous.last_review_day == day
+            {
+                continue;
+            }
+            autonomous.last_review_day = day;
+            let Some(warehouse) = warehouse_by_id.get(&route.warehouse) else {
+                continue;
+            };
+            let (Some(origin), Some(destination)) = (
+                market_by_settlement.get(&route.origin),
+                market_by_settlement.get(&route.destination),
+            ) else {
+                continue;
+            };
+            let distance = Vec2::new(
+                destination.position.x - origin.position.x,
+                destination.position.z - origin.position.z,
+            )
+            .length();
+            let consignment_key = (route.warehouse, route.destination, route.good);
+            let already_reviewed = history.trips().iter().any(|trip| trip.units > 0)
+                && !reviewed_consignments.insert(consignment_key);
+            let unsold = halls
+                .get_mut(destination.entity)
+                .is_ok_and(|(_, _, _, mut market, _)| {
+                    review_merchant_consignment(
+                        &route,
+                        &mut autonomous,
+                        history,
+                        &mut market,
+                        warehouse.daily_wage,
+                        clock.cycle_duration(),
+                        distance,
+                        day,
+                        already_reviewed || manual_listing_keys.contains(&consignment_key),
+                    )
+                });
+            // An embodied worker's cargo and price commitment remain intact.
+            if route.assigned_caravaner.is_some() {
+                continue;
+            }
+            let was_queued = !matches!(
+                route.status,
+                TradeRouteStatus::Idle | TradeRouteStatus::Mothballed | TradeRouteStatus::Returning
+            );
+            if !matches!(
+                route.status,
+                TradeRouteStatus::Idle | TradeRouteStatus::Mothballed
+            ) {
+                let active = active_routes_per_company.entry(company.id).or_default();
+                *active = active.saturating_sub(1);
+                let active = active_routes_by_warehouse
+                    .entry(route.warehouse)
+                    .or_default();
+                *active = active.saturating_sub(1);
+            }
+            if was_queued {
+                let incoming = incoming.entry((route.destination, route.good)).or_default();
+                *incoming = incoming.saturating_sub(route.cargo_target);
+                if schedule
+                    .stops()
+                    .get(usize::from(route.current_stop))
+                    .is_some_and(|stop| stop.action == TradeRouteStopAction::Buy)
+                {
+                    pending_purchases = pending_purchases.saturating_sub(
+                        route
+                            .maximum_purchase_price
+                            .saturating_mul(u64::from(route.cargo_target)),
+                    );
+                    available_cash = free_cash.saturating_sub(pending_purchases);
+                }
+            }
+            route.status = TradeRouteStatus::Mothballed;
+            route.automatic = false;
+            if unsold
+                || company.account.wage_arrears > 0
+                || company.account.tax_arrears > 0
+                || !land_access.allows(route.origin, route.destination)
+                || active_routes_per_company
+                    .get(&company.id)
+                    .copied()
+                    .unwrap_or(0)
+                    >= porter_count.get(&company.id).copied().unwrap_or(0)
+                || active_routes_by_warehouse
+                    .get(&route.warehouse)
+                    .copied()
+                    .unwrap_or(0)
+                    >= porter_count_by_warehouse
+                        .get(&(company.id, route.warehouse))
+                        .copied()
+                        .unwrap_or(0)
+            {
+                continue;
+            }
+            if autonomous.disappointing_reviews >= 2 {
+                let stopped = *autonomous.mothballed_day.get_or_insert(day);
+                if day.saturating_sub(stopped) < AUTONOMOUS_ROUTE_RETRY_DAYS {
+                    continue;
+                }
+            }
+            let find_observation = |settlement| {
+                knowledge
+                    .observations
+                    .iter()
+                    .find(|observation| {
+                        observation.settlement == settlement && observation.good == route.good
+                    })
+                    .copied()
+            };
+            let (Some(mut source), Some(destination_observation)) = (
+                find_observation(route.origin),
+                find_observation(route.destination),
+            ) else {
+                continue;
+            };
+            let loads_owned = schedule
+                .stops()
+                .first()
+                .is_some_and(|stop| stop.action == TradeRouteStopAction::Load);
+            if loads_owned {
+                source.listed_units = warehouse.stock[route.good.index()];
+            } else {
+                source.listed_units = source.listed_units.min(
+                    (available_cash
+                        / uncertain_purchase_limit(source.asking_price, source.confidence).max(1))
+                    .min(u64::from(u32::MAX)) as u32,
+                );
+            }
+            let committed = incoming
+                .get(&(route.destination, route.good))
+                .copied()
+                .unwrap_or(0);
+            let Some(opportunity) = evaluate_merchant_opportunity(
+                source,
+                destination_observation,
+                origin.position,
+                destination.position,
+                company.policy.strategy,
+                warehouse.daily_wage,
+                committed,
+            ) else {
+                continue;
+            };
+            route.cargo_target = opportunity.cargo_units;
+            route.maximum_purchase_price = opportunity.maximum_purchase_price;
+            route.minimum_destination_price = opportunity.minimum_sale_price;
+            route.expected_trip_profit = opportunity.expected_profit;
+            route.decision_confidence = opportunity.confidence;
+            route.status = TradeRouteStatus::WaitingForPorter;
+            autonomous.expected_trip_profit = opportunity.expected_profit;
+            autonomous.confidence = opportunity.confidence;
+            autonomous.minimum_cargo_net = opportunity.minimum_cargo_net;
+            autonomous.freight_cost = opportunity.freight_cost;
+            autonomous.minimum_return_bps = opportunity.minimum_return_bps;
+            autonomous.destination_fee_bps = opportunity.destination_fee_bps;
+            if autonomous.disappointing_reviews >= 2 {
+                // This branch was gated by a completed cooldown above. A
+                // normal requeue must preserve the consecutive failure count.
+                autonomous.disappointing_reviews = 0;
+            }
+            autonomous.mothballed_day = None;
+            *active_routes_per_company.entry(company.id).or_default() += 1;
+            *active_routes_by_warehouse
+                .entry(route.warehouse)
+                .or_default() += 1;
+            if !loads_owned {
+                pending_purchases = pending_purchases.saturating_add(
+                    opportunity
+                        .maximum_purchase_price
+                        .saturating_mul(u64::from(opportunity.cargo_units)),
+                );
+                available_cash = free_cash.saturating_sub(pending_purchases);
+            }
+            let incoming = incoming.entry((route.destination, route.good)).or_default();
+            *incoming = incoming.saturating_add(opportunity.cargo_units);
         }
 
         let review_due = (day + (company.id.0 % 3) as u32).is_multiple_of(3);
@@ -1030,17 +1142,6 @@ pub fn review_autonomous_merchant_trade(
             }
             continue;
         }
-        let protected_payroll = payroll_by_company
-            .get(&company.id)
-            .copied()
-            .unwrap_or(0)
-            .saturating_mul(u64::from(company.policy.payroll_reserve_days));
-        let available_cash = company
-            .account
-            .cash
-            .saturating_sub(protected_payroll)
-            .saturating_sub(company.account.wage_arrears)
-            .saturating_sub(company.account.tax_arrears);
         // Payroll for the warehouse porter is already protected above for the
         // company's chosen reserve horizon. Requiring one additional full
         // wage here double-counted labour and permanently blocked modest firms
@@ -1071,7 +1172,10 @@ pub fn review_autonomous_merchant_trade(
                     company.account.cash,
                     available_cash,
                     route_capacity,
-                    active_routes_per_company.get(&company.id).copied().unwrap_or(0),
+                    active_routes_per_company
+                        .get(&company.id)
+                        .copied()
+                        .unwrap_or(0),
                     routes_per_company.get(&company.id).copied().unwrap_or(0),
                 );
             }
@@ -1080,10 +1184,17 @@ pub fn review_autonomous_merchant_trade(
 
         let attention_budget = 2 + usize::from(master_attributes.intelligence() / 25);
         let mut candidates = Vec::new();
-        for warehouse in warehouse_snapshots
-            .iter()
-            .filter(|warehouse| warehouse.company == company.id)
-        {
+        for warehouse in warehouse_snapshots.iter().filter(|warehouse| {
+            warehouse.company == company.id
+                && active_routes_by_warehouse
+                    .get(&warehouse.id)
+                    .copied()
+                    .unwrap_or(0)
+                    < porter_count_by_warehouse
+                        .get(&(company.id, warehouse.id))
+                        .copied()
+                        .unwrap_or(0)
+        }) {
             let Some(source_market) = market_by_settlement.get(&warehouse.settlement) else {
                 continue;
             };
@@ -1109,6 +1220,9 @@ pub fn review_autonomous_merchant_trade(
                                 <= TRADE_INTEL_MAX_AGE_DAYS
                     })
                 {
+                    if unsold_consignments.contains(&(warehouse.id, destination.settlement, good)) {
+                        continue;
+                    }
                     if existing_lanes.contains(&(
                         company.id,
                         warehouse.settlement,
@@ -1132,6 +1246,7 @@ pub fn review_autonomous_merchant_trade(
                         source_market.position,
                         destination_market.position,
                         company.policy.strategy,
+                        warehouse.daily_wage,
                         committed,
                     ) {
                         let notice = mixed_trade_seed(
@@ -1151,6 +1266,9 @@ pub fn review_autonomous_merchant_trade(
                 // in the source town made trade with small producer towns—or
                 // a zero-population test market—impossible by construction.
                 let destination = source_market.observations[good.index()];
+                if unsold_consignments.contains(&(warehouse.id, warehouse.settlement, good)) {
+                    continue;
+                }
                 for mut source in knowledge
                     .observations
                     .iter()
@@ -1194,6 +1312,7 @@ pub fn review_autonomous_merchant_trade(
                         remote_market.position,
                         source_market.position,
                         company.policy.strategy,
+                        warehouse.daily_wage,
                         committed,
                     ) {
                         let notice = mixed_trade_seed(
@@ -1305,11 +1424,17 @@ pub fn review_autonomous_merchant_trade(
                 disappointing_reviews: 0,
                 expected_trip_profit: opportunity.expected_profit,
                 confidence: opportunity.confidence,
+                unsold_since_day: None,
+                minimum_cargo_net: opportunity.minimum_cargo_net,
+                freight_cost: opportunity.freight_cost,
+                minimum_return_bps: opportunity.minimum_return_bps,
+                destination_fee_bps: opportunity.destination_fee_bps,
             },
             Replicate::to_clients(NetworkTarget::All),
         ));
         *routes_per_company.entry(company.id).or_default() += 1;
         *active_routes_per_company.entry(company.id).or_default() += 1;
+        *active_routes_by_warehouse.entry(warehouse.id).or_default() += 1;
         *incoming
             .entry((opportunity.destination, opportunity.good))
             .or_default() += opportunity.cargo_units;
@@ -1351,6 +1476,13 @@ pub fn post_civic_import_contracts(
         &mut Settlement,
         &GoodsInventory,
         &MootMarket,
+        &PlayerPosition,
+    )>,
+    warehouses: Query<(
+        &shared::components::BuildingOf,
+        &SettlementBuilding,
+        Option<&BusinessCondition>,
+        Option<&BusinessWagePolicy>,
     )>,
     contracts: Query<&CivicTradeContract>,
 ) {
@@ -1358,13 +1490,23 @@ pub fn post_civic_import_contracts(
     let land_access = LandTradeAccess::from_tags(land_networks.iter());
     let active: HashSet<_> = contracts
         .iter()
-        .filter(|contract| contract.status.is_active())
+        .filter(|contract| civic_review::blocks_new_tender(contract, day))
         .map(|contract| (contract.destination, contract.good))
         .collect();
+    if !projects
+        .iter()
+        .any(|(project, building_of, inventory, site)| {
+            !site.raising
+                && !active.contains(&(building_of.0, project.material))
+                && project.material_required > inventory.amount(project.material)
+        })
+    {
+        return;
+    }
 
     let source_offers: Vec<_> = halls
         .iter()
-        .flat_map(|(settlement, _, inventory, market)| {
+        .flat_map(|(settlement, _, inventory, market, _)| {
             let regional = market.supports_regional_trade();
             market.listings().iter().filter_map(move |listing| {
                 let MarketSeller::Business(_) = listing.seller else {
@@ -1381,12 +1523,30 @@ pub fn post_civic_import_contracts(
             })
         })
         .collect();
-    let settlement_ids: HashSet<_> = halls
+    let hall_snapshots: HashMap<_, _> = halls
         .iter()
-        .filter_map(|(settlement, _, _, market)| {
-            market.supports_regional_trade().then_some(*settlement)
+        .filter_map(|(settlement, _, _, market, position)| {
+            market.supports_regional_trade().then_some((
+                *settlement,
+                HallSnapshot {
+                    position: position.0,
+                    rotation: 0.0,
+                },
+            ))
         })
         .collect();
+    let mut carrier_wages = HashMap::<SettlementId, u64>::new();
+    for (settlement, building, condition, wage) in warehouses.iter() {
+        if building.kind == SettlementBuildingKind::StorageHall
+            && condition.is_none_or(|condition| condition.state.can_operate())
+        {
+            let wage = wage.map_or(FOUNDING_DAILY_WAGE, |wage| wage.daily_wage);
+            carrier_wages
+                .entry(settlement.0)
+                .and_modify(|current| *current = (*current).min(wage))
+                .or_insert(wage);
+        }
+    }
 
     for (project, building_of, inventory, site) in projects.iter() {
         if site.raising || active.contains(&(building_of.0, project.material)) {
@@ -1398,9 +1558,10 @@ pub fn post_civic_import_contracts(
         if remaining == 0 {
             continue;
         }
-        let Some((_, mut destination, destination_store, destination_market)) = halls
-            .iter_mut()
-            .find(|(settlement, ..)| **settlement == building_of.0)
+        let Some((_, mut destination, destination_store, destination_market, destination_at)) =
+            halls
+                .iter_mut()
+                .find(|(settlement, ..)| **settlement == building_of.0)
         else {
             continue;
         };
@@ -1422,6 +1583,20 @@ pub fn post_civic_import_contracts(
             continue;
         }
 
+        let journey_allowances = civic_review::journey_allowances(
+            HallSnapshot {
+                position: destination_at.0,
+                rotation: 0.0,
+            },
+            &hall_snapshots,
+        );
+        let carrier_cost = |origin: SettlementId| {
+            carrier_wages
+                .get(&origin)
+                .copied()
+                .unwrap_or(FOUNDING_DAILY_WAGE)
+                .saturating_add(journey_allowances.get(&origin).copied().unwrap_or(0))
+        };
         let source_offer = source_offers
             .iter()
             .copied()
@@ -1430,53 +1605,67 @@ pub fn post_civic_import_contracts(
                     && *good == project.material
                     && land_access.allows(*origin, building_of.0)
             })
-            .min_by_key(|(origin, seller, _, price, _)| (*price, *origin, *seller));
+            .filter_map(|(origin, seller, _, price, units)| {
+                civic_review::affordable_quote(
+                    project.material,
+                    import_units.min(units),
+                    price,
+                    destination.treasury,
+                    carrier_cost(origin),
+                )
+                .map(|quote| (origin, seller, quote))
+            })
+            .min_by(civic_review::quote_order);
         // An unbound tender exists to invite production in *another*
         // settlement. With no possible remote origin it would only remove the
         // buyer's money from circulation and suppress repeated local purchase
         // attempts forever. Keep the treasury liquid and let the local market
         // publish its ordinary unmet-demand signal instead.
         if source_offer.is_none()
-            && !settlement_ids.iter().any(|settlement| {
+            && !hall_snapshots.keys().any(|settlement| {
                 *settlement != building_of.0 && land_access.allows(*settlement, building_of.0)
             })
         {
             continue;
         }
-        let maximum_unit_price = source_offer
-            .map(|(_, _, _, price, _)| price)
-            .unwrap_or_else(|| project.material.base_price());
-        let offered_units = source_offer
-            .map(|(_, _, _, _, units)| units)
-            .unwrap_or(import_units);
-        let carry_units =
-            (shared::economy::capacity::PORTER / project.material.bulk_per_unit()).max(1);
-        let candidate_units = import_units.min(offered_units).min(carry_units);
-        let Some((units, delivery_fee_per_bulk, reserved_cash)) =
-            (1..=candidate_units).rev().find_map(|units| {
-                let delivery_fee_per_bulk =
-                    contract_delivery_pennies_per_bulk(project.material, units);
-                let per_unit = maximum_unit_price.saturating_add(
-                    delivery_fee_per_bulk
-                        .saturating_mul(u64::from(project.material.bulk_per_unit())),
-                );
-                let reserved_cash = per_unit.saturating_mul(u64::from(units));
-                (reserved_cash <= destination.treasury).then_some((
-                    units,
-                    delivery_fee_per_bulk,
-                    reserved_cash,
-                ))
-            })
-        else {
+        let Some(quote) = source_offer.map(|(_, _, quote)| quote).or_else(|| {
+            hall_snapshots
+                .keys()
+                .copied()
+                .filter(|origin| {
+                    *origin != building_of.0 && land_access.allows(*origin, building_of.0)
+                })
+                .filter_map(|origin| {
+                    civic_review::affordable_quote(
+                        project.material,
+                        import_units,
+                        project.material.base_price(),
+                        destination.treasury,
+                        carrier_cost(origin),
+                    )
+                })
+                .min_by_key(|quote| {
+                    (
+                        quote.escrow_cash / u64::from(quote.units),
+                        std::cmp::Reverse(quote.units),
+                    )
+                })
+        }) else {
             continue;
         };
+        let civic_review::CivicQuote {
+            units,
+            maximum_unit_price,
+            delivery_fee_per_bulk,
+            escrow_cash: reserved_cash,
+        } = quote;
         destination.treasury -= reserved_cash;
         commands.spawn((
             CivicTradeContract {
                 origin: source_offer.map(|(origin, ..)| origin),
                 destination: building_of.0,
                 good: project.material,
-                source_seller: source_offer.map(|(_, seller, ..)| seller),
+                source_seller: source_offer.map(|(_, seller, _)| seller),
                 requested_units: units,
                 delivered_units: 0,
                 maximum_unit_price,
@@ -1523,7 +1712,7 @@ pub fn manage_company_trade_routes(
     world_time: Query<&WorldTime>,
     mut next_review_world_seconds: Local<f64>,
     land_networks: Query<(&SettlementId, &FoundingLandNetwork), With<Settlement>>,
-    halls: Query<
+    mut halls: Query<
         (
             Entity,
             &shared::components::SettlementId,
@@ -1531,6 +1720,7 @@ pub fn manage_company_trade_routes(
             Option<&PlayerRotation>,
             &GoodsInventory,
             &MootMarket,
+            &mut Settlement,
         ),
         With<Settlement>,
     >,
@@ -1543,14 +1733,18 @@ pub fn manage_company_trade_routes(
         &PlayerPosition,
         &PlayerRotation,
         Option<&BusinessCondition>,
+        Option<&BusinessWagePolicy>,
     )>,
     mut contracts: Query<(Entity, &TradeContractId, &mut CivicTradeContract)>,
-    mut routes: Query<(
-        Entity,
-        &TradeRouteId,
-        &mut CompanyTradeRoute,
-        Option<&TradeRouteSchedule>,
-    )>,
+    mut routes: Query<
+        (
+            Entity,
+            &TradeRouteId,
+            &mut CompanyTradeRoute,
+            Option<&TradeRouteSchedule>,
+        ),
+        Without<MaritimeTradeRoute>,
+    >,
     porters: Query<
         (
             Entity,
@@ -1564,11 +1758,10 @@ pub fn manage_company_trade_routes(
             Option<&RoadBuilderRoutine>,
             Option<&MootQueueTicket>,
             Option<&MootMealRoutine>,
-            Option<&strategic::StrategicPerson>,
-            Option<&strategic::StrategicTravel>,
         ),
         With<CharacterKind>,
     >,
+    dispatch_busy: Query<(), super::worker_activity::TransportStartBlocked>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
@@ -1582,7 +1775,7 @@ pub fn manage_company_trade_routes(
     let land_access = LandTradeAccess::from_tags(land_networks.iter());
     let hall_snapshots: HashMap<_, _> = halls
         .iter()
-        .map(|(_entity, id, position, rotation, _, _)| {
+        .map(|(_entity, id, position, rotation, ..)| {
             (
                 *id,
                 HallSnapshot {
@@ -1594,11 +1787,11 @@ pub fn manage_company_trade_routes(
         .collect();
     let regional_markets: HashSet<_> = halls
         .iter()
-        .filter_map(|(_, id, _, _, _, market)| market.supports_regional_trade().then_some(*id))
+        .filter_map(|(_, id, _, _, _, market, _)| market.supports_regional_trade().then_some(*id))
         .collect();
     let source_offers: Vec<_> = halls
         .iter()
-        .flat_map(|(_, settlement, _, _, inventory, market)| {
+        .flat_map(|(_, settlement, _, _, inventory, market, _)| {
             let regional = market.supports_regional_trade();
             market.listings().iter().filter_map(move |listing| {
                 let MarketSeller::Business(_) = listing.seller else {
@@ -1619,7 +1812,7 @@ pub fn manage_company_trade_routes(
         .iter()
         .filter(|(_, _, _, _, building, ..)| building.kind == SettlementBuildingKind::StorageHall)
         .map(
-            |(_entity, id, building_of, company, _, position, rotation, condition)| {
+            |(_entity, id, building_of, company, _, position, rotation, condition, _)| {
                 WarehouseSnapshot {
                     id: *id,
                     settlement: building_of.0,
@@ -1631,6 +1824,31 @@ pub fn manage_company_trade_routes(
             },
         )
         .collect();
+
+    let staffed_warehouses: HashSet<_> = porters
+        .iter()
+        .map(|(_, _, porter, ..)| (porter.company, porter.storage_hall))
+        .collect();
+    let warehouse_wages: HashMap<_, _> = warehouses
+        .iter()
+        .map(|(_, id, _, _, _, _, _, _, wage)| {
+            (
+                *id,
+                wage.map_or(FOUNDING_DAILY_WAGE, |wage| wage.daily_wage),
+            )
+        })
+        .collect();
+    let mut carrier_wages = HashMap::<SettlementId, u64>::new();
+    for warehouse in &warehouse_snapshots {
+        if warehouse.can_operate && staffed_warehouses.contains(&(warehouse.company, warehouse.id))
+        {
+            let wage = warehouse_wages[&warehouse.id];
+            carrier_wages
+                .entry(warehouse.settlement)
+                .and_modify(|current| *current = (*current).min(wage))
+                .or_insert(wage);
+        }
+    }
 
     // Repair assignments whose worker disappeared or lost the job. Cargo is
     // protected by the worker's carried inventory while alive; before pickup,
@@ -1693,68 +1911,79 @@ pub fn manage_company_trade_routes(
         // A missing warehouse or employee can change on a later day without
         // making every Activity tick rescan all companies in the meantime.
         contract.last_attempt_day = day;
-        if contract.origin.is_none() || contract.source_seller.is_none() {
-            let Some((origin, seller, _, _, _)) = source_offers
-                .iter()
-                .copied()
-                .filter(|(origin, _, good, price, units)| {
-                    *origin != contract.destination
-                        && land_access.allows(*origin, contract.destination)
-                        && *good == contract.good
-                        && *price <= contract.maximum_unit_price
-                        && *units >= contract.remaining_units()
-                })
-                .min_by_key(|(origin, seller, _, price, _)| (*price, *origin, *seller))
-            else {
-                continue;
-            };
-            contract.origin = Some(origin);
-            contract.source_seller = Some(seller);
-            info!(
-                "Civic trade contract #{} bound its {} tender to seller {:?} in settlement #{}",
-                contract_id.0,
-                contract.good.label(),
-                seller,
-                origin.0,
-            );
-        }
-        let Some(origin_id) = contract.origin else {
+        let Some((_, _, _, _, _, _, mut buyer)) = halls
+            .iter_mut()
+            .find(|(_, id, ..)| **id == contract.destination)
+        else {
+            // Preserve the liability until the receiving treasury exists.
             continue;
         };
-        if !land_access.allows(origin_id, contract.destination) {
+        if civic_review::expire_open_tender(&mut contract, &mut buyer.treasury, day) {
             continue;
         }
-        if !regional_markets.contains(&origin_id)
-            || !regional_markets.contains(&contract.destination)
-        {
+        if !regional_markets.contains(&contract.destination) {
             continue;
         }
-        let (Some(origin), Some(destination)) = (
-            hall_snapshots.get(&origin_id),
-            hall_snapshots.get(&contract.destination),
-        ) else {
+        let Some(destination) = hall_snapshots.get(&contract.destination).copied() else {
             continue;
         };
+        let journey_allowances = civic_review::journey_allowances(destination, &hall_snapshots);
+        let available_cash = buyer.treasury.saturating_add(contract.escrow_cash);
+        // Offers may change before collection. Once per day compare the
+        // current complete landed quotes, including the ordinary employee's
+        // actual wage, and move only the additional affordable reservation.
+        let Some((origin_id, seller, quote)) = source_offers
+            .iter()
+            .copied()
+            .filter(|(origin, _, good, _, _)| {
+                *origin != contract.destination
+                    && land_access.allows(*origin, contract.destination)
+                    && *good == contract.good
+            })
+            .filter_map(|(origin, seller, _, price, units)| {
+                let journey = journey_allowances.get(&origin)?;
+                let wage = carrier_wages
+                    .get(&origin)
+                    .copied()
+                    .unwrap_or(FOUNDING_DAILY_WAGE);
+                civic_review::affordable_quote(
+                    contract.good,
+                    contract.remaining_units().min(units),
+                    price,
+                    available_cash,
+                    wage.saturating_add(*journey),
+                )
+                .map(|quote| (origin, seller, quote))
+            })
+            .min_by(|a, b| {
+                // A quote with real transport can fulfil the public need
+                // now. An unstaffed source remains a production tender only
+                // while no affordable staffed alternative exists.
+                carrier_wages
+                    .contains_key(&b.0)
+                    .cmp(&carrier_wages.contains_key(&a.0))
+                    .then_with(|| civic_review::quote_order(a, b))
+            })
+        else {
+            continue;
+        };
+        if !civic_review::apply_quote(&mut contract, &mut buyer.treasury, quote) {
+            continue;
+        }
+        contract.origin = Some(origin_id);
+        contract.source_seller = Some(seller);
         let fee = u64::from(contract.remaining_units())
             .saturating_mul(u64::from(contract.good.bulk_per_unit()))
             .saturating_mul(contract.delivery_fee_per_bulk);
-        let distance = Vec2::new(
-            destination.position.x - origin.position.x,
-            destination.position.z - origin.position.z,
-        )
-        .length();
-        let journey_allowance =
-            ((distance / 100.0).ceil() as u64).saturating_mul(JOURNEY_PENNIES_PER_100_METRES);
+        let journey_allowance = journey_allowances[&origin_id];
         let Some(warehouse) = warehouse_snapshots
             .iter()
             .copied()
             .filter(|warehouse| warehouse.can_operate && warehouse.settlement == origin_id)
+            .filter(|warehouse| staffed_warehouses.contains(&(warehouse.company, warehouse.id)))
             .filter(|warehouse| {
-                porters.iter().any(|(_, _, porter, ..)| {
-                    porter.company == warehouse.company && porter.storage_hall == warehouse.id
-                })
+                fee >= warehouse_wages[&warehouse.id].saturating_add(journey_allowance)
             })
-            .filter(|_| fee >= FOUNDING_DAILY_WAGE.saturating_add(journey_allowance))
             .min_by_key(|warehouse| (warehouse.company, warehouse.id))
         else {
             continue;
@@ -1834,7 +2063,7 @@ pub fn manage_company_trade_routes(
             .iter()
             .filter(
                 |(
-                    _,
+                    entity,
                     _,
                     porter,
                     inventory,
@@ -1845,10 +2074,9 @@ pub fn manage_company_trade_routes(
                     road,
                     queue,
                     meal,
-                    _,
-                    strategic_travel,
                 )| {
-                    porter.company == route.company
+                    !dispatch_busy.contains(*entity)
+                        && porter.company == route.company
                         && porter.storage_hall == route.warehouse
                         && inventory.is_empty()
                         && routine.is_none()
@@ -1858,7 +2086,6 @@ pub fn manage_company_trade_routes(
                         && road.is_none()
                         && queue.is_none()
                         && meal.is_none()
-                        && strategic_travel.is_none()
                 },
             )
             .min_by_key(|(_, person, ..)| **person);
@@ -1867,27 +2094,24 @@ pub fn manage_company_trade_routes(
         };
         route.assigned_caravaner = Some(*person);
         route.status = TradeRouteStatus::GoingToOrigin;
-        commands
-            .entity(porter_entity)
-            .remove::<strategic::StrategicPerson>()
-            .remove::<strategic::PendingStrategicDemotion>()
-            .insert((
-                TradeRouteRoutine {
-                    route: *route_id,
-                    mode: TradeRouteMode::ContractCarrier,
-                    phase: TradeRoutePhase::GoingToOrigin,
-                    stop_index: 0,
-                    stops_visited: 0,
-                    departed_day: day,
-                    departed_world_seconds: now,
-                    source_purchase_cost: 0,
-                    source_market_fees: 0,
-                    cargo_units: 0,
-                    consigned_value: 0,
-                    failed_approaches: 0,
-                },
-                MoveTarget(hall_entrance(origin)),
-            ));
+        commands.entity(porter_entity).insert((
+            TradeRouteRoutine {
+                route: *route_id,
+                mode: TradeRouteMode::ContractCarrier,
+                phase: TradeRoutePhase::GoingToOrigin,
+                stop_index: 0,
+                stops_visited: 0,
+                departed_day: day,
+                departed_world_seconds: now,
+                source_purchase_cost: 0,
+                source_market_fees: 0,
+                cargo_units: 0,
+                consigned_value: 0,
+                failed_approaches: 0,
+            },
+            MoveTarget(hall_entrance(origin)),
+            CharacterActivity::Idle,
+        ));
         info!(
             "Company #{} dispatched porter #{} on route #{} from settlement #{} to #{}",
             route.company.0, person.0, route_id.0, route.origin.0, route.destination.0,
@@ -1950,7 +2174,7 @@ pub fn manage_company_trade_routes(
             .iter()
             .filter(
                 |(
-                    _,
+                    entity,
                     _,
                     porter,
                     inventory,
@@ -1961,10 +2185,9 @@ pub fn manage_company_trade_routes(
                     road,
                     queue,
                     meal,
-                    _,
-                    strategic_travel,
                 )| {
-                    porter.company == route.company
+                    !dispatch_busy.contains(*entity)
+                        && porter.company == route.company
                         && porter.storage_hall == route.warehouse
                         && inventory.is_empty()
                         && routine.is_none()
@@ -1974,7 +2197,6 @@ pub fn manage_company_trade_routes(
                         && road.is_none()
                         && queue.is_none()
                         && meal.is_none()
-                        && strategic_travel.is_none()
                 },
             )
             .min_by_key(|(_, person, ..)| **person);
@@ -1984,27 +2206,24 @@ pub fn manage_company_trade_routes(
         route.assigned_caravaner = Some(*person);
         route.current_stop = 0;
         route.status = TradeRouteStatus::GoingToOrigin;
-        commands
-            .entity(porter_entity)
-            .remove::<strategic::StrategicPerson>()
-            .remove::<strategic::PendingStrategicDemotion>()
-            .insert((
-                TradeRouteRoutine {
-                    route: *route_id,
-                    mode: TradeRouteMode::Merchant,
-                    phase: TradeRoutePhase::MerchantTravellingToStop,
-                    stop_index: 0,
-                    stops_visited: 0,
-                    departed_day: day,
-                    departed_world_seconds: now,
-                    source_purchase_cost: 0,
-                    source_market_fees: 0,
-                    cargo_units: 0,
-                    consigned_value: 0,
-                    failed_approaches: 0,
-                },
-                MoveTarget(first_target),
-            ));
+        commands.entity(porter_entity).insert((
+            TradeRouteRoutine {
+                route: *route_id,
+                mode: TradeRouteMode::Merchant,
+                phase: TradeRoutePhase::MerchantTravellingToStop,
+                stop_index: 0,
+                stops_visited: 0,
+                departed_day: day,
+                departed_world_seconds: now,
+                source_purchase_cost: 0,
+                source_market_fees: 0,
+                cargo_units: 0,
+                consigned_value: 0,
+                failed_approaches: 0,
+            },
+            MoveTarget(first_target),
+            CharacterActivity::Idle,
+        ));
         info!(
             "Company #{} dispatched porter #{} on merchant route #{} with {} stops",
             route.company.0,
@@ -2063,11 +2282,14 @@ pub fn run_company_trade_routes(
     company_entities: Query<(Entity, &shared::components::CompanyId)>,
     mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
     mut contracts: Query<(&TradeContractId, &mut CivicTradeContract)>,
-    mut routes: Query<(
-        &TradeRouteId,
-        &mut CompanyTradeRoute,
-        &mut TradeRouteHistory,
-    )>,
+    mut routes: Query<
+        (
+            &TradeRouteId,
+            &mut CompanyTradeRoute,
+            &mut TradeRouteHistory,
+        ),
+        Without<MaritimeTradeRoute>,
+    >,
     mut porters: Query<
         (
             Entity,
@@ -2079,8 +2301,9 @@ pub fn run_company_trade_routes(
             &mut TradeRouteRoutine,
             Option<&NavigationRouteFailed>,
         ),
-        (With<CharacterKind>, Without<strategic::StrategicPerson>),
+        With<CharacterKind>,
     >,
+    mut road_traffic: Option<ResMut<crate::world::regional_roads::RegionalRoadTraffic>>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
@@ -2110,6 +2333,23 @@ pub fn run_company_trade_routes(
         };
         if routine.mode != TradeRouteMode::ContractCarrier {
             continue;
+        }
+
+        let traffic_leg = crate::world::regional_roads::TradeLeg {
+            route: routine.route,
+            cycle: route.completed_trips,
+            stop: 1,
+        };
+        if routine.phase == TradeRoutePhase::InTransit && carrier.amount(route.good) > 0 {
+            if let Some(traffic) = road_traffic.as_deref_mut() {
+                traffic.observe(
+                    traffic_leg,
+                    route.origin,
+                    route.destination,
+                    position.0.xz(),
+                    day,
+                );
+            }
         }
 
         // Returning is deliberately independent of the contract entity. A
@@ -2224,12 +2464,24 @@ pub fn run_company_trade_routes(
         };
 
         if route_failed.is_some() {
-            // The shared navigation retry system owns its exponential
-            // backoff and wakes this exact target after geometry changes or
-            // the retry deadline. Clearing all route state here made an
-            // impossible overland journey launch another full search every
-            // update. Keep the transaction and buyer-owned cargo intact while
-            // the caravan waits; future bridges/ships can make it reachable.
+            // Like merchant and return legs, public carriers may approach a
+            // shared doorway/worksite from another nearby loading bay. The
+            // attempt count is finite; once exhausted, shared navigation keeps
+            // its exponential backoff for the last goal. Neither retry path
+            // changes the transaction or the buyer-owned cargo on the porter.
+            if routine.phase == TradeRoutePhase::GoingToOrigin {
+                retry_trade_approach(&mut commands, porter_entity, &mut routine, |attempt| {
+                    hall_trade_approach(origin, attempt)
+                });
+            } else if routine.phase == TradeRoutePhase::InTransit {
+                let site = projects.iter().find_map(|(project, building_of, site, _)| {
+                    (building_of.0 == route.destination && project.material == route.good)
+                        .then_some(site)
+                });
+                retry_trade_approach(&mut commands, porter_entity, &mut routine, |attempt| {
+                    contract_delivery_approach(destination, site, attempt)
+                });
+            }
             continue;
         }
 
@@ -2251,6 +2503,7 @@ pub fn run_company_trade_routes(
                     contract.status = TradeContractStatus::Cancelled;
                     route.status = TradeRouteStatus::Returning;
                     routine.phase = TradeRoutePhase::ReturningToWarehouse;
+                    routine.failed_approaches = 0;
                     warn!(
                         "Company #{} cancelled contract route #{} because a public endpoint has no completed Marketplace",
                         route.company.0, routine.route.0,
@@ -2264,7 +2517,7 @@ pub fn run_company_trade_routes(
                     );
                     continue;
                 }
-                let target = hall_entrance(origin);
+                let target = hall_trade_approach(origin, routine.failed_approaches);
                 if ground_distance(position.0, target) > ROUTE_REACH {
                     ensure_move_target(&mut commands, porter_entity, move_target, target);
                     continue;
@@ -2313,6 +2566,7 @@ pub fn run_company_trade_routes(
                     contract.last_attempt_day = day;
                     route.status = TradeRouteStatus::Returning;
                     routine.phase = TradeRoutePhase::ReturningToWarehouse;
+                    routine.failed_approaches = 0;
                     ensure_move_target(
                         &mut commands,
                         porter_entity,
@@ -2346,22 +2600,23 @@ pub fn run_company_trade_routes(
                 route.status = TradeRouteStatus::InTransit;
                 route.current_stop = 1;
                 routine.phase = TradeRoutePhase::InTransit;
+                routine.failed_approaches = 0;
                 activity.set_if_neq(CharacterActivity::Idle);
-                let target = projects
-                    .iter_mut()
-                    .find(|(project, building_of, _, _)| {
-                        building_of.0 == route.destination && project.material == route.good
-                    })
-                    .map_or_else(|| hall_entrance(destination), |(_, _, site, _)| site.stand);
+                let site = projects.iter().find_map(|(project, building_of, site, _)| {
+                    (building_of.0 == route.destination && project.material == route.good)
+                        .then_some(site)
+                });
+                let target =
+                    contract_delivery_approach(destination, site, routine.failed_approaches);
                 ensure_move_target(&mut commands, porter_entity, move_target, target);
             }
             TradeRoutePhase::InTransit => {
-                let target = projects
-                    .iter_mut()
-                    .find(|(project, building_of, _, _)| {
-                        building_of.0 == route.destination && project.material == route.good
-                    })
-                    .map_or_else(|| hall_entrance(destination), |(_, _, site, _)| site.stand);
+                let site = projects.iter().find_map(|(project, building_of, site, _)| {
+                    (building_of.0 == route.destination && project.material == route.good)
+                        .then_some(site)
+                });
+                let target =
+                    contract_delivery_approach(destination, site, routine.failed_approaches);
                 if ground_distance(position.0, target) > ROUTE_REACH {
                     ensure_move_target(&mut commands, porter_entity, move_target, target);
                     continue;
@@ -2431,6 +2686,17 @@ pub fn run_company_trade_routes(
                 {
                     account.record_service_revenue(day, freight);
                 }
+                if let Some(traffic) = road_traffic.as_deref_mut() {
+                    traffic.delivered(
+                        traffic_leg,
+                        route.origin,
+                        route.destination,
+                        position.0.xz(),
+                        delivered,
+                        day,
+                    );
+                    traffic.finish_leg(traffic_leg);
+                }
                 route.completed_trips = route.completed_trips.saturating_add(1);
                 route.lifetime_units = route.lifetime_units.saturating_add(delivered);
                 route.lifetime_delivery_revenue =
@@ -2490,6 +2756,7 @@ pub fn run_merchant_trade_routes(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
     mut business_events: ResMut<BusinessEventQueue>,
+    intelligence: Option<Res<RegionalTradeIntelligence>>,
     mut halls: Query<
         (
             &shared::components::SettlementId,
@@ -2515,12 +2782,16 @@ pub fn run_merchant_trade_routes(
     >,
     company_entities: Query<(Entity, &shared::components::CompanyId)>,
     mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
-    mut routes: Query<(
-        &TradeRouteId,
-        &mut CompanyTradeRoute,
-        &TradeRouteSchedule,
-        &mut TradeRouteHistory,
-    )>,
+    mut routes: Query<
+        (
+            &TradeRouteId,
+            &mut CompanyTradeRoute,
+            &TradeRouteSchedule,
+            &mut TradeRouteHistory,
+            Option<&AutonomousMerchantRoute>,
+        ),
+        Without<MaritimeTradeRoute>,
+    >,
     mut porters: Query<
         (
             Entity,
@@ -2532,8 +2803,9 @@ pub fn run_merchant_trade_routes(
             &mut TradeRouteRoutine,
             Option<&NavigationRouteFailed>,
         ),
-        (With<CharacterKind>, Without<strategic::StrategicPerson>),
+        With<CharacterKind>,
     >,
+    mut road_traffic: Option<ResMut<crate::world::regional_roads::RegionalRoadTraffic>>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
@@ -2585,7 +2857,7 @@ pub fn run_merchant_trade_routes(
         if routine.mode != TradeRouteMode::Merchant {
             continue;
         }
-        let Some((_, mut route, schedule, mut history)) = routes
+        let Some((_, mut route, schedule, mut history, autonomous)) = routes
             .iter_mut()
             .find(|(route_id, ..)| **route_id == routine.route)
         else {
@@ -2698,6 +2970,20 @@ pub fn run_merchant_trade_routes(
             routine.phase = TradeRoutePhase::MerchantReturningToOrigin;
             continue;
         };
+        let traffic_leg = crate::world::regional_roads::TradeLeg {
+            route: routine.route,
+            cycle: route.completed_trips,
+            stop: routine.stop_index,
+        };
+        let traffic_from = usize::from(routine.stop_index)
+            .checked_sub(1)
+            .and_then(|index| schedule.stops().get(index))
+            .map(|previous| previous.settlement);
+        if carrier.amount(route.good) > 0 {
+            if let (Some(traffic), Some(from)) = (road_traffic.as_deref_mut(), traffic_from) {
+                traffic.observe(traffic_leg, from, stop.settlement, position.0.xz(), day);
+            }
+        }
         let stop_has_marketplace = halls.iter_mut().any(|(id, _, _, _, market)| {
             *id == stop.settlement && market.supports_regional_trade()
         });
@@ -2798,10 +3084,54 @@ pub fn run_merchant_trade_routes(
                         continue;
                     }
                     let requested = wanted.min(source_store.amount(route.good));
+                    let budget = if route.autonomous_management {
+                        company_account.cash.saturating_sub(
+                            intelligence
+                                .as_ref()
+                                .and_then(|intel| intel.protected_company_cash.get(&route.company))
+                                .copied()
+                                .unwrap_or(0),
+                        )
+                    } else {
+                        company_account.cash
+                    };
+                    if route.autonomous_management {
+                        let preview = source_market.preview_purchase(
+                            route.good,
+                            requested,
+                            budget,
+                            Some(route.maximum_purchase_price),
+                            Some(MarketSeller::Business(route.warehouse)),
+                        );
+                        if autonomous.is_none_or(|terms| {
+                            !viable_pickup(preview, route.minimum_destination_price, terms)
+                        }) {
+                            // A tiny or newly unaffordable load cannot repay the
+                            // fixed trip. Return with cash intact for review.
+                            route.completed_trips = route.completed_trips.saturating_add(1);
+                            history.record(TradeRouteTrip {
+                                departed_day: routine.departed_day,
+                                completed_day: day,
+                                units: 0,
+                                source_purchase_cost: 0,
+                                source_market_fees: 0,
+                                delivery_revenue: 0,
+                                consigned_value: 0,
+                                stops_visited: routine.stops_visited.saturating_add(1),
+                                travel_world_seconds: (now - routine.departed_world_seconds)
+                                    .max(0.0)
+                                    .min(f64::from(u32::MAX))
+                                    as u32,
+                            });
+                            route.status = TradeRouteStatus::Returning;
+                            routine.phase = TradeRoutePhase::MerchantReturningToOrigin;
+                            continue;
+                        }
+                    }
                     let purchase = source_market.purchase_for_resale(
                         route.good,
                         requested,
-                        company_account.cash,
+                        budget,
                         Some(route.maximum_purchase_price),
                         Some(MarketSeller::Business(route.warehouse)),
                     );
@@ -2847,6 +3177,17 @@ pub fn run_merchant_trade_routes(
                     };
                     let deposited = store.add(route.good, carried);
                     carrier.remove(route.good, deposited);
+                    if let (Some(traffic), Some(from)) = (road_traffic.as_deref_mut(), traffic_from)
+                    {
+                        traffic.delivered(
+                            traffic_leg,
+                            from,
+                            stop.settlement,
+                            position.0.xz(),
+                            deposited,
+                            day,
+                        );
+                    }
                     stop_complete = carrier.amount(route.good) == 0;
                 }
             }
@@ -2871,6 +3212,18 @@ pub fn run_merchant_trade_routes(
                     let deposited = destination_store.add(route.good, carried);
                     if deposited > 0 {
                         carrier.remove(route.good, deposited);
+                        if let (Some(traffic), Some(from)) =
+                            (road_traffic.as_deref_mut(), traffic_from)
+                        {
+                            traffic.delivered(
+                                traffic_leg,
+                                from,
+                                stop.settlement,
+                                position.0.xz(),
+                                deposited,
+                                day,
+                            );
+                        }
                         destination_market.consign(
                             MarketSeller::Business(route.warehouse),
                             route.good,
@@ -2898,6 +3251,9 @@ pub fn run_merchant_trade_routes(
             continue;
         }
 
+        if let Some(traffic) = road_traffic.as_deref_mut() {
+            traffic.finish_leg(traffic_leg);
+        }
         routine.stops_visited = routine.stops_visited.saturating_add(1);
         let next_index = usize::from(routine.stop_index).saturating_add(1);
         if next_index < schedule.stops().len() {
@@ -3037,6 +3393,8 @@ mod tests {
         funded_unmet: u32,
         confidence: u8,
     ) -> CompanyTradeObservation {
+        let mut funded_demand = shared::economy::FundedDemandCurve::default();
+        funded_demand.add(u64::from(funded_unmet), ask);
         CompanyTradeObservation {
             settlement,
             good,
@@ -3047,7 +3405,8 @@ mod tests {
             recent_units_sold: sold,
             recent_sale_price: ask,
             funded_unmet_units: funded_unmet,
-            target_stock: 24,
+            funded_demand,
+            substitute_demand: shared::economy::FundedDemandCurve::default(),
             market_fee_bps: 500,
         }
     }
@@ -3082,10 +3441,52 @@ mod tests {
         let mut market = regional_market(MootMarket::founding());
         let missed = market.purchase_recording_demand(Good::Meat, 8, 10_000, None, None);
         assert_eq!(missed.trade.units, 0);
+        market.consign(MarketSeller::Business(QUARRY), Good::Food, 8, 10);
+        assert_eq!(
+            market.purchase(Good::Food, 8, 80, None, None).trade.units,
+            8
+        );
 
         let bread = market_observation(DESTINATION, &market, Good::Bread, 4);
         assert_eq!(bread.funded_unmet_units, 2);
+        assert_eq!(bread.substitute_demand.total_units(), 8);
         assert_eq!(bread.recent_units_sold, 0);
+        assert_eq!(bread.recent_sale_price, 0);
+    }
+
+    #[test]
+    fn cheap_fish_sales_cannot_multiply_buyers_at_one_expensive_bread_sale_price() {
+        let mut market = regional_market(MootMarket::founding());
+        market.consign(MarketSeller::Business(QUARRY), Good::Bread, 1, 200);
+        market.consign(MarketSeller::Business(QUARRY), Good::Food, 400, 1);
+        assert_eq!(
+            market.purchase(Good::Bread, 1, 200, None, None).trade.units,
+            1
+        );
+        assert_eq!(
+            market
+                .purchase(Good::Food, 400, 400, None, None)
+                .trade
+                .units,
+            400
+        );
+
+        let bread = market_observation(DESTINATION, &market, Good::Bread, 4);
+        assert_eq!((bread.recent_units_sold, bread.recent_sale_price), (1, 200));
+        let source = observed_market(SOURCE, Good::Bread, 20, 100, 0, 0, 100);
+        assert!(
+            evaluate_merchant_opportunity(
+                source,
+                bread,
+                Vec3::ZERO,
+                Vec3::X * 40.0,
+                shared::economy::BusinessStrategy::Balanced,
+                FOUNDING_DAILY_WAGE,
+                0,
+            )
+            .is_none(),
+            "one historical Bread buyer cannot cover this trip's minimum profit; Fish volume must not invent 51 Bread buyers"
+        );
     }
 
     #[test]
@@ -3098,6 +3499,7 @@ mod tests {
             Vec3::ZERO,
             Vec3::new(40.0, 0.0, 0.0),
             shared::economy::BusinessStrategy::Balanced,
+            FOUNDING_DAILY_WAGE,
             0,
         )
         .expect("funded scarcity and a large price gap should justify one trial cart");
@@ -3116,6 +3518,7 @@ mod tests {
             Vec3::ZERO,
             Vec3::new(360.0, 0.0, 0.0),
             shared::economy::BusinessStrategy::Balanced,
+            FOUNDING_DAILY_WAGE,
             0,
         )
         .expect("the large margin should tolerate a one-penny rumor error");
@@ -3130,6 +3533,7 @@ mod tests {
             Vec3::ZERO,
             Vec3::new(360.0, 0.0, 0.0),
             shared::economy::BusinessStrategy::Balanced,
+            FOUNDING_DAILY_WAGE,
             0,
         )
         .expect("the exact quote remains profitable");
@@ -3140,15 +3544,18 @@ mod tests {
     fn hunger_without_funded_demand_is_not_guaranteed_merchant_revenue() {
         let source = observed_market(SOURCE, Good::Bread, 100, 20, 4, 0, 100);
         let destination = observed_market(DESTINATION, Good::Bread, 220, 0, 0, 0, 55);
-        assert!(evaluate_merchant_opportunity(
-            source,
-            destination,
-            Vec3::ZERO,
-            Vec3::new(40.0, 0.0, 0.0),
-            shared::economy::BusinessStrategy::Balanced,
-            0,
-        )
-        .is_none());
+        assert!(
+            evaluate_merchant_opportunity(
+                source,
+                destination,
+                Vec3::ZERO,
+                Vec3::new(40.0, 0.0, 0.0),
+                shared::economy::BusinessStrategy::Balanced,
+                FOUNDING_DAILY_WAGE,
+                0,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -3239,6 +3646,23 @@ mod tests {
             company,
             storage_hall: WAREHOUSE,
         });
+        // A richer-looking second depot cannot borrow the first depot's
+        // employee merely because both belong to the same company.
+        app.world_mut().spawn((
+            BuildingId(WAREHOUSE.0 + 1),
+            OperatedBy(company),
+            BuildingOf(DESTINATION),
+            SettlementBuilding {
+                kind: SettlementBuildingKind::StorageHall,
+                settlement: "Hungry Market".into(),
+                owner: Some("Merchant".into()),
+                quality: 1.0,
+                workers: vec![],
+            },
+            GoodsInventory::new(shared::economy::capacity::STORAGE_HALL),
+            BusinessWagePolicy::default(),
+            BusinessStaffingPolicy::new(0),
+        ));
         app.world_mut().spawn((
             CompanyTradeRoute {
                 company,
@@ -3286,9 +3710,26 @@ mod tests {
             }
         }
         app.update();
+        let advertised = app.world().resource::<RegionalMerchantDemand>();
+        assert_eq!(
+            advertised.units(SOURCE, Good::Bread) > 0,
+            expected,
+            "export permits must only see demand that a land route can actually reach"
+        );
+        assert_eq!(
+            advertised.bulk(DESTINATION) > 0,
+            expected,
+            "an unreachable import cannot justify local warehouse construction"
+        );
         if !expected {
-            assert_eq!(app.world_mut().query::<&CompanyTradeRoute>().iter(app.world()).count(), 1,
-                "the existing contract lane is preserved but no impossible merchant trial is created");
+            assert_eq!(
+                app.world_mut()
+                    .query::<&CompanyTradeRoute>()
+                    .iter(app.world())
+                    .count(),
+                1,
+                "the existing contract lane is preserved but no impossible merchant trial is created"
+            );
             assert_eq!(
                 app.world_mut()
                     .query::<&CompanyAccount>()
@@ -3298,18 +3739,20 @@ mod tests {
                 350,
                 "rejecting a separated market must not spend the company's cash"
             );
-            assert!(app
-                .world_mut()
-                .query::<&AutonomousMerchantRoute>()
-                .iter(app.world())
-                .next()
-                .is_none());
+            assert!(
+                app.world_mut()
+                    .query::<&AutonomousMerchantRoute>()
+                    .iter(app.world())
+                    .next()
+                    .is_none()
+            );
             return;
         }
 
-        let (_, route, schedule) = app
+        let (route_entity, _, route, schedule) = app
             .world_mut()
             .query::<(
+                Entity,
                 &AutonomousMerchantRoute,
                 &CompanyTradeRoute,
                 &TradeRouteSchedule,
@@ -3317,6 +3760,7 @@ mod tests {
             .single(app.world())
             .expect("one bounded autonomous food route should be founded");
         assert_eq!(route.company, company);
+        assert_eq!(route.warehouse, WAREHOUSE);
         assert_eq!(route.good, Good::Bread);
         assert_eq!(route.origin, SOURCE);
         assert_eq!(route.destination, DESTINATION);
@@ -3331,6 +3775,8 @@ mod tests {
         assert!(!route.automatic, "NPC trials must return for review");
         assert_eq!(schedule.stops()[0].action, TradeRouteStopAction::Buy);
         assert_eq!(schedule.stops()[1].action, TradeRouteStopAction::Sell);
+        let delivered_units = route.cargo_target;
+        let posted_price = route.minimum_destination_price;
         assert_eq!(
             app.world_mut()
                 .query::<&CompanyTradeRoute>()
@@ -3338,6 +3784,95 @@ mod tests {
                 .count(),
             2,
             "the reusable idle contract lane must not consume the company's only porter slot"
+        );
+        // A delivered but unsold trial cannot silently buy a second cart.
+        // Its local consignment is marked down by the daily merchant review.
+        {
+            let mut route = app
+                .world_mut()
+                .get_mut::<CompanyTradeRoute>(route_entity)
+                .unwrap();
+            route.completed_trips = 1;
+            route.status = TradeRouteStatus::Idle;
+        }
+        app.world_mut()
+            .get_mut::<TradeRouteHistory>(route_entity)
+            .unwrap()
+            .record(TradeRouteTrip {
+                departed_day: 0,
+                completed_day: 0,
+                units: delivered_units,
+                source_purchase_cost: 10 * u64::from(delivered_units),
+                source_market_fees: 0,
+                delivery_revenue: 0,
+                consigned_value: posted_price * u64::from(delivered_units),
+                stops_visited: 2,
+                travel_world_seconds: 20,
+            });
+        app.world_mut()
+            .get_mut::<MootMarket>(destination_hall)
+            .unwrap()
+            .consign(
+                MarketSeller::Business(WAREHOUSE),
+                Good::Bread,
+                delivered_units,
+                posted_price,
+            );
+        app.world_mut()
+            .get_mut::<GoodsInventory>(destination_hall)
+            .unwrap()
+            .add(Good::Bread, delivered_units);
+        let clock_entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorldTime>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<WorldTime>(clock_entity)
+            .unwrap()
+            .day = 3;
+        app.update();
+        let route = app.world().get::<CompanyTradeRoute>(route_entity).unwrap();
+        assert_eq!(route.status, TradeRouteStatus::Mothballed);
+        let marked_down = app
+            .world()
+            .get::<MootMarket>(destination_hall)
+            .unwrap()
+            .suggested_price(Good::Bread);
+        assert!(marked_down < posted_price);
+        assert_eq!(
+            app.world_mut()
+                .query::<&CompanyAccount>()
+                .single(app.world())
+                .unwrap()
+                .cash,
+            350
+        );
+
+        // Taking explicit control disables both repricing and route changes.
+        {
+            let mut route = app
+                .world_mut()
+                .get_mut::<CompanyTradeRoute>(route_entity)
+                .unwrap();
+            route.autonomous_management = false;
+            route.minimum_destination_price = 777;
+            route.status = TradeRouteStatus::Idle;
+        }
+        app.world_mut()
+            .get_mut::<WorldTime>(clock_entity)
+            .unwrap()
+            .day = 6;
+        app.update();
+        let route = app.world().get::<CompanyTradeRoute>(route_entity).unwrap();
+        assert_eq!(route.status, TradeRouteStatus::Idle);
+        assert_eq!(route.minimum_destination_price, 777);
+        assert_eq!(
+            app.world()
+                .get::<MootMarket>(destination_hall)
+                .unwrap()
+                .suggested_price(Good::Bread),
+            marked_down
         );
     }
 
@@ -3464,12 +3999,13 @@ mod tests {
                 GoodsInventory::new(8 * Good::Stone.bulk_per_unit()),
             ));
             app.update();
-            assert!(app
-                .world_mut()
-                .query::<&CivicTradeContract>()
-                .iter(app.world())
-                .next()
-                .is_none());
+            assert!(
+                app.world_mut()
+                    .query::<&CivicTradeContract>()
+                    .iter(app.world())
+                    .next()
+                    .is_none()
+            );
             assert_eq!(
                 app.world().get::<Settlement>(destination).unwrap().treasury,
                 10_000
@@ -3758,17 +4294,21 @@ mod tests {
             PlayerPosition(Vec3::new(-12.0, 0.0, 0.0)),
             PlayerRotation(0.0),
         ));
-        app.world_mut().spawn((
-            CharacterKind::Villager,
-            PORTER,
-            CompanyPorter {
-                settlement: source_hall,
-                settlement_id: SOURCE,
-                company: CARRIER_COMPANY,
-                storage_hall: WAREHOUSE,
-            },
-            GoodsInventory::new(shared::economy::capacity::PORTER),
-        ));
+        let porter = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PORTER,
+                CompanyPorter {
+                    settlement: source_hall,
+                    settlement_id: SOURCE,
+                    company: CARRIER_COMPANY,
+                    storage_hall: WAREHOUSE,
+                },
+                GoodsInventory::new(shared::economy::capacity::PORTER),
+                CharacterActivity::Indoors,
+            ))
+            .id();
 
         app.update();
         assert_eq!(
@@ -3791,10 +4331,57 @@ mod tests {
         assert_eq!(route.warehouse, WAREHOUSE);
         assert_eq!(route.good, Good::Stone);
         assert_eq!(route.active_contract, Some(CONTRACT));
+
+        let route_entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<CompanyTradeRoute>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().entity_mut(route_entity).insert(ROUTE);
+        app.world_mut()
+            .entity_mut(porter)
+            .insert(WorkplaceDoorTransit {
+                building: Vec3::ZERO,
+                door: Vec3::ZERO,
+                inside: Vec3::Z,
+                direction: WorkplaceDoorDirection::Entering,
+                phase: WorkplaceDoorPhase::Crossing,
+                destination_after_exit: None,
+            });
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 2;
+        app.update();
+        assert!(
+            app.world().get::<TradeRouteRoutine>(porter).is_none(),
+            "dispatch must not steal the destination during a door crossing"
+        );
+        app.world_mut()
+            .entity_mut(porter)
+            .remove::<WorkplaceDoorTransit>();
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 3;
+        app.update();
+        assert!(app.world().get::<TradeRouteRoutine>(porter).is_some());
+        assert_eq!(
+            app.world().get::<CharacterActivity>(porter),
+            Some(&CharacterActivity::Idle),
+            "a new freight journey must wake an indoor porter"
+        );
+        assert_eq!(
+            app.world().get::<MoveTarget>(porter).unwrap().0,
+            SettlementBuildingKind::Hall.entrance_position(Vec3::ZERO, 0.0)
+        );
     }
 
     #[test]
     fn physical_contract_trip_pays_seller_then_carrier_and_returns_porter() {
+        assert_physical_contract_trip(false);
+    }
+
+    #[test]
+    fn public_carrier_retries_loading_bays_without_losing_paid_cargo_or_repaying_sellers() {
+        assert_physical_contract_trip(true);
+    }
+
+    fn assert_physical_contract_trip(fail_approaches: bool) {
         let mut app = App::new();
         app.init_resource::<BusinessEventQueue>().add_systems(
             Update,
@@ -3967,6 +4554,52 @@ mod tests {
             ))
             .id();
 
+        if fail_approaches {
+            app.world_mut()
+                .entity_mut(porter)
+                .insert(NavigationRouteFailed {
+                    goal: source_entrance,
+                });
+            app.update();
+            let alternate_origin = hall_trade_approach(
+                HallSnapshot {
+                    position: source_at,
+                    rotation: 0.0,
+                },
+                1,
+            );
+            assert_eq!(
+                app.world().get::<MoveTarget>(porter).unwrap().0,
+                alternate_origin
+            );
+            assert_eq!(
+                app.world().get::<PlayerPosition>(porter).unwrap().0,
+                source_entrance
+            );
+            assert!(app.world().get::<NavigationRouteFailed>(porter).is_none());
+            app.update();
+            assert_eq!(
+                app.world().get::<MoveTarget>(porter).unwrap().0,
+                alternate_origin
+            );
+            assert_eq!(
+                app.world()
+                    .get::<CivicTradeContract>(contract_entity)
+                    .unwrap()
+                    .escrow_cash,
+                2_144,
+                "changing pickup approach cannot purchase before the porter arrives"
+            );
+            assert_eq!(
+                app.world()
+                    .get::<GoodsInventory>(porter)
+                    .unwrap()
+                    .amount(Good::Stone),
+                0
+            );
+            app.world_mut().get_mut::<PlayerPosition>(porter).unwrap().0 = alternate_origin;
+        }
+
         app.update();
 
         assert_eq!(
@@ -4003,7 +4636,115 @@ mod tests {
             2_000
         );
 
-        app.world_mut().get_mut::<PlayerPosition>(porter).unwrap().0 = project_stand;
+        assert_eq!(
+            app.world()
+                .get::<TradeRouteRoutine>(porter)
+                .unwrap()
+                .failed_approaches,
+            0
+        );
+        let mut delivery_target = project_stand;
+        if fail_approaches {
+            for attempt in 1..TRADE_STOP_APPROACH_OFFSETS.len() {
+                app.world_mut()
+                    .entity_mut(porter)
+                    .insert(NavigationRouteFailed {
+                        goal: delivery_target,
+                    });
+                app.update();
+                delivery_target = offset_trade_approach(project_stand, 0.0, attempt as u8);
+                assert_eq!(
+                    app.world().get::<MoveTarget>(porter).unwrap().0,
+                    delivery_target
+                );
+                assert!(app.world().get::<NavigationRouteFailed>(porter).is_none());
+                app.update();
+                assert_eq!(
+                    app.world().get::<MoveTarget>(porter).unwrap().0,
+                    delivery_target,
+                    "the next update must retain the alternate service bay"
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<GoodsInventory>(porter)
+                        .unwrap()
+                        .amount(Good::Stone),
+                    8
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<GoodsInventory>(project)
+                        .unwrap()
+                        .amount(Good::Stone),
+                    0
+                );
+                let contract = app
+                    .world()
+                    .get::<CivicTradeContract>(contract_entity)
+                    .unwrap();
+                assert_eq!(contract.status, TradeContractStatus::InTransit);
+                assert_eq!(contract.escrow_cash, 144);
+                assert_eq!(contract.spent_on_goods, 2_000);
+                assert_eq!(contract.spent_on_freight, 0);
+                assert_eq!(
+                    app.world()
+                        .get::<CompanyAccount>(seller_company)
+                        .unwrap()
+                        .cash,
+                    1_900
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<CompanyAccount>(carrier_company)
+                        .unwrap()
+                        .cash,
+                    0
+                );
+                assert!(
+                    app.world()
+                        .get::<TradeRouteHistory>(route)
+                        .unwrap()
+                        .trips()
+                        .is_empty()
+                );
+            }
+            app.world_mut()
+                .entity_mut(porter)
+                .insert(NavigationRouteFailed {
+                    goal: delivery_target,
+                });
+            for _ in 0..3 {
+                app.update();
+                assert_eq!(
+                    app.world().get::<MoveTarget>(porter).unwrap().0,
+                    delivery_target
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<TradeRouteRoutine>(porter)
+                        .unwrap()
+                        .failed_approaches,
+                    (TRADE_STOP_APPROACH_OFFSETS.len() - 1) as u8
+                );
+                assert!(
+                    app.world().get::<NavigationRouteFailed>(porter).is_some(),
+                    "exhausted candidates must retain the shared navigation failure/backoff instead of restarting searches every update"
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<GoodsInventory>(porter)
+                        .unwrap()
+                        .amount(Good::Stone),
+                    8
+                );
+            }
+            // Stand in for navigation eventually reaching the retained bay;
+            // the trade system must still wait for physical arrival to settle.
+            app.world_mut()
+                .entity_mut(porter)
+                .remove::<NavigationRouteFailed>();
+        }
+        app.world_mut().get_mut::<PlayerPosition>(porter).unwrap().0 = delivery_target;
         app.update();
 
         assert_eq!(

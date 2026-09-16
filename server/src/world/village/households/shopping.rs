@@ -1,6 +1,6 @@
 //! One physical shopping trip per household, with explicitly owned cargo.
 
-use super::needs::HearthState;
+use super::needs::{HearthState, ProvisionNeeds};
 use super::provisioning::{plan_basket, purchase_basket};
 use super::*;
 use shared::components::{BuildingId, HouseholdId, HouseholdMembers};
@@ -49,8 +49,9 @@ pub fn run_household_shopping(
             Option<&MoveTarget>,
             Option<&HomeRoutine>,
             Option<&NavigationRouteFailed>,
+            Option<&ConstructionMaterialRoutine>,
         ),
-        (With<CharacterKind>, Without<strategic::StrategicPerson>),
+        With<CharacterKind>,
     >,
 ) {
     if shoppers.is_empty() {
@@ -67,9 +68,16 @@ pub fn run_household_shopping(
         target,
         resting,
         failed,
+        material,
     ) in &mut shoppers
     {
         if resting.is_some() {
+            continue;
+        }
+        // Admission normally prevents this overlap, but an assigned site or
+        // retained save can coexist with an already owned household basket.
+        // Use the same safe cargo boundary as paid meals and queue admission.
+        if material.is_some_and(ConstructionMaterialRoutine::finishes_before_personal_needs) {
             continue;
         }
         let account_valid = accounts
@@ -96,7 +104,7 @@ pub fn run_household_shopping(
         if home_entity.is_none() || routine.phase == HouseholdShoppingPhase::ReturningToMarket {
             if !routine.has_cargo() {
                 // An unfilled order owns no goods. Release the member so a
-                // missing house cannot prevent work or strategic demotion.
+                // missing house cannot prevent other work.
                 commands
                     .entity(shopper)
                     .remove::<HouseholdShoppingRoutine>()
@@ -228,18 +236,18 @@ pub fn run_household_shopping(
                 // Stable membership includes people travelling or serving in a
                 // battalion. Buy for the people actually occupying this home.
                 let n = occupants.resident_ids.len();
-                let food = (n as u32)
-                    .saturating_mul(u32::from(economy.pantry_target_days))
-                    .saturating_sub(pantry.edible_amount());
-                let fuel = hearth.map_or_else(
-                    || HearthState::default().deficit(n, economy.fuel_target_days, &pantry),
-                    |hearth| hearth.deficit(n, economy.fuel_target_days, &pantry),
+                let initial_hearth = HearthState::default();
+                let needs = ProvisionNeeds::for_home(
+                    n,
+                    &economy,
+                    &pantry,
+                    hearth.unwrap_or(&initial_hearth),
                 );
                 let basket = plan_basket(
                     &market,
                     &hall,
-                    food,
-                    fuel,
+                    needs,
+                    economy.pennies,
                     economy.pennies,
                     carrier.free_bulk().min(pantry.free_bulk()),
                 );

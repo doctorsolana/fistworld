@@ -294,11 +294,21 @@ fn night_schedule_waits_for_a_loaded_worker_to_finish_the_workplace_handoff() {
 }
 
 #[test]
-fn an_unreachable_night_route_cannot_leave_a_resident_outdoors_forever() {
+fn a_failed_night_route_preserves_the_resident_and_retries_a_real_journey_next_night() {
     let mut app = village_test_app();
     app.init_resource::<Time>();
     app.add_systems(Update, run_household_schedules);
-    app.world_mut().spawn(WorldTime::new(100.0, 20.0, 105.0));
+    let clock = app
+        .world_mut()
+        .spawn((
+            WorldTime::new(100.0, 20.0, 105.0),
+            shared::components::TimeWarp::clamped(25.0),
+        ))
+        .id();
+    let mut terrain = WorldTerrain::default();
+    let floor = terrain.water_surface_height(0.0, 0.0).unwrap() + 2.0;
+    terrain.apply_flatten_rect(Vec3::new(0.0, floor, 0.0), Vec2::splat(64.0), 0.0, 0.0);
+    app.insert_resource(terrain);
 
     let settlement = app
         .world_mut()
@@ -310,7 +320,7 @@ fn an_unreachable_night_route_cannot_leave_a_resident_outdoors_forever() {
         })
         .id();
     let resident_id = shared::components::PersonId(77);
-    let home_position = Vec3::new(20.0, 3.0, 0.0);
+    let home_position = Vec3::new(20.0, floor, 0.0);
     let home = app
         .world_mut()
         .spawn((
@@ -330,12 +340,14 @@ fn an_unreachable_night_route_cannot_leave_a_resident_outdoors_forever() {
         ))
         .id();
     let door = SettlementBuildingKind::House.entrance_position(home_position, 0.0);
+    let stranded_at = Vec3::new(-20.0, floor, 0.0);
     let villager = app
         .world_mut()
         .spawn((
             resident_id,
             CharacterKind::Villager,
-            PlayerPosition(Vec3::new(-20.0, 3.0, 0.0)),
+            PlayerPosition(stranded_at),
+            shared::region::RegionCoord::from_world_pos(stranded_at),
             PlayerRotation(0.0),
             CharacterActivity::Idle,
             HomeAssignment { home },
@@ -368,18 +380,81 @@ fn an_unreachable_night_route_cannot_leave_a_resident_outdoors_forever() {
     let resident = app.world().entity(villager);
     assert_eq!(
         resident.get::<HomeRoutine>().unwrap().phase,
+        HomePhase::GoingToDoor
+    );
+    assert_eq!(resident.get::<HomeRoutine>().unwrap().failed_routes, 3);
+    assert_eq!(
+        *resident.get::<CharacterActivity>().unwrap(),
+        CharacterActivity::Idle
+    );
+    assert!(resident.get::<NavigationRouteFailed>().is_none());
+    assert!(resident.get::<MoveTarget>().is_none());
+    assert!(resident.get::<BuildingDoorUse>().is_none());
+    assert_eq!(resident.get::<PlayerPosition>().unwrap().0, stranded_at);
+    assert!(matches!(
+        resident.get::<VillagerIntent>(),
+        Some(VillagerIntent::Resident { settlement: assigned }) if *assigned == settlement
+    ));
+
+    // Exhaustion parks this night's attempt without busy retries or remote
+    // shelter. Daylight releases the routine; the following night may try
+    // again with the same resident, home and physical body.
+    app.update();
+    assert!(app.world().get::<MoveTarget>(villager).is_none());
+    app.world_mut()
+        .get_mut::<WorldTime>(clock)
+        .unwrap()
+        .seconds_in_cycle = 0.0;
+    app.update();
+    assert!(app.world().get::<HomeRoutine>(villager).is_none());
+    assert_eq!(
+        app.world().get::<PlayerPosition>(villager).unwrap().0,
+        stranded_at
+    );
+    app.world_mut()
+        .get_mut::<WorldTime>(clock)
+        .unwrap()
+        .seconds_in_cycle = 105.0;
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<HomeRoutine>(villager)
+            .unwrap()
+            .failed_routes,
+        0
+    );
+    assert_eq!(app.world().get::<MoveTarget>(villager).unwrap().0, door);
+
+    // Failure certificates above are deliberately injected scheduler input.
+    // The recovered leg now uses the real mover on a clear, dry forecourt;
+    // no fixture writes an arrival or sleeping position.
+    app.add_systems(
+        Update,
+        crate::player::hero::step_units.after(run_household_schedules),
+    );
+    let mut crossed_door = false;
+    for _ in 0..240 {
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        app.update();
+        crossed_door |= app.world().get::<BuildingDoorUse>(villager).is_some();
+    }
+    let resident = app.world().entity(villager);
+    assert!(
+        crossed_door,
+        "recovery must include the physical door crossing"
+    );
+    assert_eq!(
+        resident.get::<HomeRoutine>().unwrap().phase,
         HomePhase::Sleeping
     );
     assert_eq!(
         *resident.get::<CharacterActivity>().unwrap(),
         CharacterActivity::Indoors
     );
-    assert!(resident.get::<NavigationRouteFailed>().is_none());
-    assert!(resident.get::<MoveTarget>().is_none());
-    assert_eq!(
-        resident.get::<PlayerPosition>().unwrap().0,
-        SettlementBuildingKind::House.interior_door_position(home_position, 0.0)
-    );
+    let inside = SettlementBuildingKind::House.interior_door_position(home_position, 0.0);
+    assert!(ground_distance(resident.get::<PlayerPosition>().unwrap().0, inside) <= DOOR_REACH);
 }
 
 #[test]
@@ -483,14 +558,15 @@ fn household_capacity_is_entity_safe_when_names_repeat() {
         })
         .collect();
     assert_eq!(stable_roster, renamed_roster);
-    assert!(houses.iter().any(|house| app
-        .world()
-        .entity(*house)
-        .get::<Household>()
-        .unwrap()
-        .residents
-        .iter()
-        .any(|name| name == "Marian")));
+    assert!(houses.iter().any(|house| {
+        app.world()
+            .entity(*house)
+            .get::<Household>()
+            .unwrap()
+            .residents
+            .iter()
+            .any(|name| name == "Marian")
+    }));
 }
 
 #[test]
@@ -537,9 +613,18 @@ fn failed_household_shop_routes_release_or_retry_without_losing_food() {
         .id();
 
     let household = shared::components::HouseholdId(71);
-    let account = app.world_mut().spawn((household, shared::components::HouseholdMembers {
-        resident_ids: Vec::new(), settlement: settlement_id, dwelling: Some(shared::components::BuildingId(70)),
-    }, HouseholdEconomy::default())).id();
+    let account = app
+        .world_mut()
+        .spawn((
+            household,
+            shared::components::HouseholdMembers {
+                resident_ids: Vec::new(),
+                settlement: settlement_id,
+                dwelling: Some(shared::components::BuildingId(70)),
+            },
+            HouseholdEconomy::default(),
+        ))
+        .id();
 
     let hall_entrance = SettlementBuildingKind::Hall.entrance_position(hall_position, 0.0);
     let outbound = app
@@ -671,9 +756,11 @@ fn travelling_villagers_do_not_occupy_resident_beds() {
     app.update();
 
     assert!(app.world().get::<HomeAssignment>(traveller).is_none());
-    assert!(residents
-        .iter()
-        .all(|resident| app.world().get::<HomeAssignment>(*resident).is_some()));
+    assert!(
+        residents
+            .iter()
+            .all(|resident| app.world().get::<HomeAssignment>(*resident).is_some())
+    );
     let occupied: usize = houses
         .iter()
         .map(|house| {
@@ -711,15 +798,39 @@ fn residents_eat_bread_fish_then_household_flour_but_never_raw_wheat() {
                 residents: 4,
                 treasury: 0,
             },
-            stock,
+            GoodsInventory::new(shared::economy::capacity::HALL),
+            MootMarket::founding(),
         ))
         .id();
 
+    let home = app
+        .world_mut()
+        .spawn((
+            SettlementBuilding {
+                kind: SettlementBuildingKind::House,
+                settlement: "Dailybread".into(),
+                owner: None,
+                quality: 1.0,
+                workers: Vec::new(),
+            },
+            shared::components::BuildingOf(shared::components::SettlementId(1)),
+            stock,
+        ))
+        .id();
+    for i in 0..4 {
+        app.world_mut().spawn((
+            CharacterKind::Villager,
+            CharacterName(format!("Resident {i}")),
+            VillagerIntent::Resident { settlement: hall },
+            HomeAssignment { home },
+            Nutrition::default(),
+        ));
+    }
     app.update();
     app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
     app.update();
 
-    let inventory = app.world().get::<GoodsInventory>(hall).unwrap();
+    let inventory = app.world().get::<GoodsInventory>(home).unwrap();
     assert_eq!(inventory.amount(Good::Bread), 0);
     assert_eq!(inventory.amount(Good::Food), 0);
     assert_eq!(inventory.amount(Good::Flour), 1);

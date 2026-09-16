@@ -5,6 +5,8 @@
 
 use super::*;
 
+#[cfg(test)]
+mod home_routine_tests;
 mod membership;
 mod needs;
 mod provisioning;
@@ -42,6 +44,52 @@ fn household_food_purchase_order(hall_store: &GoodsInventory, market: &MootMarke
     order
 }
 
+/// One actual ready meal, priced from eligible listings rather than the food's
+/// authored preference. A missing or unaffordable meal is still one request.
+pub(super) fn cheapest_ready_food(hall: &GoodsInventory, market: &MootMarket) -> Option<Good> {
+    Good::READY_TO_EAT_PRIORITY
+        .into_iter()
+        .enumerate()
+        .filter_map(|(preference, good)| {
+            if hall.amount(good) == 0 {
+                return None;
+            }
+            let quote = market.preview_purchase(good, 1, u64::MAX, None, None);
+            (quote.units == 1).then_some((quote.pennies, preference, good))
+        })
+        .min_by_key(|(price, preference, _)| (*price, *preference))
+        .map(|(_, _, good)| good)
+}
+
+/// Two days of local essentials are a meaningful reserve at either cheap or
+/// expensive markets. An empty exchange uses observed sales before authored
+/// prices, without pretending that the fallback is a purchasable offer.
+pub(super) fn household_ration_price(hall: &GoodsInventory, market: &MootMarket) -> u64 {
+    Good::HOUSEHOLD_FOOD_PRIORITY
+        .into_iter()
+        .filter(|good| hall.amount(*good) > 0)
+        .filter_map(|good| {
+            let quote = market.preview_purchase(good, 1, u64::MAX, None, None);
+            (quote.units == 1).then_some(quote.pennies)
+        })
+        .min()
+        .or_else(|| {
+            Good::HOUSEHOLD_FOOD_PRIORITY
+                .into_iter()
+                .map(|good| market.pool(good).bid)
+                .filter(|price| *price > 0)
+                .min()
+        })
+        .unwrap_or_else(|| {
+            Good::HOUSEHOLD_FOOD_PRIORITY
+                .into_iter()
+                .map(Good::base_price)
+                .min()
+                .unwrap_or(1)
+        })
+        .max(1)
+}
+
 /// Send housed villagers through their cabin door at sunset and back out at
 /// sunrise. Work state is reset to its workplace approach, so morning resumes
 /// with a real journey instead of farming or chopping beside the bed.
@@ -66,6 +114,8 @@ pub fn run_household_schedules(
         Without<CharacterKind>,
     >,
     roads: Query<&shared::components::VillageRoad>,
+    unsafe_handoff: Query<(), super::worker_activity::UnsafeToInterrupt>,
+    pending_service: Query<(), With<MootQueueTicket>>,
     moot_service_busy: Query<
         (),
         Or<(
@@ -73,6 +123,9 @@ pub fn run_household_schedules(
             With<MootMealRoutine>,
             With<HouseholdShoppingRoutine>,
             With<TradeRouteRoutine>,
+            With<crate::world::shipping::crew::ShipCrew>,
+            With<crate::world::shipping::PortHaulRoutine>,
+            With<crate::world::ports::PortBuilder>,
             With<TavernVisitRoutine>,
             With<TavernWorkerRoutine>,
             With<crate::world::settlement_development::CivicHallBuilderRoutine>,
@@ -84,7 +137,7 @@ pub fn run_household_schedules(
         (
             Entity,
             &shared::components::PersonId,
-            &mut PlayerPosition,
+            &PlayerPosition,
             &mut PlayerRotation,
             &mut CharacterActivity,
             Option<&HomeAssignment>,
@@ -103,7 +156,6 @@ pub fn run_household_schedules(
         ),
         (
             With<CharacterKind>,
-            Without<strategic::StrategicPerson>,
             Or<(With<HomeAssignment>, With<HomeRoutine>)>,
         ),
     >,
@@ -117,7 +169,7 @@ pub fn run_household_schedules(
     for (
         villager,
         person_id,
-        mut position,
+        position,
         mut facing,
         mut activity,
         assignment,
@@ -152,13 +204,14 @@ pub fn run_household_schedules(
             }
             continue;
         };
-        if moot_service_busy.get(villager).is_ok() {
+        let leaving_for_service = pending_service.contains(villager) && routine.is_some();
+        if moot_service_busy.get(villager).is_ok() && !leaving_for_service {
             continue;
         }
         let assigned_home = homes.get(assignment.home).ok();
 
         let Some(mut routine) = routine else {
-            if is_day {
+            if is_day || unsafe_handoff.contains(villager) {
                 continue;
             }
             // Production owns the worker until its last physical load reaches
@@ -171,7 +224,10 @@ pub fn run_household_schedules(
                     (farmer.is_some() && inventory.amount(Good::Wheat) > 0)
                         || (fisher.is_some() && inventory.amount(Good::Food) > 0)
                         || (lumberjack.is_some() && inventory.amount(Good::Wood) > 0)
-                        || (quarry.is_some() && inventory.amount(Good::Stone) > 0)
+                        || (quarry.is_some()
+                            && (inventory.amount(Good::Stone) > 0
+                                || inventory.amount(Good::Meat) > 0
+                                || inventory.amount(Good::Wool) > 0))
                 });
             if returning_workplace_goods {
                 continue;
@@ -246,28 +302,23 @@ pub fn run_household_schedules(
             // essential: otherwise an interrupted Chopping phase resumes at
             // the cabin and the villager swings an axe beside their bed.
             if let Some(farmer) = farmer.as_deref_mut() {
-                farmer.phase = FarmerPhase::GoingToFarmstead;
+                super::worker_activity::lifecycle::prepare_resume(farmer);
             }
             if let Some(lumberjack) = lumberjack.as_deref_mut() {
-                lumberjack.phase = LumberjackPhase::GoingToHut;
+                super::worker_activity::lifecycle::prepare_resume(lumberjack);
             }
             if let Some(fisher) = fisher.as_deref_mut() {
-                fisher.phase = FishingPhase::GoingToHut;
-                commands
-                    .entity(villager)
-                    .remove::<PierTraversal>()
-                    .remove::<TravelRoute>()
-                    .remove::<NavigationRoutePending>();
+                super::worker_activity::lifecycle::prepare_resume(fisher);
             }
             if let Some(quarry) = quarry.as_deref_mut() {
                 // Quarry work is outdoors; after an empty-handed cutoff the
                 // retained routine can safely restart from its workplace on
                 // the next daylight shift. A loaded quarrier was kept above
                 // until the Stone reached bounded business storage.
-                quarry.restart_for_morning();
+                super::worker_activity::lifecycle::prepare_resume(quarry);
             }
             if let Some(processor) = processor.as_deref_mut() {
-                processor.reset_for_morning();
+                super::worker_activity::lifecycle::prepare_resume(processor);
             }
             if let Some(road_builder) = road_builder.as_deref_mut() {
                 if let Ok(road) = roads.get(road_builder.road) {
@@ -279,11 +330,7 @@ pub fn run_household_schedules(
             // route must not remain attached: movement deliberately sleeps
             // while NavigationRouteFailed exists, including during a doorway
             // transit that is otherwise allowed to ignore the wall collider.
-            commands
-                .entity(villager)
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
+            super::worker_activity::lifecycle::clear_production_travel(&mut commands, villager);
 
             let phase =
                 if let Some((building, workplace_door, workplace_inside)) = workplace_threshold {
@@ -368,22 +415,26 @@ pub fn run_household_schedules(
                 routine.phase = HomePhase::GoingToDoor;
                 continue;
             } else {
-                // Shelter is an aggregate guarantee as well as visible
-                // behaviour. Compress only the impossible remainder of this
-                // trip after three certified route failures. Ordinary homes
-                // still walk through the threshold and animate their door.
-                position.0 = inside;
-                activity.set_if_neq(CharacterActivity::Indoors);
+                // An unreachable house cannot shelter this body remotely.
+                // Retain the failed attempt until morning so the next tick
+                // neither retries indefinitely nor pretends the person slept.
+                // Their position and carried goods remain authoritative.
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands
                     .entity(villager)
                     .remove::<BuildingDoorUse>()
                     .remove::<MoveTarget>();
-                routine.phase = HomePhase::Sleeping;
+                routine.phase = HomePhase::GoingToDoor;
                 continue;
             }
         }
 
-        if is_day {
+        if !is_day && !leaving_for_service && routine.failed_routes >= 3 {
+            activity.set_if_neq(CharacterActivity::Idle);
+            continue;
+        }
+
+        if is_day || leaving_for_service {
             match routine.phase {
                 HomePhase::LeavingWorkplace => {
                     // Finish crossing the workplace threshold first. Its
@@ -572,7 +623,19 @@ mod tests {
             vec![Good::Bread]
         );
         assert_eq!(
-            provisioning::plan_basket(&market, &hall, 8, 0, u64::MAX, 80).pennies,
+            provisioning::plan_basket(
+                &market,
+                &hall,
+                needs::ProvisionNeeds {
+                    food: 8,
+                    today_food: 8,
+                    ..default()
+                },
+                u64::MAX,
+                u64::MAX,
+                80
+            )
+            .pennies,
             0
         );
     }
@@ -589,7 +652,19 @@ mod tests {
             120,
         );
         assert_eq!(
-            provisioning::plan_basket(&market, &hall, 8, 0, u64::MAX, 80).pennies,
+            provisioning::plan_basket(
+                &market,
+                &hall,
+                needs::ProvisionNeeds {
+                    food: 8,
+                    today_food: 8,
+                    ..default()
+                },
+                u64::MAX,
+                u64::MAX,
+                80
+            )
+            .pennies,
             360
         );
     }

@@ -26,6 +26,7 @@ roads. Failed and incomplete runs remain visible; a pleasant plan is not a pass.
 | `low` | Two arrivals on each of scenario days 2, 4 and 6 |
 | `steady` | Three arrivals each day from scenario days 2 through 8 |
 | `burst` | Twenty-four arrivals together on scenario day 4 |
+| `closed-32` | Thirty-two initial people with ordinary founding wallets and 96 finite Bread; no immigration or subsequent grants |
 | `inland-boats` | Five founders and 20 Bread; two physical boat arrivals on each of days 1–30 (65 people offered in total) |
 | `city-100-gradual` / `city-100-surge` | Offer a total of 100 people, including founders |
 | `city-250-gradual` / `city-250-surge` | Offer a total of 250 people, including founders |
@@ -55,6 +56,163 @@ Each snapshot retains the dated evidence and qualification history. `TOWN develo
 logs report housed residents, occupied homes, operating business types, Market access,
 paid trade and Hall materials separately from qualifying days. Historical runs below
 retain the rules and dates under which they were measured.
+
+### Fixed-money economy experiment
+
+```bash
+python3 tools/town_growth.py --seeds 23 --profiles closed-32 \
+  --minutes 1440 --snapshot-minutes 24 --warp 25 --timeout 10800
+```
+
+`closed-32` provides enough initial people to build and staff a varied economy,
+with 96 physical Bread to bridge its opening days. Everyone receives the same
+ordinary founding wallet as other profiles. There are no later people, cash,
+food or infrastructure grants. The connected fixture also disables ambient
+natural immigration. Its default duration is 60 days; use `--minutes 720` for 30.
+Every snapshot checks the exact fixed initial money total, including transfers
+through company, household, public and escrow accounts. All growth profiles also
+export `people-*.json`: per-person wallets, health, nutrition, private/civic jobs,
+household membership/purses/pantries, company balances/ownership, market listings,
+business wages/sale status, public payroll/policies/relief accounts and recorded
+deaths. Population accounting compares living people plus deaths with that
+profile’s actual founders and arrivals; only the inland boat profile includes
+voyage counters.
+
+A test-only audit brackets the real abandoned-business removal system. It records
+empty, unstaffed ForSale candidates without stock, debt or market listings,
+then authorizes retirement only when that production system actually removes the
+entity after its own sale-window and delivery-reservation checks. Snapshots retain the evidence as `abandonments`; they still reject
+unexplained disappearances, moved buildings and overlaps. This lets completed
+liquidation and normal abandonment occur during long economic experiments.
+
+The town still constructs its own houses, businesses and roads. Early construction
+is warmup, not an already established economy. The report records
+`first_housed_commercial_base_day` when at least 24 people are housed and at least
+two business types operate; this is a structural milestone, not a prosperity or
+survival pass. Compare food, employment, deaths and balances in the latter half
+of the run to see whether the town functions without fresh immigrant cash.
+
+#### Historical full-shift validation, 2026-09-15
+
+This run predates the correction requiring positioned, non-strategic people to
+collect meals and household supplies physically in headless labs. Retain it as
+historical evidence; the later runs below retain their own source boundaries.
+
+The `closed-32` run used `village_lab`, charter seed 23, 32 founders, 96 initial
+Bread and 34,000p total starting money, with no immigration or later grants. It
+ran 1,440 world minutes (60 days) at warp 25, exporting every 24 minutes: 61
+snapshots including the initial state. Workers could produce throughout their
+shifts while resources, inputs and storage allowed; sales forecasts guided
+staffing rather than imposing daily production quotas.
+
+The lab passed its population, money, building-identity and overlap audits. At
+day 60, all 32 people were alive and housed in eight homes; the settlement had
+reached Town, with 28 completed buildings and 28 completed roads, no pending
+construction or roads, and no roadless or disconnected buildings. No abandonment
+occurred. All enabled private positions were filled at each daily observation;
+this sampling does not exclude shorter hiring delays. Money still totaled
+34,000p: personal wallets 26,084p, unique company accounts 6,005p and treasury
+1,911p, with household purses empty.
+
+Affordability remains unresolved: seven people were hungry, four had missed six
+meals and had 39 health, while 27 Bread were offered at 62p each. Dwellings with
+building IDs 4 and 5 (household IDs 8 and 3) had empty pantries, no employed
+residents and only 26p combined personal cash.
+At the final snapshot, four civic workers earning 64p with seven payroll days
+protected reserved 1,792p; the emergency-relief formula left just
+`(1,911 - 1,792) / 3 = 39p`, below one listed meal. This is evidence of an income
+and public-budget distribution problem despite available food, not an economy
+balance pass. Recent food production was 13.33 units/day against 24.33 consumed.
+
+Artifacts are under
+`logs/economy-reform-final/closed-full-shifts/seed-23__closed-32/`:
+`run.json`, `lab.log`, `snapshot-0060.json` and `people-0060.json` retain the run
+identity, assertions and final evidence. The earlier quota-based run under
+`logs/economy-reform-final/closed/seed-23__closed-32/` ended with 28 survivors;
+it is historical evidence under different work rules. Live simulation ordering
+also varied, so these runs are not a controlled comparison or a performance
+benchmark, and survival through day 60 does not establish longer-term stability.
+
+#### Historical physical-needs validation, 2026-09-15
+
+This run predates the site-work/personal-needs ownership fixes. It is retained
+for provenance rather than presented as the latest executable's result.
+The `closed-32` seed-23 run completed 60 days at 25× with 32 founders,
+96 initial Bread and no later immigration or grants. Its
+[run record](../logs/economy-reform-final/closed-physical-needs/seed-23__closed-32/run.json)
+identifies the tested executable and SHA-256. All 61 daily journals retained
+exactly **34,000p**. The population, money, stable-building and overlap checks
+passed; the end state had 32 living, housed, fully fed people at full health,
+eight homes, 32 completed buildings and 32 connected roads, with no deaths or
+pending construction/roads.
+
+The [final worker/business journal](../logs/economy-reform-final/closed-physical-needs/seed-23__closed-32/people-0060.json)
+recorded 11 private employees, four civic employees and 17 job seekers. These are
+descriptive counts, not a full-employment target: an early-game town with fewer
+implemented trades can have spare labour while meeting its current demand.
+Evaluate labour problems through unmet funded demand or household access to
+essentials, rather than treating the number of job seekers as a defect. Money
+was distributed as 29,219p in personal wallets, 3,024p in company accounts,
+50p in household purses and 1,707p in the treasury. All four farms produced
+during the run; sampled worker histories showed no persistent release handoff
+hangs. Daily sampling cannot exclude shorter stalls or prove every job path.
+
+Food access was not perfect: the journals accumulated 1,844 meals and 76 missed
+meals. Late hunger affected two, two, three and four people on days 50–53;
+everyone was fed again on day 54 and back to full health on day 55. The
+[final town snapshot](../logs/economy-reform-final/closed-physical-needs/seed-23__closed-32/snapshot-0060.json)
+held 83 food units, about 2.594 reserve days. Recent production was 30.33 units
+per day against 32 consumed, so final survival and stocked shelves do not
+establish sustainable production or long-term food affordability.
+
+This is one closed-town correctness and recovery result, not a performance
+benchmark, exhaustive job validation or a controlled comparison with the older
+run. Its separate 900-minute trade attempt failed a construction-material
+approach check and is outside this pass.
+
+#### Site-work and personal-needs validation, 2026-09-15
+
+The later [closed-site-needs run](../logs/economy-reform-final/closed-site-needs/seed-23__closed-32/run.json)
+completed the same seed-23 `closed-32` charter: 32 founders, 96 initial Bread,
+no immigration or later grants, 1,440 world minutes/60 days at 25×. Its executable
+SHA-256 is `9a9f9c62f8e4e517a826f7bfd90c11c4b0e164b4d70d65bc90d014d1c69c8626`.
+This includes the site-work/food movement guards but **predates the final objective
+precedence correction**. Objectives also determine navigation priority: a returning
+household shopper is essential traffic rather than committed construction traffic.
+The correction is therefore more than a display change; this run does not certify
+the final source for 60 days.
+
+The conservation, population and layout audits passed. All 61 daily snapshots
+retained exactly **34,000p**. At day 60, all 32 people were alive, housed, fed and
+at 100 health, with eight homes/32 beds, 31 completed buildings and 32 completed
+roads, no pending construction/roads and no roadless or disconnected buildings.
+Tavern building 26 was listed on day 40 and normally abandoned on day 43, with
+its removal verified by the lifecycle audit. Final money was 26,567p in personal
+wallets, 47p in household purses, 5,978p in company accounts and 1,408p in the
+treasury. The [final worker journal](../logs/economy-reform-final/closed-site-needs/seed-23__closed-32/people-0060.json)
+and daily histories showed no sampled release/route-failure flags or four-day
+unchanging active work/route states; this does not exclude transient stalls.
+
+Food access varied despite the final recovery. There were 99 missed meals by
+day 16, no additional misses on days 17–40, then 47 more on days 41–47. Hunger
+peaked at 11 people on day 45 and minimum health reached 39 on day 47; everyone
+had recovered by day 50. Nine later misses on days 54–56 and 59 brought the total
+to 155, without deaths. The [final snapshot](../logs/economy-reform-final/closed-site-needs/seed-23__closed-32/snapshot-0060.json)
+held 96 food units/three reserve days, with recent output of 29 units/day against
+31.67 consumed. Households 7 and 8 each retained only four rations and 158p/83p
+in combined personal wallets; household 8 had no fuel. The treasury's 1,408p was
+close to its 1,400p protected public payroll. These are food-access and budget
+observations, not a demand for full employment or artificial new jobs.
+
+Wall time was 834.763 seconds while other work ran concurrently. This is neither
+a performance measurement nor a controlled comparison with earlier runs, and
+final survival does not establish lasting affordability or balanced production.
+The separate [trade-comparison soak](../logs/economy-reform-final/trade-site-needs.run.json)
+also passed its existing scenario checks: 900 world minutes at 10×, in 1,589.209
+wall seconds, using the same executable. Its detailed scope is recorded in
+[VILLAGE-LAB.md](VILLAGE-LAB.md). It shares the pre-objective/navigation-priority
+boundary above; neither soak establishes a strict connected builder/meal/resume
+sequence or a final-source performance result.
 
 ### Thirty-day inland village experiment
 

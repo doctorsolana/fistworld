@@ -1,6 +1,6 @@
 //! The People spread: portrait directory and a readable personal record.
 use super::super::*;
-use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
 use crate::ui::hud::chrome::{self, HudIcon};
 use crate::ui::ledger;
 use crate::ui::styles::{PLATE_RULE_SOFT, STATUS_GOOD};
@@ -91,6 +91,8 @@ pub(super) fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                             });
                         toolbar.spawn((PeopleCountText, ledger::body("", 16.0)));
                     });
+                person_links::spawn_return_link(directory);
+                search::spawn(directory, EncyclopediaTab::People);
                 directory
                     .spawn((
                         PeopleListViewport,

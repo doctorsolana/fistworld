@@ -1,20 +1,19 @@
 //! Selected-company ownership, governance and current accounting details.
 
-use super::controls::{
-    CompanyBranchPolicyButton, CompanyManagementButton, CompanyPersonButton, NewTradeRouteButton,
-};
+use super::controls::{CompanyBranchPolicyButton, CompanyManagementButton, NewTradeRouteButton};
 use super::model::{CompanyDirectory, CompanyPolicyFeedback, CompanyRecord, TradeRouteEditorState};
 use super::routes::spawn_route_card;
 use super::sites::{spawn_branch_card, spawn_site_card, spawn_site_ledger};
 use super::widgets::{
     detail_button, detail_stat, key_value, signed_money, spawn_note, spawn_section_title,
 };
-use crate::ui::foundation::{button_chrome, UiButtonVariant};
+use crate::ui::business_management::BusinessManagementSelection;
+use crate::ui::encyclopedia::person_links::spawn_person_link;
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT};
 use bevy::prelude::*;
 use shared::components::SettlementBuildingKind;
-use shared::economy::{format_money, CompanyDayLedger};
+use shared::economy::{CompanyDayLedger, format_money};
 use shared::protocol::HeroCompanyAction;
 
 pub(super) fn spawn_company_detail(
@@ -79,20 +78,18 @@ pub(super) fn spawn_company_detail(
                         },
                         "FULL LEDGER",
                     );
-                    if let Some(site) = company.sites.first() {
-                        detail_button(
-                            actions,
-                            CompanyManagementButton {
-                                site: site.entity,
-                                company: company.id,
-                            },
-                            "COMPANY CONTROLS",
-                        );
-                    }
+                    detail_button(
+                        actions,
+                        CompanyManagementButton {
+                            target: BusinessManagementSelection::Company(company.id),
+                            company: company.id,
+                        },
+                        "COMPANY SETTINGS",
+                    );
                 });
         });
 
-    if !feedback.message.is_empty() {
+    if feedback.company == Some(company.id) && !feedback.message.is_empty() {
         spawn_note(
             parent,
             &format!(
@@ -205,12 +202,17 @@ pub(super) fn spawn_company_detail(
 
     spawn_section_title(parent, "Operating Sites", "");
     if company.sites.is_empty() {
-        spawn_note(parent, "This company has no operating site.");
+        spawn_note(
+            parent,
+            "No workplaces are currently observed. Company settings are still available.",
+        );
     } else {
         for site in &company.sites {
             spawn_site_card(parent, company.id, site);
         }
     }
+
+    super::fleet::spawn_fleet(parent, company, directory);
 
     spawn_section_title(parent, "Trade Routes", "");
     let can_manage_routes = directory.local_person == Some(company.master);
@@ -244,7 +246,7 @@ pub(super) fn spawn_company_detail(
     if company.routes.is_empty() {
         spawn_note(
             parent,
-            "This company operates no caravan route. Contract routes appear automatically when the company accepts funded public freight.",
+            "This company operates no trade route. Contract routes appear automatically when the company accepts funded public freight.",
         );
     } else {
         for route in &company.routes {
@@ -278,7 +280,7 @@ pub(super) fn spawn_company_detail(
         "stock is physical and never shared between settlements",
     );
     if company.branches.is_empty() {
-        spawn_note(parent, "This company has no local operating branch.");
+        spawn_note(parent, "No local branch stock is currently observed.");
     } else {
         let can_manage = directory.local_person == Some(company.master);
         for branch in &company.branches {
@@ -299,41 +301,21 @@ pub(super) fn spawn_company_detail(
 
     spawn_section_title(parent, "OWNERSHIP", "1,000 ordinary shares in total");
     for holder in &company.holders {
-        parent
-            .spawn((
-                Button,
-                CompanyPersonButton(holder.person),
-                Node {
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
-                    border: UiRect::bottom(Val::Px(1.0)),
-                    ..default()
-                },
-                button_chrome(UiButtonVariant::Row),
-            ))
-            .with_children(|row| {
-                row.spawn((
-                    Text::new(if holder.person == company.master {
-                        format!("{}  /  COMPANY MASTER", holder.name)
-                    } else {
-                        holder.name.clone()
-                    }),
-                    ledger::reading_strong(14.0),
-                    TextColor(INK),
-                    Pickable::IGNORE,
-                ));
-                row.spawn((
-                    Text::new(format!(
-                        "{} shares  /  {:.1}%",
-                        holder.shares,
-                        f32::from(holder.shares) / 10.0
-                    )),
-                    ledger::reading_strong(13.5),
-                    TextColor(INK_MUTED),
-                    Pickable::IGNORE,
-                ));
-            });
+        spawn_person_link(
+            parent,
+            holder.person,
+            &holder.name,
+            &format!(
+                "{} shares · {:.1}%{}",
+                holder.shares,
+                f32::from(holder.shares) / 10.0,
+                if holder.person == company.master {
+                    " · Company master"
+                } else {
+                    ""
+                }
+            ),
+        );
     }
 
     spawn_section_title(
@@ -364,10 +346,11 @@ pub(super) fn spawn_company_detail(
         "GOVERNANCE",
         "company-wide policy set by the Company Master",
     );
-    key_value(
+    spawn_person_link(
         parent,
-        "COMPANY MASTER",
-        format!("{}  /  Person #{}", company.master_name, company.master.0),
+        company.master,
+        &company.master_name,
+        "Company master",
     );
     key_value(
         parent,
@@ -477,7 +460,7 @@ fn spawn_position(
             if company.offers.is_empty() {
                 "You own no shares. No shareholder is currently offering stock."
             } else {
-                "You own no shares. Public offers are listed below; open COMPANY CONTROLS to trade."
+                "You own no shares. Public offers are listed below; open COMPANY SETTINGS to trade."
             },
         );
         return;

@@ -76,7 +76,7 @@ pub fn update_weapons(
             Has<BowEquipped>,
             Option<&BowShot>,
         ),
-        (Without<OfflineHero>, Without<AboardBoat>),
+        (Without<OfflineHero>, Without<AboardBoat>, Without<shared::components::AboardShip>),
     >,
 ) {
     let Some(clock) = clock.iter().next() else {

@@ -313,11 +313,23 @@ pub enum CharacterObjective {
     GoingToTradeRoutePickup,
     HaulingInterSettlementCargo,
     ReturningFromTradeRoute,
+    BoardingTradeShip,
+    SailingTradeShip,
+    LeavingTradeShip,
+    HaulingConstructionSupplies,
+    BuildingBridge,
+    ChoosingSettlement,
 }
 
 impl CharacterObjective {
     pub const fn label(self) -> &'static str {
         match self {
+            Self::BoardingTradeShip => "Boarding the company ship",
+            Self::SailingTradeShip => "Crewing a trade voyage",
+            Self::LeavingTradeShip => "Returning ashore",
+            Self::HaulingConstructionSupplies => "Hauling construction supplies",
+            Self::BuildingBridge => "Building a bridge",
+            Self::ChoosingSettlement => "Choosing a settlement",
             Self::Idle => "Idle",
             Self::LookingForSettlement => "Looking for a settlement",
             Self::SailingToSettlement => "Sailing to a chosen settlement",

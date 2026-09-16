@@ -1,6 +1,8 @@
 //! Local consignment order book, purchase settlement and daily market flow.
 
-use super::{Good, GoodsInventory, MarketTradeTier, BASIS_POINTS, DEFAULT_MARKET_FEE_BPS};
+use super::{
+    FundedDemandCurve, Good, GoodsInventory, MarketTradeTier, BASIS_POINTS, DEFAULT_MARKET_FEE_BPS,
+};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +40,7 @@ pub struct MarketDayFlow {
     /// escrow or a promise that a buyer will still be present tomorrow.
     #[serde(default)]
     pub funded_unmet_unit_price: u64,
+    pub funded_demand: FundedDemandCurve,
 }
 
 impl MarketDayFlow {
@@ -57,6 +60,7 @@ impl MarketDayFlow {
             unaffordable_units: 0,
             funded_unmet_units: 0,
             funded_unmet_unit_price: 0,
+            funded_demand: FundedDemandCurve::empty(),
         }
     }
 
@@ -95,28 +99,19 @@ impl MarketDayFlow {
         self.unaffordable_units = self
             .unaffordable_units
             .saturating_add(u64::from(unaffordable));
-        self.funded_unmet_units = self
-            .funded_unmet_units
-            .saturating_add(u64::from(funded_unmet));
-        if funded_unmet > 0 {
-            let price = reference_price.max(1);
-            self.funded_unmet_unit_price = if self.funded_unmet_unit_price == 0 {
-                price
-            } else {
-                self.funded_unmet_unit_price.min(price)
-            };
-        }
+        self.funded_demand
+            .add(u64::from(funded_unmet), reference_price);
+        self.refresh_funded_summary();
     }
 
-    /// Quantity whose observed buying capacity covers this actual offer.
-    /// Mixing a cheap rejected order with richer buyers deliberately keeps
-    /// the lower bound; no producer may price every claim at the richest bid.
-    pub const fn funded_unmet_at(self, unit_price: u64) -> u64 {
-        if unit_price > 0 && unit_price <= self.funded_unmet_unit_price {
-            self.funded_unmet_units
-        } else {
-            0
-        }
+    fn refresh_funded_summary(&mut self) {
+        self.funded_unmet_units = self.funded_demand.total_units();
+        self.funded_unmet_unit_price = self.funded_demand.price_levels().next().unwrap_or(0);
+    }
+
+    /// Quantity whose own observed buying capacity covers this actual offer.
+    pub fn funded_unmet_at(&self, unit_price: u64) -> u64 {
+        self.funded_demand.units_at(unit_price)
     }
 
     pub const fn unmet_units(self) -> u64 {
@@ -814,14 +809,14 @@ impl MootMarket {
     /// Withdraw a caller-owned outstanding claim from the current day before
     /// replacing or resolving it. Callers must clear their claim bookkeeping
     /// at the same market-day boundary; historical flows are never mutated.
-    /// Removing the cheapest claimant cannot reconstruct richer individual
-    /// ceilings, so the surviving aggregate deliberately keeps its safe bound.
+    /// Its original bid removes only that price band, preserving other buyers.
     pub fn withdraw_unmet_demand(
         &mut self,
         good: Good,
         unavailable: u32,
         unaffordable: u32,
         funded: u32,
+        reference_price: u64,
     ) {
         let flow = &mut self.pool_mut(good).day;
         debug_assert!(flow.unavailable_units >= u64::from(unavailable));
@@ -833,7 +828,9 @@ impl MootMarket {
         flow.unaffordable_units = flow
             .unaffordable_units
             .saturating_sub(u64::from(unaffordable));
-        flow.funded_unmet_units = flow.funded_unmet_units.saturating_sub(u64::from(funded));
+        flow.funded_demand
+            .withdraw(u64::from(funded), reference_price);
+        flow.refresh_funded_summary();
         debug_assert!(flow.funded_unmet_units <= flow.unmet_units());
         if flow.funded_unmet_units == 0 {
             flow.funded_unmet_unit_price = 0;

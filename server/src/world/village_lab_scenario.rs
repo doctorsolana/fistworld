@@ -24,6 +24,7 @@ use shared::worldgen::WorldBiome;
 use crate::world::village;
 
 mod town_growth;
+pub(crate) mod worker_lifecycle;
 pub(crate) use town_growth::{choose_town_growth_site, town_growth_seed, GrowthProfile};
 
 pub(crate) const SECURE_VILLAGERS: usize = 8;
@@ -262,6 +263,8 @@ pub(crate) fn maintain_merchant_beacon_supply(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabScenario {
     Secure,
+    /// Connected physical worker acceptance; initial fixtures only.
+    WorkerLifecycle,
     /// Central inland, fixed charter and controlled real migration waves.
     TownGrowth,
     InlandMeadow,
@@ -294,6 +297,7 @@ impl LabScenario {
         {
             "secure" | "food-secure" | "meadow" | "coast" | "coastal" | "port" => Self::Secure,
             "town-growth" => Self::TownGrowth,
+            "worker-lifecycle" => Self::WorkerLifecycle,
             "inland-meadow" | "grain" | "grain-only" | "no-fishing" => Self::InlandMeadow,
             "policy-comparison" | "policy-compare" | "twin-meadow" | "twin" => {
                 Self::PolicyComparison
@@ -425,6 +429,7 @@ impl LabScenario {
     pub(crate) fn residents_per_village(self) -> usize {
         let default = match self {
             Self::EconomySoak => 0,
+            Self::WorkerLifecycle => 8,
             Self::TownGrowth => GrowthProfile::from_environment().founders(),
             Self::RegionalEconomy => SECURE_VILLAGERS,
             Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE,
@@ -2095,7 +2100,12 @@ pub(crate) fn stage_rendered_lab_arrivals(
     let scenario = LabScenario::from_environment();
     // Crowd-stress scenarios run their own arrivals; a skirmish field has no
     // settlement to arrive AT, so its default wave would only warn forever.
-    if scenario.is_crowd_stress() || scenario == LabScenario::Skirmish {
+    if scenario.is_crowd_stress()
+        || matches!(
+            scenario,
+            LabScenario::Skirmish | LabScenario::WorkerLifecycle
+        )
+    {
         return;
     }
     let waves = lab_arrival_waves();
@@ -2387,6 +2397,7 @@ pub(crate) fn stage_rendered_lab_once(
     derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
     settlements: Query<&Settlement>,
     mut warps: Query<&mut TimeWarp>,
+    mut clocks: Query<&mut WorldTime>,
     mut villager_seed: ResMut<crate::world::dev::VillagerSeed>,
     mut ids: ResMut<crate::world::identity::WorldIdAllocator>,
     mut staged: Local<bool>,
@@ -2540,6 +2551,23 @@ pub(crate) fn stage_rendered_lab_once(
         return;
     }
 
+    if scenario == LabScenario::WorkerLifecycle {
+        worker_lifecycle::stage(
+            &mut commands,
+            &terrain,
+            &mut villager_seed,
+            &mut ids,
+            colliders.as_deref_mut(),
+            derived.as_deref(),
+        );
+        *warp = TimeWarp::clamped(lab_warp());
+        if let Some(mut clock) = clocks.iter_mut().next() {
+            clock.set_normalized_time(6.0 / 24.0);
+        }
+        *staged = true;
+        return;
+    }
+
     // A battlefield stages BODIES, never a village: with no Settlement
     // anywhere the spawned villagers have nowhere to immigrate and idle
     // forever, so the whole scene holds still until the player acts.
@@ -2684,7 +2712,10 @@ pub(crate) fn stage_rendered_lab_once(
                 shared::components::SettlementDevelopment::from_seed(town_growth_seed(), 0),
                 profile.initial_inventory(),
             ));
-            if profile == GrowthProfile::InlandBoats {
+            if matches!(
+                profile,
+                GrowthProfile::InlandBoats | GrowthProfile::Closed32
+            ) {
                 commands.insert_resource(
                     crate::world::immigration::NaturalImmigrationDirector::manual_only(),
                 );
@@ -3163,7 +3194,10 @@ fn objective_expects_position_progress(objective: shared::components::CharacterO
     // exact bug class this diagnostic exists to catch.
     match objective {
         // Travel: standing still here for game-hours is a stall.
-        Objective::SailingToSettlement
+        Objective::BoardingTradeShip
+        | Objective::LeavingTradeShip
+        | Objective::HaulingConstructionSupplies
+        | Objective::SailingToSettlement
         | Objective::TravellingToSettlement
         | Objective::CarryingConstructionWood
         | Objective::GoingHome
@@ -3196,8 +3230,11 @@ fn objective_expects_position_progress(objective: shared::components::CharacterO
         | Objective::HaulingInterSettlementCargo
         | Objective::ReturningFromTradeRoute => true,
         // In place: queues, station work, rest and idling.
-        Objective::Idle
+        Objective::SailingTradeShip
+        | Objective::BuildingBridge
+        | Objective::Idle
         | Objective::LookingForSettlement
+        | Objective::ChoosingSettlement
         | Objective::WaitingToRetryMigration
         | Objective::QueuedForImmigration
         | Objective::RegisteringImmigration

@@ -141,11 +141,24 @@ pub(super) fn livestock_earthwork_effort(
         .then_some((yard / FARMYARD_MAX_CUT_FILL + grazing / FARM_FIELD_MAX_CUT_FILL) * 0.5)
 }
 
-/// How far above the waterline anything a settlement builds must stand, in metres.
+/// How far above the waterline ordinary inland plots must stand, in metres.
 ///
 /// Not zero: ground exactly at the waterline is shoreline, and a farmstead with
 /// its doorstep in the lake reads as a bug even though the maths permitted it.
 pub const FREEBOARD: f32 = 1.5;
+
+/// Fishing huts need a dry bank close enough for their authored pier to reach
+/// water. Keep manual permits and both automatic searches on the same shore
+/// standard; the hut footprint, doorway, side route and submerged pier tip are
+/// still checked individually. Applying inland freeboard only to manual huts
+/// rejected the same safe banks already used by automatic fishing permits.
+pub(super) fn building_freeboard(kind: SettlementBuildingKind) -> f32 {
+    if kind == SettlementBuildingKind::FishermansHut {
+        shared::components::SETTLEMENT_FREEBOARD
+    } else {
+        FREEBOARD
+    }
+}
 
 /// Keep every authored interaction point on navigable terrain.
 ///
@@ -154,12 +167,13 @@ pub const FREEBOARD: f32 = 1.5;
 /// centre is not enough near an edge: a valid-looking farmhouse can put its
 /// fields outside the map, and a hut can leave its door or pier unreachable.
 pub(super) fn plot_fits_navigation_bounds(
+    terrain: &WorldTerrain,
     kind: SettlementBuildingKind,
     candidate: Vec3,
     rotation: f32,
 ) -> bool {
-    let point_is_inside =
-        |point: Vec3| point.is_finite() && shared::terrain::world_pos_in_bounds(point.x, point.z);
+    let bounds = terrain.generator.active_map_bounds();
+    let point_is_inside = |point: Vec3| point.is_finite() && bounds.contains_xz(point.x, point.z);
     let rect_is_inside = |center: Vec3, half: Vec2| {
         [
             Vec2::new(-half.x, -half.y),
@@ -169,9 +183,7 @@ pub(super) fn plot_fits_navigation_bounds(
         ]
         .into_iter()
         .map(|corner| shared::rotation::local_to_world_xz(corner, rotation))
-        .all(|offset| {
-            shared::terrain::world_pos_in_bounds(center.x + offset.x, center.z + offset.y)
-        })
+        .all(|offset| bounds.contains_xz(center.x + offset.x, center.z + offset.y))
     };
 
     let definition = kind.placement_definition();

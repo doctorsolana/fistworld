@@ -46,6 +46,9 @@ inspected layouts, connected behavior, compressed art budget and portrait timing
 | `client/src/combat_mode.rs` | Compact combat status and optional Orders help |
 | `client/src/siege/controls.rs` | Selected siege controls and placement above mixed-army cards |
 | `client/src/ui/market/model.rs` | Pure market presentation: eligible purchase quote, cargo/listed ownership and disabled reasons |
+| `client/src/ui/business_management/model.rs`, `model/company.rs` | Separate site/company control models, stable control IDs and authoritative command payloads |
+| `client/src/ui/encyclopedia/search.rs` | Independent People/Places drafts, native keyboard focus and local-knowledge filtering |
+| `client/src/ui/encyclopedia/person_links/` | Durable person navigation, observed workplace rosters and return destinations |
 
 Do not put a new palette alias, hover state machine, modal scrim or scroll algorithm in a
 screen module. Screen-specific data colours (for example chart series or a health grade) are
@@ -502,6 +505,33 @@ hosts the page next frame. A market history page covers its owning market withou
 so BACK reveals the same retained market page and scroll state. ESC pops a page before it closes the window; the X closes everything
 and `close_pages_with_encyclopedia` clears the page targets so nothing reopens itself. New
 pages follow the same shape: spawn into the host, bind in place, no own close.
+Management targets explicitly distinguish `Site(Entity)` from `Company(CompanyId)`.
+**Company Settings** opens by stable company identity, including companies with no observed
+workplace; **Site Settings** names the exact workplace. The retained page can expose both
+scopes when a site belongs to a company. Each control carries its own scope and payload:
+site operations send `HeroBusinessOrder`, while treasury, governance, shares and company
+strategy send `HeroCompanyOrder`. Switching tabs never repurposes a site address for a
+company decision. Missing company metadata keeps an operated site read-only; an independent
+site requires matching assigned owner identity, never a display name. Known remote people
+retain their recorded names when their live body is outside the observed region.
+The server rechecks every permission. Company replies carry CompanyId;
+site replies carry the mapped originating entity. One receiver per message type routes
+feedback to its matching context rather than letting a late reply label another company.
+
+People and Places search fields remain outside their lists' rebuilt subtrees. Each retains
+its own bounded UTF-8 draft and cached case-insensitive search terms; People searches names,
+residence and workplace, while Places searches town names. Search filters already-visible
+knowledge and cannot discover an unseen person. Native keyboard events run after chat's
+input reset, capture typing and its closing frame, and preserve the draft on Enter/Escape.
+The first Escape leaves editing; a later Escape follows ordinary page/window navigation.
+
+Workplace, company and management worker links address `PersonId`, never a display name or
+transient body entity. They open the existing People record only if it is known, the local
+hero, or visible through developer capability. The destination search is cleared to reveal
+the linked record, with a return destination for the original workplace/company/settings
+page. Observed staff lists are not a census of unreplicated workers; roster refresh builds
+one employment index and deduplicates identities, and unchanged rows remain mounted.
+
 The company-founding form (`company_founding.rs`) is the model for an input form: the name and
 capital are a client-side draft, `sync_founding_texts` writes them into the form in place so a
 press shows instantly even while the pointer rests on the button (refresh-gated panels defer

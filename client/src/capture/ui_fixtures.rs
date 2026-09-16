@@ -80,7 +80,7 @@ pub(super) fn stage_capture_companies(commands: &mut Commands) {
         day: 8,
         master: aldric,
         from: shared::economy::BusinessStrategy::Balanced,
-        to: shared::economy::BusinessStrategy::Growth,
+        to: shared::economy::BusinessStrategy::Aggressive,
         reason: CompanyDecisionReason::ProfitableExpansion,
     });
     let brackwater = SettlementId(701);
@@ -155,7 +155,7 @@ pub(super) fn stage_capture_companies(commands: &mut Commands) {
             ..default()
         },
         CompanyManagementPolicy {
-            strategy: shared::economy::BusinessStrategy::Growth,
+            strategy: shared::economy::BusinessStrategy::Aggressive,
             ..default()
         },
         first_branches,
@@ -381,7 +381,7 @@ pub(super) fn open_capture_business_management(
     commands.insert_resource(crate::camera_rts::LocalPeerId(
         shared::player::peer_id_to_u64(hero.owner),
     ));
-    target.0 = Some(site);
+    target.0 = Some(crate::ui::business_management::BusinessManagementSelection::Site(site));
     return_to.0 = Some(shared::components::CompanyId(501));
     // The controls are an encyclopedia page: keep the window open so the page
     // host exists (closing it would clear the target again).
@@ -392,7 +392,10 @@ pub(super) fn open_capture_business_management(
 /// `FISTFORCE_CAPTURE_BUSINESS_SCROLL=<px>` scrolls the site-controls page so
 /// its lower sections (meters, input rows) can be photographed.
 pub(super) fn scroll_capture_business_page(
-    mut bodies: Query<&mut ScrollPosition, With<crate::ui::business_management::BodyScroll>>,
+    mut bodies: Query<
+        (&Node, &mut ScrollPosition),
+        With<crate::ui::business_management::BodyScroll>,
+    >,
 ) {
     let Some(offset) = std::env::var("FISTFORCE_CAPTURE_BUSINESS_SCROLL")
         .ok()
@@ -400,8 +403,8 @@ pub(super) fn scroll_capture_business_page(
     else {
         return;
     };
-    for mut scroll in bodies.iter_mut() {
-        if scroll.0.y != offset {
+    for (node, mut scroll) in bodies.iter_mut() {
+        if node.display != Display::None && scroll.0.y != offset {
             scroll.0.y = offset;
         }
     }

@@ -2,10 +2,11 @@
 
 use super::*;
 
-/// A short headless soak of the same world the player watches, with every
-/// village clock running at 100x. This is deliberately not a mocked
-/// production calculation: villagers still migrate, request permits, walk,
-/// build, enter workplaces, animate work and physically haul each load.
+/// A focused bootstrap supply regression at 100x: real migration, FIFO registration and permits,
+/// navigation, building, workplace doors and carried production. Development
+/// is deliberately stopped after the initial sites are admitted. Personal
+/// needs, market transactions and business management are not installed here;
+/// connected and town-growth labs cover the complete village schedule.
 #[test]
 fn hundred_x_world_runs_complete_visible_supply_loops() {
     use crate::player::hero::step_units;
@@ -31,12 +32,22 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
             claim_settlement_hall_obstacles,
             tag_villager_intent,
             seek_settlement,
-            arrive_at_settlement,
+            (arrive_at_settlement, advance_immigration_departures).chain(),
             recount_residents,
-            consider_permits,
+            (
+                consider_permits,
+                moot_services::advance_moot_service_queues,
+                moot_services::complete_moot_permit_pickups,
+            )
+                .chain(),
             run_construction_material_logistics,
             advance_construction,
-            ensure_farm_fields,
+            (
+                ensure_farm_fields,
+                ensure_livestock_pastures,
+                ensure_fishing_piers,
+            )
+                .chain(),
             crate::world::village_roads::plan_requested_roads,
             fill_vacancies,
             ensure_households,
@@ -47,8 +58,12 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
                 crate::world::village_roads::build_village_roads,
                 assign_farmer_routines,
                 assign_lumberjack_routines,
+                assign_quarry_routines,
+                assign_fishing_routines,
                 run_farmer_routines,
                 run_lumberjack_routines,
+                run_quarry_routines,
+                run_fishing_routines,
                 sync_carried_load,
             )
                 .chain(),
@@ -103,14 +118,15 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
 
     let step = std::time::Duration::from_secs_f32(1.0 / 60.0);
     let mut saw_indoors = false;
-    let mut saw_farming = false;
+    let mut saw_food_work = false;
     let mut saw_chopping = false;
-    let mut saw_wheat_carried = false;
+    let mut saw_food_carried = false;
     let mut saw_wood_carried = false;
     let mut saw_partially_supplied_site = false;
     let mut saw_fully_supplied_site = false;
     let mut founding_pipeline_filled = false;
-    // Forty-five wall-clock seconds represent seventy-five simulated minutes.
+    // Forty-five seconds of input time represent seventy-five world minutes;
+    // this is independent of the machine's wall-clock execution speed.
     // Emergency builders now carry two Wood per tree while professional
     // woodcutters carry three, so bootstrap supply needs several more visible
     // journeys before the completed workplaces can begin production.
@@ -129,18 +145,22 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
             .query::<&CharacterActivity>()
             .iter(world)
             .any(|activity| *activity == CharacterActivity::Indoors);
-        saw_farming |= world
+        saw_food_work |= world
             .query::<&CharacterActivity>()
             .iter(world)
-            .any(|activity| *activity == CharacterActivity::Farming);
+            .any(|activity| {
+                matches!(
+                    activity,
+                    CharacterActivity::Farming | CharacterActivity::Fishing
+                )
+            });
         saw_chopping |= world
             .query::<&CharacterActivity>()
             .iter(world)
             .any(|activity| *activity == CharacterActivity::Chopping);
-        saw_wheat_carried |= world
-            .query::<&CarriedLoad>()
-            .iter(world)
-            .any(|load| load.good == Some(Good::Wheat) && !load.is_empty());
+        saw_food_carried |= world.query::<&CarriedLoad>().iter(world).any(|load| {
+            matches!(load.good, Some(Good::Wheat | Good::Meat | Good::Food)) && !load.is_empty()
+        });
         saw_wood_carried |= world
             .query::<&CarriedLoad>()
             .iter(world)
@@ -189,12 +209,45 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
         })
         .collect();
     assert!(
-        built.contains(&SettlementBuildingKind::Farmstead),
+        built.iter().any(|kind| matches!(
+            kind,
+            SettlementBuildingKind::Farmstead
+                | SettlementBuildingKind::LivestockFarm
+                | SettlementBuildingKind::FishermansHut
+        )),
         "built={built:?} pending={pending_sites:?} suppliers={supplier_states:?}"
     );
     assert!(built.contains(&SettlementBuildingKind::House), "{built:?}");
     let field_count = world.query::<&FarmField>().iter(&world).count();
-    assert!(field_count >= 2 && field_count.is_multiple_of(2));
+    // Food type is the planner's economic/environmental choice. Verify the
+    // corresponding real worksite instead of forcing a crop business.
+    let food_sites: Vec<_> = world
+        .query::<&SettlementBuilding>()
+        .iter(&world)
+        .map(|site| site.kind)
+        .collect();
+    assert_eq!(
+        field_count,
+        food_sites
+            .iter()
+            .filter(|kind| **kind == SettlementBuildingKind::Farmstead)
+            .count()
+            * 2
+    );
+    assert_eq!(
+        world.query::<&LivestockPasture>().iter(&world).count(),
+        food_sites
+            .iter()
+            .filter(|kind| **kind == SettlementBuildingKind::LivestockFarm)
+            .count()
+    );
+    assert_eq!(
+        world.query::<&FishingPier>().iter(&world).count(),
+        food_sites
+            .iter()
+            .filter(|kind| **kind == SettlementBuildingKind::FishermansHut)
+            .count()
+    );
     let households: Vec<_> = world.query::<&Household>().iter(&world).collect();
     assert_eq!(households.len(), 1);
     assert_eq!(households[0].residents.len(), 3);
@@ -247,11 +300,17 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
         .collect();
     assert!(
         saw_indoors,
-        "workers should disappear into their workplaces: {people_states:?}; roads={road_states:?}"
+        "household/workplace doors should produce real indoor activity: {people_states:?}; roads={road_states:?}"
     );
-    assert!(saw_farming, "farm work must remain observable at 100x");
+    assert!(
+        saw_food_work,
+        "food production work must remain observable at 100x"
+    );
     assert!(saw_chopping, "tree work must remain observable at 100x");
-    assert!(saw_wheat_carried, "wheat must be physically hauled at 100x");
+    assert!(
+        saw_food_carried,
+        "the selected food output must be physically hauled at 100x"
+    );
     assert!(
         saw_wood_carried,
         "construction wood must be physically hauled at 100x"
@@ -265,23 +324,33 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
         "a worksite must receive its complete wood requirement at 100x"
     );
 
-    let wheat = world
-        .query::<&GoodsInventory>()
+    let deposited_food = world
+        .query::<(&SettlementBuilding, &GoodsInventory)>()
         .iter(&world)
-        .map(|inventory| inventory.amount(Good::Wheat))
+        .map(|(site, inventory)| match site.kind {
+            SettlementBuildingKind::Farmstead => inventory.amount(Good::Wheat),
+            SettlementBuildingKind::LivestockFarm => inventory.amount(Good::Meat),
+            SettlementBuildingKind::FishermansHut => inventory.amount(Good::Food),
+            _ => 0,
+        })
         .sum::<u32>();
-    assert!(wheat > 0, "the accelerated farm loop must retain wheat");
+    assert!(
+        deposited_food > 0,
+        "food must be produced, carried and deposited in its own workplace: {people_states:?}"
+    );
     assert!(
         world
             .query::<&CharacterAttributes>()
             .iter(&world)
             .any(|attributes| attributes.physique() > 10),
-        "a successful farm cycle must train physique even at 100x"
+        "a successful production cycle must train physique even at 100x"
     );
-    assert!(world
-        .query::<&GoodsInventory>()
-        .iter(&world)
-        .all(|inventory| inventory.used_bulk() <= inventory.bulk_capacity()));
+    assert!(
+        world
+            .query::<&GoodsInventory>()
+            .iter(&world)
+            .all(|inventory| inventory.used_bulk() <= inventory.bulk_capacity())
+    );
 }
 
 /// The whole loop, driven by the real systems.
@@ -291,10 +360,12 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
 /// on the map some way off, and let the server do everything else. Nothing
 /// here assigns a resident, an occupation or a plot.
 ///
-/// It runs the ACTUAL scheduled systems, including `step_units`, so the
-/// walking, the arrival radius and the permit clock are all under test. A
-/// test that called the decision functions directly would pass while the
-/// villagers stood still forever.
+/// This focused bootstrap fixture runs the production decision systems and
+/// `step_units`; the calendar stays in its opening shift and movement omits
+/// the full obstacle/path-queue schedule. It verifies voluntary settlement,
+/// physical construction supply and observed work, not a complete economy
+/// or route-feasibility soak. The 100x companion includes the route planner;
+/// connected and town-growth labs include needs, commerce and calendar days.
 #[test]
 fn three_villagers_settle_and_build_a_village_unaided() {
     use crate::player::hero::step_units;
@@ -313,9 +384,14 @@ fn three_villagers_settle_and_build_a_village_unaided() {
             tag_villager_intent,
             seek_settlement,
             step_units,
-            arrive_at_settlement,
+            (arrive_at_settlement, advance_immigration_departures).chain(),
             recount_residents,
-            consider_permits,
+            (
+                consider_permits,
+                moot_services::advance_moot_service_queues,
+                moot_services::complete_moot_permit_pickups,
+            )
+                .chain(),
             run_construction_material_logistics,
             advance_construction,
             ensure_farm_fields,
@@ -627,9 +703,11 @@ fn three_villagers_settle_and_build_a_village_unaided() {
         sites.len(),
         "every completed building needs storage"
     );
-    assert!(stores
-        .iter()
-        .all(|(kind, capacity)| { *capacity == kind.storage_bulk_capacity() }));
+    assert!(
+        stores
+            .iter()
+            .all(|(kind, capacity)| { *capacity == kind.storage_bulk_capacity() })
+    );
 
     // Where the test actually founded, so a failure elsewhere is diagnosable.
     println!("founded at {hall_position:?}, waterline {water}");

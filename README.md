@@ -22,11 +22,11 @@ arrival and reusable ship-navigation contract are documented in
 
 - A chunk-streamed generated world with biomes, rivers, coastlines, water, foliage,
   atmospheric day/night lighting and a seamless commander camera.
-- The ordinary launch creates a random seeded world with roughly ten inhabited settlements.
-  Towns spread across suitable land, with certified arrivals for separate land groups.
-  Surrounding land and each workplace's actual resource quality govern sizes and businesses;
-  named residents, homes, companies and finite opening stock become ordinary simulation
-  state. See [NEW-WORLD.md](docs/NEW-WORLD.md).
+- Hosting offers a small Frontier opening or an established world, both randomly seeded by
+  default. Frontier starts four bare Moot Halls with six settlers each on 20% of the full
+  map area; the established preset starts roughly ten inhabited settlements. Towns spread
+  across suitable land with certified arrivals, finite provisions and ordinary economic
+  simulation. See [NEW-WORLD.md](docs/NEW-WORLD.md).
 - [Wild horse herds](docs/WILDLIFE.md) on meadow grass, with server-owned identity,
   grazing and wandering near observers, and bounded client animation rigs. Stables
   and horse acquisition remain future work.
@@ -80,13 +80,14 @@ arrival and reusable ship-navigation contract are documented in
   business permit. When the hero masters several firms, the Hall always shows and transmits
   the selected `ACTING AS` company; personal and company money are never silently mixed.
   Daily payroll is charged to the completed shift at dawn, paid from the company treasury
-  and attributed to the worker's site; unpaid amounts remain explicit arrears.
+  and attributed to the worker's site; unpaid amounts remain owed to the named worker
+  after a job change.
 - Same-company Farmstead → Windmill → Bakery chains give active company input needs first
   claim on owned Wheat or Flour, then release only genuine surplus. Players manage this with
   readable days-of-stock coverage, `Company first`/`Best value`/`Company only` sourcing and
   `Sell surplus`/`Hold all`, while the server derives bounded unit targets from real staffing
-  and recipes. Tactical stewards carry the real
-  goods door to door; strategic simulation performs the same bounded transaction. Site
+  and recipes. Stewards carry the real goods door to door throughout the world,
+  including towns nobody is watching. Site
   ledgers retain attributed internal flow while company P&L eliminates both memorandum
   sides. The encyclopedia's Companies tab exposes a global firm directory, each Hero's
   multi-company share portfolio, cap tables, public offers, linked sites, capital assets,
@@ -97,7 +98,7 @@ arrival and reusable ship-navigation contract are documented in
   needs a completed Storage Hall and one employed Company Porter; that ordinary company
   owns the reusable route, physically collects the exact seller's cargo, carries it between
   settlements, and earns freight only after delivery. A small minimum call-out keeps a valid
-  partial load above the carrier's fixed wage cost. There is no hardcoded trade-company
+  partial load viable; distance and porter wages inform the freight quote. There is no hardcoded trade-company
   category, and active contracts/routes are visible in Hall and company UI.
 - Company Masters can also author merchant caravan timetables from the Companies encyclopedia.
   A route is a building-like operating asset based at a staffed Storage Hall, with two to eight
@@ -114,8 +115,12 @@ arrival and reusable ship-navigation contract are documented in
 - Builder-made obstacle-safe roads, a shared local travel graph and the paid Moot Steward,
   who combines consignment collection with audits and repairs of disconnected buildings.
 - Auditable civic finance: payroll reserves and durable arrears for every public role,
-  market fees, positive-profit levies, paid public procurement, Surplus-Only Poor Relief,
+  market fees, positive-profit levies, paid public procurement, Emergency Budget relief,
   food/payroll targets, staffing posture, permit subsidies and weekly Reeve policy review.
+- Local labour and trade respond to affordable demand: bounded bid bands, company-funded
+  wage competition, import-supported businesses, adaptive merchant offers and viable takeovers.
+  Households prioritize today's food and fuel before reserves; towns can fund emergency meals
+  after protecting public payroll. These flows use real goods and existing money.
 - Inspectable residents, households, buildings, worksites, markets, settlement progress,
   inventories and prosperity in the selection UI and encyclopedia. Every Hall also has a
   scrollable Permits & Property board with live permit prices/demand and inherited or insolvent
@@ -152,8 +157,10 @@ arrival and reusable ship-navigation contract are documented in
   Recommended processor capital is advisory and remains ordinary spendable company cash.
 - One authoritative linear simulation clock (one world minute per real second at 1x),
   with a 05:00 sunrise, 23:00 sunset and independently defined 06:00-18:00 work shift;
-  the same ordered village schedule in the live game and lab, aggregate off-screen village
-  production, and summary/detail replication.
+  the same ordered village schedule and physical routines everywhere, including a server
+  with no clients. Camera interest controls replication/presentation only. The former
+  aggregate offscreen fork is retired; fresh scale and observation-parity acceptance are
+  tracked in [SIMULATION-PARITY.md](docs/SIMULATION-PARITY.md).
 
 The live tier ladder is **Moot (Hamlet) → Village → Town**; City is future work.
 Its population gates are 12 and 30 residents. Village also requires 8 housed residents
@@ -172,7 +179,7 @@ constructs it. Those values remain prototype balance, not final design.
   The initial settlement network is generated; later new Halls still require developer access.
 - Versioned world-state persistence, migrations, backups and hosted durable storage.
 - Births, aging, non-combat/non-starvation mortality, decline and persistent tree depletion/regrowth.
-- Strategic caravan travel, larger transport, multi-wagon route scaling, escorts and
+- Larger overland transport, multi-wagon route scaling, escorts and
   interception remain ahead. Buyer-funded Stone contracts, player-authored physical multi-town
   routes and bounded NPC merchant trials using imperfect price reports are live. Porter
   hand-cart art is already integrated. Players can now
@@ -181,7 +188,7 @@ constructs it. Those values remain prototype balance, not final design.
   the same policies as NPC owners. Company-funded purchases of existing listed firms and
   durable restart persistence remain future work.
 - Physical palisades, stone walls, gates, guards and patrols.
-- Strategic travelling parties and armies with lossless tactical promotion/demotion.
+- Scalable shared-route travelling parties and armies without observation-dependent rules.
 - Military hiring/upkeep, morale, weapon classes, diplomacy, clans and realm war.
   Tactical battalions, formation orders, bounded shared route fields, melee and ballistic archers are live;
   see [combat controls and limits](docs/COMBAT-DESIGN.md).
@@ -211,18 +218,39 @@ live-panel rules are in [UI-ARCHITECTURE.md](docs/UI-ARCHITECTURE.md).
 ## Run the game
 
 ```bash
-./run.sh                 # new random inhabited world, then the client
-./run.sh --dev           # faster compile, slower runtime
-./run.sh --release       # shipping/performance measurement profile
+./run.sh                         # choose a world, then start the server and client
+./run.sh smallworld              # start the small Frontier preset immediately
+./run.sh setup                   # explicitly open the preset/custom-world chooser
+./run.sh server                  # choose a world and host without opening a client
+./run.sh server --world-config config/worlds/small-frontier.ron
+./run.sh client                  # join an already-running server
 ```
 
-The default `playtest` profile keeps release-grade optimisation without thin LTO and with
-incremental compilation. Use it for normal play and iteration.
+In an interactive terminal, `./run.sh` offers **Small frontier**, **Established world**,
+or **Custom world** before hosting. Small frontier uses about **20% of the full world
+area** (3.664 km per side), four bare Moot Halls and six settlers each. Its **three boat
+arrivals per day are shared across the whole world**: people enter by boat first, then
+choose a town from current conditions. Towns have no individual arrival quotas.
 
-Normal play disables God commands. Each server restart creates a fresh world; the seed
-is printed in the terminal and in `logs/game-*/server.log`. Reproduce its initial geography
-and settlements with `FISTWORLD_WORLD_SEED=12345 ./run.sh`. Joining another running server
-uses that server's recipe automatically. Explicit lab commands keep their fixed scenarios.
+Custom setup adjusts area, starting settlements, global immigration, population cap and
+seed; it saves a reusable RON file under `logs/world-setup/`. Use `--world-config FILE`
+with either `./run.sh` or `./run.sh server` to reuse it without a prompt. Existing explicit
+map/config settings and non-interactive launches skip the automatic chooser; with no
+config, the server retains the established-world default. Joining clients always use the
+host's world and cannot change its setup.
+
+Seeds are random by default. Repeat both the config and seed to reproduce an opening:
+
+```bash
+FISTWORLD_WORLD_SEED=12345 ./run.sh --world-config config/worlds/small-frontier.ron
+```
+
+Normal play disables God commands. Restarting the server creates a fresh world; a seed
+reproduces its opening, not later history. The seed is printed in the terminal and local
+host/client logs under `logs/game-*/`. Explicit labs keep their fixed scenarios.
+
+The default `playtest` build keeps release-grade optimisation with incremental compilation.
+Append `--dev` for faster compilation or `--release` for the shipping/performance profile.
 
 ### First journey
 
@@ -468,7 +496,7 @@ capture/profiling override only; ordinary gameplay and saved graphics settings r
 cargo check --workspace --all-targets
 cargo test --workspace
 cargo village-lab
-cargo village-scale-lab       # release-only 5,000-person / 30-settlement benchmark
+cargo village-scale-lab       # release-only synthetic subsystem probes; not a full server tick
 ```
 
 The full lab is intentionally ignored by ordinary `cargo test` runs.
@@ -495,9 +523,9 @@ The full lab is intentionally ignored by ordinary `cargo test` runs.
 - The server is authoritative; clients send intent and render replicated truth.
 - `SimulationDelta` captures real time, world time and global warp once per tick. Gameplay
   systems consume that clock instead of applying speed independently.
-- Ordinary observed villagers use physical routes and animations. Unobserved ordinary
-  residents retain durable identity/economic state and contribute through aggregate
-  settlement production rather than pathfinding.
+- Villagers use the same physical routes, work, cargo and needs routines everywhere,
+  including on a server with no clients. Observation changes network detail and client
+  presentation, not authoritative simulation.
 - `SettlementSummary` is globally visible; halls, buildings, markets, roads, fields and
   piers are region-scoped detail joined by stable IDs.
 - Tactical village travel uses bounded obstacle surveys plus a cached shared road graph.

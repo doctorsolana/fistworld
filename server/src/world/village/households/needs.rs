@@ -7,6 +7,37 @@ use shared::components::PersonId;
 /// per day, plus one per occupant: four residents consume half a bundle/day.
 /// Fuel affects the inspectable warmth reading, not food or work eligibility.
 pub(super) const HEARTH_UNITS_PER_WOOD: u32 = 16;
+pub(super) const PERSONAL_RESERVE_RATION_DAYS: u64 = 2;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ProvisionNeeds {
+    pub food: u32,
+    pub fuel: u32,
+    pub today_food: u32,
+    pub today_fuel: u32,
+}
+
+impl ProvisionNeeds {
+    pub fn for_home(
+        residents: usize,
+        economy: &HouseholdEconomy,
+        pantry: &GoodsInventory,
+        hearth: &HearthState,
+    ) -> Self {
+        let food = (residents as u32)
+            .saturating_mul(u32::from(economy.pantry_target_days))
+            .saturating_sub(pantry.edible_amount());
+        let fuel = hearth.deficit(residents, economy.fuel_target_days, pantry);
+        Self {
+            food,
+            fuel,
+            today_food: (residents as u32)
+                .saturating_sub(pantry.edible_amount())
+                .min(food),
+            today_fuel: hearth.deficit(residents, economy.fuel_target_days.min(1), pantry),
+        }
+    }
+}
 
 pub(super) fn daily_hearth_units(residents: usize) -> u32 {
     if residents == 0 {
@@ -20,6 +51,8 @@ pub(super) fn daily_hearth_units(residents: usize) -> u32 {
 #[derive(Component, Debug)]
 pub(crate) struct HearthState {
     pub credit: u32,
+    /// Actual bundles removed at this hearth; retained for conservation journals.
+    pub consumed_wood: u64,
     last_day: u32,
 }
 
@@ -27,6 +60,7 @@ impl Default for HearthState {
     fn default() -> Self {
         Self {
             credit: 0,
+            consumed_wood: 0,
             last_day: u32::MAX,
         }
     }
@@ -63,6 +97,7 @@ impl HearthState {
             .div_ceil(u64::from(HEARTH_UNITS_PER_WOOD))
             .min(u64::from(u32::MAX)) as u32;
         let burned = pantry.remove(Good::Wood, wood);
+        self.consumed_wood = self.consumed_wood.saturating_add(u64::from(burned));
         let energy = u64::from(self.credit) + u64::from(burned) * u64::from(HEARTH_UNITS_PER_WOOD);
         let served = energy.min(wanted);
         self.credit = energy.saturating_sub(served) as u32;
@@ -179,8 +214,10 @@ mod tests {
         hearth.advance(0, 4, &mut pantry, &mut economy);
         hearth.advance(1, 4, &mut pantry, &mut economy);
         assert_eq!((pantry.amount(Good::Wood), hearth.credit), (1, 8));
+        assert_eq!(hearth.consumed_wood, 1);
         hearth.advance(1, 4, &mut pantry, &mut economy);
         assert_eq!((pantry.amount(Good::Wood), hearth.credit), (1, 8));
+        assert_eq!(hearth.consumed_wood, 1);
         hearth.advance(4, 4, &mut pantry, &mut economy);
         assert_eq!(
             (
@@ -190,13 +227,16 @@ mod tests {
             ),
             (0, 0, 100)
         );
+        assert_eq!(hearth.consumed_wood, 2);
         hearth.advance(5, 4, &mut pantry, &mut economy);
+        assert_eq!(hearth.consumed_wood, 2);
         assert_eq!(
             (economy.fuel_satisfaction, economy.fuel_shortage_days),
             (0, 1)
         );
         pantry.add(Good::Wood, 1);
         hearth.advance(6, 4, &mut pantry, &mut economy);
+        assert_eq!(hearth.consumed_wood, 3);
         assert_eq!(
             (economy.fuel_satisfaction, economy.fuel_shortage_days),
             (100, 0)
@@ -211,6 +251,7 @@ mod tests {
         hearth.advance(0, 0, &mut pantry, &mut economy);
         hearth.advance(30, 0, &mut pantry, &mut economy);
         assert_eq!(pantry.amount(Good::Wood), 2);
+        assert_eq!(hearth.consumed_wood, 0);
         assert_eq!(hearth.deficit(0, 4, &pantry), 0);
     }
 }

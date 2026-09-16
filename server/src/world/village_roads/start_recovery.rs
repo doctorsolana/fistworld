@@ -126,7 +126,10 @@ pub(super) fn recover_prop_overlap(
         for direction in 0..DIRECTIONS {
             let angle = phase + direction as f32 * std::f32::consts::TAU / DIRECTIONS as f32;
             let candidate = point + Vec2::new(angle.cos(), angle.sin()) * (ring as f32 * STEP);
-            if !world_pos_in_bounds(candidate.x, candidate.y)
+            if !terrain
+                .generator
+                .active_map_bounds()
+                .contains_xz(candidate.x, candidate.y)
                 || buildings.is_some_and(|grid| grid.segment_blocked(point, candidate))
                 || !clear_escape(point, candidate, &props)
                 || !embodied_segment_is_dry(terrain, point, candidate)

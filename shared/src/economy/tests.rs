@@ -4,6 +4,25 @@ use super::*;
 use bevy::prelude::*;
 
 #[test]
+fn the_three_company_postures_roundtrip_on_the_wire() {
+    assert_eq!(
+        BusinessStrategy::ALL,
+        [
+            BusinessStrategy::Aggressive,
+            BusinessStrategy::Balanced,
+            BusinessStrategy::Conservative
+        ]
+    );
+    for strategy in BusinessStrategy::ALL {
+        let encoded = bincode::serialize(&strategy).unwrap();
+        assert_eq!(
+            bincode::deserialize::<BusinessStrategy>(&encoded).unwrap(),
+            strategy
+        );
+    }
+}
+
+#[test]
 fn new_heroes_begin_with_twenty_coins_without_changing_villager_money() {
     assert_eq!(Wallet::founding_hero().balance(), 20 * PENNIES_PER_COIN);
     assert_eq!(Wallet::founding_villager().balance(), 10 * PENNIES_PER_COIN);
@@ -349,7 +368,7 @@ fn market_distinguishes_missing_stock_from_rejected_prices() {
 }
 
 #[test]
-fn funded_shortages_retain_a_conservative_price_and_expire_with_daily_flow() {
+fn funded_shortages_preserve_price_bands_and_expire_with_daily_flow() {
     let mut market = MootMarket::founding();
     market.purchase_recording_demand(Good::Wood, 6, 300, Some(50), None);
     market.purchase_recording_demand(Good::Wood, 4, 20, Some(5), None);
@@ -357,7 +376,9 @@ fn funded_shortages_retain_a_conservative_price_and_expire_with_daily_flow() {
     assert_eq!(flow.funded_unmet_units, 10);
     assert_eq!(flow.funded_unmet_unit_price, 5);
     assert_eq!(flow.funded_unmet_at(5), 10);
-    assert_eq!(flow.funded_unmet_at(6), 0);
+    assert_eq!(flow.funded_unmet_at(6), 6);
+    assert_eq!(flow.funded_unmet_at(50), 6);
+    assert_eq!(flow.funded_unmet_at(51), 0);
 
     market.begin_new_day();
     assert_eq!(market.pool(Good::Wood).day.funded_unmet_at(5), 0);
@@ -404,7 +425,7 @@ fn later_income_can_fund_existing_shortage_without_repeating_missing_units() {
 fn replacing_a_missing_stock_claim_with_price_rejection_does_not_double_demand() {
     let mut market = MootMarket::founding();
     market.record_unmet_demand(Good::Bread, 3, 0, 2, 100);
-    market.withdraw_unmet_demand(Good::Bread, 3, 0, 2);
+    market.withdraw_unmet_demand(Good::Bread, 3, 0, 2, 100);
     market.record_unmet_demand(Good::Bread, 0, 3, 2, 100);
     let flow = market.pool(Good::Bread).day;
     assert_eq!(flow.requested_units(), 3);
@@ -418,16 +439,16 @@ fn withdrawing_claims_preserves_other_buyers_and_clears_the_last_funded_price() 
     let mut market = MootMarket::founding();
     market.record_unmet_demand(Good::Wood, 3, 0, 3, 20);
     market.record_unmet_demand(Good::Wood, 6, 0, 6, 50);
-    market.withdraw_unmet_demand(Good::Wood, 3, 0, 3);
+    market.withdraw_unmet_demand(Good::Wood, 3, 0, 3, 20);
     let flow = market.pool(Good::Wood).day;
     assert_eq!(flow.requested_units(), 6);
     assert_eq!(flow.funded_unmet_at(20), 6);
     assert_eq!(
         flow.funded_unmet_at(50),
-        0,
-        "a surviving conservative bound must not overpromise"
+        6,
+        "withdrawing a cheap bid must preserve richer buyers"
     );
-    market.withdraw_unmet_demand(Good::Wood, 6, 0, 6);
+    market.withdraw_unmet_demand(Good::Wood, 6, 0, 6, 50);
     assert_eq!(market.pool(Good::Wood).day.funded_unmet_unit_price, 0);
     assert_eq!(market.pool(Good::Wood).day.requested_units(), 0);
 }
@@ -693,10 +714,12 @@ fn estate_transfer_preserves_the_goods_price_and_future_proceeds() {
     assert_eq!(market.seller_listed_units(treasury, Good::Flour), 7);
     let purchase = market.purchase(Good::Flour, 7, u64::MAX, None, None);
     assert_eq!(purchase.trade.pennies, 7 * 61);
-    assert!(purchase
-        .fills
-        .iter()
-        .all(|fill| fill.seller == treasury && fill.unit_price == 61));
+    assert!(
+        purchase
+            .fills
+            .iter()
+            .all(|fill| fill.seller == treasury && fill.unit_price == 61)
+    );
 }
 
 #[test]

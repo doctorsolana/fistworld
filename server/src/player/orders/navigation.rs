@@ -52,6 +52,7 @@ impl FormationRoutes {
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn advance_marches(
     mut commands: Commands,
+    decks: Option<Res<crate::world::bridges::BridgeDecks>>,
     routes: Option<ResMut<FormationRoutes>>,
     terrain: Option<Res<WorldTerrain>>,
     buildings: Option<Res<SpatialObstacleGrid>>,
@@ -83,13 +84,15 @@ pub fn advance_marches(
     if routes.groups.is_empty() {
         return;
     }
-    let version = navigation_geometry_version(buildings.as_deref(), colliders.as_deref());
+    let version =
+        navigation_geometry_version(buildings.as_deref(), colliders.as_deref(), decks.as_deref());
     let clear_at = |radius: f32, a: Vec2, b: Vec2| {
-        crate::player::siege::ground_clear(
+        crate::player::siege::ground_clear_with_bridges(
             a,
             b,
             radius,
             terrain.as_deref(),
+            decks.as_deref(),
             buildings.as_deref(),
             colliders.as_deref(),
             derived.as_deref(),
@@ -100,7 +103,14 @@ pub fn advance_marches(
     let grounded = |p: Vec2| {
         Vec3::new(
             p.x,
-            terrain.as_deref().map_or(0.0, |t| t.get_height(p.x, p.y)),
+            terrain.as_deref().map_or(0.0, |t| {
+                crate::world::bridges::ground_height(
+                    t,
+                    decks.as_deref(),
+                    p,
+                    shared::physics::CHARACTER_NAV_RADIUS,
+                )
+            }),
             p.y,
         )
     };

@@ -19,16 +19,15 @@ use shared::components::{
     SettlementTier,
 };
 use shared::economy::{
-    business_working_capital, format_money, BusinessAccount, BusinessCondition, BusinessForSale,
-    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
-    BusinessStaffingPolicy, BusinessWagePolicy, Good, GoodsInventory, MootMarket,
-    SettlementEconomy,
+    BusinessAccount, BusinessCondition, BusinessForSale, BusinessManagementPolicy,
+    BusinessProcurementPolicy, BusinessSalePolicy, BusinessStaffingPolicy, BusinessWagePolicy,
+    Good, GoodsInventory, MootMarket, SettlementEconomy, business_working_capital, format_money,
 };
 
 use super::*;
-use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
-use crate::ui::hud::chrome::HudIcon;
+use crate::ui::foundation::{UiButtonStyle, UiButtonVariant, button_chrome};
 use crate::ui::hud::GodCapability;
+use crate::ui::hud::chrome::HudIcon;
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::{INK, INK_MUTED};
 use lightyear::prelude::{Connected, MessageSender};
@@ -810,12 +809,15 @@ fn permit_queue_summary(place: &PlaceRecord) -> String {
 pub(super) fn rebuild_place_list(
     mut commands: Commands,
     places: Res<KnownPlaces>,
+    search: Res<super::search::EncyclopediaSearch>,
     mut selected: ResMut<SelectedPlace>,
     mut selected_entry: ResMut<SelectedPlaceEntry>,
     content: Query<Entity, With<PlacesListContent>>,
     existing: Query<Entity, Or<(With<PlaceRow>, With<PlaceBuildingRow>)>>,
     mut count_text: Query<&mut Text, With<PlaceCountText>>,
     mut last: Local<Option<u64>>,
+    mut last_search: Local<u64>,
+    mut scroll: Query<&mut ScrollPosition, With<PlacesListViewport>>,
     ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
     let mut _ui_scope = ui_perf.scope("rebuild_place_list");
@@ -824,11 +826,29 @@ pub(super) fn rebuild_place_list(
     // while `KnownPlaces` moves every time a storehouse count ticks. Rebuild
     // on the ROW projection, not on the registry. A fresh container always fills.
     let fresh = existing.is_empty();
-    if !places.is_changed() && !selected.is_changed() && !fresh && last.is_some() {
+    let search_changed = *last_search != search.revision(EncyclopediaTab::Places);
+    if !places.is_changed() && !selected.is_changed() && !search_changed && !fresh && last.is_some()
+    {
         return;
     }
-    let ordered = places.ordered();
-    let signature = place_rows_signature(&ordered, selected.0);
+    let total = places.records.len();
+    let ordered: Vec<_> = places
+        .ordered()
+        .into_iter()
+        .filter(|place| search.matches_place(&place.name))
+        .collect();
+    if search_changed {
+        *last_search = search.revision(EncyclopediaTab::Places);
+        for mut position in &mut scroll {
+            position.y = 0.0;
+        }
+    }
+    let signature = place_rows_signature(
+        &ordered,
+        selected.0,
+        total,
+        search.active(EncyclopediaTab::Places),
+    );
     if !fresh && *last == Some(signature) {
         return;
     }
@@ -844,7 +864,7 @@ pub(super) fn rebuild_place_list(
 
     // Drop a selection that no longer exists.
     if let Some(id) = selected.0 {
-        if !ordered.iter().any(|record| record.id == id) {
+        if places.find_by_id(id).is_none() {
             selected.0 = None;
             *selected_entry = SelectedPlaceEntry::Overview;
         } else if let SelectedPlaceEntry::Building(index) = *selected_entry {
@@ -858,9 +878,13 @@ pub(super) fn rebuild_place_list(
     }
 
     for mut text in count_text.iter_mut() {
-        let label = match ordered.len() {
-            1 => "1 place".to_string(),
-            n => format!("{n} places"),
+        let label = if search.active(EncyclopediaTab::Places) {
+            format!("{} of {total}", ordered.len())
+        } else {
+            match ordered.len() {
+                1 => "1 place".to_string(),
+                n => format!("{n} places"),
+            }
         };
         if text.0 != label {
             text.0 = label;
@@ -873,7 +897,11 @@ pub(super) fn rebuild_place_list(
                 // Carries the row marker so the rebuild's despawn pass cleans it
                 // up; an unmarked empty state survives under a populated list.
                 PlaceRow(shared::components::SettlementId::default()),
-                Text::new("No places known yet"),
+                Text::new(if search.active(EncyclopediaTab::Places) {
+                    "No places match this search"
+                } else {
+                    "No places known yet"
+                }),
                 crate::ui::typography::text(15.0),
                 TextColor(INK_MUTED),
                 Node {
@@ -925,12 +953,17 @@ pub(super) fn rebuild_place_list(
 fn place_rows_signature(
     ordered: &[&PlaceRecord],
     selected: Option<shared::components::SettlementId>,
+    total: usize,
+    searching: bool,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     selected.hash(&mut hasher);
+    total.hash(&mut hasher);
+    searching.hash(&mut hasher);
     ordered.len().hash(&mut hasher);
     for record in ordered {
+        record.id.hash(&mut hasher);
         record.name.hash(&mut hasher);
         record.tier.label().hash(&mut hasher);
         record.buildings.len().hash(&mut hasher);
@@ -2975,6 +3008,7 @@ mod tests {
         world.insert_resource(SelectedPlace(Some(id)));
         world.insert_resource(SelectedPlaceEntry::Overview);
         world.init_resource::<crate::ui::perf::UiPerf>();
+        world.init_resource::<super::super::search::EncyclopediaSearch>();
         world.spawn((PlacesListContent, Node::default()));
         let header = world
             .spawn((
@@ -3013,10 +3047,12 @@ mod tests {
                 .count(),
             3
         );
-        assert!(!world
-            .query::<&LedgerIllustration>()
-            .iter(&world)
-            .any(|kind| *kind == LedgerIllustration::Hamlet));
+        assert!(
+            !world
+                .query::<&LedgerIllustration>()
+                .iter(&world)
+                .any(|kind| *kind == LedgerIllustration::Hamlet)
+        );
 
         *world.resource_mut::<SelectedPlaceEntry>() = SelectedPlaceEntry::Hall;
         schedule.run(&mut world);
@@ -3114,10 +3150,12 @@ mod tests {
         let model = worksite_detail_model(&site, 4, 10, shared::economy::Good::Wood, None, false);
         assert_eq!(model.title, "HOUSE WORKSITE");
         assert_eq!(model.subtitle, "BRACKWATER / AWAITING MATERIALS");
-        assert!(model
-            .tiles
-            .iter()
-            .any(|(label, value)| label == "WOOD" && value == "4 / 10"));
+        assert!(
+            model
+                .tiles
+                .iter()
+                .any(|(label, value)| label == "WOOD" && value == "4 / 10")
+        );
         let raising = shared::components::ConstructionSite {
             raising: true,
             ..site
@@ -3178,6 +3216,55 @@ mod tests {
         assert!(compass_bearing(Vec3::ZERO).contains("central"));
         assert!(compass_bearing(Vec3::new(-2000.0, 0.0, 0.0)).contains("west"));
         assert!(compass_bearing(Vec3::new(2000.0, 0.0, 0.0)).contains("east"));
+    }
+
+    #[test]
+    fn searching_places_preserves_selection_and_clearing_reveals_its_buildings() {
+        let mut world = World::new();
+        let mut place = explorer_place();
+        place.name = "Broadholt".into();
+        let id = place.id;
+        world.insert_resource(KnownPlaces {
+            records: vec![place],
+        });
+        world.insert_resource(SelectedPlace(Some(id)));
+        world.insert_resource(SelectedPlaceEntry::Hall);
+        world.init_resource::<crate::ui::perf::UiPerf>();
+        world.init_resource::<super::super::search::EncyclopediaSearch>();
+        world.spawn((PlacesListContent, Node::default()));
+        let mut schedule = Schedule::default();
+        schedule.add_systems(rebuild_place_list);
+        world
+            .resource_mut::<super::super::search::EncyclopediaSearch>()
+            .set_query(EncyclopediaTab::Places, "elsewhere");
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<SelectedPlace>().0, Some(id));
+        assert_eq!(
+            *world.resource::<SelectedPlaceEntry>(),
+            SelectedPlaceEntry::Hall
+        );
+        assert_eq!(world.query::<&PlaceBuildingRow>().iter(&world).count(), 0);
+        assert!(
+            world
+                .query::<&Text>()
+                .iter(&world)
+                .any(|text| text.0 == "No places match this search")
+        );
+        world
+            .resource_mut::<super::super::search::EncyclopediaSearch>()
+            .clear_places();
+        schedule.run(&mut world);
+        assert!(
+            world
+                .query::<&PlaceRow>()
+                .iter(&world)
+                .any(|row| row.0 == id)
+        );
+        assert!(world.query::<&PlaceBuildingRow>().iter(&world).count() > 0);
+        assert_eq!(
+            *world.resource::<SelectedPlaceEntry>(),
+            SelectedPlaceEntry::Hall
+        );
     }
 
     fn explorer_place() -> PlaceRecord {
@@ -3279,9 +3366,11 @@ mod tests {
         assert!(model.lines().any(|(label, value)| {
             label == "UNREST" && value.contains("Uneasy") && value.contains("rising")
         }));
-        assert!(model
-            .lines()
-            .any(|(label, value)| label == "HUNGER" && value.contains("50%")));
+        assert!(
+            model
+                .lines()
+                .any(|(label, value)| label == "HUNGER" && value.contains("50%"))
+        );
     }
 
     #[test]
@@ -3305,9 +3394,11 @@ mod tests {
             "QUALIFYING DAYS".into(),
             "2 of last 3 · 2 needed".into()
         )));
-        assert!(model.rows[living..]
-            .iter()
-            .any(|row| matches!(row, DetailRow::Line(label, _) if label == "HUNGER")));
+        assert!(
+            model.rows[living..]
+                .iter()
+                .any(|row| matches!(row, DetailRow::Line(label, _) if label == "HUNGER"))
+        );
     }
 
     #[test]
@@ -3317,15 +3408,21 @@ mod tests {
         // The subtitle names the owner and the town, so a site page can never
         // be mistaken for the company page it was opened from.
         assert_eq!(model.subtitle, "ONE SITE OF ADA  /  IN BRACKWATER");
-        assert!(model
-            .lines()
-            .any(|(label, value)| label == "OWNER" && value == "Ada"));
-        assert!(model
-            .lines()
-            .any(|(label, value)| label == "FARMLAND QUALITY" && value == "76%"));
-        assert!(model
-            .lines()
-            .any(|(label, value)| label == "STORE" && value.contains("Wheat 4")));
+        assert!(
+            model
+                .lines()
+                .any(|(label, value)| label == "OWNER" && value == "Ada")
+        );
+        assert!(
+            model
+                .lines()
+                .any(|(label, value)| label == "FARMLAND QUALITY" && value == "76%")
+        );
+        assert!(
+            model
+                .lines()
+                .any(|(label, value)| label == "STORE" && value.contains("Wheat 4"))
+        );
     }
 
     #[test]
@@ -3440,8 +3537,10 @@ mod tests {
             .run_system_once(sync_place_business_history_action)
             .unwrap();
         assert_eq!(world.get::<Node>(button).unwrap().display, Display::None);
-        assert!(world
-            .get::<crate::ui::history::BusinessHistoryButton>(button)
-            .is_none());
+        assert!(
+            world
+                .get::<crate::ui::history::BusinessHistoryButton>(button)
+                .is_none()
+        );
     }
 }

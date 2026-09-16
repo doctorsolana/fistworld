@@ -48,6 +48,10 @@ pub fn ensure_moot_administrations(
 /// output, audits roads and builds/adopts missing connectors.
 pub fn staff_moot_stewards(
     mut commands: Commands,
+    civic_offers: Option<Res<crate::world::village::civic_labor::CivicLaborMarket>>,
+    attributes: Query<&shared::components::CharacterAttributes>,
+    civic_busy: Query<(), crate::world::village::worker_activity::JobChangeBlocked>,
+    cargo: Query<&shared::economy::GoodsInventory>,
     mut halls: Query<(
         Entity,
         &Settlement,
@@ -107,6 +111,9 @@ pub fn staff_moot_stewards(
                 .filter(|(entity, _, _, intent, occupation, steward, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && !tavern_visitors.contains(*entity)
+                        && !civic_busy.contains(*entity)
+                        && cargo.get(*entity).map_or(true, |store| store.is_empty())
+                        && civic_offers.as_deref().is_none_or(|offers| !offers.prefers_private(*settlement_id, administration.steward_daily_salary, attributes.get(*entity).ok()))
                         && occupation.0.is_none()
                         && steward.is_none()
                         && employed_at.is_none()
@@ -122,7 +129,6 @@ pub fn staff_moot_stewards(
             };
             occupation.0 = Some("Moot Steward".to_string());
             administration.lead_steward = Some(name.0.clone());
-            administration.steward_daily_salary = MOOT_STEWARD_DAILY_SALARY;
             runtime.last_audit_at = None;
             commands.entity(candidate).insert((
                 MootSteward { settlement: hall },
@@ -176,6 +182,10 @@ pub fn staff_moot_stewards(
 /// job for either duty.
 pub fn staff_public_positions(
     mut commands: Commands,
+    civic_offers: Option<Res<crate::world::village::civic_labor::CivicLaborMarket>>,
+    attributes: Query<&shared::components::CharacterAttributes>,
+    civic_busy: Query<(), crate::world::village::worker_activity::JobChangeBlocked>,
+    cargo: Query<&shared::economy::GoodsInventory>,
     mut halls: Query<(
         Entity,
         &Settlement,
@@ -350,7 +360,11 @@ pub fn staff_public_positions(
                 // cargo or abandon a half-built connector. Keep paying the
                 // excess worker until their current physical duty completes;
                 // the next staffing pass will then release them cleanly.
-                if collection.is_some() || road_work.is_some() {
+                if collection.is_some()
+                    || road_work.is_some()
+                    || civic_busy.contains(entity)
+                    || cargo.get(entity).is_ok_and(|store| !store.is_empty())
+                {
                     retained_busy_workers.push((entity, *person_id, name.0.clone(), true));
                     continue;
                 }
@@ -367,7 +381,14 @@ pub fn staff_public_positions(
                 .remove::<NavigationRouteFailed>();
         }
         city_workers.extend(retained_busy_workers);
-        for (entity, ..) in guards.drain(desired_guards.min(guards.len())..) {
+        let mut retained_busy_guards = Vec::new();
+        for guard in guards.drain(desired_guards.min(guards.len())..) {
+            let entity = guard.0;
+            if civic_busy.contains(entity) || cargo.get(entity).is_ok_and(|store| !store.is_empty())
+            {
+                retained_busy_guards.push(guard);
+                continue;
+            }
             if let Ok((_, _, _, _, mut occupation, mut status, _, _, _, _, _)) =
                 villagers.get_mut(entity)
             {
@@ -379,6 +400,7 @@ pub fn staff_public_positions(
                 .remove::<shared::components::CivicEmployment>();
         }
 
+        guards.extend(retained_busy_guards);
         while city_workers.len() < desired_workers
             && usize::from(administration.reeve.is_some()) + city_workers.len() + guards.len()
                 < staffing_budget
@@ -398,6 +420,9 @@ pub fn staff_public_positions(
                 .filter(|(entity, _, _, intent, occupation, _, steward, employed_at, civic_job, _, _)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && !tavern_visitors.contains(*entity)
+                        && !civic_busy.contains(*entity)
+                        && cargo.get(*entity).map_or(true, |store| store.is_empty())
+                        && civic_offers.as_deref().is_none_or(|offers| !offers.prefers_private(*settlement_id, administration.steward_daily_salary, attributes.get(*entity).ok()))
                         && occupation.0.is_none()
                         && steward.is_none()
                         && employed_at.is_none()
@@ -449,6 +474,9 @@ pub fn staff_public_positions(
                 .filter(|(entity, _, _, intent, occupation, _, _, employed_at, civic_job, _, _)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && !tavern_visitors.contains(*entity)
+                        && !civic_busy.contains(*entity)
+                        && cargo.get(*entity).map_or(true, |store| store.is_empty())
+                        && civic_offers.as_deref().is_none_or(|offers| !offers.prefers_private(*settlement_id, administration.steward_daily_salary, attributes.get(*entity).ok()))
                         && occupation.0.is_none()
                         && employed_at.is_none()
                         && civic_job.is_none()
@@ -498,6 +526,15 @@ pub fn staff_public_positions(
 pub fn audit_village_roads(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
+    repair_busy: Query<
+        (),
+        Or<(
+            crate::world::village::worker_activity::JobChangeBlocked,
+            With<MoveTarget>,
+            With<TravelRoute>,
+            With<NavigationRoutePending>,
+        )>,
+    >,
     mut halls: Query<(
         Entity,
         &Settlement,
@@ -521,6 +558,7 @@ pub fn audit_village_roads(
         &VillageRoad,
         &shared::components::RoadOf,
         Option<&RoadConnectorFor>,
+        Has<crate::world::regional_roads::RegionalRoadSection>,
     )>,
     road_workers: Query<(
         Entity,
@@ -538,7 +576,6 @@ pub fn audit_village_roads(
         &shared::components::CivicEmployment,
         Option<&RoadBuilderRoutine>,
         Option<&crate::world::village::MarketCollectionRoutine>,
-        Has<crate::world::village::strategic::StrategicPerson>,
     )>,
 ) {
     let Some(clock) = world_time.iter().next() else {
@@ -586,18 +623,9 @@ pub fn audit_village_roads(
         {
             continue;
         }
-        let Some((
-            steward,
-            steward_name,
-            intent,
-            _,
-            _,
-            road_work,
-            collection,
-            steward_is_strategic,
-        )) = stewards
+        let Some((steward, steward_name, intent, _, _, road_work, collection)) = stewards
             .iter()
-            .filter(|(_, _, intent, steward, civic_job, _, _, _)| {
+            .filter(|(_, _, intent, steward, civic_job, _, _)| {
                 steward.settlement == hall
                     && intent.settlement() == Some(hall)
                     && civic_job.settlement == *settlement_id
@@ -606,12 +634,13 @@ pub fn audit_village_roads(
             // Prefer an actually idle steward. With two workers, selecting the
             // oldest one unconditionally could leave the second idle while a
             // collection or connector kept the primary occupied for hours.
-            .min_by_key(|(entity, _, intent, _, _, road_work, collection, _)| {
+            .min_by_key(|(entity, _, intent, _, _, road_work, collection)| {
                 (
                     !intent.is_settled()
                         || road_work.is_some()
                         || collection.is_some()
-                        || steward_request_owners.contains(entity),
+                        || steward_request_owners.contains(entity)
+                        || repair_busy.contains(*entity),
                     entity.to_bits(),
                 )
             })
@@ -625,14 +654,15 @@ pub fn audit_village_roads(
         let steward_available_for_repair = road_work.is_none()
             && collection.is_none()
             && intent.is_settled()
-            && !steward_owns_request;
+            && !steward_owns_request
+            && !repair_busy.contains(steward);
 
         let mut abandoned_roads = 0usize;
         let mut stalled_roads = 0usize;
         let mut observed_roads = HashSet::new();
         let mut settlement_roads = Vec::new();
         let mut connector_buildings = HashSet::new();
-        for (entity, road, road_of, connector) in roads.iter() {
+        for (entity, road, road_of, connector, regional) in roads.iter() {
             if road_of.0 != *settlement_id {
                 continue;
             }
@@ -642,6 +672,15 @@ pub fn audit_village_roads(
                 if let Some(connector) = connector {
                     connector_buildings.insert(connector.building);
                 }
+                continue;
+            }
+
+            if regional {
+                // Paid inter-town work has its own worker/cargo recovery and
+                // escrow. Local connector repair must never erase its paid
+                // prefix during a long haul or an ownership handoff. Completed
+                // regional roads still enter the Hall network above.
+                runtime.road_progress.remove(&entity);
                 continue;
             }
 
@@ -850,21 +889,6 @@ pub fn audit_village_roads(
             .copied()
             .filter(|_| steward_available_for_repair)
         {
-            if steward_is_strategic {
-                // Road inspection is cheap settlement bookkeeping and must
-                // continue while a town is off screen. Physical repair is a
-                // different matter: wake only the selected accountable steward,
-                // discard any abstract leisure journey, and keep them
-                // tactical until the connector routine reaches a safe end.
-                commands
-                    .entity(steward)
-                    .insert((
-                        crate::world::village::strategic::PendingStrategicDemotion,
-                        shared::components::CharacterMotion::STATIONARY,
-                    ))
-                    .remove::<crate::world::village::strategic::StrategicPerson>()
-                    .remove::<crate::world::village::strategic::StrategicTravel>();
-            }
             // Completing a building deliberately leaves its builder in the
             // Building intent until that person adopts the connector. If the
             // person was hired before the road turn, the steward must take
@@ -923,3 +947,6 @@ pub fn audit_village_roads(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

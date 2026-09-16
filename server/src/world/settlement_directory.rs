@@ -156,6 +156,8 @@ pub fn tag_settlement_detail_regions(
                 With<ConstructionSite>,
                 With<FarmField>,
                 With<FishingPier>,
+                With<shared::components::RoadBridge>,
+                With<shared::components::SettlementPort>,
             )>,
         ),
     >,

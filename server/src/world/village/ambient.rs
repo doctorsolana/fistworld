@@ -1,37 +1,31 @@
 //! Cheap ambient life for residents who currently lack a home or a job.
 //!
-//! Every observed resident owns an independent next-decision timestamp. The
+//! Every eligible resident owns an independent next-decision timestamp. The
 //! ECS pass is a cheap deadline scan; only people whose personal event is due
 //! make a choice. This avoids both a per-frame behaviour tree and a global
 //! crowd batch. Destinations remain deterministic roadside/gathering spots and
-//! ordinary movement reuses the cached village-road routing layer. Regions
-//! nobody observes receive no ambient orders at all.
+//! ordinary movement reuses the cached village-road routing layer. The same
+//! routines run everywhere, independent of camera and network interest.
 
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use shared::components::{
-    BuildingDoorUse, CharacterActivity, CharacterKind, CharacterName, Occupation, PersonId,
-    PlayerPosition, PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind,
-    VillageRoad, WorkStatus, WorldTime,
+    CharacterActivity, CharacterKind, CharacterName, Occupation, PersonId, PlayerPosition,
+    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, VillageRoad,
+    WorkStatus, WorldTime,
 };
-use shared::region::{RegionCoord, SimLevel};
+use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::WorldTerrain;
 
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
-use crate::player::hero::{navigation_segment_clear, MoveTarget};
-use crate::world::regions::RegionRegistry;
+use crate::player::hero::{MoveTarget, navigation_segment_clear};
 use crate::world::village_roads::{
-    NavigationLoad, NavigationRouteFailed, NavigationRoutePending, RoadBuilderRoutine, TravelRoute,
+    NavigationLoad, NavigationRouteFailed, NavigationRoutePending, TravelRoute,
 };
 
-use super::{
-    ConstructionMaterialRoutine, FarmerRoutine, FishingRoutine, HomeAssignment, HomeRoutine,
-    HouseholdShoppingRoutine, LumberjackRoutine, MootMealRoutine, MootQueueTicket, MootSteward,
-    PierTraversal, TavernVisitRoutine, TavernWorkerRoutine, TradeRouteRoutine, VillagerIntent,
-    WorkerOffDuty, WorkplaceDoorTransit,
-};
+use super::{ConstructionMaterialRoutine, HomeAssignment, VillagerIntent, WorkerOffDuty};
 
 const AMBIENT_REACH: f32 = 0.65;
 const ROADSIDE_SPACING: f32 = 6.0;
@@ -48,16 +42,15 @@ const ARRIVAL_DISPERSAL_DISTANCE: f32 = 82.0;
 const ARRIVAL_DISPERSAL_MIN_DISTANCE: f32 = 18.0;
 const AMBIENT_OCCUPANCY_CELL: f32 = 1.65;
 const MAX_AMBIENT_TRAVEL_SECONDS: f32 = 60.0;
-/// Visible flavour is admitted, not batch-decided. Every resident keeps an
+/// Optional leisure is admitted, not batch-decided. Every resident keeps an
 /// independent mind and deadline, but only this many optional journeys per
-/// settlement may occupy the expensive tactical route queue simultaneously.
+/// settlement may occupy the shared physical route queue simultaneously.
 /// Night shelter, work, food and other real needs bypass this cosmetic cap.
 const MAX_ACTIVE_AMBIENT_ROUTES_PER_SETTLEMENT: usize = 96;
 /// Shared monotonic world-time base for independent per-person deadlines.
 #[derive(Resource, Default)]
 pub struct AmbientClock {
     world_seconds_elapsed: f64,
-    had_tactical_observer: bool,
 }
 
 /// Roadside candidates are geometry, not a per-person decision. Cache the raw
@@ -369,7 +362,7 @@ fn spot_geometry_signature(
         signature = signature.wrapping_add(mix(value));
     }
     for (road, road_of) in roads.iter() {
-        let value = road_of.0 .0
+        let value = road_of.0.0
             ^ u64::from(road.built_through).rotate_left(11)
             ^ (road.points.len() as u64).rotate_left(29)
             ^ u64::from(road.width.to_bits()).rotate_left(43);
@@ -379,7 +372,7 @@ fn spot_geometry_signature(
         if building.kind != SettlementBuildingKind::Market {
             continue;
         }
-        let value = building_of.0 .0
+        let value = building_of.0.0
             ^ u64::from(position.0.x.to_bits()).rotate_left(5)
             ^ u64::from(position.0.z.to_bits()).rotate_left(23)
             ^ u64::from(rotation.map_or(0.0, |rotation| rotation.0).to_bits()).rotate_left(41);
@@ -522,9 +515,9 @@ fn ambient_place_occupied(occupied: &HashSet<(i32, i32)>, point: Vec2) -> bool {
     (-1..=1).any(|dx| (-1..=1).any(|dy| occupied.contains(&(x + dx, y + dy))))
 }
 
-/// Give unemployed or unhoused residents a little visible life when observed.
+/// Give unemployed or unhoused residents ordinary neighbourhood activity.
 ///
-/// This pass is intentionally bounded by wall time and region simulation LOD.
+/// Personal deadlines and shared route admission bound this pass in every region.
 /// It never pathfinds itself: it writes one `MoveTarget`, after which the
 /// existing budgeted route queue and shared road graph do the travel work.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -538,7 +531,6 @@ pub fn run_ambient_routines(
     ),
     world_time: Query<&WorldTime>,
     terrain: Option<Res<WorldTerrain>>,
-    regions: Option<Res<RegionRegistry>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     colliders: Option<Res<StaticColliders>>,
     derived: Option<Res<DerivedColliderLibrary>>,
@@ -562,33 +554,7 @@ pub fn run_ambient_routines(
         ),
         Without<CharacterKind>,
     >,
-    busy: Query<
-        (),
-        Or<(
-            With<FarmerRoutine>,
-            With<FishingRoutine>,
-            With<LumberjackRoutine>,
-            With<HomeRoutine>,
-            With<RoadBuilderRoutine>,
-            With<WorkplaceDoorTransit>,
-            With<BuildingDoorUse>,
-            With<PierTraversal>,
-            With<HouseholdShoppingRoutine>,
-            With<MootQueueTicket>,
-            With<MootMealRoutine>,
-            With<TradeRouteRoutine>,
-            Or<(With<TavernVisitRoutine>, With<TavernWorkerRoutine>)>,
-            Or<(
-                With<crate::world::settlement_development::CivicHallBuilderRoutine>,
-                With<crate::world::house_upgrades::HouseUpgradeBuilderRoutine>,
-            )>,
-            // The combined Moot Steward waits inside the hall between
-            // collections. An unhoused founding steward is still on duty and
-            // must not receive an ambient roadside order that fights the
-            // market system's stable Indoors state.
-            With<MootSteward>,
-        )>,
-    >,
+    busy: Query<(), super::worker_activity::AmbientStartBlocked>,
     mut villagers: Query<
         (
             Entity,
@@ -611,10 +577,7 @@ pub fn run_ambient_routines(
             ),
             Option<&mut AmbientRoutine>,
         ),
-        (
-            With<CharacterKind>,
-            Without<super::strategic::StrategicPerson>,
-        ),
+        (With<CharacterKind>,),
     >,
     mut commands: Commands,
 ) {
@@ -631,18 +594,11 @@ pub fn run_ambient_routines(
                 .collect()
         })
         .unwrap_or_default();
-    let any_tactical_observer = regions
-        .as_ref()
-        .is_none_or(|registry| registry.tactical_count() > 0);
-    if !any_tactical_observer && !ambient_clock.had_tactical_observer {
-        return;
-    }
-    ambient_clock.had_tactical_observer = any_tactical_observer;
     let Some(terrain) = terrain else { return };
     let Some(daylight) = world_time.iter().next().map(WorldTime::is_day) else {
         return;
     };
-    if any_tactical_observer {
+    {
         let signature = spot_geometry_signature(&settlements, &roads, &buildings);
         if !spot_cache.initialized || spot_cache.signature != signature {
             spot_cache.by_settlement = gathering_spots(&settlements, &roads, &buildings);
@@ -678,7 +634,7 @@ pub fn run_ambient_routines(
         name,
         position,
         mut facing,
-        region,
+        _region,
         intent,
         (occupation, work_status),
         person_id,
@@ -749,27 +705,6 @@ pub fn run_ambient_routines(
 
         let needs_ambient_life = off_duty.is_some() || occupation.0.is_none() || home.is_none();
         if !needs_ambient_life {
-            if routine.is_some() {
-                if matches!(
-                    *activity,
-                    CharacterActivity::Sitting | CharacterActivity::LyingDown
-                ) {
-                    activity.set_if_neq(CharacterActivity::Idle);
-                }
-                clear_owned_movement(&mut commands, entity);
-            }
-            continue;
-        }
-
-        // No tactical observer means no ambient decisions, routes, movement or
-        // animation. Keeping the last authoritative position is the temporary
-        // representation until strategic Person promotion/demotion lands.
-        let tactical = regions.as_ref().is_none_or(|registry| {
-            registry
-                .get(*region)
-                .is_some_and(|state| state.sim_level == SimLevel::Tactical)
-        });
-        if !tactical {
             if routine.is_some() {
                 if matches!(
                     *activity,
@@ -1292,6 +1227,7 @@ pub fn cleanup_orphaned_direct_transit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::regions::RegionRegistry;
 
     #[test]
     fn unhoused_night_rest_lies_down_and_dawn_releases_it() {
@@ -1665,10 +1601,11 @@ mod tests {
                 ..
             } if travel_seconds_left == MAX_AMBIENT_TRAVEL_SECONDS
         ));
-        assert!(app
-            .world()
-            .get::<NavigationRoutePending>(resident)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<NavigationRoutePending>(resident)
+                .is_some()
+        );
     }
 
     #[test]
@@ -1864,9 +1801,11 @@ mod tests {
         }));
         for (index, destination) in destinations.iter().enumerate() {
             let cell = ambient_occupancy_cell(Vec2::new(destination.x, destination.z));
-            assert!(destinations[index + 1..]
-                .iter()
-                .all(|other| { ambient_occupancy_cell(Vec2::new(other.x, other.z)) != cell }));
+            assert!(
+                destinations[index + 1..]
+                    .iter()
+                    .all(|other| { ambient_occupancy_cell(Vec2::new(other.x, other.z)) != cell })
+            );
         }
     }
 
@@ -1907,7 +1846,7 @@ mod tests {
                 VillagerIntent::Resident { settlement: hall },
                 Occupation(Some("Moot Steward".to_string())),
                 CharacterActivity::Indoors,
-                MootSteward { settlement: hall },
+                crate::world::village::MootSteward { settlement: hall },
             ))
             .id();
 
@@ -1930,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    fn five_thousand_unobserved_residents_receive_no_ambient_work() {
+    fn unobserved_residents_keep_life_routines_with_bounded_route_admission() {
         let mut app = App::new();
         app.init_resource::<Time>();
         app.init_resource::<AmbientClock>();
@@ -1978,7 +1917,7 @@ mod tests {
         app.update();
         assert!(villagers.iter().all(|villager| {
             let resident = app.world().entity(*villager);
-            !resident.contains::<AmbientRoutine>() && !resident.contains::<MoveTarget>()
+            resident.contains::<AmbientRoutine>() && !resident.contains::<MoveTarget>()
         }));
     }
 }

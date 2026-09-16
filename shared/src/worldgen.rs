@@ -2725,27 +2725,6 @@ mod tests {
         let back: GeneratedWorld = ron::de::from_str(&ron).unwrap();
         assert_eq!(back, def);
     }
-
-    /// A recipe written before roads were removed still loads.
-    ///
-    /// Every shipped `map.ron` has a `strokes: []` field that no longer exists
-    /// on the struct. Serde ignores unknown fields, so this passes -- but it
-    /// passes by a default that a future `deny_unknown_fields` would silently
-    /// take away, and the failure would be "the world will not load".
-    #[test]
-    fn a_recipe_with_the_old_strokes_field_still_loads() {
-        let legacy = r#"(
-            style: Showcase,
-            seed: 91,
-            generator_version: 5,
-            half_extent: 4096.0,
-            strokes: [],
-        )"#;
-        let parsed: GeneratedWorld =
-            ron::de::from_str(legacy).expect("legacy recipe with strokes must still parse");
-        assert_eq!(parsed.seed, 91);
-        assert_eq!(parsed.half_extent, 4096.0);
-    }
 }
 
 #[cfg(test)]

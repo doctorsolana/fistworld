@@ -3,6 +3,20 @@
 use super::*;
 
 const MAX_CERTIFIED_DELIVERY_FAILURES: u8 = 12;
+const BLOCKED_DELIVERY_RETRY_SECONDS: f64 = 60.;
+
+fn release_material_ticket(
+    commands: &mut Commands,
+    builder: Entity,
+    ticket: Option<&MootQueueTicket>,
+) {
+    if ticket.is_some_and(|ticket| ticket.kind == MootServiceKind::ConstructionMaterial) {
+        commands
+            .entity(builder)
+            .remove::<MootQueueTicket>()
+            .remove::<MootQueueTransit>();
+    }
+}
 
 /// Runtime acknowledgement that a completed market has been checked against
 /// the current 12 m square terrain contract. The marker is deliberately not
@@ -112,6 +126,7 @@ pub(crate) struct ConstructionDeliveryAccess {
 }
 
 struct MaterialRouteContext<'a> {
+    now: f64,
     terrain: &'a WorldTerrain,
     obstacles: Option<&'a SpatialObstacleGrid>,
     colliders: Option<&'a StaticColliders>,
@@ -138,6 +153,82 @@ impl MaterialRouteContext<'_> {
             self.colliders,
             self.derived,
         ) && crate::world::village_roads::road_segment_is_coarsely_dry(self.terrain, start, end)
+    }
+
+    /// Tree clearing follows material delivery. A reserved apron can therefore
+    /// still contain a live trunk: find a close, dry stand inside this same
+    /// frontage, without granting passage through props or expanding the plot.
+    /// These at most 41 point probes only run when a delivery is selected.
+    fn delivery_stand(&self, access: &PlannedRoadAccess) -> Option<Vec3> {
+        let door = *access.points.first()?;
+        let apron = *access.points.get(1)?;
+        if self.plausible_local_join(apron, apron) {
+            return Some(self.point(apron));
+        }
+        let forward = (apron - door).normalize_or_zero();
+        if forward == Vec2::ZERO {
+            return None;
+        }
+        let side = Vec2::new(-forward.y, forward.x);
+        let clearance = crate::world::navgrid::VILLAGER_PROP_RADIUS;
+        let width = (access.half_width - clearance).max(0.0);
+        for radius in [0.5, 1.0, 1.5, 2.0, 2.4] {
+            for offset in [
+                -forward,
+                forward,
+                side,
+                -side,
+                (-forward + side).normalize(),
+                (-forward - side).normalize(),
+                (forward + side).normalize(),
+                (forward - side).normalize(),
+            ] {
+                let point = apron + offset * radius;
+                // Stay outside the eventual building shell and within the
+                // existing interaction reach and reserved door/access ribbon.
+                if (point - door).dot(forward) < clearance + 0.25
+                    || !access.points.windows(2).take(2).any(|segment| {
+                        shared::components::distance_squared_to_segment(
+                            point, segment[0], segment[1],
+                        ) <= width * width
+                    })
+                    || self
+                        .obstacles
+                        .is_some_and(|grid| grid.segment_blocked(apron, point))
+                    || !self.plausible_local_join(point, point)
+                    || !crate::world::village_roads::road_segment_is_coarsely_dry(
+                        self.terrain,
+                        apron,
+                        point,
+                    )
+                {
+                    continue;
+                }
+                return Some(self.point(point));
+            }
+        }
+        None
+    }
+
+    /// A permit reserves terrain for a future road, but its trees may not have
+    /// been cleared yet. Do not reinstall that polyline as a walking route
+    /// when live props/buildings already prove it obstructed.
+    fn retained_route_clear(&self, start: Vec3, waypoints: &[RouteWaypoint]) -> bool {
+        let mut previous = start.xz();
+        for waypoint in waypoints {
+            let next = waypoint.position.xz();
+            if !crate::player::hero::navigation_segment_clear(
+                previous,
+                next,
+                self.obstacles,
+                self.colliders,
+                self.derived,
+            ) {
+                return false;
+            }
+            previous = next;
+        }
+        true
     }
 }
 
@@ -197,6 +288,36 @@ fn begin_material_delivery(
     access: Option<&PlannedRoadAccess>,
     force_full_corridor: bool,
 ) -> ConstructionMaterialPhase {
+    if let Some(access) = access {
+        let Some(stand) = routes.delivery_stand(access) else {
+            let destination = access
+                .points
+                .get(1)
+                .map_or(fallback, |point| routes.point(*point));
+            commands
+                .entity(builder)
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            return ConstructionMaterialPhase::WaitingForDeliveryAccess {
+                destination,
+                retry_after: routes.now + BLOCKED_DELIVERY_RETRY_SECONDS,
+            };
+        };
+        if stand.xz().distance_squared(access.points[1]) > 0.01 {
+            commands
+                .entity(builder)
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>()
+                .insert((
+                    MoveTarget(stand),
+                    ConstructionDeliveryAccess { entry: stand },
+                ));
+            return ConstructionMaterialPhase::ApproachingDeliveryAccess { entry: stand };
+        }
+    }
     let selected = access.and_then(|access| {
         material_delivery_entry(position.xz(), access, force_full_corridor, |start, end| {
             routes.plausible_local_join(start, end)
@@ -218,8 +339,12 @@ fn begin_material_delivery(
     {
         info!(
             "Village material delivery start: builder={builder:?} from=({:.1},{:.1}) entry=({:.1},{:.1}) apron=({:.1},{:.1}) distant_fallback={}",
-            position.x, position.z, entry.x, entry.z,
-            access.points[1].x, access.points[1].y,
+            position.x,
+            position.z,
+            entry.x,
+            entry.z,
+            access.points[1].x,
+            access.points[1].y,
             index == access.points.len() - 1 && index > 1,
         );
     }
@@ -241,6 +366,22 @@ fn finish_material_approach(
     routes: &MaterialRouteContext,
     access: Option<&PlannedRoadAccess>,
 ) -> ConstructionMaterialPhase {
+    if let Some(stand) = access.and_then(|access| {
+        routes
+            .delivery_stand(access)
+            .filter(|stand| stand.xz().distance_squared(access.points[1]) > 0.01)
+    }) {
+        if ground_distance(entry, stand) <= 0.1 {
+            // The caller has observed movement finish at this exact clear
+            // stand. Cargo is still on the carrier until the delivery phase.
+            commands
+                .entity(builder)
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>();
+            return ConstructionMaterialPhase::Delivering { destination: stand };
+        }
+        return begin_material_delivery(commands, builder, entry, stand, routes, access, false);
+    }
     let retained = access.and_then(|access| {
         access
             .points
@@ -271,6 +412,17 @@ fn finish_material_approach(
         })
         .collect();
     waypoints.dedup_by(|a, b| a.position.distance_squared(b.position) <= 0.01);
+    if !routes.retained_route_clear(entry, &waypoints) {
+        // Let the shared bounded planner route around the uncleared obstacle
+        // from this actual position, retaining the cargo and exact worksite.
+        commands
+            .entity(builder)
+            .remove::<TravelRoute>()
+            .remove::<NavigationRoutePending>()
+            .remove::<NavigationRouteFailed>()
+            .insert(MoveTarget(destination));
+        return ConstructionMaterialPhase::Delivering { destination };
+    }
     commands
         .entity(builder)
         .remove::<NavigationRoutePending>()
@@ -291,14 +443,22 @@ fn begin_material_egress(
     commands: &mut Commands,
     builder: Entity,
     position: Vec3,
-    terrain: &WorldTerrain,
+    routes: &MaterialRouteContext,
     access: Option<&PlannedRoadAccess>,
     return_entry: Option<Vec3>,
 ) -> ConstructionMaterialPhase {
     commands
         .entity(builder)
         .remove::<ConstructionDeliveryAccess>();
-    let Some((exit, waypoints)) = delivery_egress_points(terrain, access, return_entry) else {
+    if return_entry.is_some_and(|entry| ground_distance(position, entry) <= WORK_REACH) {
+        commands
+            .entity(builder)
+            .remove::<MoveTarget>()
+            .remove::<TravelRoute>();
+        return ConstructionMaterialPhase::Seeking;
+    }
+    let Some((exit, waypoints)) = delivery_egress_points(routes.terrain, access, return_entry)
+    else {
         commands
             .entity(builder)
             .remove::<MoveTarget>()
@@ -311,6 +471,15 @@ fn begin_material_egress(
             .remove::<MoveTarget>()
             .remove::<TravelRoute>();
         return ConstructionMaterialPhase::Seeking;
+    }
+    if !routes.retained_route_clear(position, &waypoints) {
+        commands
+            .entity(builder)
+            .remove::<TravelRoute>()
+            .remove::<NavigationRoutePending>()
+            .remove::<NavigationRouteFailed>()
+            .insert(MoveTarget(exit));
+        return ConstructionMaterialPhase::LeavingDeliveryAccess { exit };
     }
     // Reverse the incoming retained prefix. A nearby tree run exits nearby;
     // a full public-entry run retains its entire 200 m pre-road escape, which
@@ -423,6 +592,7 @@ pub fn run_construction_material_logistics(
         Without<CharacterKind>,
     >,
     mut tree_candidates: Local<TreeWorkCandidateCache>,
+    personal_needs: Query<(), worker_activity::PersonalNeedsOwnMovement>,
     mut builders: Query<
         (
             Entity,
@@ -468,6 +638,8 @@ pub fn run_construction_material_logistics(
         return;
     };
     let material_routes = MaterialRouteContext {
+        now: f64::from(clock.day) * f64::from(clock.cycle_duration())
+            + f64::from(clock.seconds_in_cycle),
         terrain: &terrain,
         obstacles: obstacles.as_deref(),
         colliders: colliders.as_deref(),
@@ -482,8 +654,7 @@ pub fn run_construction_material_logistics(
     // sparse-timber backoff last ten world minutes at 10x (and an hour at
     // 100x), which looked exactly like abandoned construction. The one-proof-
     // per-tick budget above still bounds the actual pathfinding cost.
-    let now = f64::from(clock.day) * f64::from(clock.cycle_duration())
-        + f64::from(clock.seconds_in_cycle);
+    let now = material_routes.now;
     // A terrain proof is bounded but not free. Stagger simultaneous builders
     // across ticks instead of letting a migration wave perform the same
     // impossible-landmass search four times in one server frame.
@@ -582,10 +753,44 @@ pub fn run_construction_material_logistics(
                 .remove::<ConstructionMaterialRoutine>()
                 .remove::<ConstructionDeliveryAccess>()
                 .remove::<PlayerConstructionAssignment>()
-                .remove::<MootQueueTicket>()
-                .remove::<MootQueueTransit>()
                 .remove::<MoveTarget>();
+            release_material_ticket(&mut commands, builder, queue_ticket);
             activity.set_if_neq(CharacterActivity::Idle);
+            continue;
+        }
+        let Ok((
+            _,
+            mut site,
+            mut site_view,
+            _site_position,
+            planned_access,
+            supply_cooldown,
+            site_is_player_project,
+            site_listed_for_sale,
+        )) = sites.get_mut(routine.site)
+        else {
+            commands
+                .entity(builder)
+                .remove::<ConstructionMaterialRoutine>()
+                .remove::<ConstructionDeliveryAccess>()
+                .remove::<PlayerConstructionAssignment>()
+                .remove::<MoveTarget>();
+            release_material_ticket(&mut commands, builder, queue_ticket);
+            activity.set_if_neq(CharacterActivity::Idle);
+            continue;
+        };
+        if site.stage != BuildStage::Supplying {
+            commands
+                .entity(builder)
+                .remove::<ConstructionMaterialRoutine>()
+                .remove::<ConstructionDeliveryAccess>();
+            release_material_ticket(&mut commands, builder, queue_ticket);
+            continue;
+        }
+        // Paid meals may reserve while someone builds. Keep the committed
+        // chop/load/corridor intact, then yield until the actual errand ends.
+        // Both sides use this same boundary, so they never alternate targets.
+        if personal_needs.contains(builder) && !routine.finishes_before_personal_needs() {
             continue;
         }
         let carried_wood = inventories
@@ -643,37 +848,6 @@ pub fn run_construction_material_logistics(
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
-        let Ok((
-            _,
-            mut site,
-            mut site_view,
-            _site_position,
-            planned_access,
-            supply_cooldown,
-            site_is_player_project,
-            site_listed_for_sale,
-        )) = sites.get_mut(routine.site)
-        else {
-            commands
-                .entity(builder)
-                .remove::<ConstructionMaterialRoutine>()
-                .remove::<ConstructionDeliveryAccess>()
-                .remove::<PlayerConstructionAssignment>()
-                .remove::<MootQueueTicket>()
-                .remove::<MootQueueTransit>()
-                .remove::<MoveTarget>();
-            activity.set_if_neq(CharacterActivity::Idle);
-            continue;
-        };
-        if site.stage != BuildStage::Supplying {
-            commands
-                .entity(builder)
-                .remove::<ConstructionMaterialRoutine>()
-                .remove::<ConstructionDeliveryAccess>()
-                .remove::<MootQueueTicket>()
-                .remove::<MootQueueTransit>();
-            continue;
-        }
         // A partial self-supplied load normally waits for another tree, but
         // ordinary villagers still finish their material run at dusk. Abort
         // an uncommitted tree/store approach and start the delivery now so
@@ -686,6 +860,7 @@ pub fn run_construction_material_logistics(
                 ConstructionMaterialPhase::Chopping { .. }
                     | ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
                     | ConstructionMaterialPhase::Delivering { .. }
+                    | ConstructionMaterialPhase::WaitingForDeliveryAccess { .. }
                     | ConstructionMaterialPhase::LeavingDeliveryAccess { .. }
             )
         {
@@ -769,13 +944,13 @@ pub fn run_construction_material_logistics(
                     | ConstructionMaterialPhase::LeavingDeliveryAccess { .. }
             ) {
                 // Material delivery predates the physical connector, but its
-                // permit-time access reservation begins at a certified door
-                // apron. Recover to that exact frontage rather than spiralling
+                // permit-time access reservation identifies the door frontage.
+                // Recover within that frontage rather than spiralling
                 // ever farther around the plot: the old growing-radius retry
                 // eventually selected water, map edges and crop plots and
                 // could cycle hundreds of failed routes despite a valid road
                 // claim sitting on the same worksite.
-                routine.failed_delivery_routes = routine.failed_delivery_routes.wrapping_add(1);
+                routine.failed_delivery_routes = routine.failed_delivery_routes.saturating_add(1);
                 commands
                     .entity(builder)
                     .remove::<NavigationRouteFailed>()
@@ -789,22 +964,23 @@ pub fn run_construction_material_logistics(
                 if routine.failed_delivery_routes >= MAX_CERTIFIED_DELIVERY_FAILURES
                     && !leaving_access
                 {
-                    // The access corridor was accepted by the road-width
-                    // terrain/building proof. Repeated tactical failures here
-                    // mean the bounded fine-grid planner cannot rediscover it
-                    // before construction creates the actual road. Preserve
-                    // the physical cargo and transaction, but complete this
-                    // last-mile handoff abstractly instead of deadlocking the
-                    // settlement forever.
+                    // A reservation is not a successful delivery. Keep this
+                    // load on its actual carrier and recheck the frontage;
+                    // neither stock nor the builder's stand may move remotely.
+                    let destination = planned_access
+                        .and_then(|access| access.points.get(1))
+                        .map_or(site.stand, |point| material_routes.point(*point));
                     warn!(
-                        "Village supplier {} could not traverse the certified {} access after {} routes; completing the carried-material handoff",
+                        "Village supplier {} cannot reach the {} delivery apron after {} routes; pausing with carried materials",
                         name.0,
                         site.kind.label(),
                         routine.failed_delivery_routes,
                     );
-                    routine.phase = ConstructionMaterialPhase::Delivering {
-                        destination: position.0,
+                    routine.phase = ConstructionMaterialPhase::WaitingForDeliveryAccess {
+                        destination,
+                        retry_after: now + BLOCKED_DELIVERY_RETRY_SECONDS,
                     };
+                    activity.set_if_neq(CharacterActivity::Idle);
                 } else if leaving_access {
                     if routine.failed_delivery_routes >= MAX_CERTIFIED_DELIVERY_FAILURES {
                         // The cargo transaction is already complete. A tree
@@ -831,7 +1007,7 @@ pub fn run_construction_material_logistics(
                             &mut commands,
                             builder,
                             position.0,
-                            &terrain,
+                            &material_routes,
                             planned_access,
                             if routine.failed_delivery_routes > 0 {
                                 None
@@ -843,9 +1019,7 @@ pub fn run_construction_material_logistics(
                 } else {
                     debug!(
                         "Village supplier {} could not reach delivery anchor {:.1},{:.1}; retrying through the certified access corridor",
-                        name.0,
-                        failed.goal.x,
-                        failed.goal.z,
+                        name.0, failed.goal.x, failed.goal.z,
                     );
                     routine.phase = begin_material_delivery(
                         &mut commands,
@@ -906,9 +1080,8 @@ pub fn run_construction_material_logistics(
                 .entity(builder)
                 .remove::<ConstructionMaterialRoutine>()
                 .remove::<ConstructionDeliveryAccess>()
-                .remove::<MootQueueTicket>()
-                .remove::<MootQueueTransit>()
                 .insert(MoveTarget(site.stand));
+            release_material_ticket(&mut commands, builder, queue_ticket);
             continue;
         }
 
@@ -946,9 +1119,9 @@ pub fn run_construction_material_logistics(
         );
         // Once Wood changes hands, retain the ready freight ticket until the
         // delivery route is actually installed (or the builder has physically
-        // reached a very close target). This keeps one body at the counter,
-        // gives pathfinding a stable start instead of a crowd-shoved pile, and
-        // only then lets the next freight applicant advance.
+        // reached a very close target). An explicitly blocked frontage releases
+        // the counter too: that safe wait owns cargo, not a queue place, and
+        // must be allowed to reach its later retry branch.
         let holding_freight_counter = queue_ticket.is_some_and(|ticket| {
             ticket.kind == MootServiceKind::ConstructionMaterial
                 && carried_wood > 0
@@ -964,15 +1137,17 @@ pub fn run_construction_material_logistics(
                 ConstructionMaterialPhase::LeavingDeliveryAccess { exit } => Some(exit),
                 _ => None,
             };
-            let route_ready = travel_route.is_some()
+            let waiting_for_frontage = matches!(
+                routine.phase,
+                ConstructionMaterialPhase::WaitingForDeliveryAccess { .. }
+            );
+            let route_ready = waiting_for_frontage
+                || travel_route.is_some()
                 || route_failed.is_some()
                 || phase_target
                     .is_some_and(|target| ground_distance(position.0, target) <= WORK_REACH);
             if route_ready {
-                commands
-                    .entity(builder)
-                    .remove::<MootQueueTicket>()
-                    .remove::<MootQueueTransit>();
+                release_material_ticket(&mut commands, builder, queue_ticket);
             } else {
                 continue;
             }
@@ -1580,9 +1755,31 @@ pub fn run_construction_material_logistics(
                     planned_access,
                 );
             }
+            ConstructionMaterialPhase::WaitingForDeliveryAccess {
+                destination,
+                retry_after,
+            } => {
+                activity.set_if_neq(CharacterActivity::Idle);
+                if now < retry_after {
+                    continue;
+                }
+                // A meal can finish somewhere else; this requests a fresh
+                // physical route from the current body, never a retained jump.
+                routine.phase = begin_material_delivery(
+                    &mut commands,
+                    builder,
+                    position.0,
+                    destination,
+                    &material_routes,
+                    planned_access,
+                    false,
+                );
+            }
             ConstructionMaterialPhase::Delivering { destination } => {
                 activity.set_if_neq(CharacterActivity::Idle);
-                if ground_distance(position.0, destination) > WORK_REACH {
+                if ground_distance(position.0, destination) > WORK_REACH
+                    || !material_routes.plausible_local_join(position.0.xz(), destination.xz())
+                {
                     ensure_move_target(&mut commands, builder, move_target, destination);
                     continue;
                 }
@@ -1621,7 +1818,7 @@ pub fn run_construction_material_logistics(
                         &mut commands,
                         builder,
                         position.0,
-                        &terrain,
+                        &material_routes,
                         planned_access,
                         if routine.failed_delivery_routes > 0 {
                             None
@@ -1665,7 +1862,10 @@ pub fn advance_construction(
     positions: Query<&PlayerPosition>,
     move_targets: Query<&MoveTarget>,
     route_failures: Query<&NavigationRouteFailed>,
-    home_routines: Query<(), With<HomeRoutine>>,
+    interruptions: (
+        Query<(), With<HomeRoutine>>,
+        Query<(), worker_activity::PersonalNeedsOwnMovement>,
+    ),
     mut intents: Query<&mut VillagerIntent>,
     mut activities: Query<&mut CharacterActivity>,
     mut pending: Query<(
@@ -1722,7 +1922,13 @@ pub fn advance_construction(
         if !player_commanded
             && under
                 .builder
-                .is_some_and(|builder| home_routines.get(builder).is_ok())
+                .is_some_and(|builder| interruptions.0.contains(builder))
+        {
+            continue;
+        }
+        if under
+            .builder
+            .is_some_and(|builder| interruptions.1.contains(builder))
         {
             continue;
         }
@@ -1881,10 +2087,30 @@ pub fn advance_construction(
                 );
             }
             BuildStage::Raising { seconds_left } => {
-                if let Some(builder) = under.builder {
+                let Some(builder) = under.builder else {
+                    continue;
+                };
+                let Ok(at) = positions.get(builder) else {
+                    under.builder = None;
+                    continue;
+                };
+                // The meal/home trip can finish far from the plot. Retain
+                // construction progress, but resume its physical stand before
+                // spending any more building time or playing the work clip.
+                if ground_distance(at.0, under.stand) > BUILD_REACH {
+                    ensure_move_target(
+                        &mut commands,
+                        builder,
+                        move_targets.get(builder).ok(),
+                        under.stand,
+                    );
                     if let Ok(mut activity) = activities.get_mut(builder) {
-                        activity.set_if_neq(CharacterActivity::Building);
+                        activity.set_if_neq(CharacterActivity::Idle);
                     }
+                    continue;
+                }
+                if let Ok(mut activity) = activities.get_mut(builder) {
+                    activity.set_if_neq(CharacterActivity::Building);
                 }
                 let left = seconds_left - world_dt;
                 if left > 0.0 {
@@ -2209,15 +2435,19 @@ pub(crate) fn ensure_market_ground_is_level(
 mod routing_tests;
 
 #[cfg(test)]
+#[path = "construction_frontage_tests.rs"]
+mod frontage_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
+        BuildStage, PlannedRoadAccess, UnderConstruction, WorldTerrain,
         construction_wood_load_is_ready, construction_wood_load_target, delivery_egress_points,
         level_construction_ground, market_ground_needs_leveling, material_stock_may_supply,
-        BuildStage, PlannedRoadAccess, UnderConstruction, WorldTerrain,
     };
     use bevy::prelude::{Entity, Vec2, Vec3};
     use shared::components::SettlementBuildingKind;
-    use shared::economy::{capacity, Good, GoodsInventory};
+    use shared::economy::{Good, GoodsInventory, capacity};
 
     #[test]
     fn construction_self_supply_fills_a_real_person_load_before_delivery() {

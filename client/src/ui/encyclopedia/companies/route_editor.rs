@@ -8,7 +8,7 @@ use super::widgets::{detail_button, spawn_note, spawn_section_title};
 use crate::ui::styles::{BUTTON_NORMAL, EMBER, INK, INK_MUTED, PLATE_RULE_SOFT, RADIUS};
 use bevy::prelude::*;
 use shared::components::{
-    SettlementBuildingKind, SettlementId, TradeRouteStopAction, MAX_TRADE_ROUTE_STOPS,
+    MAX_TRADE_ROUTE_STOPS, SettlementBuildingKind, SettlementId, TradeRouteStopAction,
 };
 use shared::economy::format_money;
 
@@ -64,9 +64,24 @@ pub(super) fn spawn_trade_route_editor(
                 .with_children(|copy| {
                     copy.spawn((
                         Text::new(if let Some(route) = draft.route {
-                            format!("EDIT CARAVAN ROUTE #{}", route.0)
+                            format!(
+                                "EDIT {} ROUTE #{}",
+                                if draft.ship.is_some() {
+                                    "SHIP"
+                                } else {
+                                    "CARAVAN"
+                                },
+                                route.0
+                            )
                         } else {
-                            "NEW CARAVAN ROUTE".to_string()
+                            format!(
+                                "NEW {} ROUTE",
+                                if draft.ship.is_some() {
+                                    "SHIP"
+                                } else {
+                                    "CARAVAN"
+                                }
+                            )
                         }),
                         crate::ui::typography::heading(24.0),
                         TextColor(INK),
@@ -101,7 +116,11 @@ pub(super) fn spawn_trade_route_editor(
         });
     spawn_note(
         parent,
-        "The caravan follows these stops from left to right, then loops back to stop one. Buy/Sell use public markets and real company cash. Load/Unload move owned stock through company Storage Halls without a sale.",
+        if draft.ship.is_some() {
+            "The ship follows these ports in order. Buy and Sell use each town’s existing market, company cash and normal market fees. Cargo is moved through the port by real workers; ship stops do not load private warehouses."
+        } else {
+            "The caravan follows these stops from left to right, then loops back to stop one. Buy/Sell use public markets and real company cash. Load/Unload move owned stock through company Storage Halls without a sale."
+        },
     );
     if !editor.message.is_empty() {
         spawn_note(parent, &editor.message);
@@ -109,8 +128,16 @@ pub(super) fn spawn_trade_route_editor(
 
     spawn_section_title(
         parent,
-        "CARAVAN & CARGO",
-        "one porter cart and one good per route",
+        if draft.ship.is_some() {
+            "SHIP & CARGO"
+        } else {
+            "CARAVAN & CARGO"
+        },
+        if draft.ship.is_some() {
+            "one hull and one good per route"
+        } else {
+            "one porter cart and one good per route"
+        },
     );
     parent
         .spawn(Node {
@@ -139,27 +166,43 @@ pub(super) fn spawn_trade_route_editor(
                 ))
                 .with_children(|card| {
                     card.spawn((
-                        Text::new("HOME STORAGE HALL"),
+                        Text::new(if draft.ship.is_some() {
+                            "SHIP / HOME PORT"
+                        } else {
+                            "HOME STORAGE HALL"
+                        }),
                         crate::ui::ledger::reading(11.5),
                         TextColor(INK_MUTED),
                     ));
                     card.spawn((
-                        Text::new(warehouse.map_or_else(
-                            || format!("Storage Hall #{}", draft.warehouse.0),
-                            |site| {
-                                format!(
-                                    "Storage Hall #{} / {} / {} porter{}",
-                                    site.id.0,
-                                    site.settlement,
-                                    site.workers,
-                                    if site.workers == 1 { "" } else { "s" }
+                        Text::new(if let Some((ship, kind)) = draft.ship {
+                            format!(
+                                "{} #{} / {}",
+                                kind.label(),
+                                ship.0,
+                                draft.stops.first().map_or_else(
+                                    || "Port unavailable".into(),
+                                    |stop| settlement_name(stop.settlement)
                                 )
-                            },
-                        )),
+                            )
+                        } else {
+                            warehouse.map_or_else(
+                                || format!("Storage Hall #{}", draft.warehouse.0),
+                                |site| {
+                                    format!(
+                                        "Storage Hall #{} / {} / {} porter{}",
+                                        site.id.0,
+                                        site.settlement,
+                                        site.workers,
+                                        if site.workers == 1 { "" } else { "s" }
+                                    )
+                                },
+                            )
+                        }),
                         crate::ui::ledger::reading(13.5),
                         TextColor(INK),
                     ));
-                    if draft.route.is_none() && warehouses.len() > 1 {
+                    if draft.route.is_none() && draft.ship.is_none() && warehouses.len() > 1 {
                         card.spawn(Node {
                             column_gap: Val::Px(5.0),
                             ..default()
@@ -201,6 +244,19 @@ pub(super) fn spawn_trade_route_editor(
                         crate::ui::ledger::reading(13.5),
                         TextColor(INK),
                     ));
+                    card.spawn((
+                        Text::new(format!(
+                            "Capacity: {} units of {} ({} bulk)",
+                            draft.cargo_capacity(),
+                            draft.good.label(),
+                            draft
+                                .ship
+                                .map_or(shared::economy::capacity::PORTER, |(_, kind)| kind
+                                    .capacity())
+                        )),
+                        crate::ui::ledger::reading(12.),
+                        TextColor(INK_MUTED),
+                    ));
                     card.spawn(Node {
                         flex_wrap: FlexWrap::Wrap,
                         column_gap: Val::Px(5.0),
@@ -214,6 +270,10 @@ pub(super) fn spawn_trade_route_editor(
                         editor_button(buttons, TradeRouteEditorAction::CargoUp(1), "+1");
                         editor_button(buttons, TradeRouteEditorAction::CargoDown(5), "-5");
                         editor_button(buttons, TradeRouteEditorAction::CargoUp(5), "+5");
+                        if draft.ship.is_some() {
+                            editor_button(buttons, TradeRouteEditorAction::CargoDown(25), "-25");
+                            editor_button(buttons, TradeRouteEditorAction::CargoUp(25), "+25");
+                        }
                     });
                 });
         });
@@ -285,7 +345,8 @@ pub(super) fn spawn_trade_route_editor(
     spawn_section_title(
         parent,
         "ORDERED STOPS",
-        "the highlighted instruction runs when the wagon reaches that town",
+        if draft.ship.is_some() { "the highlighted instruction runs when the ship reaches that port" }
+        else { "the highlighted instruction runs when the wagon reaches that town" },
     );
     parent
         .spawn(Node {
@@ -334,11 +395,15 @@ pub(super) fn spawn_trade_route_editor(
                         TextColor(INK),
                     ));
                     let has_marketplace = directory.settlements.iter().any(|settlement| {
-                        settlement.id == stop.settlement && settlement.has_marketplace
+                        settlement.id == stop.settlement && draft.accepts_settlement(settlement)
                     });
                     if !has_marketplace {
                         stop_card.spawn((
-                            Text::new("LOCAL MOOT — BUILD A MARKETPLACE"),
+                            Text::new(if draft.ship.is_some() {
+                                "COMPLETED MARKET & SUITABLE PORT REQUIRED"
+                            } else {
+                                "LOCAL MOOT — BUILD A MARKETPLACE"
+                            }),
                             crate::ui::ledger::reading(11.0),
                             TextColor(EMBER),
                         ));

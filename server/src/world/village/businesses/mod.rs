@@ -6,9 +6,12 @@
 //! solvency. All expensive decisions happen at most once per business per
 //! world day; per-tick work only appends compact events.
 
+/// Give a newly opened site two complete days after its possibly partial first day.
+pub(super) const NEW_BUSINESS_DAYS: u32 = 3;
+
 mod management;
 pub(super) mod market_response;
 mod transactions;
 
 pub use management::review_business_management;
-pub use transactions::{apply_business_events, BusinessEventQueue};
+pub use transactions::{BusinessEventQueue, apply_business_events};

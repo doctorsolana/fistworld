@@ -154,8 +154,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extension_grid_has_expected_compact_size() {
+    fn ocean_extension_has_valid_upward_geometry_and_covers_the_fade_within_budget() {
         let mesh = build_ocean_edge_mesh();
-        assert_eq!(mesh.count_vertices(), 231_361);
+        assert_eq!(mesh.primitive_topology(), PrimitiveTopology::TriangleList);
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(VertexAttributeValues::as_float3)
+            .expect("3D ocean positions");
+        // Resource ceilings, not a prescribed tessellation or an FPS claim.
+        assert!((4..=250_000).contains(&positions.len()));
+        let indices: Vec<_> = mesh.indices().expect("indexed ocean").iter().collect();
+        assert!(!indices.is_empty() && indices.len() <= 1_500_000);
+        assert_eq!(indices.len() % 3, 0);
+        assert!(indices.iter().all(|index| *index < positions.len()));
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        for position in positions {
+            let point = Vec3::from_array(*position);
+            assert!(point.is_finite());
+            assert_eq!(point.y, shared::water::WATER_SURFACE_OFFSET);
+            min = min.min(point);
+            max = max.max(point);
+        }
+        let required_extent = WATER_FADE_END + CHUNK_SIZE * 0.5;
+        assert!(min.x < -required_extent && min.z < -required_extent);
+        assert!(max.x > required_extent && max.z > required_extent);
+        let mut area = 0.0f64;
+        for triangle in indices.chunks_exact(3) {
+            let a = Vec3::from_array(positions[triangle[0]]);
+            let b = Vec3::from_array(positions[triangle[1]]);
+            let c = Vec3::from_array(positions[triangle[2]]);
+            let cross = (b - a).cross(c - a);
+            assert!(
+                cross.is_finite() && cross.y > 0.0,
+                "degenerate or reversed triangle"
+            );
+            area += f64::from(cross.y) * 0.5;
+        }
+        let bounds_area = f64::from(max.x - min.x) * f64::from(max.z - min.z);
+        assert!((area - bounds_area).abs() <= bounds_area * 1e-6);
+        let normals = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .and_then(VertexAttributeValues::as_float3)
+            .expect("ocean normals");
+        assert_eq!(normals.len(), positions.len());
+        assert!(normals
+            .iter()
+            .all(|normal| Vec3::from_array(*normal) == Vec3::Y));
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("ocean shader coverage markers");
+        };
+        assert_eq!(colors.len(), positions.len());
+        assert!(colors
+            .iter()
+            .all(|color| color.iter().all(|channel| channel.is_finite()) && color[2] > 1.0));
     }
 }

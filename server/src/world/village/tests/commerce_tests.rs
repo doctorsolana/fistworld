@@ -593,12 +593,12 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             LumberjackRoutine {
                 hut,
                 hall,
-                cycle: 0,
+                cycle: 7,
                 failed_tree_routes: 0,
                 failed_hut_routes: 0,
-                chop_seconds: 0.0,
+                chop_seconds: 37.0,
                 production_day: 0,
-                produced_today: 0,
+                produced_today: 2,
                 phase: LumberjackPhase::Inside { seconds_left: 1.0 },
             },
         ))
@@ -634,6 +634,10 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
         .entity(worker)
         .contains::<MarketCollectionRoutine>());
     assert!(!app.world().entity(worker).contains::<LumberjackRoutine>());
+    let saved = app.world().get::<LumberjackWorkProgress>(worker).unwrap();
+    assert_eq!((saved.cycle, saved.chop_seconds), (7, 37.0));
+    assert_eq!((saved.production_day, saved.produced_today), (0, 2));
+    assert!(app.world().get::<WorkerOffDuty>(worker).is_none());
     app.update();
     assert!(
         app.world()
@@ -644,6 +648,12 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             > 0,
         "the employee should carry one bounded load while no porter exists"
     );
+    app.world_mut().get_mut::<PlayerPosition>(worker).unwrap().0 = market_entrance;
+    app.update();
+    assert!(app.world().get::<MarketCollectionRoutine>(worker).is_none());
+    assert_eq!(app.world().get::<GoodsInventory>(worker).unwrap().used_bulk(), 0);
+    assert_eq!(app.world().get::<LumberjackWorkProgress>(worker).unwrap().chop_seconds, 37.0,
+        "consigning a real load must retain the interrupted chopping work");
 }
 
 #[test]
@@ -1337,6 +1347,149 @@ fn the_moot_steward_buys_inputs_for_any_business_policy() {
         3 * Good::Wheat.base_price(),
         "Treasury-owned migration stock receives the purchase through the same seller path"
     );
+}
+
+#[test]
+fn first_processor_inputs_preserve_the_real_first_payroll() {
+    for (cash, expected_units) in [(412, 3), (180, 1), (179, 0)] {
+        let mut app = village_test_app();
+        app.add_systems(
+            Update,
+            (run_market_collections, apply_business_events).chain(),
+        );
+        app.world_mut().spawn(WorldTime::new_default());
+        let settlement = shared::components::SettlementId(8_100);
+        let company_id = shared::components::CompanyId(8_101);
+        let company = spawn_test_company(&mut app, company_id.0, cash);
+        let mut stock = GoodsInventory::new(shared::economy::capacity::HALL);
+        assert_eq!(stock.add(Good::Wheat, 8), 8);
+        let mut market = MootMarket::founding();
+        market.consign(
+            shared::economy::MarketSeller::Treasury(settlement),
+            Good::Wheat,
+            8,
+            80,
+        );
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement,
+                Settlement {
+                    name: "Firstshift".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 1,
+                    treasury: 0,
+                },
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+                stock,
+                market,
+            ))
+            .id();
+        let mut procurement = BusinessProcurementPolicy::default();
+        procurement.set_rule(
+            Good::Wheat,
+            shared::economy::BusinessInputRule {
+                enabled: true,
+                coverage_days: 2,
+                reorder_below: 1,
+                target_units: 8,
+                maximum_unit_price: 80,
+            },
+        );
+        let business = app
+            .world_mut()
+            .spawn((
+                shared::components::BuildingId(8_102),
+                shared::components::BuildingOf(settlement),
+                shared::components::OperatedBy(company_id),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::Windmill,
+                    settlement: "Firstshift".into(),
+                    owner: None,
+                    quality: 1.0,
+                    workers: Vec::new(),
+                },
+                PlayerPosition(Vec3::new(12.0, 0.0, 0.0)),
+                PlayerRotation(0.0),
+                GoodsInventory::new(SettlementBuildingKind::Windmill.storage_bulk_capacity()),
+                BusinessSalePolicy::for_good(Good::Flour),
+                BusinessAccount::default(),
+                BusinessWagePolicy {
+                    daily_wage: 100,
+                    ..default()
+                },
+                BusinessStaffingPolicy::new(1),
+                procurement,
+                BusinessCondition::default(),
+            ))
+            .id();
+        let porter = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                MootSteward { settlement: hall },
+                PlayerPosition(SettlementBuildingKind::Hall.entrance_position(Vec3::ZERO, 0.0)),
+                CharacterActivity::Idle,
+                GoodsInventory::new(shared::economy::capacity::PORTER),
+            ))
+            .id();
+
+        // This is the real counter transaction, with physical Hall stock and
+        // a titled seller. No journey or production success is simulated.
+        app.update();
+        let company_cash = app.world().get::<CompanyAccount>(company).unwrap().cash;
+        let treasury = app.world().get::<Settlement>(hall).unwrap().treasury;
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(porter)
+                .unwrap()
+                .amount(Good::Wheat),
+            expected_units
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(hall)
+                .unwrap()
+                .amount(Good::Wheat),
+            8 - expected_units
+        );
+        assert_eq!(
+            app.world()
+                .get::<MootMarket>(hall)
+                .unwrap()
+                .listed_units(Good::Wheat),
+            8 - expected_units
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(business)
+                .unwrap()
+                .amount(Good::Wheat),
+            0
+        );
+        assert_eq!(company_cash, cash - u64::from(expected_units) * 80);
+        assert!(company_cash >= 100, "the first shift is still funded");
+        assert_eq!(
+            company_cash + treasury,
+            cash,
+            "the purchase only transfers existing money"
+        );
+        let account = app.world().get::<BusinessAccount>(business).unwrap();
+        assert_eq!(
+            account.current_day.input_expense,
+            u64::from(expected_units) * 80
+        );
+        assert_eq!(account.wage_arrears, 0);
+        if expected_units == 0 {
+            assert!(app.world().get::<MarketCollectionRoutine>(porter).is_none());
+        } else {
+            let trip = app.world().get::<MarketCollectionRoutine>(porter).unwrap();
+            assert_eq!(trip.business, business);
+            assert_eq!(trip.phase, MarketCollectionPhase::DeliveringInput);
+            assert_eq!(trip.reserved_units, expected_units);
+        }
+    }
 }
 
 #[test]

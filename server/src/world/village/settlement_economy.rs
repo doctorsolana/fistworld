@@ -81,6 +81,18 @@ fn advance_unrest(current: f32, target: f32) -> f32 {
 }
 
 const FOOD_HISTORY_DAYS: usize = 3;
+/// Spread discretionary funds over several meal boundaries. Relief does not
+/// spend payroll reserves or pretend the ordinary food target is untouchable.
+const EMERGENCY_RELIEF_BUDGET_DAYS: u64 = 3;
+
+fn emergency_relief_budget(
+    settlement: &Settlement,
+    administration: Option<&MootAdministration>,
+    policies: &SettlementPolicies,
+) -> u64 {
+    civic::civic_discretionary_budget(settlement, administration, Some(policies))
+        / EMERGENCY_RELIEF_BUDGET_DAYS
+}
 
 #[derive(Debug)]
 struct SettlementEconomyDay {
@@ -115,19 +127,6 @@ impl SettlementEconomyDay {
             return 0.0;
         }
         values[..days].iter().sum::<u32>() as f32 / days as f32
-    }
-
-    /// The just-finished day's production plus enough history to retain the
-    /// same three-day window used by the public economy reading.
-    fn recent_production_including_today(&self) -> f32 {
-        let previous_days = self.recorded_days.min(FOOD_HISTORY_DAYS.saturating_sub(1));
-        let total = self.produced_today.saturating_add(
-            self.production_history[..previous_days]
-                .iter()
-                .copied()
-                .sum(),
-        );
-        total as f32 / (previous_days + 1) as f32
     }
 }
 
@@ -362,8 +361,7 @@ pub fn update_settlement_economies(
     world_time: Query<&WorldTime>,
     mut runtime: ResMut<SettlementEconomyRuntime>,
     mut business_events: ResMut<BusinessEventQueue>,
-    mut queue_clock: Option<ResMut<MootQueueClock>>,
-    regions: Option<Res<RegionRegistry>>,
+    mut queue_clock: ResMut<MootQueueClock>,
     mut settlements: Query<(
         Entity,
         &shared::components::SettlementId,
@@ -405,29 +403,22 @@ pub fn update_settlement_economies(
         ),
         With<CharacterKind>,
     >,
-    service_state: Query<
-        (
-            Option<&RegionCoord>,
-            Option<&MootMealRoutine>,
-            Option<&MootQueueTicket>,
-        ),
-        With<CharacterKind>,
-    >,
+    service_state: Query<(Option<&MootMealRoutine>, Option<&MootQueueTicket>), With<CharacterKind>>,
     mut inventories: ParamSet<(
         Query<&mut GoodsInventory, (With<Settlement>, Without<SettlementBuilding>)>,
         Query<&mut GoodsInventory, With<SettlementBuilding>>,
+        Query<&mut GoodsInventory, With<crate::world::shipping::crew::ShipCrew>>,
     )>,
+    sea_crew: Query<(), With<crate::world::shipping::crew::ShipCrew>>,
 ) {
     let Some(day) = world_time.iter().next().map(|time| time.day) else {
         return;
     };
 
-    let mut stores: HashMap<shared::components::SettlementId, Vec<Entity>> = HashMap::new();
     let mut pantries: HashMap<shared::components::SettlementId, Vec<Entity>> = HashMap::new();
     let mut housing: HashMap<shared::components::SettlementId, u32> = HashMap::new();
     let mut employed: HashMap<shared::components::SettlementId, u32> = HashMap::new();
     for (entity, building, building_of, _, _, _, _, _, appearance) in buildings.iter() {
-        stores.entry(building_of.0).or_default().push(entity);
         if building.kind == SettlementBuildingKind::House {
             pantries.entry(building_of.0).or_default().push(entity);
         }
@@ -498,9 +489,6 @@ pub fn update_settlement_economies(
             *best = (*best).max(offer);
         }
     }
-    for store_entities in stores.values_mut() {
-        store_entities.sort_unstable_by_key(|entity| entity.to_bits());
-    }
     for pantry_entities in pantries.values_mut() {
         pantry_entities.sort_unstable_by_key(|entity| entity.to_bits());
     }
@@ -553,7 +541,9 @@ pub fn update_settlement_economies(
                 // Unhoused residents still buy one ration personally at the
                 // Moot because they have no household budget or storage.
                 for (resident, intent, _, nutrition, home) in residents.iter_mut() {
-                    if intent.settlement() != Some(entity) {
+                    if !intent.counts_as_resident() || intent.settlement() != Some(entity) {
+                        // A chosen destination is not completed immigration.
+                        // Keep the landing/long journey owner until registration.
                         continue;
                     }
                     // A direct Tavern meal is a real ration for this same meal
@@ -564,6 +554,34 @@ pub fn update_settlement_economies(
                         .is_some_and(|nutrition| nutrition.last_meal_day == Some(meal_day))
                     {
                         consumed = consumed.saturating_add(1);
+                        continue;
+                    }
+                    if service_state
+                        .get(resident)
+                        .is_ok_and(|(meal, _)| meal.is_some())
+                    {
+                        // The already-purchased ration remains reserved until its
+                        // owner physically collects it. Never buy or grant it twice.
+                        continue;
+                    }
+                    // A sailor eats the provisions actually taken aboard.
+                    // Do not empty a distant household pantry or summon a
+                    // shore meal trip in the middle of a voyage.
+                    if sea_crew.contains(resident) {
+                        let fed = inventories
+                            .p2()
+                            .get_mut(resident)
+                            .is_ok_and(|mut provisions| provisions.remove_edible(1) == 1);
+                        if fed {
+                            consumed = consumed.saturating_add(1);
+                        }
+                        if let Some(mut nutrition) = nutrition {
+                            if fed {
+                                nutrition.record_meal(meal_day);
+                            } else {
+                                nutrition.record_missed_meal();
+                            }
+                        }
                         continue;
                     }
                     let fed = home.is_some_and(|home| {
@@ -585,7 +603,13 @@ pub fn update_settlement_economies(
                 }
                 if let Ok(mut hall) = inventories.p0().get_mut(entity) {
                     for resident in individual_buyers.iter().copied() {
-                        let Ok((_, _, wallet, nutrition, _)) = residents.get_mut(resident) else {
+                        if service_state
+                            .get(resident)
+                            .is_ok_and(|(_, ticket)| ticket.is_some())
+                        {
+                            continue;
+                        }
+                        let Ok((_, _, wallet, _, _)) = residents.get_mut(resident) else {
                             continue;
                         };
                         let Some(mut wallet) = wallet else {
@@ -593,11 +617,18 @@ pub fn update_settlement_economies(
                             continue;
                         };
                         let mut fed = false;
-                        let mut collecting = false;
-                        for good in Good::READY_TO_EAT_PRIORITY {
-                            if hall.amount(good) == 0 {
-                                continue;
-                            }
+                        let chosen = households::cheapest_ready_food(&hall, market);
+                        if chosen.is_none() {
+                            let price = Good::Bread.base_price();
+                            market.record_unmet_demand(
+                                Good::Bread,
+                                1,
+                                0,
+                                u32::from(wallet.balance() >= price),
+                                price,
+                            );
+                        }
+                        for good in chosen.into_iter() {
                             let purchase = market.purchase_recording_demand(
                                 good,
                                 1,
@@ -615,40 +646,16 @@ pub fn update_settlement_economies(
                                 );
                                 consumed = consumed.saturating_add(1);
                                 fed = true;
-                                let tactical = queue_clock.is_some()
-                                    && service_state.get(resident).is_ok_and(
-                                        |(region, meal, ticket)| {
-                                            meal.is_none()
-                                                && ticket.is_none()
-                                                && region.is_some_and(|region| {
-                                                    regions.as_ref().is_some_and(|registry| {
-                                                        registry.get(*region).is_some_and(|state| {
-                                                            state.sim_level == SimLevel::Tactical
-                                                        })
-                                                    })
-                                                })
-                                        },
-                                    );
-                                if tactical {
-                                    if let Some(queue_clock) = queue_clock.as_deref_mut() {
-                                        moot_services::reserve_meal(
-                                            &mut commands,
-                                            queue_clock,
-                                            resident,
-                                            entity,
-                                            MootServiceKind::PersonalMeal,
-                                            good,
-                                            meal_day,
-                                        );
-                                        collecting = true;
-                                    }
-                                }
+                                moot_services::reserve_meal(
+                                    &mut commands,
+                                    &mut queue_clock,
+                                    resident,
+                                    entity,
+                                    MootServiceKind::PersonalMeal,
+                                    good,
+                                    meal_day,
+                                );
                                 break;
-                            }
-                        }
-                        if let Some(mut nutrition) = nutrition {
-                            if fed && !collecting {
-                                nutrition.record_meal(meal_day);
                             }
                         }
                         if !fed {
@@ -656,41 +663,45 @@ pub fn update_settlement_economies(
                         }
                     }
 
-                    // Solvent residents buy first. Poor Relief then sees the
-                    // real remaining surplus and cannot consume the emergency
-                    // floor out from under ordinary daily demand.
+                    // Personal purchases clear first. Relief has its own daily
+                    // cash envelope; the ordinary multi-day stock target must
+                    // not keep an affordable physical ration from an unfed person.
                     if let Some(policy) =
                         policies.filter(|policy| policy.poor_relief.allows_purchase())
                     {
-                        let reserve_floor = demand
-                            .saturating_mul(u32::from(policy.food_reserve_target_days.max(1)));
-                        // Require a real replenishment stream, but not one
-                        // which already covers every resident after a sudden
-                        // population increase. The protected stock floor below
-                        // is the actual surplus/solvency test.
-                        let production_is_active =
-                            day_state.recent_production_including_today() > 0.0;
-
+                        let mut relief_remaining =
+                            emergency_relief_budget(&settlement, administration, policy);
                         unaffordable.sort_unstable_by_key(|resident| resident.to_bits());
+                        // Rotate scarce meals instead of feeding the same first
+                        // entity whenever a town can afford only part of its need.
+                        if !unaffordable.is_empty() {
+                            let offset = meal_day as usize % unaffordable.len();
+                            unaffordable.rotate_left(offset);
+                        }
                         for resident in unaffordable.iter().copied() {
-                            // Public relief is a real market purchase, but only
-                            // sustainable surplus is eligible: production must
-                            // cover the roster and the purchase must leave the
-                            // configured number of full resident-days intact.
-                            if !production_is_active
-                                || hall.ready_to_eat_amount() == 0
-                                || hall.edible_amount().saturating_sub(1) < reserve_floor
+                            if service_state
+                                .get(resident)
+                                .is_ok_and(|(_, ticket)| ticket.is_some())
                             {
+                                continue;
+                            }
+                            if relief_remaining == 0 {
                                 break;
                             }
                             let mut relieved = false;
-                            for good in Good::READY_TO_EAT_PRIORITY {
-                                let purchase =
-                                    market.purchase(good, 1, settlement.treasury, None, None);
+                            for good in households::cheapest_ready_food(&hall, market).into_iter() {
+                                let purchase = market.purchase(
+                                    good,
+                                    1,
+                                    relief_remaining.min(settlement.treasury),
+                                    None,
+                                    None,
+                                );
                                 if purchase.trade.units == 1
                                     && settlement.treasury >= purchase.trade.pennies
                                 {
                                     settlement.treasury -= purchase.trade.pennies;
+                                    relief_remaining -= purchase.trade.pennies;
                                     if let Some(account) = civic_account.as_deref_mut() {
                                         account.record_poor_relief_expense(
                                             meal_day,
@@ -706,40 +717,15 @@ pub fn update_settlement_economies(
                                     );
                                     consumed = consumed.saturating_add(1);
                                     relieved = true;
-                                    let tactical = queue_clock.is_some()
-                                        && service_state.get(resident).is_ok_and(
-                                            |(region, meal, ticket)| {
-                                                meal.is_none()
-                                                    && ticket.is_none()
-                                                    && region.is_some_and(|region| {
-                                                        regions.as_ref().is_some_and(|registry| {
-                                                            registry.get(*region).is_some_and(
-                                                                |state| {
-                                                                    state.sim_level
-                                                                        == SimLevel::Tactical
-                                                                },
-                                                            )
-                                                        })
-                                                    })
-                                            },
-                                        );
-                                    if tactical {
-                                        if let Some(queue_clock) = queue_clock.as_deref_mut() {
-                                            moot_services::reserve_meal(
-                                                &mut commands,
-                                                queue_clock,
-                                                resident,
-                                                entity,
-                                                MootServiceKind::PoorRelief,
-                                                good,
-                                                meal_day,
-                                            );
-                                        }
-                                    } else if let Ok((_, _, _, Some(mut nutrition), _)) =
-                                        residents.get_mut(resident)
-                                    {
-                                        nutrition.record_meal(meal_day);
-                                    }
+                                    moot_services::reserve_meal(
+                                        &mut commands,
+                                        &mut queue_clock,
+                                        resident,
+                                        entity,
+                                        MootServiceKind::PoorRelief,
+                                        good,
+                                        meal_day,
+                                    );
                                     break;
                                 }
                             }
@@ -761,49 +747,18 @@ pub fn update_settlement_economies(
                 }
                 consumed.min(demand)
             } else {
-                // Migration/test compatibility for a malformed pre-market
-                // world. Production wiring always installs a market first.
-                let mut remaining = demand;
-                if remaining > 0 {
-                    if let Ok(mut hall) = inventories.p0().get_mut(entity) {
-                        remaining = remaining.saturating_sub(hall.remove_edible(remaining));
-                    }
-                    if remaining > 0 {
-                        for store in stores.get(settlement_id).into_iter().flatten() {
-                            if let Ok(mut inventory) = inventories.p1().get_mut(*store) {
-                                remaining =
-                                    remaining.saturating_sub(inventory.remove_edible(remaining));
-                            }
-                            if remaining == 0 {
-                                break;
+                // A missing public market cannot authorize taking private stock.
+                // No purchase occurred, so record unmet meals without moving goods.
+                for (_, intent, _, nutrition, _) in residents.iter_mut() {
+                    if intent.counts_as_resident() && intent.settlement() == Some(entity) {
+                        if let Some(mut nutrition) = nutrition {
+                            if nutrition.last_meal_day != Some(meal_day) {
+                                nutrition.record_missed_meal();
                             }
                         }
                     }
                 }
-                let consumed = demand.saturating_sub(remaining);
-                // Old/no-market worlds still produce an honest per-person
-                // result. Entity order keeps the fallback deterministic; live
-                // worlds use the wallet-aware branch above.
-                let mut local_residents: Vec<Entity> = residents
-                    .iter_mut()
-                    .filter_map(|(resident, intent, _, _, _)| {
-                        (intent.settlement() == Some(entity)).then_some(resident)
-                    })
-                    .collect();
-                local_residents.sort_unstable_by_key(|resident| resident.to_bits());
-                for (index, resident) in local_residents.into_iter().enumerate() {
-                    if let Ok((_, _, _, Some(mut nutrition), _)) = residents.get_mut(resident) {
-                        if nutrition.last_meal_day == Some(meal_day) {
-                            continue;
-                        }
-                        if index < consumed as usize {
-                            nutrition.record_meal(meal_day);
-                        } else {
-                            nutrition.record_missed_meal();
-                        }
-                    }
-                }
-                consumed
+                0
             };
             economy.unmet_food = demand.saturating_sub(consumed);
             let pressures = unrest_pressures(
@@ -836,26 +791,6 @@ pub fn update_settlement_economies(
                     .map_or(0, |inventory| inventory.edible_amount()),
             );
         }
-        // Before finance initialisation, retain the old aggregate reading for
-        // focused unit tests. In a live market, only Moot-owned stock is a
-        // reserve residents can actually purchase.
-        if market.is_none() {
-            for store in stores.get(settlement_id).into_iter().flatten() {
-                if pantries
-                    .get(settlement_id)
-                    .is_some_and(|houses| houses.contains(store))
-                {
-                    continue;
-                }
-                stock = stock.saturating_add(
-                    inventories
-                        .p1()
-                        .get_mut(*store)
-                        .map_or(0, |inventory| inventory.edible_amount()),
-                );
-            }
-        }
-
         let residents = settlement.residents;
         economy.edible_stock = stock;
         economy.reserve_days = if residents == 0 {
@@ -946,6 +881,7 @@ mod unrest_tests {
         let mut app = App::new();
         app.init_resource::<SettlementEconomyRuntime>()
             .init_resource::<BusinessEventQueue>()
+            .init_resource::<MootQueueClock>()
             .add_systems(Update, update_settlement_economies);
         app.world_mut().spawn(WorldTime::new_default());
         let hall = app

@@ -1,11 +1,10 @@
 //! Natural, physical arrivals from outside the playable world.
 //!
-//! Newcomers decide which settlement looks promising before they appear. They
-//! enter on an ocean-connected dinghy, sail to the coast nearest that choice,
+//! Newcomers enter on a real ocean-connected dinghy, then decide which
+//! settlement looks promising. They sail to the coast nearest that choice,
 //! abandon the temporary boat at landfall, and then use the ordinary migration
 //! route and visible Moot Hall queue. The director is deliberately small and
-//! demand-sensitive: seasons can change cadence later without putting a timer
-//! or a decision tree on every NPC.
+//! demand-sensitive, without adding a timer or decision tree to every NPC.
 
 use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
@@ -13,16 +12,17 @@ use lightyear::prelude::{NetworkTarget, Replicate};
 use shared::components::{
     AboardBoat, CharacterActivity, CharacterKind, CharacterMotion, CharacterObjective,
     ImmigrantArrivalBoat, PlayerBoat, PlayerPosition, PlayerRotation, Settlement,
-    SettlementBuildingKind, Vessel, WorldTime,
+    SettlementBuildingKind, SettlementId, Vessel, WorldTime,
 };
 use shared::economy::SettlementEconomy;
 use shared::region::RegionCoord;
 use shared::terrain::WorldTerrain;
 
 use crate::player::boat::{
+    BOAT_ARRIVE_EPSILON, CoastalVoyage, HELM_LOCAL, TerrainDependencies, VesselNavigation,
+    VesselNavigationQueue, VesselRoute, WaterPlanResult, WaterSearch,
     arrival::{ArrivalBodies, ArrivalOccupancy},
-    coastal_voyages, water_route, CoastalVoyage, VesselNavigation, VesselRoute,
-    BOAT_ARRIVE_EPSILON, HELM_LOCAL,
+    coastal_voyages,
 };
 use crate::world::village::VillagerIntent;
 #[cfg(test)]
@@ -30,13 +30,17 @@ use crate::world::village_roads::overland_trade_corridor_exists;
 use crate::world::village_roads::{IncrementalCorridorResult, IncrementalOverlandCorridorSearch};
 use std::time::Duration;
 
+mod admission;
+mod director;
+pub(crate) use admission::ChoosingSettlement;
+pub use director::plan_natural_immigration;
+
 const DEFAULT_IMMIGRANTS_PER_DAY: f32 = 3.0;
 const DEFAULT_WORLD_NPC_CAP: usize = 5_000;
 const MIN_IMMIGRANTS_PER_DAY: f32 = 0.1;
 const MAX_IMMIGRANTS_PER_DAY: f32 = 20.0;
 const FIRST_ARRIVAL_DELAY_DAYS: f32 = 0.06;
 const RETRY_DELAY_DAYS: f32 = 0.08;
-const MIN_ATTRACTIVENESS: f32 = 18.0;
 const MAX_ACTIVE_VOYAGES: usize = 8;
 const MAX_QUEUED_MANUAL_ARRIVALS: u8 = 8;
 /// Landfall discovery is terrain work, not a reason to suspend an entire
@@ -70,14 +74,21 @@ impl CachedSettlementLandfall {
 
 #[derive(Debug)]
 struct PendingLandfallSearch {
-    settlement: Entity,
-    settlement_name: String,
-    entrance: Vec3,
-    decision_seed: u64,
-    manual: bool,
+    // The selected opportunity owns both proof phases. Changing day-to-day
+    // scores must not discard a completed landfall and chase another town.
+    choice: SettlementChoice,
     candidates: Vec<CoastalVoyage>,
     candidate_index: usize,
     corridor: Option<IncrementalOverlandCorridorSearch>,
+    terrain_reads: TerrainDependencies,
+}
+
+/// One suspended decision per actual waiting hull, bounded by the arrival cap.
+/// Moving a frontier between turns preserves all of its certified work.
+#[derive(Debug, Default)]
+struct PendingDecision {
+    landfall: Option<PendingLandfallSearch>,
+    water: Option<PendingWaterVoyage>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -88,12 +99,7 @@ enum PendingLandfallResult {
 }
 
 impl PendingLandfallSearch {
-    fn new(
-        choice: &SettlementChoice,
-        decision_seed: u64,
-        manual: bool,
-        coastal_approaches: &[CoastalVoyage],
-    ) -> Self {
+    fn new(choice: &SettlementChoice, coastal_approaches: &[CoastalVoyage]) -> Self {
         let mut candidates = coastal_approaches.to_vec();
         candidates.sort_by(|a, b| {
             a.landing
@@ -102,23 +108,30 @@ impl PendingLandfallSearch {
                 .total_cmp(&b.landing.xz().distance_squared(choice.entrance.xz()))
         });
         Self {
-            settlement: choice.entity,
-            settlement_name: choice.name.clone(),
-            entrance: choice.entrance,
-            decision_seed,
-            manual,
+            choice: choice.clone(),
             candidates,
             candidate_index: 0,
             corridor: None,
+            terrain_reads: default(),
         }
     }
 
     fn advance(&mut self, terrain: &WorldTerrain) -> PendingLandfallResult {
+        if self.terrain_reads.changed(terrain) {
+            self.candidate_index = 0;
+            self.corridor = None;
+        }
         let Some(candidate) = self.candidates.get(self.candidate_index).copied() else {
             return PendingLandfallResult::Unreachable;
         };
         let corridor = self.corridor.get_or_insert_with(|| {
-            IncrementalOverlandCorridorSearch::new(candidate.landing.xz(), self.entrance.xz())
+            let corridor = IncrementalOverlandCorridorSearch::new(
+                candidate.landing.xz(),
+                self.choice.entrance.xz(),
+            );
+            let (min, max) = corridor.terrain_bounds();
+            self.terrain_reads.observe_bounds(terrain, min, max);
+            corridor
         });
         match corridor.advance(terrain, LANDFALL_SEARCH_SLICE) {
             IncrementalCorridorResult::Pending => PendingLandfallResult::Pending,
@@ -150,9 +163,16 @@ pub struct NaturalImmigrationDirector {
     coastal_approaches: Vec<CoastalVoyage>,
     settlement_landfalls: bevy::platform::collections::HashMap<Entity, CachedSettlementLandfall>,
     pending_landfall: Option<PendingLandfallSearch>,
+    pending_water: Option<PendingWaterVoyage>,
     /// Explicit lab requests. They use the normal physical arrival pipeline
     /// but do not enable recurring immigration or disturb its calendar.
     manual_arrivals: u8,
+    configured: bool,
+    steady_rate: bool,
+    deciding: Option<Entity>,
+    decision_cursor: Option<(u64, u64)>,
+    suspended_decisions: bevy::platform::collections::HashMap<Entity, PendingDecision>,
+    terrain_revision: Option<(u64, u32)>,
 }
 
 impl Default for NaturalImmigrationDirector {
@@ -203,12 +223,39 @@ impl Default for NaturalImmigrationDirector {
             coastal_approaches: Vec::new(),
             settlement_landfalls: default(),
             pending_landfall: None,
+            pending_water: None,
             manual_arrivals: 0,
+            configured: false,
+            steady_rate: false,
+            deciding: None,
+            decision_cursor: None,
+            suspended_decisions: default(),
+            terrain_revision: None,
         }
     }
 }
 
 impl NaturalImmigrationDirector {
+    /// Allocates only when the opt-in world observer explicitly requests a sample.
+    pub(crate) fn planning_status(&self) -> serde_json::Value {
+        let water = self.pending_water.as_ref().map(|pending| {
+            let (phase, expanded, frontier, sampled_points, revision) = pending.search.progress();
+            serde_json::json!({"town_entity":pending.choice.entity.to_bits(),
+                "town_name":pending.choice.name, "start":pending.entry.start.to_array(),
+                "mooring":pending.voyage.mooring.to_array(), "phase":phase,
+                "expanded":expanded,"frontier":frontier,"sampled_points":sampled_points,"revision":revision,
+                "grid_metres":pending.search.grid_metres()})
+        });
+        let land = self.pending_landfall.as_ref().map(|pending| {
+            serde_json::json!({"town_entity":pending.choice.entity.to_bits(),
+                "candidate":pending.candidate_index,"candidates":pending.candidates.len(),
+                "corridor":pending.corridor.as_ref().map(|corridor|format!("{corridor:?}"))})
+        });
+        serde_json::json!({"boat":self.deciding.map(Entity::to_bits),"land":land,"water":water,
+            "suspended_decisions":self.suspended_decisions.len(),
+            "next_entry_at":self.next_arrival_world_seconds,"terrain_revision":self.terrain_revision})
+    }
+
     /// Controlled labs retain real voyages without ambient extra arrivals.
     pub(crate) fn manual_only() -> Self {
         Self {
@@ -227,13 +274,26 @@ impl NaturalImmigrationDirector {
         true
     }
 
+    fn defer_arrival(&mut self, manual: bool, now: f64, cycle: f64) {
+        if manual {
+            self.finish_manual_arrival();
+        } else {
+            self.next_arrival_world_seconds = Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
+        }
+    }
+
     fn finish_manual_arrival(&mut self) {
         self.manual_arrivals = self.manual_arrivals.saturating_sub(1);
     }
 }
 
 fn interval_days_for_rate(immigrants_per_day: f32) -> f32 {
-    1.0 / immigrants_per_day.clamp(MIN_IMMIGRANTS_PER_DAY, MAX_IMMIGRANTS_PER_DAY)
+    // Config accepts any positive rate. Keep sparse arrivals sparse, with f64
+    // arithmetic so subnormal inputs cannot overflow into an infinite deadline.
+    // Only an interval beyond f32's representation saturates; zero is handled
+    // by the caller's explicit recurring-arrivals disable branch.
+    let rate = immigrants_per_day.min(MAX_IMMIGRANTS_PER_DAY);
+    (1.0_f64 / f64::from(rate)).min(f64::from(f32::MAX)) as f32
 }
 
 /// Discover immutable edge approaches while the server is starting, before a
@@ -264,10 +324,20 @@ fn parse_bool(raw: &str) -> bool {
     )
 }
 
+/// Authoritative admission facts retained after ordinary Moot registration.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct ImmigrantArrival {
+    pub entry: Vec3,
+    pub entered_at: f64,
+    pub chosen_settlement: Option<SettlementId>,
+    pub chosen_score: Option<f32>,
+    pub chosen_at: Option<f64>,
+}
+
 #[derive(Component, Debug, Clone, Copy)]
 pub struct NaturalImmigrantVoyage {
     boat: Entity,
-    settlement: Entity,
+    settlement: Option<Entity>,
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -276,6 +346,11 @@ pub struct NpcArrivalBoat {
     settlement: Entity,
     mooring: Vec2,
     landing: Vec3,
+    retry_at: f64,
+    retry_count: u8,
+    route_version: u32,
+    decision_seed: u64,
+    manual: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -285,6 +360,14 @@ struct SettlementChoice {
     position: Vec3,
     entrance: Vec3,
     score: f32,
+}
+
+#[derive(Debug)]
+struct PendingWaterVoyage {
+    choice: SettlementChoice,
+    entry: CoastalVoyage,
+    voyage: CoastalVoyage,
+    search: WaterSearch,
 }
 
 fn mixed(mut value: u64) -> u64 {
@@ -365,361 +448,10 @@ fn absolute_world_seconds(clock: &WorldTime) -> f64 {
     f64::from(clock.day) * f64::from(clock.cycle_duration()) + f64::from(clock.seconds_in_cycle)
 }
 
-/// Admit at most one new voyage per pass, even after a large time jump. Time
-/// warp therefore advances the calendar without turning one server tick into a
-/// burst of coastline searches, entity spawns, or later route requests.
-pub fn plan_natural_immigration(
-    mut commands: Commands,
-    terrain: Res<WorldTerrain>,
-    clock: Query<&WorldTime>,
-    settlements: Query<(
-        Entity,
-        &Settlement,
-        &PlayerPosition,
-        Option<&PlayerRotation>,
-        Option<&SettlementEconomy>,
-    )>,
-    active: Query<(), With<NpcArrivalBoat>>,
-    people: Query<&CharacterKind>,
-    arrival_bodies: ArrivalBodies,
-    mut director: ResMut<NaturalImmigrationDirector>,
-    mut villager_seed: ResMut<crate::world::dev::VillagerSeed>,
-) {
-    // God-mode requests are deliberately one-shot. In the Village Lab this
-    // keeps recurring immigration disabled for deterministic scenarios, while
-    // every map still exercises the exact production pipeline on demand.
-    if !director.enabled
-        && director.manual_arrivals == 0
-        && director
-            .pending_landfall
-            .as_ref()
-            .is_none_or(|pending| !pending.manual)
-    {
-        return;
-    }
-    let Some(clock) = clock.iter().next() else {
-        return;
-    };
-    let now = absolute_world_seconds(clock);
-    let cycle = f64::from(clock.cycle_duration());
-
-    // A server may run for hours before anyone founds a Moot. Keep the
-    // director entirely dormant in that state and discard any obsolete due
-    // time so the first settlement receives the ordinary initial delay rather
-    // than a burst of accumulated arrivals.
-    if settlements.is_empty() {
-        director.next_arrival_world_seconds = None;
-        director.pending_landfall = None;
-        director.settlement_landfalls.clear();
-        director.manual_arrivals = 0;
-        return;
-    }
-    director
-        .settlement_landfalls
-        .retain(|entity, _| settlements.get(*entity).is_ok());
-
-    let mut resumed_request = None;
-    if let Some(mut pending) = director.pending_landfall.take() {
-        let pending_still_matches =
-            settlements
-                .get(pending.settlement)
-                .is_ok_and(|(_, _, position, rotation, _)| {
-                    let entrance = SettlementBuildingKind::Hall
-                        .entrance_position(position.0, rotation.map_or(0.0, |rotation| rotation.0));
-                    entrance.distance_squared(pending.entrance) <= LANDFALL_ENTRANCE_EPSILON_SQ
-                });
-        if pending_still_matches {
-            match pending.advance(&terrain) {
-                PendingLandfallResult::Pending => {
-                    director.pending_landfall = Some(pending);
-                    return;
-                }
-                PendingLandfallResult::Reachable(voyage) => {
-                    info!(
-                        "Natural immigration certified a landfall for '{}' after checking {} coastal approach(es)",
-                        pending.settlement_name,
-                        pending.candidate_index + 1
-                    );
-                    director.settlement_landfalls.insert(
-                        pending.settlement,
-                        CachedSettlementLandfall::Reachable {
-                            entrance: pending.entrance,
-                            voyage,
-                        },
-                    );
-                    resumed_request = Some((pending.decision_seed, pending.manual));
-                }
-                PendingLandfallResult::Unreachable => {
-                    warn!(
-                        "Natural immigration found no walkable coastal approach toward '{}'; caching the terrain failure",
-                        pending.settlement_name
-                    );
-                    director.settlement_landfalls.insert(
-                        pending.settlement,
-                        CachedSettlementLandfall::Unreachable {
-                            entrance: pending.entrance,
-                        },
-                    );
-                    if pending.manual {
-                        director.finish_manual_arrival();
-                    } else {
-                        director.next_arrival_world_seconds =
-                            Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
-                    }
-                    return;
-                }
-            }
-        } else {
-            director.settlement_landfalls.remove(&pending.settlement);
-        }
-    }
-
-    if active.iter().count() >= MAX_ACTIVE_VOYAGES {
-        return;
-    }
-    let manual = resumed_request
-        .map(|(_, manual)| manual)
-        .unwrap_or(director.manual_arrivals > 0);
-    if !manual {
-        if !director.enabled {
-            return;
-        }
-        if director.next_arrival_world_seconds.is_none() {
-            director.next_arrival_world_seconds =
-                Some(now + cycle * f64::from(FIRST_ARRIVAL_DELAY_DAYS));
-            return;
-        }
-        if now < director.next_arrival_world_seconds.unwrap_or(f64::INFINITY) {
-            return;
-        }
-    }
-
-    // This full count happens only when an arrival is due (three times per
-    // world day by default), never once per server tick. Strategic residents
-    // retain CharacterKind, so this is a true world total across tactical and
-    // cheap off-screen people. Player heroes deliberately do not consume the
-    // NPC population budget.
-    let world_npc_count = people
-        .iter()
-        .filter(|kind| **kind == CharacterKind::Villager)
-        .count();
-    if world_npc_count >= director.world_npc_cap {
-        if !director.population_cap_announced {
-            info!(
-                "Natural immigration paused at world NPC cap ({world_npc_count}/{})",
-                director.world_npc_cap
-            );
-            director.population_cap_announced = true;
-        }
-        if manual {
-            director.finish_manual_arrival();
-        } else {
-            director.next_arrival_world_seconds =
-                Some(now + cycle * f64::from(director.interval_days));
-        }
-        return;
-    }
-    if director.population_cap_announced {
-        info!(
-            "Natural immigration resumed below world NPC cap ({world_npc_count}/{})",
-            director.world_npc_cap
-        );
-        director.population_cap_announced = false;
-    }
-
-    let decision_seed = resumed_request.map(|(seed, _)| seed).unwrap_or_else(|| {
-        director.sequence = director.sequence.wrapping_add(1);
-        director.sequence ^ (u64::from(clock.day) << 32)
-    });
-    if director.coastal_approaches.is_empty() {
-        // Shore discovery scans the authored map edge. Cache that immutable
-        // geography once so recurring arrivals never turn it into a periodic
-        // hitch, especially when the calendar runs at 25x or 100x.
-        director.coastal_approaches = coastal_voyages(&terrain, 0);
-    }
-    // Pick where this person enters the world before they judge towns. That
-    // makes "a northerner heard about the nearby Moot" a real geographic fact.
-    let Some(entry) = (!director.coastal_approaches.is_empty()).then(|| {
-        let index = mixed(decision_seed) as usize % director.coastal_approaches.len();
-        director.coastal_approaches[index]
-    }) else {
-        warn!("Natural immigrant could not find an ocean-connected entry coast");
-        if manual {
-            director.finish_manual_arrival();
-        } else {
-            director.next_arrival_world_seconds = Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
-        }
-        return;
-    };
-    let choice = settlements
-        .iter()
-        .filter_map(|(entity, settlement, position, rotation, economy)| {
-            let entrance = SettlementBuildingKind::Hall
-                .entrance_position(position.0, rotation.map_or(0.0, |rotation| rotation.0));
-            let cached = director
-                .settlement_landfalls
-                .get(&entity)
-                .copied()
-                .filter(|cached| cached.matches(entrance));
-            if matches!(cached, Some(CachedSettlementLandfall::Unreachable { .. })) {
-                return None;
-            }
-            Some(SettlementChoice {
-                entity,
-                name: settlement.name.clone(),
-                position: position.0,
-                entrance,
-                score: settlement_attractiveness(
-                    settlement,
-                    economy,
-                    decision_seed,
-                    entity,
-                    entry.landing,
-                    position.0,
-                ),
-            })
-        })
-        .max_by(|a, b| a.score.total_cmp(&b.score));
-    // A manual lab launch must remain observable even when its only staged
-    // settlement is intentionally food-poor. It still picks the best real
-    // settlement and uses all route validation; only the migration-interest
-    // threshold is bypassed. Recurring world immigration keeps the threshold.
-    let Some(choice) = choice.filter(|choice| manual || choice.score >= MIN_ATTRACTIVENESS) else {
-        if manual {
-            director.finish_manual_arrival();
-        } else {
-            director.next_arrival_world_seconds = Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
-        }
-        return;
-    };
-    let cached_landfall = director
-        .settlement_landfalls
-        .get(&choice.entity)
-        .copied()
-        .filter(|cached| cached.matches(choice.entrance))
-        .and_then(|cached| match cached {
-            CachedSettlementLandfall::Reachable { voyage, .. } => Some(voyage),
-            CachedSettlementLandfall::Unreachable { .. } => None,
-        });
-    let Some(voyage) = cached_landfall else {
-        director.pending_landfall = Some(PendingLandfallSearch::new(
-            &choice,
-            decision_seed,
-            manual,
-            &director.coastal_approaches,
-        ));
-        return;
-    };
-    // Player starts, earlier NPC boats, wrecks and people all occupy real
-    // space. Keep the chosen coast but use a water-connected vacant berth;
-    // then certify the voyage from that actual start, not the cached centre.
-    let occupancy = ArrivalOccupancy::from_bodies(&arrival_bodies);
-    let Some(entry) = occupancy.vacant_voyage(&terrain, entry, decision_seed) else {
-        if manual {
-            director.finish_manual_arrival();
-        } else {
-            director.next_arrival_world_seconds = Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
-        }
-        return;
-    };
-    let Some(route) = water_route(&terrain, entry.start.xz(), voyage.mooring) else {
-        // Never fall back to an arbitrary entry beach: it may be a dry shelf
-        // below a cliff or belong to a different landmass. Waiting for another
-        // entry is preferable to creating a permanently stranded person.
-        warn!(
-            "Natural immigrant could not find a water route toward '{}'",
-            choice.name
-        );
-        if manual {
-            director.finish_manual_arrival();
-        } else {
-            director.next_arrival_world_seconds = Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
-        }
-        return;
-    };
-    let direction = route
-        .first()
-        .copied()
-        .map_or(Vec2::ZERO, |waypoint| waypoint - entry.start.xz())
-        .normalize_or_zero();
-    let initial_yaw = if direction == Vec2::ZERO {
-        entry.yaw
-    } else {
-        f32::atan2(-direction.x, -direction.y)
-    };
-
-    villager_seed.0 = villager_seed.0.wrapping_add(1);
-    let passenger_position = entry.start + Quat::from_rotation_y(initial_yaw) * HELM_LOCAL;
-    let passenger = crate::player::hero::spawn_villager(
-        &mut commands,
-        &terrain,
-        villager_seed.0,
-        passenger_position,
-    );
-    let boat = commands
-        .spawn((
-            PlayerBoat,
-            ImmigrantArrivalBoat,
-            Vessel,
-            VesselNavigation::DINGHY,
-            NpcArrivalBoat {
-                passenger,
-                settlement: choice.entity,
-                mooring: voyage.mooring,
-                landing: voyage.landing,
-            },
-            VesselRoute {
-                waypoints: route,
-                next: 0,
-            },
-            PlayerPosition(entry.start),
-            PlayerRotation(initial_yaw),
-            CharacterMotion::STATIONARY,
-            RegionCoord::from_world_pos(entry.start),
-            Replicate::to_clients(NetworkTarget::All),
-        ))
-        .id();
-    commands.entity(passenger).insert((
-        AboardBoat,
-        NaturalImmigrantVoyage {
-            boat,
-            settlement: choice.entity,
-        },
-        VillagerIntent::ArrivingBySea {
-            settlement: choice.entity,
-        },
-        CharacterActivity::Sitting,
-        CharacterObjective::SailingToSettlement,
-        PlayerPosition(passenger_position),
-        PlayerRotation(initial_yaw),
-        RegionCoord::from_world_pos(passenger_position),
-    ));
-    info!(
-        "Natural immigrant {} entered {:.0}m from '{}' and chose it at {:.1} attractiveness (landing walk {:.0}m)",
-        villager_seed.0,
-        entry.landing.xz().distance(choice.position.xz()),
-        choice.name,
-        choice.score,
-        voyage.landing.xz().distance(choice.position.xz())
-    );
-
-    if manual {
-        director.finish_manual_arrival();
-    } else {
-        let preference = (mixed(decision_seed ^ 0x53a9) & 0xffff) as f32 / u16::MAX as f32;
-        let jitter = 0.85 + preference * 0.30;
-        let interval = director.interval_days
-            * seasonal_interval_multiplier(clock.day)
-            * jitter
-            * if choice.score >= 65.0 { 0.8 } else { 1.0 };
-        director.next_arrival_world_seconds = Some(now + cycle * f64::from(interval));
-    }
-}
-
 /// Keep each NPC passenger at the helm of its own authoritative boat. Client
 /// rendering adds the same local buoyancy polish used for the player voyage.
 pub fn sync_natural_immigrant_passengers(
-    boats: Query<(&PlayerPosition, &PlayerRotation, &CharacterMotion), With<NpcArrivalBoat>>,
+    boats: Query<(&PlayerPosition, &PlayerRotation, &CharacterMotion), With<ImmigrantArrivalBoat>>,
     mut passengers: Query<
         (
             &NaturalImmigrantVoyage,
@@ -729,7 +461,7 @@ pub fn sync_natural_immigrant_passengers(
             &mut CharacterMotion,
             &mut CharacterActivity,
         ),
-        Without<NpcArrivalBoat>,
+        Without<ImmigrantArrivalBoat>,
     >,
 ) {
     for (voyage, mut position, mut rotation, mut region, mut motion, mut activity) in
@@ -765,16 +497,18 @@ pub fn sync_natural_immigrant_passengers(
 pub fn finish_natural_immigrant_voyages(
     mut commands: Commands,
     terrain: Res<WorldTerrain>,
-    boats: Query<
+    simulation_time: crate::world::simulation_time::SimulationTime,
+    mut water_navigation: ResMut<VesselNavigationQueue>,
+    mut boats: Query<
         (
             Entity,
-            &NpcArrivalBoat,
+            &mut NpcArrivalBoat,
             &PlayerPosition,
             Option<&VesselRoute>,
         ),
         With<PlayerBoat>,
     >,
-    halls: Query<(&PlayerPosition, Option<&PlayerRotation>), With<Settlement>>,
+    halls: Query<(&PlayerPosition, Option<&PlayerRotation>, &Settlement)>,
     mut passengers: Query<
         (
             &mut PlayerPosition,
@@ -783,14 +517,89 @@ pub fn finish_natural_immigrant_voyages(
             &mut CharacterMotion,
             &mut CharacterActivity,
             &mut VillagerIntent,
-            &NaturalImmigrantVoyage,
+            &mut NaturalImmigrantVoyage,
+            Option<&mut ImmigrantArrival>,
         ),
         (Without<PlayerBoat>, Without<Settlement>),
     >,
 ) {
-    for (boat_entity, arrival, boat_position, route) in boats.iter() {
-        if route.is_some()
-            || boat_position.0.xz().distance(arrival.mooring) > BOAT_ARRIVE_EPSILON + 0.5
+    let now = simulation_time.elapsed_real_seconds_f64();
+    for (boat_entity, mut arrival, boat_position, route) in boats.iter_mut() {
+        if passengers.get(arrival.passenger).is_err() {
+            water_navigation.take(boat_entity);
+            commands.entity(boat_entity).despawn();
+            continue;
+        }
+        let invalid_destination = !halls
+            .get(arrival.settlement)
+            .is_ok_and(|(_, _, town)| town.tier != shared::components::SettlementTier::Ruins);
+        let flooded_landing = terrain
+            .get_water_height(arrival.landing.x, arrival.landing.z)
+            .is_some();
+        if invalid_destination || flooded_landing {
+            if let Ok((
+                _,
+                _,
+                _,
+                mut motion,
+                mut activity,
+                mut intent,
+                mut voyage,
+                Some(mut facts),
+            )) = passengers.get_mut(arrival.passenger)
+            {
+                facts.chosen_settlement = None;
+                facts.chosen_score = None;
+                facts.chosen_at = None;
+                voyage.settlement = None;
+                *intent = VillagerIntent::Idle;
+                *motion = CharacterMotion::STATIONARY;
+                activity.set_if_neq(CharacterActivity::Sitting);
+                commands
+                    .entity(boat_entity)
+                    .remove::<(
+                        NpcArrivalBoat,
+                        VesselRoute,
+                        crate::player::boat::VesselRouteCertification,
+                    )>()
+                    .insert((
+                        ChoosingSettlement {
+                            passenger: arrival.passenger,
+                            facts: *facts,
+                            decision_seed: arrival.decision_seed,
+                            manual: arrival.manual,
+                            retry_at: 0.,
+                            rejected_towns: vec![arrival.settlement],
+                        },
+                        CharacterMotion::STATIONARY,
+                    ));
+                water_navigation.take(boat_entity);
+            }
+            continue;
+        }
+        if route.is_some() {
+            continue;
+        }
+        if boat_position.0.xz().distance(arrival.mooring) > BOAT_ARRIVE_EPSILON + 0.5 {
+            if !water_navigation.is_pending(boat_entity)
+                && (now >= arrival.retry_at
+                    || arrival.route_version != terrain.modification_version())
+            {
+                arrival.retry_count = arrival.retry_count.saturating_add(1);
+                arrival.retry_at =
+                    now + (2_f64.powi(i32::from(arrival.retry_count.min(6))) * 2.0).min(120.0);
+                arrival.route_version = terrain.modification_version();
+                water_navigation.request(
+                    boat_entity,
+                    crate::player::boat::VesselGoal::Sail(arrival.mooring),
+                );
+            }
+            continue;
+        }
+        // A terrain change must not put the immigrant down in newly flooded water.
+        if terrain
+            .get_water_height(arrival.landing.x, arrival.landing.z)
+            .is_some()
         {
             continue;
         }
@@ -802,13 +611,14 @@ pub fn finish_natural_immigrant_voyages(
             mut activity,
             mut intent,
             voyage,
+            _,
         )) = passengers.get_mut(arrival.passenger)
         else {
             commands.entity(boat_entity).despawn();
             continue;
         };
         debug_assert_eq!(voyage.boat, boat_entity);
-        debug_assert_eq!(voyage.settlement, arrival.settlement);
+        debug_assert_eq!(voyage.settlement, Some(arrival.settlement));
         let landing = Vec3::new(
             arrival.landing.x,
             terrain.get_height(arrival.landing.x, arrival.landing.z),
@@ -819,7 +629,7 @@ pub fn finish_natural_immigrant_voyages(
         *motion = CharacterMotion::STATIONARY;
         activity.set_if_neq(CharacterActivity::Idle);
 
-        if let Ok((hall, hall_rotation)) = halls.get(arrival.settlement) {
+        if let Ok((hall, hall_rotation, _)) = halls.get(arrival.settlement) {
             let entrance = SettlementBuildingKind::Hall
                 .entrance_position(hall.0, hall_rotation.map_or(0.0, |rotation| rotation.0));
             let direction = entrance.xz() - landing.xz();
@@ -854,7 +664,7 @@ mod tests {
     use crate::world::pathfinding::PathfindingBudgetSettings;
     use crate::world::simulation_time::SimulationDelta;
     use crate::world::village_roads::{
-        embodied_land_route_exists, NavigationRouteFailed, TravelRoute, VillageRoadGraph,
+        NavigationRouteFailed, TravelRoute, VillageRoadGraph, embodied_land_route_exists,
     };
     use shared::components::{SettlementTier, TimeWarp};
 
@@ -904,8 +714,7 @@ mod tests {
             origin,
             place,
         );
-        assert!(good > MIN_ATTRACTIVENESS);
-        assert!(bad < MIN_ATTRACTIVENESS);
+        assert!(good.is_finite() && bad.is_finite());
         assert!(good > bad + 50.0);
     }
 
@@ -919,7 +728,7 @@ mod tests {
             Vec3::ZERO,
             Vec3::ZERO,
         );
-        assert!(score >= MIN_ATTRACTIVENESS, "frontier score was {score}");
+        assert!(score.is_finite(), "frontier score was {score}");
     }
 
     #[test]
@@ -930,6 +739,17 @@ mod tests {
     #[test]
     fn three_immigrants_per_day_maps_to_a_third_day_base_interval() {
         assert!((interval_days_for_rate(3.0) - (1.0 / 3.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn sparse_configured_arrivals_keep_their_rate_and_a_finite_deadline() {
+        assert_eq!(interval_days_for_rate(0.01), 100.);
+        assert_eq!(interval_days_for_rate(0.0001), 10_000.);
+        let smallest_rate = f32::from_bits(1);
+        let interval = interval_days_for_rate(smallest_rate);
+        assert!(interval.is_finite() && interval > 10_000.);
+        let deadline = f64::from(WorldTime::new_default().cycle_duration()) * f64::from(interval);
+        assert!(deadline.is_finite());
     }
 
     #[test]
@@ -950,9 +770,17 @@ mod tests {
                 coastal_approaches: vec![coast],
                 settlement_landfalls: default(),
                 pending_landfall: None,
+                pending_water: None,
                 manual_arrivals: 2,
+                configured: false,
+                steady_rate: false,
+                deciding: None,
+                decision_cursor: None,
+                suspended_decisions: default(),
+                terrain_revision: None,
             })
             .insert_resource(crate::world::dev::VillagerSeed::default())
+            .init_resource::<VesselNavigationQueue>()
             .add_systems(Update, plan_natural_immigration);
         app.world_mut().spawn(WorldTime::new_default());
         app.world_mut().spawn((
@@ -982,8 +810,18 @@ mod tests {
                     voyage: coast,
                 },
             );
-        app.update();
-        app.update();
+        for _ in 0..2_000 {
+            app.update();
+            if app
+                .world_mut()
+                .query_filtered::<Entity, With<NpcArrivalBoat>>()
+                .iter(app.world())
+                .count()
+                == 2
+            {
+                break;
+            }
+        }
 
         assert_eq!(
             app.world()
@@ -1037,52 +875,6 @@ mod tests {
     }
 
     #[test]
-    fn server_without_a_settlement_accumulates_no_arrival_backlog() {
-        let mut app = App::new();
-        app.insert_resource(WorldTerrain::default())
-            .insert_resource(NaturalImmigrationDirector {
-                enabled: true,
-                interval_days: interval_days_for_rate(3.0),
-                next_arrival_world_seconds: Some(0.0),
-                sequence: 0,
-                world_npc_cap: DEFAULT_WORLD_NPC_CAP,
-                population_cap_announced: false,
-                coastal_approaches: Vec::new(),
-                settlement_landfalls: default(),
-                pending_landfall: None,
-                manual_arrivals: 0,
-            })
-            .insert_resource(crate::world::dev::VillagerSeed::default())
-            .add_systems(Update, plan_natural_immigration);
-        app.world_mut().spawn(WorldTime::new_default());
-
-        for _ in 0..10 {
-            app.update();
-        }
-        {
-            let director = app.world().resource::<NaturalImmigrationDirector>();
-            assert_eq!(director.sequence, 0);
-            assert!(director.next_arrival_world_seconds.is_none());
-            assert!(director.pending_landfall.is_none());
-        }
-
-        app.world_mut().spawn((
-            settlement("First Moot", 0),
-            PlayerPosition(Vec3::ZERO),
-            PlayerRotation(0.0),
-            SettlementEconomy::default(),
-        ));
-        app.update();
-
-        let director = app.world().resource::<NaturalImmigrationDirector>();
-        assert_eq!(director.sequence, 0);
-        assert!(director
-            .next_arrival_world_seconds
-            .is_some_and(|next| next > 0.0));
-        assert!(director.pending_landfall.is_none());
-    }
-
-    #[test]
     fn failed_landfall_candidates_advance_one_per_slice_and_terminate() {
         let terrain = WorldTerrain::default();
         let choice = SettlementChoice {
@@ -1103,7 +895,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let mut pending = PendingLandfallSearch::new(&choice, 1, false, &candidates);
+        let mut pending = PendingLandfallSearch::new(&choice, &candidates);
 
         for expected_checked in 1..candidates.len() {
             assert!(matches!(
@@ -1190,7 +982,7 @@ mod tests {
             entrance,
             score: 100.0,
         };
-        let mut pending = PendingLandfallSearch::new(&choice, 1, false, &[start]);
+        let mut pending = PendingLandfallSearch::new(&choice, &[start]);
 
         let mut slices = 0u32;
         let voyage = loop {
@@ -1231,12 +1023,7 @@ mod tests {
     #[test]
     fn cached_unreachable_moot_is_skipped_for_another_settlement() {
         let terrain = WorldTerrain::default();
-        let approach = CoastalVoyage {
-            start: Vec3::new(-100.0, 0.0, -100.0),
-            yaw: 0.0,
-            mooring: Vec2::new(-90.0, -90.0),
-            landing: Vec3::new(-80.0, 0.0, -80.0),
-        };
+        let approach = coastal_voyages(&terrain, 0)[0];
         let mut app = App::new();
         app.insert_resource(terrain)
             .insert_resource(NaturalImmigrationDirector {
@@ -1249,9 +1036,17 @@ mod tests {
                 coastal_approaches: vec![approach],
                 settlement_landfalls: default(),
                 pending_landfall: None,
+                pending_water: None,
                 manual_arrivals: 0,
+                configured: false,
+                steady_rate: false,
+                deciding: None,
+                decision_cursor: None,
+                suspended_decisions: default(),
+                terrain_revision: None,
             })
             .insert_resource(crate::world::dev::VillagerSeed::default())
+            .init_resource::<VesselNavigationQueue>()
             .add_systems(Update, plan_natural_immigration);
         app.world_mut().spawn(WorldTime::new_default());
         let blocked_position = Vec3::ZERO;
@@ -1285,7 +1080,8 @@ mod tests {
                 },
             );
 
-        app.update();
+        app.update(); // Actual entry, with no preselected town.
+        app.update(); // Choose from current reachable opportunities.
 
         let director = app.world().resource::<NaturalImmigrationDirector>();
         assert!(matches!(
@@ -1296,7 +1092,7 @@ mod tests {
             director
                 .pending_landfall
                 .as_ref()
-                .map(|pending| pending.settlement),
+                .map(|pending| pending.choice.entity),
             Some(alternative)
         );
     }
@@ -1315,6 +1111,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
+        let entry = coastal_voyages(&terrain, 0)[0];
         let mut app = App::new();
         app.insert_resource(terrain)
             .insert_resource(NaturalImmigrationDirector {
@@ -1324,12 +1121,20 @@ mod tests {
                 sequence: 0,
                 world_npc_cap: DEFAULT_WORLD_NPC_CAP,
                 population_cap_announced: false,
-                coastal_approaches: candidates,
+                coastal_approaches: vec![entry],
                 settlement_landfalls: default(),
                 pending_landfall: None,
+                pending_water: None,
                 manual_arrivals: 0,
+                configured: false,
+                steady_rate: false,
+                deciding: None,
+                decision_cursor: None,
+                suspended_decisions: default(),
+                terrain_revision: None,
             })
             .insert_resource(crate::world::dev::VillagerSeed::default())
+            .init_resource::<VesselNavigationQueue>()
             .add_systems(Update, plan_natural_immigration);
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
         let position = Vec3::ZERO;
@@ -1343,6 +1148,10 @@ mod tests {
             ))
             .id();
 
+        app.update(); // Real entry is a separate stage from the deliberately invalid survey.
+        app.world_mut()
+            .resource_mut::<NaturalImmigrationDirector>()
+            .coastal_approaches = candidates;
         for _ in 0..64 {
             app.update();
             let cached = app
@@ -1392,9 +1201,17 @@ mod tests {
                 coastal_approaches: Vec::new(),
                 settlement_landfalls: default(),
                 pending_landfall: None,
+                pending_water: None,
                 manual_arrivals: 0,
+                configured: false,
+                steady_rate: false,
+                deciding: None,
+                decision_cursor: None,
+                suspended_decisions: default(),
+                terrain_revision: None,
             })
             .insert_resource(crate::world::dev::VillagerSeed::default())
+            .init_resource::<VesselNavigationQueue>()
             .add_systems(Update, plan_natural_immigration);
         app.world_mut().spawn(WorldTime::new_default());
         app.world_mut().spawn((
@@ -1415,9 +1232,11 @@ mod tests {
         assert_eq!(arrivals, 0);
         let director = app.world().resource::<NaturalImmigrationDirector>();
         assert!(director.population_cap_announced);
-        assert!(director
-            .next_arrival_world_seconds
-            .is_some_and(|next| next > 0.0));
+        assert!(
+            director
+                .next_arrival_world_seconds
+                .is_some_and(|next| next > 0.0)
+        );
     }
 
     #[test]
@@ -1517,16 +1336,25 @@ mod tests {
                 coastal_approaches,
                 settlement_landfalls: default(),
                 pending_landfall: None,
+                pending_water: None,
                 manual_arrivals: 1,
+                configured: false,
+                steady_rate: false,
+                deciding: None,
+                decision_cursor: None,
+                suspended_decisions: default(),
+                terrain_revision: None,
             })
             .insert_resource(crate::world::dev::VillagerSeed::default())
             .init_resource::<SimulationDelta>()
+            .init_resource::<VesselNavigationQueue>()
             .add_systems(Update, plan_natural_immigration);
         app.world_mut()
             .spawn((WorldTime::new_default(), TimeWarp(1.0)));
         let settlement_entity = app
             .world_mut()
             .spawn((
+                SettlementId(1),
                 Settlement {
                     name: "Arrival Test".to_string(),
                     tier: SettlementTier::Hamlet,
@@ -1599,6 +1427,13 @@ mod tests {
             for sample in 0..=samples {
                 let point = segment_start.lerp(*waypoint, sample as f32 / samples as f32);
                 assert!(
+                    terrain
+                        .generator
+                        .active_map_bounds()
+                        .contains_xz(point.x, point.y),
+                    "arrival route escaped its own terrain bounds"
+                );
+                assert!(
                     terrain.get_water_height(point.x, point.y).is_some(),
                     "certified boat route crossed dry land at {point:?}"
                 );
@@ -1620,9 +1455,13 @@ mod tests {
             "the director ignored the viable coast beside its chosen settlement"
         );
 
+        // Losing a route must trigger bounded replanning, retaining this same
+        // body/boat and the certified beach rather than stranding the arrival.
+        app.world_mut().entity_mut(boat).remove::<VesselRoute>();
         app.add_systems(
             Update,
             (
+                crate::player::boat::plan_vessel_routes,
                 crate::player::boat::step_boats,
                 sync_natural_immigrant_passengers,
                 finish_natural_immigrant_voyages,
@@ -1681,15 +1520,17 @@ mod tests {
             );
         for _ in 0..600 {
             app.update();
-            if app.world().get::<MoveTarget>(passenger).is_none() {
-                break;
-            }
             assert!(
                 app.world()
                     .get::<NavigationRouteFailed>(passenger)
                     .is_none(),
                 "the normal land planner rejected the arrival walk"
             );
+            // A rejected corrupt/out-of-bounds order also removes its target.
+            // Only absence without failure is a successful arrival signal.
+            if app.world().get::<MoveTarget>(passenger).is_none() {
+                break;
+            }
         }
         let final_position = app.world().get::<PlayerPosition>(passenger).unwrap().0;
         assert!(

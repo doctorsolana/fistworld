@@ -2,8 +2,9 @@
 
 use bevy::prelude::*;
 use shared::components::{
-    BuildingId, CompanyId, PersonId, SettlementBuildingKind, SettlementId, TradeRouteId,
-    TradeRouteMode, TradeRouteStatus, TradeRouteStop, TradeRouteStopAction, TradeRouteTrip,
+    BuildingId, CompanyFleet, CompanyId, PersonId, SettlementBuildingKind, SettlementId,
+    SettlementPortSummary, ShipId, ShipKind, TradeRouteId, TradeRouteMode, TradeRouteStatus,
+    TradeRouteStop, TradeRouteStopAction, TradeRouteTrip,
 };
 use shared::economy::{
     BusinessSourcingMode, BusinessState, CompanyAccount, CompanyDecisionRecord,
@@ -69,6 +70,7 @@ pub struct CompanyBranchRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompanyRouteRecord {
     pub id: TradeRouteId,
+    pub ship: Option<(ShipId, ShipKind)>,
     pub warehouse: BuildingId,
     pub warehouse_name: String,
     pub mode: TradeRouteMode,
@@ -108,6 +110,7 @@ pub struct CompanySettlementRecord {
     pub id: SettlementId,
     pub name: String,
     pub has_marketplace: bool,
+    pub port: Option<SettlementPortSummary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,6 +128,7 @@ pub struct CompanyRecord {
     pub sites: Vec<CompanySiteRecord>,
     pub branches: Vec<CompanyBranchRecord>,
     pub routes: Vec<CompanyRouteRecord>,
+    pub fleet: CompanyFleet,
 }
 
 impl CompanyRecord {
@@ -150,7 +154,7 @@ impl CompanyRecord {
 
     pub(super) fn status(&self) -> &'static str {
         if self.sites.is_empty() {
-            "NO SITES"
+            "SITES UNOBSERVED"
         } else if self.sites.iter().any(|site| {
             matches!(
                 site.state,
@@ -244,6 +248,7 @@ pub enum TradeRouteEditorAction {
 pub struct TradeRouteDraft {
     pub company: CompanyId,
     pub route: Option<TradeRouteId>,
+    pub ship: Option<(ShipId, ShipKind)>,
     pub warehouse: BuildingId,
     pub good: Good,
     pub cargo_target: u32,
@@ -263,6 +268,37 @@ pub struct TradeRouteEditorState {
 
 #[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
 pub struct CompanyPolicyFeedback {
+    pub company: Option<CompanyId>,
     pub message: String,
     pub success: bool,
+}
+
+impl TradeRouteDraft {
+    pub(super) fn cargo_capacity(&self) -> u32 {
+        self.ship
+            .map_or(shared::economy::capacity::PORTER, |(_, kind)| {
+                kind.capacity()
+            })
+            / self.good.bulk_per_unit().max(1)
+    }
+    pub(super) fn accepts_settlement(&self, settlement: &CompanySettlementRecord) -> bool {
+        settlement.has_marketplace
+            && self.ship.is_none_or(|(_, kind)| {
+                settlement
+                    .port
+                    .is_some_and(|port| port.built && kind <= port.maximum_ship)
+            })
+    }
+    pub(super) fn stop_actions(&self) -> &'static [TradeRouteStopAction] {
+        if self.ship.is_some() {
+            &[TradeRouteStopAction::Buy, TradeRouteStopAction::Sell]
+        } else {
+            &[
+                TradeRouteStopAction::Load,
+                TradeRouteStopAction::Buy,
+                TradeRouteStopAction::Unload,
+                TradeRouteStopAction::Sell,
+            ]
+        }
+    }
 }

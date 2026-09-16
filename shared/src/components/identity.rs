@@ -39,6 +39,8 @@ stable_id!(PermitId);
 stable_id!(CompanyId);
 stable_id!(TradeContractId);
 stable_id!(TradeRouteId);
+stable_id!(ShipId);
+stable_id!(ShipOrderId);
 
 /// A person's domestic group, independent of their current bed or settlement.
 /// Membership carries no family, employment, political or command authority.
@@ -348,9 +350,10 @@ pub struct SettlementSummary {
     pub has_marketplace: bool,
 }
 
-/// Durable settlement membership. Runtime AI may still hold a session-local
-/// Entity for fast ECS access, but saves, histories and cross-region systems
-/// join through this identifier.
+/// Durable registered settlement membership, never an immigrant's chosen
+/// destination. Natural newcomers receive it only after Hall registration.
+/// Runtime AI may still hold a session-local Entity for fast ECS access, but
+/// saves, histories and cross-region systems join through this identifier.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ResidentOf(pub SettlementId);
 
@@ -471,11 +474,13 @@ mod company_tests {
 
     #[test]
     fn invalid_cap_tables_and_overdrawn_transfers_are_rejected() {
-        assert!(CompanyOwnership::from_shares(vec![CompanyShare {
-            shareholder: PersonId(1),
-            shares: 999,
-        }])
-        .is_none());
+        assert!(
+            CompanyOwnership::from_shares(vec![CompanyShare {
+                shareholder: PersonId(1),
+                shares: 999,
+            }])
+            .is_none()
+        );
         let mut ownership = CompanyOwnership::sole(PersonId(1));
         assert!(!ownership.transfer(PersonId(1), PersonId(2), 1_001));
         assert_eq!(ownership.share_count(PersonId(1)), 1_000);

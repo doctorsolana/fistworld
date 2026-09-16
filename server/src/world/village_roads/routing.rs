@@ -1,5 +1,13 @@
 //! Built-road graph maintenance, bounded tactical route planning and caching.
 
+#[cfg(test)]
+#[path = "tests/route_cache.rs"]
+mod route_cache_tests;
+
+#[cfg(test)]
+#[path = "tests/missing_backoff.rs"]
+mod missing_backoff_tests;
+
 use super::*;
 
 #[derive(Default)]
@@ -28,6 +36,10 @@ pub struct VillageRoadGraph {
     walkability_obstacle_version: u64,
     pub(super) routes: HashMap<(usize, usize), Vec<usize>>,
     topology_routes: HashMap<(usize, usize), Vec<usize>>,
+    route_order: VecDeque<(usize, usize)>,
+    topology_route_order: VecDeque<(usize, usize)>,
+    route_points: usize,
+    topology_route_points: usize,
     /// One reverse shortest-path tree per popular destination road node.
     /// A commute wave to a hall, market or workplace now pays for Dijkstra
     /// once and every different origin walks the same immutable tree.
@@ -37,11 +49,14 @@ pub struct VillageRoadGraph {
     topology_destination_tree_order: VecDeque<usize>,
     pub(super) tactical_routes: HashMap<TacticalRouteKey, Vec<(Vec2, bool)>>,
     pub(super) tactical_order: VecDeque<TacticalRouteKey>,
+    tactical_points: usize,
     /// A few certified approaches per exact destination. Immigrant cohorts
     /// usually share one hall door but begin at slightly different points;
     /// joining a nearby certified approach turns hundreds of full A* jobs
     /// into one route plus cheap local connectors.
     cohort_routes: HashMap<TacticalRoutePoint, VecDeque<CohortRoute>>,
+    cohort_goal_order: VecDeque<TacticalRoutePoint>,
+    cohort_points: usize,
     /// Monotonic, destination-specific proof that a new certified approach
     /// has become available. Migration cooldowns remember this value when a
     /// route fails, so a later successful immigrant can wake the stranded
@@ -55,10 +70,16 @@ pub struct VillageRoadGraph {
     pub(super) road_opportunity_revisions: HashMap<(i32, i32), u64>,
     pub(super) next_road_opportunity_revision: u64,
     pub(super) initialized: bool,
+    bridge_revision: u64,
+    bridge_opportunity_revision: u64,
 }
 
 const MAX_TACTICAL_ROUTE_CACHE_ENTRIES: usize = 8_192;
 const MAX_DESTINATION_TREES: usize = 64;
+// Kilometre-long routes must be bounded by stored geometry as well as count.
+const MAX_CACHED_ROUTE_POINTS: usize = 262_144;
+const MAX_GRAPH_ROUTE_PAIRS: usize = 2_048;
+const MAX_COHORT_ROUTE_GOALS: usize = 512;
 const MAX_COHORT_OPPORTUNITY_GOALS: usize = MAX_TACTICAL_ROUTE_CACHE_ENTRIES;
 const MAX_COHORT_ROUTES_PER_GOAL: usize = 8;
 /// Try only the nearest couple of reusable approaches before falling back to
@@ -121,15 +142,29 @@ pub fn rebuild_village_road_graph(
     roads: Query<&VillageRoad>,
     changed: Query<(), Changed<VillageRoad>>,
     mut removed: RemovedComponents<VillageRoad>,
+    decks: Option<Res<BridgeDecks>>,
 ) {
-    let removed_any = removed.read().next().is_some();
-    if graph.initialized && changed.is_empty() && !removed_any {
+    let removed_any = removed.read().count() > 0;
+    let bridge_revision = decks.as_deref().map_or(0, |decks| decks.version);
+    let bridges_changed = graph.bridge_revision != bridge_revision;
+    if graph.initialized && changed.is_empty() && !removed_any && !bridges_changed {
         return;
+    }
+    if bridges_changed {
+        graph.clear_tactical_routes();
+        graph.bridge_revision = bridge_revision;
+        graph.next_road_opportunity_revision =
+            graph.next_road_opportunity_revision.wrapping_add(1).max(1);
+        graph.bridge_opportunity_revision = graph.next_road_opportunity_revision;
     }
     let previous_points = std::mem::take(&mut graph.built_point_keys);
     graph.nodes.clear();
     graph.routes.clear();
     graph.topology_routes.clear();
+    graph.route_order.clear();
+    graph.topology_route_order.clear();
+    graph.route_points = 0;
+    graph.topology_route_points = 0;
     graph.destination_trees.clear();
     graph.destination_tree_order.clear();
     graph.topology_destination_trees.clear();
@@ -163,6 +198,31 @@ pub fn rebuild_village_road_graph(
             }
             previous = Some(node);
         }
+    }
+    // Finished bridge ramps are durable road-network edges. Their exact end
+    // points join planned approach roads, while pedestrians can also survey
+    // a short connector to either ramp through ordinary clear terrain.
+    for bridge in decks.as_deref().into_iter().flat_map(BridgeDecks::iter) {
+        let mut ends = Vec::new();
+        for point in [bridge.start.xz(), bridge.end.xz()] {
+            let key = graph_key(point);
+            current_points.insert(key);
+            if !previous_points.contains(&key) {
+                new_points.push(point);
+            }
+            let node = *by_point.entry(key).or_insert_with(|| {
+                let index = graph.nodes.len();
+                graph.nodes.push(RoadGraphNode {
+                    point,
+                    edges: Vec::new(),
+                });
+                index
+            });
+            ends.push(node);
+        }
+        let length = bridge.length();
+        graph.nodes[ends[0]].edges.push((ends[1], length));
+        graph.nodes[ends[1]].edges.push((ends[0], length));
     }
     graph.built_point_keys = current_points;
     for point in new_points {
@@ -270,11 +330,7 @@ impl VillageRoadGraph {
     fn edge_key(&self, a: usize, b: usize) -> ((i32, i32), (i32, i32)) {
         let a = graph_key(self.nodes[a].point);
         let b = graph_key(self.nodes[b].point);
-        if a < b {
-            (a, b)
-        } else {
-            (b, a)
-        }
+        if a < b { (a, b) } else { (b, a) }
     }
 
     fn edge_is_blocked(&self, a: usize, b: usize) -> bool {
@@ -318,6 +374,8 @@ impl VillageRoadGraph {
             }
         }
         self.routes.clear();
+        self.route_order.clear();
+        self.route_points = 0;
         self.destination_trees.clear();
         self.destination_tree_order.clear();
         self.rebuild_components();
@@ -328,7 +386,10 @@ impl VillageRoadGraph {
     fn clear_tactical_routes(&mut self) {
         self.tactical_routes.clear();
         self.tactical_order.clear();
+        self.tactical_points = 0;
         self.cohort_routes.clear();
+        self.cohort_goal_order.clear();
+        self.cohort_points = 0;
     }
 
     /// Embodied movement found one stale segment. Discard only cached routes
@@ -352,6 +413,7 @@ impl VillageRoadGraph {
                 )
             })
         });
+        self.tactical_points = self.tactical_routes.values().map(Vec::len).sum();
         self.tactical_order
             .retain(|key| self.tactical_routes.contains_key(key));
         self.rebuild_cohort_routes();
@@ -359,6 +421,8 @@ impl VillageRoadGraph {
 
     fn rebuild_cohort_routes(&mut self) {
         self.cohort_routes.clear();
+        self.cohort_goal_order.clear();
+        self.cohort_points = 0;
         let retained: Vec<_> = self.tactical_routes.values().cloned().collect();
         for route in retained {
             let (Some((start, _)), Some((goal, _))) = (route.first(), route.last()) else {
@@ -383,6 +447,7 @@ impl VillageRoadGraph {
                         .any(|pair| blocker.blocks_segment(pair[0].0, pair[1].0))
             })
         });
+        self.tactical_points = self.tactical_routes.values().map(Vec::len).sum();
         self.tactical_order
             .retain(|key| self.tactical_routes.contains_key(key));
         self.rebuild_cohort_routes();
@@ -409,6 +474,7 @@ impl VillageRoadGraph {
                     .any(|x| (min_z..=max_z).any(|z| changed.contains(&ChunkCoord::new(x, z))))
             })
         });
+        self.tactical_points = self.tactical_routes.values().map(Vec::len).sum();
         self.tactical_order
             .retain(|key| self.tactical_routes.contains_key(key));
         self.rebuild_cohort_routes();
@@ -449,6 +515,7 @@ impl VillageRoadGraph {
     pub(super) fn route_opportunity_version(&self, start: Vec2, goal: Vec2) -> u64 {
         self.nearby_road_opportunity_revision(start)
             .max(self.nearby_road_opportunity_revision(goal))
+            .max(self.bridge_opportunity_revision)
     }
 
     /// Version of the latest newly-certified embodied approach to an exact
@@ -512,20 +579,39 @@ impl VillageRoadGraph {
     }
 
     fn cache_cohort_route(&mut self, goal: Vec2, start: Vec2, route: &[(Vec2, bool)]) {
-        let routes = self.cohort_routes.entry(goal.into()).or_default();
-        if let Some(existing) = routes
-            .iter_mut()
-            .find(|existing| existing.start.distance_squared(start) <= 0.01)
-        {
-            existing.tagged = route.to_vec();
+        if route.len() > MAX_CACHED_ROUTE_POINTS {
             return;
         }
-        routes.push_back(CohortRoute {
-            start,
-            tagged: route.to_vec(),
-        });
+        let key = goal.into();
+        if !self.cohort_routes.contains_key(&key) {
+            self.cohort_goal_order.push_back(key);
+        }
+        let routes = self.cohort_routes.entry(key).or_default();
+        if let Some(existing) = routes
+            .iter_mut()
+            .find(|r| r.start.distance_squared(start) <= 0.01)
+        {
+            self.cohort_points -= existing.tagged.len();
+            existing.tagged = route.to_vec();
+        } else {
+            routes.push_back(CohortRoute {
+                start,
+                tagged: route.to_vec(),
+            });
+        }
+        self.cohort_points += route.len();
         while routes.len() > MAX_COHORT_ROUTES_PER_GOAL {
-            routes.pop_front();
+            self.cohort_points -= routes.pop_front().unwrap().tagged.len();
+        }
+        while self.cohort_routes.len() > MAX_COHORT_ROUTE_GOALS
+            || self.cohort_points > MAX_CACHED_ROUTE_POINTS
+        {
+            let Some(oldest) = self.cohort_goal_order.pop_front() else {
+                break;
+            };
+            if let Some(routes) = self.cohort_routes.remove(&oldest) {
+                self.cohort_points -= routes.iter().map(|r| r.tagged.len()).sum::<usize>();
+            }
         }
     }
 
@@ -552,15 +638,26 @@ impl VillageRoadGraph {
         key: TacticalRouteKey,
         route: Vec<(Vec2, bool)>,
     ) -> bool {
-        let inserted = self.tactical_routes.insert(key, route).is_none();
+        if route.len() > MAX_CACHED_ROUTE_POINTS {
+            return false;
+        }
+        let length = route.len();
+        let previous = self.tactical_routes.insert(key, route);
+        let inserted = previous.is_none();
+        self.tactical_points =
+            self.tactical_points + length - previous.as_ref().map_or(0, Vec::len);
         if inserted {
             self.tactical_order.push_back(key);
         }
-        while self.tactical_routes.len() > MAX_TACTICAL_ROUTE_CACHE_ENTRIES {
+        while self.tactical_routes.len() > MAX_TACTICAL_ROUTE_CACHE_ENTRIES
+            || self.tactical_points > MAX_CACHED_ROUTE_POINTS
+        {
             let Some(oldest) = self.tactical_order.pop_front() else {
                 break;
             };
-            self.tactical_routes.remove(&oldest);
+            if let Some(route) = self.tactical_routes.remove(&oldest) {
+                self.tactical_points -= route.len();
+            }
         }
         inserted
     }
@@ -613,10 +710,22 @@ impl VillageRoadGraph {
                 return None;
             }
         }
-        self.routes.insert((start, goal), path.clone());
+        cache_graph_route(
+            &mut self.routes,
+            &mut self.route_order,
+            &mut self.route_points,
+            (start, goal),
+            path.clone(),
+        );
         let mut reverse = path.clone();
         reverse.reverse();
-        self.routes.insert((goal, start), reverse);
+        cache_graph_route(
+            &mut self.routes,
+            &mut self.route_order,
+            &mut self.route_points,
+            (goal, start),
+            reverse,
+        );
         Some(path)
     }
 
@@ -648,10 +757,22 @@ impl VillageRoadGraph {
                 return None;
             }
         }
-        self.topology_routes.insert((start, goal), path.clone());
+        cache_graph_route(
+            &mut self.topology_routes,
+            &mut self.topology_route_order,
+            &mut self.topology_route_points,
+            (start, goal),
+            path.clone(),
+        );
         let mut reverse = path.clone();
         reverse.reverse();
-        self.topology_routes.insert((goal, start), reverse);
+        cache_graph_route(
+            &mut self.topology_routes,
+            &mut self.topology_route_order,
+            &mut self.topology_route_points,
+            (goal, start),
+            reverse,
+        );
         Some(path)
     }
 
@@ -692,6 +813,32 @@ impl VillageRoadGraph {
             }
         }
         next_toward_goal
+    }
+}
+
+fn cache_graph_route(
+    cache: &mut HashMap<(usize, usize), Vec<usize>>,
+    order: &mut VecDeque<(usize, usize)>,
+    points: &mut usize,
+    key: (usize, usize),
+    route: Vec<usize>,
+) {
+    if route.len() > MAX_CACHED_ROUTE_POINTS {
+        return;
+    }
+    let length = route.len();
+    let previous = cache.insert(key, route);
+    *points = *points + length - previous.as_ref().map_or(0, Vec::len);
+    if previous.is_none() {
+        order.push_back(key);
+    }
+    while cache.len() > MAX_GRAPH_ROUTE_PAIRS || *points > MAX_CACHED_ROUTE_POINTS {
+        let Some(oldest) = order.pop_front() else {
+            break;
+        };
+        if let Some(route) = cache.remove(&oldest) {
+            *points -= route.len();
+        }
     }
 }
 
@@ -831,7 +978,8 @@ pub fn queue_villager_travel_routes(
     }
 }
 
-/// A static failure sleeps until the AI chooses a genuinely new destination.
+/// Retry a failed trip after its real-time delay, a relevant new road or a
+/// genuinely different destination. Seed missing delays from movement failures.
 ///
 /// A global obstacle version is intentionally not a retry trigger: completing
 /// any house changes that version, even if the failed point is on the opposite
@@ -839,8 +987,10 @@ pub fn queue_villager_travel_routes(
 /// villager repeatedly while a settlement was expanding.
 pub fn retry_failed_routes_after_obstacle_change(
     simulation_time: crate::world::simulation_time::SimulationTime,
+    terrain: Option<Res<WorldTerrain>>,
     mut commands: Commands,
     graph: Res<VillageRoadGraph>,
+    collision: TravelCollisionResources,
     failed: Query<
         (
             Entity,
@@ -855,6 +1005,11 @@ pub fn retry_failed_routes_after_obstacle_change(
     >,
 ) {
     let now = simulation_time.elapsed_real_seconds_f64();
+    let geometry_version = navigation_geometry_version(
+        collision.obstacles.as_deref(),
+        collision.colliders.as_deref(),
+        collision.decks.as_deref(),
+    );
     for (entity, position, target, failed, backoff, pending, travelling) in failed.iter() {
         let destination_changed = failed
             .is_some_and(|failed| failed.goal.distance_squared(target.0) > 0.01)
@@ -865,6 +1020,26 @@ pub fn retry_failed_routes_after_obstacle_change(
                 .remove::<NavigationRouteFailed>()
                 .remove::<NavigationRouteBackoff>()
                 .insert(NavigationRoutePending::new(target.0));
+            continue;
+        }
+        if failed.is_some() && backoff.is_none() && !pending && !travelling {
+            // Movement can reject a previously certified segment after live
+            // collision changes. That failure did not pass through the route
+            // planner, so give it the same real-time circuit breaker once.
+            // Retaining the failure keeps the actor still until retry is due.
+            commands
+                .entity(entity)
+                .insert(NavigationRouteBackoff::after_failure(
+                    None,
+                    target.0,
+                    geometry_version,
+                    terrain
+                        .as_deref()
+                        .map_or(0, WorldTerrain::modification_version),
+                    graph.route_opportunity_version(position.0.xz(), target.0.xz()),
+                    now,
+                    entity,
+                ));
             continue;
         }
         let relevant_road_changed = backoff.is_some_and(|backoff| {
@@ -901,6 +1076,7 @@ struct IncrementalRouteJob {
     scratch: SurveyScratch,
     search: SurveySearchState,
     geometry_version: u64,
+    terrain_version: u32,
     road_opportunity_version: u64,
     /// The search owns an immutable blocker snapshot. Geometry may change
     /// while a long local or regional route is spread across ticks; the
@@ -913,6 +1089,7 @@ struct IncrementalRouteJob {
     /// searches. This is independent of geometry-drift safety: long local
     /// porter/work routes also retain progress, but keep full local fidelity.
     regional_corridor: bool,
+    bridge_version: u64,
 }
 
 #[derive(Default)]
@@ -1074,6 +1251,9 @@ pub(crate) struct RoutePlannerAux<'w, 's> {
     defenses: Query<'w, 's, &'static shared::components::FortificationSegment>,
     changed_defenses: Query<'w, 's, (), Changed<shared::components::FortificationSegment>>,
     removed_defenses: RemovedComponents<'w, 's, shared::components::FortificationSegment>,
+    ports: Query<'w, 's, &'static shared::components::SettlementPort>,
+    changed_ports: Query<'w, 's, (), Changed<shared::components::SettlementPort>>,
+    removed_ports: RemovedComponents<'w, 's, shared::components::SettlementPort>,
     yards: Query<
         'w,
         's,
@@ -1129,6 +1309,7 @@ fn needs_regional_corridor(objective: Option<&CharacterObjective>, local_distanc
     // extended-local tier, whose 20 m padded window cannot express a headland
     // detour — and then stood at the landfall "waiting to retry" forever.
     is_intersettlement_route_objective(objective)
+        || local_distance > EXTENDED_LOCAL_SURVEY_MAX_DISTANCE
         || (local_distance > EXTENDED_LOCAL_SURVEY_MIN_DISTANCE
             && matches!(objective, Some(CharacterObjective::TravellingToSettlement)))
 }
@@ -1188,10 +1369,95 @@ enum IncrementalRouteResult {
     Failed,
 }
 
+/// Explicitly enabled lab evidence, outside the normal planner path. Exact
+/// live obstacles and terrain edits let an intersettlement failure be replayed
+/// without waiting for another town to grow for thirty days.
+fn save_failed_regional_survey(
+    terrain: &WorldTerrain,
+    buildings: &NavigationBuildingCache,
+    job: &IncrementalRouteJob,
+    reason: &str,
+    completed: &[Vec2],
+) {
+    if !job.regional_corridor {
+        return;
+    }
+    let Some(directory) = std::env::var_os("FISTWORLD_LAB_ROUTE_SNAPSHOT_DIR") else {
+        return;
+    };
+    let directory = std::path::PathBuf::from(directory);
+    if std::fs::create_dir_all(&directory).is_err() {
+        return;
+    }
+    let path = directory.join(format!(
+        "regional-{:08x}-{:08x}-{:08x}-{:08x}.json",
+        job.start.survey.x.to_bits(),
+        job.start.survey.y.to_bits(),
+        job.goal.survey.x.to_bits(),
+        job.goal.survey.y.to_bits(),
+    ));
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    else {
+        return;
+    };
+    let vector = |point: Vec2| [point.x, point.y];
+    let (stride, padding) = regional_survey_profile(job.start.survey.distance(job.goal.survey));
+    let min = job.start.survey.min(job.goal.survey) - Vec2::splat(padding);
+    let max = job.start.survey.max(job.goal.survey) + Vec2::splat(padding);
+    let mut props: Vec<_> = job
+        .props
+        .cells
+        .values()
+        .flatten()
+        .map(|prop| [prop.point.x, prop.point.y, prop.radius])
+        .collect();
+    props.sort_by(|a, b| a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])));
+    let mut deltas: Vec<_> = terrain
+        .delta_chunks()
+        .iter()
+        .filter(|(chunk, _)| {
+            let lower = Vec2::new(chunk.x as f32, chunk.z as f32) * CHUNK_SIZE;
+            let upper = lower + Vec2::splat(CHUNK_SIZE);
+            upper.x >= min.x - CHUNK_SIZE
+                && upper.y >= min.y - CHUNK_SIZE
+                && lower.x <= max.x + CHUNK_SIZE
+                && lower.y <= max.y + CHUNK_SIZE
+        })
+        .map(|(chunk, data)| (chunk.x, chunk.z, &data.deltas))
+        .collect();
+    deltas.sort_by_key(|(x, z, _)| (*x, *z));
+    let snapshot = serde_json::json!({
+        "map": terrain.generator.active_map_id(),
+        "map_hash": terrain.generator.active_map_content_hash(),
+        "reason": reason,
+        "start": vector(job.start.survey), "goal": vector(job.goal.survey),
+        "actual_start": vector(job.start.actual), "actual_goal": vector(job.goal.actual),
+        "escaping_building": job.start.escaping_building,
+        "start_apron": job.start_apron.iter().copied().map(vector).collect::<Vec<_>>(),
+        "goal_apron": job.goal_apron.iter().copied().map(vector).collect::<Vec<_>>(),
+        "completed": completed.iter().copied().map(vector).collect::<Vec<_>>(),
+        "min": vector(min), "max": vector(max),
+        "stride": stride, "cell_size": SURVEY_CELL,
+        "fine_endpoint_radius": INTERSETTLEMENT_FINE_ENDPOINT_RADIUS,
+        "max_nodes": job.max_nodes, "expanded": job.search.expanded,
+        "frontier": job.scratch.open.len(),
+        "buildings": buildings.blockers.iter()
+            .map(|b| [b.center.x, b.center.y, b.half.x, b.half.y, b.rotation]).collect::<Vec<_>>(),
+        "props": props, "terrain_deltas": deltas,
+    });
+    if serde_json::to_writer(std::io::BufWriter::new(file), &snapshot).is_ok() {
+        eprintln!("LAB failed regional survey snapshot {}", path.display());
+    }
+}
+
 fn resume_incremental_route(
     terrain: &WorldTerrain,
     building_cache: &NavigationBuildingCache,
     job: &mut IncrementalRouteJob,
+    decks: Option<&BridgeDecks>,
     deadline: Instant,
     telemetry: &mut RoutePlannerTelemetry,
 ) -> IncrementalRouteResult {
@@ -1204,6 +1470,7 @@ fn resume_incremental_route(
         SURVEY_PADDING
     };
     let survey = RoadSurvey {
+        decks,
         terrain,
         buildings: &building_cache.blockers,
         live_buildings: Some(&building_cache.spatial),
@@ -1252,7 +1519,25 @@ fn resume_incremental_route(
     telemetry.record_surveys(job.scratch.metrics - metrics_before);
     match result {
         SurveySearchResult::Pending => IncrementalRouteResult::Pending,
-        SurveySearchResult::Failed => IncrementalRouteResult::Failed,
+        SurveySearchResult::Failed => {
+            save_failed_regional_survey(terrain, building_cache, job, "survey failed", &[]);
+            if std::env::var_os("FISTWORLD_LAB_ROUTE_DIAGNOSTICS").is_some() {
+                eprintln!(
+                    "LAB retained survey failed from={:?} to={:?} expanded={} max_nodes={} frontier={} visited={} stride={} padding={} start_apron={} goal_apron={}",
+                    job.start.survey,
+                    job.goal.survey,
+                    job.search.expanded,
+                    job.max_nodes,
+                    job.scratch.open.len(),
+                    job.scratch.closed.len(),
+                    survey.coarse_stride,
+                    survey_padding,
+                    job.start_apron.len(),
+                    job.goal_apron.len(),
+                );
+            }
+            IncrementalRouteResult::Failed
+        }
         SurveySearchResult::Found(raw) => {
             let simple = simplify_visible(&raw, &survey, &mut job.scratch);
             let resampled = resample_path(&simple, 1.5);
@@ -1290,6 +1575,7 @@ fn install_completed_direct_route(
     direct: &[Vec2],
     props: &PropBlockers,
     terrain: &WorldTerrain,
+    decks: Option<&BridgeDecks>,
     obstacles: Option<&SpatialObstacleGrid>,
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
@@ -1308,7 +1594,17 @@ fn install_completed_direct_route(
         start.escaping_building,
     );
     telemetry.certification_time += certification_started.elapsed();
-    if !clear {
+    if !clear
+        || !direct.windows(2).all(|pair| {
+            crate::world::bridges::segment_walkable(
+                terrain,
+                decks,
+                pair[0],
+                pair[1],
+                CHARACTER_NAV_RADIUS,
+            )
+        })
+    {
         return false;
     }
     let reverse_is_certified =
@@ -1321,6 +1617,7 @@ fn install_completed_direct_route(
         target,
         goal.actual,
         terrain,
+        decks,
         &tagged,
         start.escaping_building,
         geometry_version,
@@ -1514,6 +1811,7 @@ fn install_tactical_route(
     target: Vec3,
     goal_actual: Vec2,
     terrain: &WorldTerrain,
+    decks: Option<&BridgeDecks>,
     tagged: &[(Vec2, bool)],
     escaping_building: bool,
     geometry_version: u64,
@@ -1525,7 +1823,16 @@ fn install_tactical_route(
             position: if is_goal {
                 target
             } else {
-                Vec3::new(point.x, terrain.get_height(point.x, point.y), point.y)
+                Vec3::new(
+                    point.x,
+                    crate::world::bridges::ground_height(
+                        terrain,
+                        decks,
+                        point,
+                        CHARACTER_NAV_RADIUS,
+                    ),
+                    point.y,
+                )
             },
             on_road,
         });
@@ -1574,6 +1881,7 @@ fn reject_navigation_route(
     target: Vec3,
     previous: Option<NavigationRouteBackoff>,
     geometry_version: u64,
+    terrain_version: u32,
     road_opportunity_version: u64,
     now: f64,
     reason: &'static str,
@@ -1584,12 +1892,14 @@ fn reject_navigation_route(
         previous,
         target,
         geometry_version,
+        terrain_version,
         road_opportunity_version,
         now,
         entity,
     );
     if backoff.should_warn() && warning_limiter.allow(target, now) {
         if std::env::var_os("FISTWORLD_LAB_ROUTE_DIAGNOSTICS").is_some() {
+            eprintln!("LAB rejected route reason={reason}");
             diagnose();
         }
         warn!(
@@ -1668,10 +1978,11 @@ pub fn plan_villager_travel_routes(
     let obstacles = collision.obstacles.as_deref();
     let colliders = collision.colliders.as_deref();
     let derived = collision.derived.as_deref();
+    let decks = collision.decks.as_deref();
     // Tactical cache entries are certified against both kinds of collision.
     // A streamed or newly cleared prop must invalidate them just as surely as
     // a newly completed building.
-    let obstacle_version = navigation_geometry_version(obstacles, colliders);
+    let obstacle_version = navigation_geometry_version(obstacles, colliders, decks);
     if let Some(colliders) = colliders {
         let collision_snapshot = &mut request_state.collision_snapshot;
         if !collision_snapshot.initialized {
@@ -1705,14 +2016,17 @@ pub fn plan_villager_travel_routes(
     let fields_changed = aux.fields.refresh();
     let removed_any = !aux.removed_buildings.is_empty()
         || !aux.removed_defenses.is_empty()
-        || !aux.removed_yards.is_empty();
+        || !aux.removed_yards.is_empty()
+        || !aux.removed_ports.is_empty();
     aux.removed_buildings.clear();
     aux.removed_defenses.clear();
     aux.removed_yards.clear();
+    aux.removed_ports.clear();
     if !building_cache.initialized
         || !aux.changed_buildings.is_empty()
         || !aux.changed_defenses.is_empty()
         || !aux.changed_yards.is_empty()
+        || !aux.changed_ports.is_empty()
         || fields_changed
         || removed_any
     {
@@ -1722,6 +2036,7 @@ pub fn plan_villager_travel_routes(
             aux.defenses.iter(),
             aux.yards.iter(),
             aux.fields.obstacles(),
+            aux.ports.iter(),
         );
         // A cabin on the east side of town cannot invalidate a certified
         // migration corridor on the west. Remove only cached polylines that
@@ -1929,12 +2244,18 @@ pub fn plan_villager_travel_routes(
         }
         // Never let one corrupt, stale or hostile destination expand prop
         // generation and A* over an unbounded rectangle. Valid long-distance
-        // movement remains inside the active map; strategic travel will later
-        // replace embodied cross-world routing altogether.
+        // movement remains inside the active map and uses the same retained
+        // bounded route planner regardless of observation.
         if !position.0.is_finite()
             || !target.0.is_finite()
-            || !world_pos_in_bounds(position.0.x, position.0.z)
-            || !world_pos_in_bounds(target.0.x, target.0.z)
+            || !terrain
+                .generator
+                .active_map_bounds()
+                .contains_xz(position.0.x, position.0.z)
+            || !terrain
+                .generator
+                .active_map_bounds()
+                .contains_xz(target.0.x, target.0.z)
         {
             // This is still an AI result. Silently erasing an invalid target
             // leaves the owning work routine unaware that it must choose a
@@ -2000,6 +2321,7 @@ pub fn plan_villager_travel_routes(
         if route_backoff.is_some_and(|backoff| {
             backoff.matches(target.0)
                 && backoff.geometry_version == geometry_version
+                && backoff.terrain_version == terrain.modification_version()
                 && backoff.road_opportunity_version == road_opportunity_version
         }) {
             telemetry.failed_attempts = telemetry.failed_attempts.saturating_add(1);
@@ -2009,6 +2331,7 @@ pub fn plan_villager_travel_routes(
                 target.0,
                 route_backoff.copied(),
                 geometry_version,
+                terrain.modification_version(),
                 road_opportunity_version,
                 now,
                 "is still blocked by unchanged geometry",
@@ -2020,8 +2343,10 @@ pub fn plan_villager_travel_routes(
 
         if let Some(mut job) = request_state.incremental_jobs.remove(&entity) {
             let versions_are_current = job.geometry_version == geometry_version
+                && job.terrain_version == terrain.modification_version()
                 && job.road_opportunity_version == road_opportunity_version;
-            let job_is_current = job.target.distance_squared(target.0) <= 0.01
+            let job_is_current = job.bridge_version == decks.map_or(0, |decks| decks.version)
+                && job.target.distance_squared(target.0) <= 0.01
                 && incremental_versions_compatible(
                     job.allow_geometry_drift,
                     job.geometry_version,
@@ -2046,6 +2371,7 @@ pub fn plan_villager_travel_routes(
                     &terrain,
                     &building_cache,
                     &mut job,
+                    decks,
                     resume_deadline,
                     &mut telemetry,
                 );
@@ -2081,11 +2407,19 @@ pub fn plan_villager_travel_routes(
                             &direct,
                             &job.props,
                             &terrain,
+                            decks,
                             obstacles,
                             colliders,
                             derived,
                             geometry_version,
                         ) {
+                            save_failed_regional_survey(
+                                &terrain,
+                                &building_cache,
+                                &job,
+                                "final live-obstacle certification failed",
+                                &direct,
+                            );
                             if job.allow_geometry_drift && !versions_are_current {
                                 // The retained frontier crossed geometry that
                                 // changed while it was being solved. Its final
@@ -2102,6 +2436,7 @@ pub fn plan_villager_travel_routes(
                                     target.0,
                                     route_backoff.copied(),
                                     geometry_version,
+                                    terrain.modification_version(),
                                     road_opportunity_version,
                                     now,
                                     "failed final live-obstacle certification",
@@ -2123,6 +2458,7 @@ pub fn plan_villager_travel_routes(
                                 target.0,
                                 route_backoff.copied(),
                                 geometry_version,
+                                terrain.modification_version(),
                                 road_opportunity_version,
                                 now,
                                 "is blocked",
@@ -2164,6 +2500,7 @@ pub fn plan_villager_travel_routes(
                 target.0,
                 goal.actual,
                 &terrain,
+                decks,
                 cached,
                 start.escaping_building,
                 geometry_version,
@@ -2219,8 +2556,9 @@ pub fn plan_villager_travel_routes(
             // Building collision is intentionally exempt until clear ground;
             // terrain and prop collision remain fully certified here and in
             // movement.
-            survey_agent_route(
+            survey_agent_route_with_decks(
                 &terrain,
+                decks,
                 start.actual,
                 start.survey,
                 &[],
@@ -2230,8 +2568,9 @@ pub fn plan_villager_travel_routes(
                 AGENT_SURVEY_MAX_NODES,
             )
         } else {
-            survey_agent_route(
+            survey_agent_route_with_decks(
                 &terrain,
+                decks,
                 start.actual,
                 start.survey,
                 &building_cache.blockers,
@@ -2241,8 +2580,9 @@ pub fn plan_villager_travel_routes(
                 AGENT_SURVEY_MAX_NODES,
             )
         };
-        let goal_apron = survey_agent_route(
+        let goal_apron = survey_agent_route_with_decks(
             &terrain,
+            decks,
             goal.survey,
             goal.actual,
             &building_cache.blockers,
@@ -2268,8 +2608,9 @@ pub fn plan_villager_travel_routes(
                 .into_iter()
                 .take(COHORT_ROUTE_CANDIDATES_TO_SURVEY)
             {
-                let connector = survey_agent_route(
+                let connector = survey_agent_route_with_decks(
                     &terrain,
+                    decks,
                     start.survey,
                     candidate.start,
                     &building_cache.blockers,
@@ -2294,7 +2635,15 @@ pub fn plan_villager_travel_routes(
                 let points: Vec<_> = tagged.iter().map(|(point, _)| *point).collect();
                 if !polyline_clear_live_world_with_start_escape(
                     &points, obstacles, colliders, derived, false,
-                ) {
+                ) || !points.windows(2).all(|pair| {
+                    crate::world::bridges::segment_walkable(
+                        &terrain,
+                        decks,
+                        pair[0],
+                        pair[1],
+                        CHARACTER_NAV_RADIUS,
+                    )
+                }) {
                     continue;
                 }
                 telemetry.cache_hits = telemetry.cache_hits.saturating_add(1);
@@ -2308,6 +2657,7 @@ pub fn plan_villager_travel_routes(
                     target.0,
                     goal.actual,
                     &terrain,
+                    decks,
                     &tagged,
                     false,
                     geometry_version,
@@ -2323,8 +2673,9 @@ pub fn plan_villager_travel_routes(
         let prefer_road_first = local_distance >= EXTENDED_LOCAL_SURVEY_MIN_DISTANCE;
         let mut direct = Vec::new();
         if !prefer_road_first {
-            let direct_middle = survey_agent_route(
+            let direct_middle = survey_agent_route_with_decks(
                 &terrain,
+                decks,
                 start.survey,
                 goal.survey,
                 &building_cache.blockers,
@@ -2502,8 +2853,9 @@ pub fn plan_villager_travel_routes(
             let last = graph.nodes[*candidate.nodes.last().unwrap()].point;
             let connectors_started = Instant::now();
             let survey_metrics_before = survey_scratch.metrics;
-            let start_connector = survey_agent_route(
+            let start_connector = survey_agent_route_with_decks(
                 &terrain,
+                decks,
                 start.survey,
                 first,
                 &building_cache.blockers,
@@ -2512,8 +2864,9 @@ pub fn plan_villager_travel_routes(
                 &mut survey_scratch,
                 AGENT_SURVEY_MAX_NODES,
             );
-            let goal_connector = survey_agent_route(
+            let goal_connector = survey_agent_route_with_decks(
                 &terrain,
+                decks,
                 last,
                 goal.survey,
                 &building_cache.blockers,
@@ -2560,7 +2913,15 @@ pub fn plan_villager_travel_routes(
                 colliders,
                 derived,
                 start.escaping_building,
-            ) {
+            ) || !points.windows(2).all(|pair| {
+                crate::world::bridges::segment_walkable(
+                    &terrain,
+                    decks,
+                    pair[0],
+                    pair[1],
+                    CHARACTER_NAV_RADIUS,
+                )
+            }) {
                 road_certification_failures += 1;
                 if road_certification_failures == 1
                     && std::env::var_os("FISTWORLD_LAB_ROUTE_DIAGNOSTICS").is_some()
@@ -2655,6 +3016,7 @@ pub fn plan_villager_travel_routes(
                     scratch: SurveyScratch::default(),
                     search: SurveySearchState::default(),
                     geometry_version,
+                    terrain_version: terrain.modification_version(),
                     road_opportunity_version,
                     // Every completed route receives a final live-world
                     // certification. Retaining the snapshot across unrelated
@@ -2662,6 +3024,7 @@ pub fn plan_villager_travel_routes(
                     // town from perpetually restarting long porter/work trips.
                     allow_geometry_drift: true,
                     regional_corridor: intersettlement_route,
+                    bridge_version: decks.map_or(0, |decks| decks.version),
                 },
             );
             telemetry.budget_yields = telemetry.budget_yields.saturating_add(1);
@@ -2687,6 +3050,7 @@ pub fn plan_villager_travel_routes(
                 target.0,
                 route_backoff.copied(),
                 geometry_version,
+                terrain.modification_version(),
                 road_opportunity_version,
                 now,
                 "is blocked",
@@ -2731,6 +3095,7 @@ pub fn plan_villager_travel_routes(
                     target.0,
                     route_backoff.copied(),
                     geometry_version,
+                    terrain.modification_version(),
                     road_opportunity_version,
                     now,
                     "failed final live-obstacle certification",
@@ -2751,6 +3116,7 @@ pub fn plan_villager_travel_routes(
             target.0,
             goal.actual,
             &terrain,
+            decks,
             &tagged,
             start.escaping_building,
             geometry_version,
@@ -2776,6 +3142,7 @@ mod local_tests {
         let terrain = WorldTerrain::default();
         let props = PropBlockers::default();
         let survey = RoadSurvey {
+            decks: None,
             terrain: &terrain,
             buildings: &[],
             live_buildings: None,
@@ -2798,9 +3165,14 @@ mod local_tests {
             "the empty return wagon still needs the inter-settlement corridor",
         );
         assert_eq!(
-            agent_survey_max_nodes(600.0, Some(&CharacterObjective::GoingToFarm)),
+            agent_survey_max_nodes(30.0, Some(&CharacterObjective::GoingToFarm)),
             AGENT_SURVEY_MAX_NODES,
-            "ordinary villagers must not inherit the expensive caravan budget",
+            "a short ordinary commute keeps the cheap local budget",
+        );
+        assert_eq!(
+            agent_survey_max_nodes(600.0, Some(&CharacterObjective::GoingToFarm)),
+            INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+            "a genuinely distant committed job needs the bounded regional corridor too",
         );
         assert_eq!(
             agent_survey_max_nodes(600.0, Some(&CharacterObjective::TravellingToSettlement),),
@@ -2829,6 +3201,69 @@ mod local_tests {
             ),
             ROUTE_PRIORITY_COMMITTED,
             "a migration wave must not outrank every established work journey",
+        );
+    }
+
+    #[test]
+    fn planner_bounds_belong_to_its_terrain_instead_of_another_world() {
+        use shared::map::{HeightmapData, MapBounds};
+        let mut terrain = WorldTerrain::default();
+        let mut map = terrain.generator.loaded_map().clone();
+        // Construct only a local generator, without replacing process-global
+        // active bounds. This detached terrain lives outside the default map.
+        let bounds = MapBounds {
+            min: [10_000., -40.],
+            max: [10_080., 40.],
+        };
+        assert!(
+            !terrain
+                .generator
+                .active_map_bounds()
+                .contains_xz(10_010., 0.)
+        );
+        map.definition.bounds = bounds;
+        map.definition.generated = None;
+        map.definition.objects.clear();
+        map.objects_by_chunk.clear();
+        map.biome_field = None;
+        map.heightmap = HeightmapData::new(bounds, 2, 2, vec![80.; 4], Some(0.));
+        terrain.generator = shared::terrain::TerrainGenerator::from_loaded_map(map);
+        let mut app = App::new();
+        app.insert_resource(terrain)
+            .init_resource::<PathfindingBudgetSettings>()
+            .init_resource::<VillageRoadGraph>()
+            .add_systems(Update, plan_villager_travel_routes);
+        let goal = Vec3::new(10_020., 80., 0.);
+        let person = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PlayerPosition(Vec3::new(10_010., 80., 0.)),
+                MoveTarget(goal),
+                NavigationRoutePending::new(goal),
+            ))
+            .id();
+        for _ in 0..128 {
+            app.update();
+            if app.world().get::<TravelRoute>(person).is_some() {
+                break;
+            }
+        }
+        let route = app.world().get::<TravelRoute>(person).expect(
+            "local map owns this valid route even though another world's bounds exclude it",
+        );
+        assert_eq!(route.goal, goal);
+        assert!(!route.waypoints.is_empty());
+        assert!(app.world().get::<NavigationRouteFailed>(person).is_none());
+        let outside = Vec3::new(10_090., 80., 0.);
+        app.world_mut()
+            .entity_mut(person)
+            .insert((MoveTarget(outside), NavigationRoutePending::new(outside)));
+        app.update();
+        assert!(app.world().get::<NavigationRouteFailed>(person).is_some());
+        assert!(
+            app.world().get::<MoveTarget>(person).is_none(),
+            "resource-local validation must still reject an actual map escape"
         );
     }
 
@@ -2950,9 +3385,11 @@ mod local_tests {
         let nearby = graph.cohort_route_candidates(start + Vec2::new(4.0, -3.0), goal);
         assert_eq!(nearby.len(), 1);
         assert_eq!(nearby[0].tagged, route);
-        assert!(graph
-            .cohort_route_candidates(start + Vec2::X * (COHORT_ROUTE_JOIN_DISTANCE + 1.0), goal)
-            .is_empty());
+        assert!(
+            graph
+                .cohort_route_candidates(start + Vec2::X * (COHORT_ROUTE_JOIN_DISTANCE + 1.0), goal)
+                .is_empty()
+        );
     }
 
     #[test]

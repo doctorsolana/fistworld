@@ -16,8 +16,10 @@ pub mod actions;
 pub mod army;
 pub mod companies;
 pub mod layout;
+pub(crate) mod person_links;
 pub mod places;
 pub mod retinue;
+pub(crate) mod search;
 mod shell;
 pub mod state_sync;
 
@@ -31,6 +33,28 @@ pub struct EncyclopediaPlugin;
 
 impl Plugin for EncyclopediaPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(person_links::PersonLinksPlugin);
+        app.init_resource::<search::EncyclopediaSearch>();
+        app.add_systems(
+            PreUpdate,
+            search::handle_input
+                .after(crate::ui::chat::ChatInput)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
+            search::sync_view
+                .after(shell::spawn_encyclopedia)
+                .run_if(encyclopedia_open)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            PostUpdate,
+            search::fit_text
+                .after(bevy::ui::UiSystems::Layout)
+                .run_if(encyclopedia_open)
+                .run_if(in_state(GameState::Playing)),
+        );
         app.init_resource::<EncyclopediaOpen>();
         app.init_resource::<EncyclopediaTab>();
         app.init_resource::<PeopleFilter>();
@@ -45,6 +69,9 @@ impl Plugin for EncyclopediaPlugin {
         app.init_resource::<companies::CompanyDrilldownReturn>();
         app.init_resource::<companies::CompanyPolicyFeedback>();
         app.init_resource::<companies::TradeRouteEditorState>();
+        app.init_resource::<companies::MaritimeRequests>();
+        app.init_resource::<companies::TradeRouteRequests>();
+        app.add_systems(Update,(companies::receive_maritime_results,companies::receive_trade_route_results).chain().run_if(in_state(GameState::Playing)));
         app.init_resource::<ClickGuard>();
         app.add_systems(
             Update,
@@ -137,14 +164,13 @@ impl Plugin for EncyclopediaPlugin {
                 companies::handle_new_company_button,
                 companies::handle_company_rows,
                 companies::handle_company_site_buttons,
-                companies::handle_company_person_buttons,
                 companies::handle_company_management_buttons,
                 companies::handle_company_branch_policy_buttons,
                 companies::handle_trade_route_open_buttons,
+                companies::handle_fleet_buttons,
                 companies::handle_trade_route_quick_actions,
                 companies::handle_trade_route_editor_buttons,
                 companies::receive_company_policy_results,
-                companies::receive_trade_route_results,
                 companies::rebuild_company_view,
                 companies::style_company_controls,
             )
@@ -485,8 +511,7 @@ impl PeopleFilter {
     }
 }
 
-/// Selected row, held by NAME so the selection survives list rebuilds,
-/// filter changes and roster refreshes.
+/// Selected row, held by durable identity through searches and roster refreshes.
 #[derive(Resource, Default)]
 /// Keyed by durable PersonId, never by name: generated names collide (two
 /// "Jarl Haldenson"s can and did share a battlefield), and a name-keyed page
@@ -584,7 +609,7 @@ impl KnownPeople {
             .filter(|record| {
                 // Without god capability an unknown person is not merely
                 // filtered out — you have no idea they exist.
-                if !record.known && !god {
+                if !record.known && !record.is_self && !god {
                     return false;
                 }
                 match filter {
@@ -810,14 +835,18 @@ mod page_tests {
         world.insert_resource(EncyclopediaTab::Places);
 
         world.run_system_once(handle_page_back).unwrap();
-        assert!(world
-            .resource::<crate::ui::history::HistoryPanelTarget>()
-            .0
-            .is_none());
-        assert!(world
-            .resource::<crate::ui::market::MarketPageTarget>()
-            .0
-            .is_some());
+        assert!(
+            world
+                .resource::<crate::ui::history::HistoryPanelTarget>()
+                .0
+                .is_none()
+        );
+        assert!(
+            world
+                .resource::<crate::ui::market::MarketPageTarget>()
+                .0
+                .is_some()
+        );
 
         world.resource_mut::<ButtonInput<KeyCode>>().clear();
         world
@@ -826,9 +855,11 @@ mod page_tests {
         world.resource_mut::<ClickGuard>().0 = true;
         world.spawn((EncyclopediaPageBack, Interaction::Pressed));
         world.run_system_once(handle_page_back).unwrap();
-        assert!(world
-            .resource::<crate::ui::market::MarketPageTarget>()
-            .0
-            .is_none());
+        assert!(
+            world
+                .resource::<crate::ui::market::MarketPageTarget>()
+                .0
+                .is_none()
+        );
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::player::{
-    army::{apply_army_order, BattalionLedger},
+    army::{BattalionLedger, apply_army_order},
     orders::apply_unit_order,
 };
 use shared::region::RegionCoord;

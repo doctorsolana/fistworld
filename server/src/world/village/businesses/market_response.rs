@@ -39,48 +39,54 @@ impl MarketResponseSite {
         [pool.day, pool.previous_day]
             .into_iter()
             .filter_map(|flow| {
-                let mut units = share
-                    .units(flow.funded_unmet_units)
-                    .min(u64::from(worker_capacity)) as u32;
-                let input_cost = if let Some(recipe) = processing_recipe(self.kind) {
-                    let cycles = units / recipe.output_units.max(1);
-                    units = cycles.saturating_mul(recipe.output_units);
-                    u64::from(cycles)
-                        .saturating_mul(u64::from(recipe.input_units))
-                        .saturating_mul(market.suggested_price(recipe.input))
-                } else {
-                    0
-                };
-                if units == 0 {
-                    return None;
-                }
-                let cost = self.daily_wage.saturating_add(input_cost);
-                let mut quote = sustainable_unit_price(
-                    cost.div_ceil(u64::from(units)),
-                    market.market_fee_bps(),
-                    self.sale.target_margin_bps,
-                )
-                .max(self.sale.minimum_unit_price);
-                let net = quote.saturating_mul(
-                    BASIS_POINTS.saturating_sub(u64::from(market.market_fee_bps())),
-                ) / BASIS_POINTS;
-                if net.saturating_mul(u64::from(units)) <= cost {
-                    quote = quote.saturating_add(1);
-                }
-                if !self.sale.automatic_pricing {
-                    let fixed = self
-                        .sale
-                        .asking_unit_price
+                flow.funded_demand
+                    .price_levels()
+                    .filter_map(|bid| {
+                        let mut units = share
+                            .units(flow.funded_unmet_at(bid))
+                            .min(u64::from(worker_capacity))
+                            as u32;
+                        let input_cost = if let Some(recipe) = processing_recipe(self.kind) {
+                            let cycles = units / recipe.output_units.max(1);
+                            units = cycles.saturating_mul(recipe.output_units);
+                            u64::from(cycles)
+                                .saturating_mul(u64::from(recipe.input_units))
+                                .saturating_mul(market.suggested_price(recipe.input))
+                        } else {
+                            0
+                        };
+                        if units == 0 {
+                            return None;
+                        }
+                        let cost = self.daily_wage.saturating_add(input_cost);
+                        let mut quote = sustainable_unit_price(
+                            cost.div_ceil(u64::from(units)),
+                            market.market_fee_bps(),
+                            self.sale.target_margin_bps,
+                        )
                         .max(self.sale.minimum_unit_price);
-                    let fixed_net = fixed.saturating_mul(
-                        BASIS_POINTS.saturating_sub(u64::from(market.market_fee_bps())),
-                    ) / BASIS_POINTS;
-                    if fixed_net.saturating_mul(u64::from(units)) <= cost {
-                        return None;
-                    }
-                    quote = fixed;
-                }
-                (flow.funded_unmet_at(quote) > 0).then_some((quote, flow.funded_unmet_unit_price))
+                        let net = quote.saturating_mul(
+                            BASIS_POINTS.saturating_sub(u64::from(market.market_fee_bps())),
+                        ) / BASIS_POINTS;
+                        if net.saturating_mul(u64::from(units)) <= cost {
+                            quote = quote.saturating_add(1);
+                        }
+                        if !self.sale.automatic_pricing {
+                            let fixed = self
+                                .sale
+                                .asking_unit_price
+                                .max(self.sale.minimum_unit_price);
+                            let fixed_net = fixed.saturating_mul(
+                                BASIS_POINTS.saturating_sub(u64::from(market.market_fee_bps())),
+                            ) / BASIS_POINTS;
+                            if fixed_net.saturating_mul(u64::from(units)) <= cost {
+                                return None;
+                            }
+                            quote = fixed;
+                        }
+                        (quote <= bid).then_some((quote, bid))
+                    })
+                    .min()
             })
             .min()
     }

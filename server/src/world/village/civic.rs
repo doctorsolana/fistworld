@@ -14,11 +14,10 @@ use shared::components::{
 };
 use shared::economy::{
     CivicAccount, BASIS_POINTS, CIVIC_POLICY_REVIEW_DAYS, DEFAULT_BUSINESS_PERMIT_SUBSIDY_BPS,
-    DEFAULT_MARKET_FEE_BPS, FOUNDING_DAILY_WAGE, MARKET_FEE_REVIEW_STEP_BPS,
-    MAXIMUM_BUSINESS_PERMIT_SUBSIDY_BPS, MAXIMUM_BUSINESS_PROFIT_TAX_BPS,
-    MAXIMUM_CIVIC_PAYROLL_RESERVE_DAYS, MAXIMUM_FOOD_RESERVE_TARGET_DAYS, MAXIMUM_MARKET_FEE_BPS,
-    MINIMUM_FOOD_RESERVE_TARGET_DAYS, MINIMUM_MARKET_FEE_BPS, PERMIT_SUBSIDY_REVIEW_STEP_BPS,
-    PROFIT_TAX_REVIEW_STEP_BPS,
+    DEFAULT_MARKET_FEE_BPS, MARKET_FEE_REVIEW_STEP_BPS, MAXIMUM_BUSINESS_PERMIT_SUBSIDY_BPS,
+    MAXIMUM_BUSINESS_PROFIT_TAX_BPS, MAXIMUM_CIVIC_PAYROLL_RESERVE_DAYS,
+    MAXIMUM_FOOD_RESERVE_TARGET_DAYS, MAXIMUM_MARKET_FEE_BPS, MINIMUM_FOOD_RESERVE_TARGET_DAYS,
+    MINIMUM_MARKET_FEE_BPS, PERMIT_SUBSIDY_REVIEW_STEP_BPS, PROFIT_TAX_REVIEW_STEP_BPS,
 };
 
 const CIVIC_UNPAID_DAYS_BEFORE_RESIGNATION: u64 = 3;
@@ -52,7 +51,8 @@ pub(crate) fn desired_civic_positions(
 }
 
 pub(crate) fn civic_daily_payroll(administration: &MootAdministration) -> u64 {
-    (filled_civic_positions(administration) as u64).saturating_mul(FOUNDING_DAILY_WAGE)
+    (filled_civic_positions(administration) as u64)
+        .saturating_mul(administration.steward_daily_salary)
 }
 
 pub(crate) fn can_afford_new_civic_hire(
@@ -74,7 +74,8 @@ pub(crate) fn can_afford_civic_positions(
     policies: &SettlementPolicies,
     projected_positions: usize,
 ) -> bool {
-    let projected_daily = (projected_positions as u64).saturating_mul(FOUNDING_DAILY_WAGE);
+    let projected_daily =
+        (projected_positions as u64).saturating_mul(administration.steward_daily_salary);
     let reserve = projected_daily.saturating_mul(u64::from(policies.civic_payroll_reserve_days));
     settlement.treasury >= administration.wage_arrears.saturating_add(reserve)
 }
@@ -153,6 +154,7 @@ pub fn sync_civic_market_policy(
 pub fn run_civic_payroll(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
+    identity: Option<Res<crate::world::identity::WorldIdentityIndex>>,
     mut halls: Query<(
         &SettlementId,
         &mut Settlement,
@@ -170,6 +172,9 @@ pub fn run_civic_payroll(
         Has<MarketCollectionRoutine>,
         Has<RoadBuilderRoutine>,
     )>,
+    mut former_wallets: Query<(Entity, &PersonId, &mut Wallet), Without<CivicEmployment>>,
+    busy: Query<(), super::worker_activity::JobChangeBlocked>,
+    cargo: Query<&GoodsInventory>,
 ) {
     let Some(day) = world_time.iter().next().map(|clock| clock.day) else {
         return;
@@ -193,6 +198,7 @@ pub fn run_civic_payroll(
     }
 
     for (settlement_id, mut settlement, mut administration, mut account) in halls.iter_mut() {
+        let offer = administration.steward_daily_salary;
         for entry in &mut administration.payroll {
             entry.active = false;
         }
@@ -208,7 +214,7 @@ pub fn run_civic_payroll(
                         person_id,
                         name: name.clone(),
                         role,
-                        daily_wage: FOUNDING_DAILY_WAGE,
+                        daily_wage: offer,
                         arrears: 0,
                         last_accrual_day: day,
                         active: true,
@@ -218,7 +224,6 @@ pub fn run_civic_payroll(
             let entry = &mut administration.payroll[index];
             entry.name = name;
             entry.active = true;
-            entry.daily_wage = FOUNDING_DAILY_WAGE;
             let elapsed = day.saturating_sub(entry.last_accrual_day);
             for offset in 0..elapsed {
                 let due_day = entry.last_accrual_day.saturating_add(offset);
@@ -226,6 +231,9 @@ pub fn run_civic_payroll(
                 account.record_wage_expense(due_day.saturating_add(1), entry.daily_wage);
             }
             entry.last_accrual_day = day;
+            // A changed offer applies after the elapsed contract period; it
+            // must not reprice yesterday's work or an existing debt.
+            entry.daily_wage = offer;
         }
 
         // Rotating the first creditor prevents one stable PersonId from always
@@ -247,15 +255,44 @@ pub fn run_civic_payroll(
             }
             let entry = &mut administration.payroll[index];
             let payment = entry.arrears.min(settlement.treasury);
-            let Some(worker) = people.get(&entry.person_id).copied() else {
+            let Some(worker) = people
+                .get(&entry.person_id)
+                .copied()
+                .or_else(|| {
+                    identity
+                        .as_ref()
+                        .and_then(|index| index.people.get(&entry.person_id).copied())
+                })
+                .or_else(|| {
+                    // Minimal test apps have no identity index; the live schedule
+                    // always supplies it, so former claims need no world scan.
+                    identity
+                        .is_none()
+                        .then(|| {
+                            former_wallets
+                                .iter()
+                                .find(|(_, id, _)| **id == entry.person_id)
+                                .map(|(entity, ..)| entity)
+                        })
+                        .flatten()
+                })
+            else {
                 continue;
             };
-            let Ok((_, _, _, _, mut wallet, ..)) = villagers.get_mut(worker) else {
-                continue;
+            let paid = if let Ok((_, _, _, _, mut wallet, ..)) = villagers.get_mut(worker) {
+                wallet.credit(payment);
+                true
+            } else if let Ok((_, _, mut wallet)) = former_wallets.get_mut(worker) {
+                wallet.credit(payment);
+                true
+            } else {
+                false
             };
+            if !paid {
+                continue;
+            }
             settlement.treasury -= payment;
             entry.arrears -= payment;
-            wallet.credit(payment);
         }
 
         // A public salary is a contract, not a vow of lifelong unpaid
@@ -285,7 +322,11 @@ pub fn run_civic_payroll(
             else {
                 continue;
             };
-            if collecting || road_work {
+            if collecting
+                || road_work
+                || busy.contains(worker)
+                || cargo.get(worker).is_ok_and(|store| !store.is_empty())
+            {
                 continue;
             }
             if let Some(mut occupation) = occupation {
@@ -320,7 +361,6 @@ pub fn run_civic_payroll(
             .iter()
             .map(|entry| entry.arrears)
             .fold(0u64, u64::saturating_add);
-        administration.steward_daily_salary = FOUNDING_DAILY_WAGE;
     }
 }
 
@@ -468,7 +508,7 @@ fn target_policy(strategy: CivicStrategy) -> CivicPolicyTarget {
         CivicStrategy::Balanced => CivicPolicyTarget {
             market_fee_bps: DEFAULT_MARKET_FEE_BPS,
             profit_tax_bps: 1_000,
-            poor_relief: PoorReliefMode::SurplusOnly,
+            poor_relief: PoorReliefMode::EmergencyBudget,
             staffing: CivicStaffingPosture::Balanced,
             permit_subsidy_bps: DEFAULT_BUSINESS_PERMIT_SUBSIDY_BPS,
         },
@@ -482,21 +522,21 @@ fn target_policy(strategy: CivicStrategy) -> CivicPolicyTarget {
         CivicStrategy::Mercantile => CivicPolicyTarget {
             market_fee_bps: 400,
             profit_tax_bps: 750,
-            poor_relief: PoorReliefMode::SurplusOnly,
+            poor_relief: PoorReliefMode::EmergencyBudget,
             staffing: CivicStaffingPosture::Balanced,
             permit_subsidy_bps: 3_500,
         },
         CivicStrategy::MutualAid => CivicPolicyTarget {
             market_fee_bps: 600,
             profit_tax_bps: 1_250,
-            poor_relief: PoorReliefMode::SurplusOnly,
+            poor_relief: PoorReliefMode::EmergencyBudget,
             staffing: CivicStaffingPosture::Full,
             permit_subsidy_bps: 4_000,
         },
         CivicStrategy::Growth => CivicPolicyTarget {
             market_fee_bps: 400,
             profit_tax_bps: 750,
-            poor_relief: PoorReliefMode::SurplusOnly,
+            poor_relief: PoorReliefMode::EmergencyBudget,
             staffing: CivicStaffingPosture::Full,
             permit_subsidy_bps: 6_500,
         },
@@ -580,9 +620,8 @@ pub fn review_civic_policies(
                 adjustment = CivicPolicyAdjustment::DisabledPoorRelief;
             }
         } else {
-            let sustainable_food = economy.recent_food_production >= settlement.residents as f32
-                && economy.reserve_days
-                    >= f32::from(policy.food_reserve_target_days.saturating_add(1));
+            let funded_emergency = economy.edible_stock > 0
+                && civic_discretionary_budget(settlement, Some(administration), Some(&policy)) > 0;
             if policy.poor_relief != target.poor_relief && target.poor_relief == PoorReliefMode::Off
             {
                 policy.poor_relief = PoorReliefMode::Off;
@@ -590,9 +629,7 @@ pub fn review_civic_policies(
                 reason = CivicPolicyReason::HealthySurplus;
             } else if policy.poor_relief != target.poor_relief
                 && economy.unmet_food > 0
-                && sustainable_food
-                && settlement.treasury
-                    >= payroll.saturating_mul(u64::from(policy.civic_payroll_reserve_days))
+                && funded_emergency
             {
                 policy.poor_relief = target.poor_relief;
                 adjustment = CivicPolicyAdjustment::EnabledPoorRelief;
@@ -1169,10 +1206,166 @@ mod tests {
         assert_eq!(a.strategy, CivicStrategy::Balanced);
         assert_eq!(a.market_fee_bps, 500);
         assert_eq!(a.business_profit_tax_bps, 1_000);
-        assert_eq!(a.poor_relief, PoorReliefMode::SurplusOnly);
+        assert_eq!(a.poor_relief, PoorReliefMode::EmergencyBudget);
         assert_eq!(a.food_reserve_target_days, 3);
         assert_eq!(a.civic_payroll_reserve_days, 7);
         assert_eq!(a.staffing_posture, CivicStaffingPosture::Balanced);
         assert_eq!(a.business_permit_subsidy_bps, 4_500);
+    }
+    #[test]
+    fn civic_payroll_accrues_the_old_contract_before_adopting_a_changed_offer() {
+        let mut app = App::new();
+        app.add_systems(Update, run_civic_payroll);
+        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+        let town = SettlementId(9000);
+        let hall = app
+            .world_mut()
+            .spawn((
+                town,
+                Settlement {
+                    name: "Payford".into(),
+                    tier: shared::components::SettlementTier::Village,
+                    residents: 1,
+                    treasury: 1000,
+                },
+                MootAdministration {
+                    steward_daily_salary: 150,
+                    ..default()
+                },
+                CivicAccount::default(),
+            ))
+            .id();
+        let worker = civic_worker(&mut app, 9001, town, CivicRole::Guard);
+        app.update();
+        app.world_mut()
+            .get_mut::<MootAdministration>(hall)
+            .unwrap()
+            .steward_daily_salary = 200;
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 2;
+        app.update();
+        assert_eq!(app.world().get::<Wallet>(worker).unwrap().balance(), 300);
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 3;
+        app.update();
+        assert_eq!(app.world().get::<Wallet>(worker).unwrap().balance(), 500);
+        assert_eq!(app.world().get::<Settlement>(hall).unwrap().treasury, 500);
+        assert_eq!(
+            app.world().get::<MootAdministration>(hall).unwrap().payroll[0].daily_wage,
+            200
+        );
+    }
+
+    #[test]
+    fn a_departed_civic_worker_can_collect_old_arrears_without_a_current_public_job() {
+        let mut app = App::new();
+        app.add_systems(Update, run_civic_payroll);
+        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+        let town = SettlementId(9100);
+        let hall = app
+            .world_mut()
+            .spawn((
+                town,
+                Settlement {
+                    name: "Debtford".into(),
+                    tier: shared::components::SettlementTier::Village,
+                    residents: 1,
+                    treasury: 0,
+                },
+                MootAdministration {
+                    steward_daily_salary: 150,
+                    ..default()
+                },
+                CivicAccount::default(),
+            ))
+            .id();
+        let worker = civic_worker(&mut app, 9101, town, CivicRole::Guard);
+        app.update();
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
+        app.update();
+        app.world_mut()
+            .entity_mut(worker)
+            .remove::<CivicEmployment>();
+        app.world_mut()
+            .get_mut::<Settlement>(hall)
+            .unwrap()
+            .treasury = 150;
+        app.update();
+        assert_eq!(app.world().get::<Wallet>(worker).unwrap().balance(), 150);
+        assert_eq!(app.world().get::<Settlement>(hall).unwrap().treasury, 0);
+        assert!(app
+            .world()
+            .get::<MootAdministration>(hall)
+            .unwrap()
+            .payroll
+            .is_empty());
+    }
+
+    #[test]
+    fn civic_hiring_protects_the_actual_public_offer() {
+        let settlement = Settlement {
+            name: "Offer".into(),
+            tier: shared::components::SettlementTier::Village,
+            residents: 10,
+            treasury: 1500,
+        };
+        let office = MootAdministration {
+            steward_daily_salary: 200,
+            ..default()
+        };
+        assert!(can_afford_civic_positions(
+            &settlement,
+            &office,
+            &SettlementPolicies::default(),
+            1
+        ));
+        assert!(!can_afford_civic_positions(
+            &settlement,
+            &office,
+            &SettlementPolicies::default(),
+            2
+        ));
+    }
+    #[test]
+    fn emergency_relief_can_be_reenabled_for_affordable_imported_food() {
+        let mut app = App::new();
+        app.add_systems(Update, review_civic_policies);
+        let mut time = WorldTime::new_default();
+        time.day = CIVIC_POLICY_REVIEW_DAYS;
+        app.world_mut().spawn(time);
+        let hall = app
+            .world_mut()
+            .spawn((
+                Settlement {
+                    name: "Importford".into(),
+                    tier: shared::components::SettlementTier::Village,
+                    residents: 10,
+                    treasury: 10_000,
+                },
+                SettlementEconomy {
+                    edible_stock: 2,
+                    unmet_food: 1,
+                    recent_food_production: 0.0,
+                    reserve_days: 0.2,
+                    ..default()
+                },
+                MootAdministration {
+                    reeve: Some("Reeve".into()),
+                    ..default()
+                },
+                SettlementPolicies {
+                    poor_relief: PoorReliefMode::Off,
+                    last_review_day: 0,
+                    ..default()
+                },
+                CivicAccount::default(),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<SettlementPolicies>(hall)
+                .unwrap()
+                .poor_relief,
+            PoorReliefMode::EmergencyBudget
+        );
     }
 }

@@ -35,16 +35,46 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 PROFILE="playtest"
 ARGS=()
-for arg in "$@"; do
-    case "$arg" in
-        --release) PROFILE="release" ;;
-        --dev)     PROFILE="dev" ;;
-        *)         ARGS+=("$arg") ;;
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --release) PROFILE="release"; shift ;;
+        --dev) PROFILE="dev"; shift ;;
+        --world-config)
+            if [[ $# -lt 2 || ! -f "$2" ]]; then
+                echo "--world-config requires an existing RON config file." >&2
+                exit 1
+            fi
+            export FISTWORLD_WORLD_CONFIG="$2"
+            shift 2 ;;
+        --world-config=*)
+            export FISTWORLD_WORLD_CONFIG="${1#*=}"
+            if [[ ! -f "$FISTWORLD_WORLD_CONFIG" ]]; then
+                echo "World config not found: $FISTWORLD_WORLD_CONFIG" >&2
+                exit 1
+            fi
+            shift ;;
+        *) ARGS+=("$1"); shift ;;
     esac
 done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 MODE=${1:-both}
+
+# World recipes are selected before the authoritative server starts. Never
+# prompt when only joining a server, running an authored lab, or in automation.
+if [[ "$MODE" == "smallworld" ]]; then
+    unset CITYSIM_MAP_ID
+    export FISTWORLD_WORLD_CONFIG="$PWD/config/worlds/small-frontier.ron"
+    MODE=both
+elif [[ "$MODE" == "setup" ]]; then
+    unset CITYSIM_MAP_ID
+    FISTWORLD_WORLD_CONFIG="$(python3 tools/world_setup.py)"
+    export FISTWORLD_WORLD_CONFIG
+    MODE=both
+elif [[ ( "$MODE" == "both" || "$MODE" == "server" ) && -t 0 && -t 1 && -z "${FISTWORLD_WORLD_CONFIG:-}" && -z "${CITYSIM_MAP_ID:-}" ]]; then
+    FISTWORLD_WORLD_CONFIG="$(python3 tools/world_setup.py)"
+    export FISTWORLD_WORLD_CONFIG
+fi
 
 # Rendered village fixtures retain both process logs so a visual observation can
 # be matched to authoritative server state after the window closes.
@@ -599,6 +629,9 @@ case $MODE in
         echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|battle5v5|archerworld|cavalryworld|mixedbattle|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
+        echo "  smallworld - 20% world, 4 bare Halls, 6 settlers each, 3 boat arrivals/day worldwide"
+        echo "  setup   - Choose preset or custom world settings before hosting"
+        echo "  --world-config FILE - Use a saved world recipe (also works with server)"
         echo "  both    - Play a new seeded world with roughly ten inhabited settlements (default)"
         echo "  testworld - Watch one deterministic logged Village Lab settlement (starts at 1x)"
         echo "  uxworld - Open a mature logged 500-resident City for permit/company UX testing (1x)"

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::{world_pos_in_bounds, CHUNK_SIZE};
+use super::{CHUNK_SIZE, world_pos_in_bounds};
 
 /// Biome types available in the world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -66,6 +66,14 @@ impl ChunkCoord {
         let center_x = (self.x as f32 + 0.5) * CHUNK_SIZE;
         let center_z = (self.z as f32 + 0.5) * CHUNK_SIZE;
         world_pos_in_bounds(center_x, center_z)
+    }
+
+    /// Resource-owned geometry must use its map, not the startup singleton.
+    pub fn in_map_bounds(&self, bounds: crate::map::MapBounds) -> bool {
+        bounds.contains_xz(
+            (self.x as f32 + 0.5) * CHUNK_SIZE,
+            (self.z as f32 + 0.5) * CHUNK_SIZE,
+        )
     }
 }
 

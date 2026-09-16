@@ -19,25 +19,27 @@ fn exhausted_service_permits_never_scan_the_whole_settlement_in_one_review() {
         SettlementBuildingKind::LivestockFarm,
     ] {
         let mut rejected = SiteSearchRejections::default();
-        assert!(find_permit_site(
-            &terrain,
-            hall,
-            kind,
-            &occupied,
-            &[],
-            &[],
-            &[],
-            &[],
-            Some(&plan),
-            None,
-            None,
-            None,
-            Some(&mut rejected),
-            None,
-            None,
-            &[],
-        )
-        .is_none());
+        assert!(
+            find_permit_site(
+                &terrain,
+                hall,
+                kind,
+                &occupied,
+                &[],
+                &[],
+                &[],
+                &[],
+                Some(&plan),
+                None,
+                None,
+                None,
+                Some(&mut rejected),
+                None,
+                None,
+                &[],
+            )
+            .is_none()
+        );
         assert!(rejected.sampled > 0);
         assert!(
             rejected.sampled <= 60,

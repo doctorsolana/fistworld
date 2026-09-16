@@ -13,7 +13,7 @@ use shared::components::{
     CivicTradeContract, Company, CompanyId, CompanyTradeRoute, EmployedAt, FarmField, FishingPier,
     HouseholdId, LivesAt, LivestockPasture, MootAdministration, OwnedBy, PersonId, PlayerPosition,
     ResidentOf, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
-    TradeContractId, TradeRouteId, VillageRoad,
+    ShipId, ShipOrderId, TradeContractId, TradeRouteId, VillageRoad,
 };
 
 use super::village::{HomeAssignment, VillagerIntent};
@@ -27,6 +27,8 @@ pub struct WorldIdAllocator {
     next_company: u64,
     next_trade_contract: u64,
     next_trade_route: u64,
+    next_ship: u64,
+    next_ship_order: u64,
 }
 
 /// Migrate field and pier parent links from their old position join. New
@@ -117,11 +119,12 @@ pub fn reconcile_stable_civic_employment(
         let Some(current) = current else {
             continue;
         };
-        let remains_in_settlement = intent.settlement().is_some_and(|hall| {
-            halls
-                .get(hall)
-                .is_ok_and(|(_, settlement, _)| *settlement == current.settlement)
-        });
+        let remains_in_settlement = intent.counts_as_resident()
+            && intent.settlement().is_some_and(|hall| {
+                halls
+                    .get(hall)
+                    .is_ok_and(|(_, settlement, _)| *settlement == current.settlement)
+            });
         if !remains_in_settlement {
             commands.entity(entity).remove::<CivicEmployment>();
         }
@@ -152,7 +155,7 @@ pub fn reconcile_stable_civic_employment(
         };
 
         for (entity, name, intent, current) in people.iter() {
-            if intent.settlement() != Some(hall) {
+            if !intent.counts_as_resident() || intent.settlement() != Some(hall) {
                 if current.is_some_and(|job| job.settlement == *settlement_id) {
                     commands.entity(entity).remove::<CivicEmployment>();
                 }
@@ -174,7 +177,9 @@ pub fn reconcile_stable_civic_employment(
             let matches = people
                 .iter()
                 .filter(|(_, other_name, other_intent, _)| {
-                    other_name.0 == name.0 && other_intent.settlement() == Some(hall)
+                    other_name.0 == name.0
+                        && other_intent.counts_as_resident()
+                        && other_intent.settlement() == Some(hall)
                 })
                 .take(2)
                 .count();
@@ -195,11 +200,35 @@ impl Default for WorldIdAllocator {
             next_company: 1,
             next_trade_contract: 1,
             next_trade_route: 1,
+            next_ship: 1,
+            next_ship_order: 1,
         }
     }
 }
 
 impl WorldIdAllocator {
+    pub(crate) fn ship(&mut self) -> shared::components::ShipId {
+        let id = shared::components::ShipId(self.next_ship);
+        self.next_ship = self.next_ship.checked_add(1).expect("ship IDs exhausted");
+        id
+    }
+
+    pub(crate) fn ship_order(&mut self) -> shared::components::ShipOrderId {
+        let id = shared::components::ShipOrderId(self.next_ship_order);
+        self.next_ship_order = self
+            .next_ship_order
+            .checked_add(1)
+            .expect("ship order IDs exhausted");
+        id
+    }
+    fn observe_ship(&mut self, id: ShipId) {
+        self.next_ship = self.next_ship.max(id.0.saturating_add(1));
+    }
+
+    fn observe_ship_order(&mut self, id: ShipOrderId) {
+        self.next_ship_order = self.next_ship_order.max(id.0.saturating_add(1));
+    }
+
     fn observe_person(&mut self, id: PersonId) {
         self.next_person = self.next_person.max(id.0.saturating_add(1));
     }
@@ -292,6 +321,10 @@ pub fn assign_stable_world_ids(
     existing_companies: Query<&CompanyId, Added<CompanyId>>,
     existing_trade_contracts: Query<&TradeContractId, Added<TradeContractId>>,
     existing_trade_routes: Query<&TradeRouteId, Added<TradeRouteId>>,
+    maritime_ids: (
+        Query<&ShipId, Added<ShipId>>,
+        Query<&ShipOrderId, Added<ShipOrderId>>,
+    ),
     new_people: Query<Entity, (With<CharacterName>, Without<PersonId>)>,
     new_settlements: Query<Entity, (With<Settlement>, Without<SettlementId>)>,
     new_buildings: Query<Entity, (With<SettlementBuilding>, Without<BuildingId>)>,
@@ -319,6 +352,13 @@ pub fn assign_stable_world_ids(
     }
     for id in existing_trade_routes.iter() {
         allocator.observe_trade_route(*id);
+    }
+
+    for id in maritime_ids.0.iter() {
+        allocator.observe_ship(*id);
+    }
+    for id in maritime_ids.1.iter() {
+        allocator.observe_ship_order(*id);
     }
 
     for entity in new_people.iter() {
@@ -435,7 +475,11 @@ pub fn reconcile_stable_world_relationships(
             Option<&ResidentOf>,
             Option<&LivesAt>,
         ),
-        Or<(Changed<VillagerIntent>, Changed<HomeAssignment>)>,
+        Or<(
+            Changed<VillagerIntent>,
+            Changed<HomeAssignment>,
+            Changed<ResidentOf>,
+        )>,
     >,
     unscoped_buildings: Query<(Entity, &SettlementBuilding), Without<BuildingOf>>,
     building_ids: Query<&BuildingId>,
@@ -452,8 +496,12 @@ pub fn reconcile_stable_world_relationships(
         .collect();
 
     for (entity, intent, home, resident_of, lives_at) in changed_people.iter() {
+        // A chosen destination is not citizenship. Only completed Hall
+        // registration (or an already registered builder) authorizes this
+        // durable relationship; sailing, walking and queuing keep just intent.
         if let Some(settlement_id) = intent
             .settlement()
+            .filter(|_| intent.counts_as_resident())
             .and_then(|settlement| settlement_by_entity.get(&settlement).copied())
         {
             if resident_of.copied() != Some(ResidentOf(settlement_id)) {
@@ -511,7 +559,7 @@ pub fn reconcile_stable_world_relationships(
                         .settlement()
                         .and_then(|hall| settlement_by_entity.get(&hall).copied())
                 });
-                name.0 == owner && person_settlement == settlement_id
+                intent.counts_as_resident() && name.0 == owner && person_settlement == settlement_id
             });
         if let (Some(first), None) = (matches.next().map(|(_, _, id, ..)| *id), matches.next()) {
             commands.entity(building_entity).insert(OwnedBy(first));
@@ -538,7 +586,8 @@ pub fn reconcile_stable_world_relationships(
                                     .settlement()
                                     .and_then(|hall| settlement_by_entity.get(&hall).copied())
                             });
-                        name.0 == *worker_name
+                        intent.counts_as_resident()
+                            && name.0 == *worker_name
                             && person_settlement == settlement_id
                             && employed_at.is_none()
                     });
@@ -622,4 +671,32 @@ mod tests {
 
         app.update();
     }
+    #[test]
+    fn loaded_fleet_ids_advance_independent_ship_and_order_sequences() {
+        let mut app = App::new();
+        app.init_resource::<WorldIdAllocator>()
+            .add_systems(Update, assign_stable_world_ids);
+        let loaded_ship = app.world_mut().spawn(ShipId(900)).id();
+        let loaded_order = app.world_mut().spawn(ShipOrderId(400)).id();
+        app.update();
+        {
+            let mut ids = app.world_mut().resource_mut::<WorldIdAllocator>();
+            assert_eq!(ids.ship(), ShipId(901));
+            assert_eq!(ids.ship_order(), ShipOrderId(401));
+        }
+        app.world_mut().spawn(ShipOrderId(700));
+        app.update();
+        let mut ids = app.world_mut().resource_mut::<WorldIdAllocator>();
+        assert_eq!(ids.ship(), ShipId(902));
+        assert_eq!(ids.ship_order(), ShipOrderId(701));
+        assert_eq!(app.world().get::<ShipId>(loaded_ship), Some(&ShipId(900)));
+        assert_eq!(
+            app.world().get::<ShipOrderId>(loaded_order),
+            Some(&ShipOrderId(400))
+        );
+    }
 }
+
+#[cfg(test)]
+#[path = "identity_registration_tests.rs"]
+mod registration_tests;

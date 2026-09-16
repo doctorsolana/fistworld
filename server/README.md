@@ -56,7 +56,7 @@ keeps no history and never logs message bodies.
 - `identity.rs`: allocates and indexes durable `PersonId`, `SettlementId`,
   `HouseholdId`, `BuildingId` and `CompanyId` values and migrates remaining readable legacy relationships.
 - `simulation_time.rs` and `time.rs`: the one real/world/warp clock and world-day state.
-- `regions.rs`: interest management, region visibility and tactical/strategic level.
+- `regions.rs`: interest management, region visibility and observer counts; no simulation-level selection.
 - `settlement_directory.rs`: tiny globally replicated settlement summaries.
 - `household_yards.rs`: bounded household land fitting, local refitting after roads or
   neighbouring buildings change, and shared yard obstacles. See
@@ -64,7 +64,7 @@ keeps no history and never logs message bodies.
 - `farm_boundaries.rs`: publishes accepted crop fences only when their physical
   segments are clear of actor bodies, and refreshes the local navigation geometry.
   `village/field_parcels.rs` owns deterministic crop surveys; `farm_productivity.rs`
-  shares area-limited output between tactical and strategic work. See
+  applies accepted field area to the same worker output rules everywhere. See
   [FARM-FIELDS.md](../docs/FARM-FIELDS.md).
 - `settlement_development.rs`: Hamlet → Village → Town → City gates, civic projects and
   main-road upgrades.
@@ -89,19 +89,18 @@ keeps no history and never logs message bodies.
     `provisioning` owns scheduled food/fuel purchasing and shared funding, `needs`
     owns hearth use and exact contribution math, `shopping` owns physical cargo
   - `tavern`: compact per-person day plans, private meal pricing, embodied Tavern visits,
-    Innkeeper shifts and equivalent cheap off-screen service
-  - `trades` / `production`: physical and aggregate farming, fishing, livestock, lumber and Stone work,
+    Innkeeper shifts and the same queued service throughout the world
+  - `trades` / `production`: physical farming, fishing, livestock, lumber and Stone work,
     plus the shared Wheat → Flour → Bread recipes and paired Meat/Wool output
   - `quarry`: embodied outdoor Stone extraction and livestock tending, bounded personal loads and workplace deposit
   - `trade_routes`: buyer-funded civic import contracts, company-owned route assets,
     staffed Storage Hall dispatch, ordered merchant stops, physical inter-settlement cargo and freight/sale accounting
   - `processing`: embodied Windmill and Bakery shifts using bounded private inventories
   - `property_market`: compact Hall-published takeover listings for completed firms and worksites
-  - `strategic`: off-screen person compression and aggregate settlement work
   - `history`: bounded person/settlement records and request handlers
   - `mortality`: sparse time-warp-safe hunger ceilings, gradual fed recovery, critical starvation damage, death records,
     household estates, civic/job cleanup, orphaned construction and business succession
-  - `ambient`: continuously budgeted, neighbourhood-local observed-region idle life
+  - `ambient`: continuously budgeted, neighbourhood-local idle life in every town
   - `schedule`: the shared ordered production/Lab schedule, with explicit
     identity, civic, economy, construction, activity and directory timing sets
 - `village_roads.rs`: local-road public state and survey facade. Implementation under
@@ -131,8 +130,10 @@ Storage Hall. Both modes require an employed Company Porter and use the bounded
 coarse-middle/fine-endpoint overland planner. Do not add implicit shared stock between branches.
 Autonomous firms begin with one enabled position, then change by one position per day toward
 the marginally profitable roster supported by recent sales, unmet demand and existing stock.
-Their cached output budget is shared by tactical and strategic production. Solvent unwanted
-sites mothball and reopen before the permit planner considers duplicate capacity. All
+The cached forecast informs staffing and investment; it does not ration physical output.
+Employed workers everywhere continue through their shift while resources, inputs
+and storage permit. Solvent unwanted sites mothball and reopen before the permit planner
+considers duplicate capacity. All
 expansion/dividend reserves must use enabled positions, not architectural maximums.
 NPC Storage Halls normally require an established branch with two other local sites. Funded
 civic export or merchant opportunity signals can also justify a standalone logistics firm;
@@ -151,7 +152,7 @@ The important dependencies are:
 2. Reconcile identity, collision and region state.
 3. Run village core decisions, households, economy, construction and physical work.
 4. Run bounded road/route planning and actor movement.
-5. Apply interest visibility and update simulation LOD.
+5. Apply network interest visibility and update observer counts; do not change simulation.
 6. Refresh reconnectable session state and close telemetry brackets.
 
 Add a village rule to its existing shared set. Do not multiply Bevy `Time` by `TimeWarp`
@@ -175,11 +176,14 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   replicated only through interest management. Directory building counts are cached until
   building or settlement-assignment components change, including removals. Update summary and
   position independently so a statistics change does not re-send an unchanged location.
-- Static-prop collider coverage is the union around distinct `PlayerPosition` chunks.
+- Static-prop collider coverage is anchored by authoritative actor/building chunks, excluding
+  camera-only `Player` entities. Wild horses use a smaller local footprint.
   Multiple actors in one chunk share streaming work; building-zone revisions still refresh
   loaded chunks even when all desired chunks are already present.
-- A `StrategicPerson` retains durable social/economic state but owns no tactical path,
-  door timer, seat or animation progress. World-wide work belongs in aggregate passes.
+- Every person follows the same authoritative movement, work, cargo, queue and needs
+  routines. Camera coverage must not change job admission or substitute aggregate work.
+  The former strategic/physical fork is retired; see [SIMULATION-PARITY.md](../docs/SIMULATION-PARITY.md).
+  Fresh whole-world performance and matched-observation acceptance remain unverified.
 - Tactical prop surveys use live static colliders for loaded chunks. Replaying the
   immutable prop recipe there would resurrect trees already cleared by roads, fields
   or building plots. Unloaded ground retains conservative generated blockers and known
@@ -214,24 +218,34 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   prevents alternating destinations from bypassing navigation's single-goal backoff.
 - Watercraft use the separate `player::boat` stack. `Vessel` is the generic navigation
   opt-in; road/character routes must never move a vessel. Direct water lines are the fast
-  path, obstructed searches are water-certified A*, and `VesselNavigationQueue` admits at
-  most four searches per fixed tick so a fleet order cannot monopolize network ingress.
+  path; `player/boat/navigation.rs` retains direct-line sampling, water A*, route
+  reconstruction and shortcut validation between bounded slices. `VesselNavigationQueue`
+  advances at most four slices per fixed tick in rotation, with at most four retained
+  fleet searches; superseding an order or pausing
+  an account releases its obsolete frontier. A shared 64-entry terrain-versioned LRU reuses
+  positive and negative water results for player boats and natural arrivals. The exact
+  start-to-grid connector is retained and every shortcut remains water-certified.
   Server movement rechecks water and derives speed from the shared deterministic wind.
 - `world::immigration` owns natural arrivals. It scores settlements from public opportunity
   plus bounded personal/geographic bias, uses the generic vessel navigator for an ephemeral
   map-edge Dinghy, and only removes the boat after it reaches its certified mooring. The
   passenger then resumes the existing land-route and Moot-queue flow; this is not a second
-  admission implementation. A world without a settlement remains dormant: it creates no
-  arrival, advances no arrival sequence and accumulates no backlog; the normal delay begins
-  after the first Moot exists. Coast-to-Hall viability is resolved incrementally with a
-  retained search budget rather than synchronous candidate scans. Reachable and unreachable
-  results are cached, Hall entrance changes invalidate them, and known-unreachable settlements
-  are skipped so an arrival can consider another town without repeating failed A*. Ordinary
-  worlds enable natural immigration by default, while labs disable it unless
-  `FISTWORLD_NATURAL_IMMIGRATION=1` is explicitly supplied. Its startup defaults are three
-  arrivals per world day and a 5,000-villager world ceiling; override those with
-  `FISTWORLD_IMMIGRANTS_PER_DAY` and `FISTWORLD_WORLD_NPC_CAP`. Seasonal and opportunity
-  modifiers intentionally make the observed cadence vary around the configured base rate.
+  admission implementation. `immigration::admission` creates the real passenger and
+  full-hull-safe dinghy first, with no target. `immigration::director` then scores current
+  opportunities from the hull's actual position and retains one landfall/water proof.
+  `ImmigrantArrival` records entry and committed-choice facts for observation. A lost route
+  retries through the same planner with capped real-time backoff; a missing/ruined town or
+  flooded landing returns that same body and hull to bounded destination selection.
+  No-town arrivals wait in real boats under the eight-voyage cap; no abstract backlog grows.
+  The Hall departure occupancy list is built only when a served embodied immigrant actually
+  needs a physical exit reservation. Coast-to-Hall viability uses a retained search budget;
+  reachable/unreachable results are cached and terrain/Hall-entrance changes invalidate them.
+  Ordinary worlds enable natural immigration by default, while labs disable it unless
+  `FISTWORLD_NATURAL_IMMIGRATION=1` is explicitly supplied. Defaults are a base three world
+  arrivals per day with seasonal variation and a 5,000-villager world ceiling. Explicit
+  `immigrants_per_day` configuration or `FISTWORLD_IMMIGRANTS_PER_DAY` uses steady global
+  spacing (zero disables recurring arrivals); `FISTWORLD_WORLD_NPC_CAP` overrides the cap.
+  No town receives a quota or guaranteed share of newcomers.
 - Avoid per-tick full-population scans, string joins and allocations. Reconcile on changed
   state or slow world boundaries.
 - The live server does not load player or world state after restart. Profiles are in-memory

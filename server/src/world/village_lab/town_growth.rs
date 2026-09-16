@@ -15,6 +15,7 @@ use crate::world::village_lab_scenario::{
     choose_town_growth_site, town_growth_seed, GrowthProfile,
 };
 
+mod abandonment;
 mod boats;
 
 fn percentile(values: &[f64], fraction: f64) -> f64 {
@@ -538,6 +539,7 @@ fn town_growth_lab() {
     std::fs::create_dir_all(&directory).expect("create ignored growth output directory");
     let mut app = App::new();
     configure_lab(&mut app);
+    abandonment::configure(&mut app);
     if profile == GrowthProfile::InlandBoats {
         boats::configure(&mut app);
     }
@@ -563,6 +565,15 @@ fn town_growth_lab() {
     app.world_mut()
         .spawn((WorldTime::new_default(), TimeWarp::clamped(warp)));
     let initial_money = total_money(app.world_mut());
+    if profile == GrowthProfile::Closed32 {
+        assert_eq!(
+            initial_money,
+            founders as u64 * shared::economy::STARTING_VILLAGER_MONEY
+                + shared::economy::STARTING_TREASURY_MONEY,
+            "closed economy must start with ordinary founder wallets and Treasury only"
+        );
+        println!("TOWN closed economy:32 founders,96 initial Bread,no later arrivals or grants; founding construction is warmup, not prebuilt capacity; initial_pennies={initial_money}");
+    }
     let waves = profile.waves();
     println!(
         "TOWN offered_population={} minutes={} warp={} last_arrival_scenario_day={}",
@@ -639,7 +650,11 @@ fn town_growth_lab() {
                 state.metrics.housed <= state.metrics.residents as usize,
                 "housing has ghost residents"
             );
-            assert_accepted_geometry(&state, &mut accepted);
+            assert_accepted_geometry(
+                &state,
+                &mut accepted,
+                &mut app.world_mut().resource_mut::<abandonment::Audit>(),
+            );
             assert_eq!(
                 total_money(app.world_mut()),
                 initial_money + arrivals as u64 * shared::economy::STARTING_VILLAGER_MONEY,
@@ -693,9 +708,21 @@ fn town_growth_lab() {
                 );
             }
             print_report(app.world_mut(), elapsed, false);
-            if profile == GrowthProfile::InlandBoats {
-                boat_journal.write(app.world_mut(), elapsed, &directory, capture_index);
-            }
+            let include_boat_arrivals = profile == GrowthProfile::InlandBoats;
+            let expected_people = founders
+                + if include_boat_arrivals {
+                    boat_journal.spawned()
+                } else {
+                    arrivals
+                };
+            boat_journal.write(
+                app.world_mut(),
+                elapsed,
+                &directory,
+                capture_index,
+                expected_people,
+                include_boat_arrivals,
+            );
             capture_index += 1;
             next_capture = elapsed + interval;
         }
@@ -726,6 +753,7 @@ fn town_growth_lab() {
 fn assert_accepted_geometry(
     state: &TownSnapshot,
     accepted: &mut HashMap<BuildingId, (SettlementBuildingKind, Vec3, f32)>,
+    abandonment: &mut abandonment::Audit,
 ) {
     for building in state
         .buildings
@@ -742,15 +770,12 @@ fn assert_accepted_geometry(
             }
         }
     }
-    for id in accepted.keys() {
-        assert!(
-            state
-                .buildings
-                .iter()
-                .any(|building| building.id == Some(*id)),
-            "growth removed accepted building {id:?}"
-        );
-    }
+    let present = state
+        .buildings
+        .iter()
+        .filter_map(|building| building.id)
+        .collect();
+    abandonment.retire_missing(&present, accepted);
     let plots: Vec<_> = state
         .buildings
         .iter()
@@ -808,6 +833,28 @@ fn inland_boat_profile_starts_small_and_only_adds_sixty_arrivals() {
     }
     assert_eq!(GrowthProfile::Steady.founders(), 8);
     assert_eq!(GrowthProfile::Steady.initial_inventory().used_bulk(), 0);
+}
+
+#[test]
+fn closed_economy_profile_has_a_full_labor_pool_and_no_future_money_inflows() {
+    let profile = GrowthProfile::parse("closed-32");
+    assert_eq!(profile.founders(), 32);
+    assert!(profile.waves().is_empty());
+    assert_eq!(profile.target_population(), 32);
+    assert_eq!(profile.initial_inventory().amount(Good::Bread), 96);
+    assert_eq!(
+        profile.initial_inventory().used_bulk(),
+        96 * Good::Bread.bulk_per_unit()
+    );
+    assert_eq!(profile.default_minutes(), 60.0 * 24.0);
+    // The shared spawn path gives every initial person this ordinary wallet;
+    // the real run asserts its observed total against this exact lineage.
+    assert_eq!(
+        (0..profile.founders())
+            .map(|_| shared::economy::Wallet::founding_villager().balance())
+            .sum::<u64>(),
+        32 * shared::economy::STARTING_VILLAGER_MONEY
+    );
 }
 
 #[test]

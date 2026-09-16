@@ -1,4 +1,5 @@
 use super::*;
+use bevy::ecs::system::RunSystemOnce;
 use std::time::Duration;
 
 fn fixture(count: usize) -> (App, Entity, Entity, Vec<Entity>) {
@@ -54,7 +55,11 @@ fn fixture(count: usize) -> (App, Entity, Entity, Vec<Entity>) {
         .map(|i| {
             app.world_mut()
                 .spawn((
-                    PlayerPosition(Vec3::ZERO),
+                    CharacterKind::Villager,
+                    VillagerIntent::Resident { settlement: tavern },
+                    PlayerPosition(
+                        SettlementBuildingKind::Tavern.interior_door_position(Vec3::ZERO, 0.0),
+                    ),
                     PlayerRotation(0.0),
                     CharacterActivity::Indoors,
                     Wallet::new(10_000),
@@ -91,10 +96,31 @@ fn fixture(count: usize) -> (App, Entity, Entity, Vec<Entity>) {
 
 fn seat_everyone(app: &mut App, people: &[Entity]) {
     app.update(); // Buy the meal and reserve a seat.
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_secs(2));
+    app.world_mut()
+        .run_system_once(run_workplace_door_transits)
+        .unwrap();
     for &person in people {
-        app.world_mut()
-            .entity_mut(person)
-            .remove::<WorkplaceDoorTransit>();
+        assert!(app.world().get::<WorkplaceDoorTransit>(person).is_some());
+        assert!(app.world().get::<WorkplaceInterior>(person).is_some());
+        assert!(app.world().get::<BuildingDoorUse>(person).is_some());
+        // Supply only the physical arrival at the authored outside target.
+        // The shared door runner must release its own occupancy markers.
+        let outside = app.world().get::<MoveTarget>(person).unwrap().0;
+        app.world_mut().get_mut::<PlayerPosition>(person).unwrap().0 = outside;
+    }
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::ZERO);
+    app.world_mut()
+        .run_system_once(run_workplace_door_transits)
+        .unwrap();
+    for &person in people {
+        assert!(app.world().get::<WorkplaceDoorTransit>(person).is_none());
+        assert!(app.world().get::<WorkplaceInterior>(person).is_none());
+        assert!(app.world().get::<BuildingDoorUse>(person).is_none());
     }
     app.update(); // Door exit completed; normal movement gets a bench destination.
     for &person in people {
@@ -210,26 +236,18 @@ fn a_new_job_keeps_todays_completed_meal_but_a_new_day_resets_it() {
 }
 
 #[test]
-fn tavern_removal_or_strategic_demotion_releases_seated_visitors() {
-    for demote in [false, true] {
-        let (mut app, tavern, _, people) = fixture(1);
-        seat_everyone(&mut app, &people);
-        let person = people[0];
-        if demote {
-            app.world_mut()
-                .entity_mut(person)
-                .insert(strategic::StrategicPerson);
-        } else {
-            app.world_mut().despawn(tavern);
-        }
-        app.update();
-        assert!(app.world().get::<TavernVisitRoutine>(person).is_none());
-        assert_eq!(app.world().get::<PlayerPosition>(person).unwrap().0.y, 0.0);
-        assert_eq!(
-            *app.world().get::<CharacterActivity>(person).unwrap(),
-            CharacterActivity::Idle
-        );
-    }
+fn tavern_removal_releases_seated_visitors() {
+    let (mut app, tavern, _, people) = fixture(1);
+    seat_everyone(&mut app, &people);
+    let person = people[0];
+    app.world_mut().despawn(tavern);
+    app.update();
+    assert!(app.world().get::<TavernVisitRoutine>(person).is_none());
+    assert_eq!(app.world().get::<PlayerPosition>(person).unwrap().0.y, 0.0);
+    assert_eq!(
+        *app.world().get::<CharacterActivity>(person).unwrap(),
+        CharacterActivity::Idle
+    );
 }
 
 #[test]
@@ -249,6 +267,7 @@ fn civic_hiring_waits_until_a_tavern_visit_finishes() {
         .id();
     for (index, &person) in people.iter().enumerate() {
         app.world_mut().entity_mut(person).insert((
+            CharacterKind::Villager,
             shared::components::PersonId(index as u64 + 1),
             CharacterName(format!("Guest {index}")),
             VillagerIntent::Resident { settlement: hall },
@@ -258,25 +277,60 @@ fn civic_hiring_waits_until_a_tavern_visit_finishes() {
     app.add_systems(
         Update,
         (
+            run_workplace_door_transits,
             crate::world::village_roads::ensure_moot_administrations,
             crate::world::village_roads::staff_moot_stewards,
             crate::world::village_roads::staff_public_positions,
         )
-            .chain(),
+            .chain()
+            .after(run_tavern_routines),
     );
     app.update();
     for &person in &people {
-        assert!(app
-            .world()
-            .get::<shared::components::CivicEmployment>(person)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<shared::components::CivicEmployment>(person)
+                .is_none()
+        );
     }
     app.world_mut()
         .entity_mut(people[0])
         .remove::<TavernVisitRoutine>();
     app.update();
-    assert!(app
-        .world()
-        .get::<shared::components::CivicEmployment>(people[0])
-        .is_some());
+    // Ending the visit does not make the guest available while its physical
+    // doorway exit is still in progress.
+    assert!(
+        app.world()
+            .get::<shared::components::CivicEmployment>(people[0])
+            .is_none()
+    );
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_secs(2));
+    app.update();
+    assert!(app.world().get::<WorkplaceInterior>(people[0]).is_some());
+    assert!(
+        app.world()
+            .get::<shared::components::CivicEmployment>(people[0])
+            .is_none()
+    );
+    let outside = app.world().get::<MoveTarget>(people[0]).unwrap().0;
+    // Supply the body arrival, not a component teardown: the common doorway
+    // runner must clear both crossing and retained interior before hiring.
+    app.world_mut()
+        .get_mut::<PlayerPosition>(people[0])
+        .unwrap()
+        .0 = outside;
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::ZERO);
+    app.update();
+    assert!(app.world().get::<WorkplaceDoorTransit>(people[0]).is_none());
+    assert!(app.world().get::<BuildingDoorUse>(people[0]).is_none());
+    assert!(app.world().get::<WorkplaceInterior>(people[0]).is_none());
+    assert!(
+        app.world()
+            .get::<shared::components::CivicEmployment>(people[0])
+            .is_some()
+    );
 }

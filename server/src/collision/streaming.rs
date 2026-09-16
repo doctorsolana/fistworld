@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use shared::building::{
-    point_in_any_build_zone_entries, BuildZoneEntry, FarmFieldClaimChanges, FarmFieldClaimIndex,
+    BuildZoneEntry, FarmFieldClaimChanges, FarmFieldClaimIndex, point_in_any_build_zone_entries,
 };
 use shared::components::PlayerPosition;
 use shared::terrain::{ChunkCoord, WorldTerrain};
@@ -12,7 +12,7 @@ use shared::terrain::{ChunkCoord, WorldTerrain};
 use crate::collision::building_index::BuildingSpatialIndex;
 use crate::collision::library::{DerivedColliderLibrary, StaticColliderInstance, StaticColliders};
 
-/// How many chunks around each player we keep static colliders loaded for.
+/// Static-collider reach around authoritative actors and buildings.
 const COLLIDER_VIEW_DISTANCE_CHUNKS: i32 = 3;
 
 /// Limit how many chunks we load per fixed tick.
@@ -24,8 +24,9 @@ use crate::collision::library::COLLIDER_CELL_SIZE;
 /// Stateful cache used by static-collider streaming to avoid full recomputation each tick.
 #[derive(Resource, Default)]
 pub struct ColliderStreamingState {
-    last_player_centers: HashSet<ChunkCoord>,
-    center_scratch: HashSet<ChunkCoord>,
+    map_bounds: Option<shared::map::MapBounds>,
+    last_player_centers: HashMap<ChunkCoord, i32>,
+    center_scratch: HashMap<ChunkCoord, i32>,
     desired_chunks: HashSet<ChunkCoord>,
     cached_building_version: u64,
     field_claims: FarmFieldClaimIndex,
@@ -33,25 +34,37 @@ pub struct ColliderStreamingState {
 }
 
 impl ColliderStreamingState {
-    fn update_centers(&mut self, centers: impl Iterator<Item = ChunkCoord>) {
+    fn update_centers(
+        &mut self,
+        centers: impl Iterator<Item = (ChunkCoord, i32)>,
+        bounds: shared::map::MapBounds,
+    ) {
         self.center_scratch.clear();
         // Do not reserve for the iterator's entity count: a crowded settlement
         // can contribute thousands of positions but only a handful of centers.
-        for center in centers {
-            self.center_scratch.insert(center);
+        for (center, radius) in centers {
+            self.center_scratch
+                .entry(center)
+                .and_modify(|current| *current = (*current).max(radius))
+                .or_insert(radius);
         }
-        if self.center_scratch == self.last_player_centers {
+        if self.center_scratch == self.last_player_centers
+            && self
+                .map_bounds
+                .is_some_and(|old| old.min == bounds.min && old.max == bounds.max)
+        {
             return;
         }
+        self.map_bounds = Some(bounds);
         std::mem::swap(&mut self.last_player_centers, &mut self.center_scratch);
         self.desired_chunks.clear();
         // PlayerPosition also belongs to world actors and buildings. Many share
         // a chunk; expand each distinct center once, retaining the same coverage.
-        for center in &self.last_player_centers {
-            for dx in -COLLIDER_VIEW_DISTANCE_CHUNKS..=COLLIDER_VIEW_DISTANCE_CHUNKS {
-                for dz in -COLLIDER_VIEW_DISTANCE_CHUNKS..=COLLIDER_VIEW_DISTANCE_CHUNKS {
+        for (center, radius) in &self.last_player_centers {
+            for dx in -*radius..=*radius {
+                for dz in -*radius..=*radius {
                     let chunk = ChunkCoord::new(center.x + dx, center.z + dz);
-                    if chunk.in_world_bounds() {
+                    if chunk.in_map_bounds(bounds) {
                         self.desired_chunks.insert(chunk);
                     }
                 }
@@ -97,16 +110,17 @@ fn bump_chunk_version(colliders: &mut StaticColliders, chunk: ChunkCoord) {
         .insert(chunk, colliders.next_chunk_version);
 }
 
-/// Stream in/out static colliders based on player positions.
+/// Stream colliders around authoritative bodies, never around a camera.
+/// Wild horses need one neighboring chunk for their five-meter grazing range;
+/// workers, buildings and ridden mounts retain the wider navigation footprint.
 pub fn update_static_collider_streaming(
     terrain: Res<WorldTerrain>,
     library: Option<Res<DerivedColliderLibrary>>,
     building_index: Res<BuildingSpatialIndex>,
-    players: Query<(
-        &PlayerPosition,
-        Option<&shared::components::Horse>,
-        Has<crate::world::wildlife::ActiveWildHorse>,
-    )>,
+    players: Query<
+        (&PlayerPosition, Option<&shared::components::Horse>),
+        Without<shared::components::Player>,
+    >,
     roads: Query<&shared::components::VillageRoad>,
     mut colliders: ResMut<StaticColliders>,
     mut state: ResMut<ColliderStreamingState>,
@@ -135,13 +149,16 @@ pub fn update_static_collider_streaming(
     zone_chunks_to_refresh.sort_unstable_by_key(|c| (c.x, c.z));
     zone_chunks_to_refresh.dedup();
 
-    // Distant wildlife is a cheap record, not a request to load terrain/prop
-    // colliders across the whole map. Ridden horses remain physical actors.
     state.update_centers(
-        players
-            .iter()
-            .filter(|(_, horse, active)| horse.is_none_or(|h| h.rider.is_some() || *active))
-            .map(|(pos, _, _)| ChunkCoord::from_world_pos(pos.0)),
+        players.iter().map(|(position, horse)| {
+            let radius = if horse.is_some_and(|horse| horse.rider.is_none()) {
+                1
+            } else {
+                COLLIDER_VIEW_DISTANCE_CHUNKS
+            };
+            (ChunkCoord::from_world_pos(position.0), radius)
+        }),
+        terrain.generator.active_map_bounds(),
     );
 
     // Unload chunks that are no longer desired.
@@ -177,7 +194,7 @@ pub fn update_static_collider_streaming(
     for &chunk in state.desired_chunks.difference(&colliders.loaded_chunks) {
         let dist = state
             .last_player_centers
-            .iter()
+            .keys()
             .map(|p| (chunk.x - p.x).abs().max((chunk.z - p.z).abs()))
             .min()
             .unwrap_or(COLLIDER_VIEW_DISTANCE_CHUNKS)
@@ -186,7 +203,10 @@ pub fn update_static_collider_streaming(
     }
 
     let mut loaded_this_tick = 0usize;
-    for bucket in buckets {
+    for mut bucket in buckets {
+        // Stable budget order prevents hash iteration from choosing which body
+        // can move first during startup or a footprint expansion.
+        bucket.sort_unstable_by_key(|chunk| (chunk.x, chunk.z));
         for chunk in bucket {
             if loaded_this_tick >= MAX_COLLIDER_CHUNKS_TO_LOAD_PER_TICK {
                 break;
@@ -305,7 +325,7 @@ pub(crate) fn survey_settlement_props(
 ) -> StaticColliders {
     let mut colliders = StaticColliders::default();
     for chunk in ChunkCoord::from_world_pos(center).chunks_in_radius(6) {
-        if chunk.in_world_bounds() {
+        if chunk.in_map_bounds(terrain.generator.active_map_bounds()) {
             load_chunk(
                 terrain,
                 library,
@@ -327,6 +347,10 @@ mod tests {
 
     #[test]
     fn duplicate_centers_preserve_coverage_and_world_bounds() {
+        let bounds = shared::map::MapBounds {
+            min: [-128.0; 2],
+            max: [128.0; 2],
+        };
         let centers = [
             ChunkCoord::new(0, 0),
             ChunkCoord::new(2, -1),
@@ -336,18 +360,59 @@ mod tests {
         let expected: HashSet<_> = positions
             .iter()
             .flat_map(|center| center.chunks_in_radius(COLLIDER_VIEW_DISTANCE_CHUNKS))
-            .filter(ChunkCoord::in_world_bounds)
+            .filter(|chunk| chunk.in_map_bounds(bounds))
             .collect();
         let mut state = ColliderStreamingState::default();
-        state.update_centers(positions.iter().copied());
+        state.update_centers(
+            positions
+                .iter()
+                .copied()
+                .map(|c| (c, COLLIDER_VIEW_DISTANCE_CHUNKS)),
+            bounds,
+        );
         assert_eq!(state.last_player_centers.len(), centers.len());
         assert_eq!(state.desired_chunks, expected);
 
         // Population and ordering can change without altering spatial coverage.
-        state.update_centers(centers.into_iter().rev());
+        state.update_centers(
+            centers
+                .into_iter()
+                .rev()
+                .map(|c| (c, COLLIDER_VIEW_DISTANCE_CHUNKS)),
+            bounds,
+        );
         assert_eq!(state.desired_chunks, expected);
-        state.update_centers(std::iter::empty());
+        state.update_centers(std::iter::empty(), bounds);
         assert!(state.desired_chunks.is_empty());
+    }
+
+    #[test]
+    fn stationary_centers_reclip_when_the_owned_map_bounds_change() {
+        let mut state = ColliderStreamingState::default();
+        let center = ChunkCoord::new(0, 0);
+        let wide = shared::map::MapBounds {
+            min: [-256.0; 2],
+            max: [256.0; 2],
+        };
+        let tight = shared::map::MapBounds {
+            min: [0.0; 2],
+            max: [shared::terrain::CHUNK_SIZE; 2],
+        };
+        state.update_centers(
+            std::iter::once((center, COLLIDER_VIEW_DISTANCE_CHUNKS)),
+            wide,
+        );
+        assert_eq!(state.desired_chunks.len(), 49);
+        state.update_centers(
+            std::iter::once((center, COLLIDER_VIEW_DISTANCE_CHUNKS)),
+            tight,
+        );
+        assert_eq!(state.desired_chunks, HashSet::from([center]));
+        state.update_centers(
+            std::iter::once((center, COLLIDER_VIEW_DISTANCE_CHUNKS)),
+            wide,
+        );
+        assert_eq!(state.desired_chunks.len(), 49);
     }
 
     #[test]
@@ -431,11 +496,12 @@ mod tests {
             .id();
         app.update();
         let field_revision = app.world().resource::<StaticColliders>().chunk_versions[&origin];
-        assert!(app
-            .world()
-            .resource::<ColliderStreamingState>()
-            .field_claims
-            .contains_point(field_at.xz()));
+        assert!(
+            app.world()
+                .resource::<ColliderStreamingState>()
+                .field_claims
+                .contains_point(field_at.xz())
+        );
         app.world_mut()
             .entity_mut(field)
             .get_mut::<shared::components::FarmField>()
@@ -453,18 +519,20 @@ mod tests {
             .shape = Some(shared::components::FarmFieldShape::default());
         app.update();
         assert!(app.world().resource::<StaticColliders>().chunk_versions[&origin] > field_revision);
-        assert!(!app
-            .world()
-            .resource::<ColliderStreamingState>()
-            .field_claims
-            .contains_point(field_at.xz()));
+        assert!(
+            !app.world()
+                .resource::<ColliderStreamingState>()
+                .field_claims
+                .contains_point(field_at.xz())
+        );
         app.world_mut().despawn(field);
         app.update();
-        assert!(!app
-            .world()
-            .resource::<ColliderStreamingState>()
-            .field_claims
-            .has_farm(field_at));
+        assert!(
+            !app.world()
+                .resource::<ColliderStreamingState>()
+                .field_claims
+                .has_farm(field_at)
+        );
 
         let before = app.world().resource::<StaticColliders>().chunk_versions[&origin];
         let building = app

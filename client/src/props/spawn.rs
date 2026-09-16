@@ -1,24 +1,24 @@
 use bevy::prelude::*;
-use shared::building::{point_in_any_build_zone_entries, FarmFieldClaimChanges};
 use shared::building::{BuildingPosition, PlacedBuilding};
-use shared::components::VillageRoad;
+use shared::building::{FarmFieldClaimChanges, point_in_any_build_zone_entries};
+use shared::components::{SettlementPort, VillageRoad};
 use shared::props::PropSpawn;
-use shared::terrain::{WorldTerrain, CHUNK_SIZE};
+use shared::terrain::{CHUNK_SIZE, WorldTerrain};
 use std::collections::HashSet;
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
 use crate::streaming::{
-    camera_view_distance, chunk_stream_priority, streaming_anchor, streaming_view_priority,
-    AnchorCamera, AnchorPlayer,
+    AnchorCamera, AnchorPlayer, camera_view_distance, chunk_stream_priority, streaming_anchor,
+    streaming_view_priority,
 };
 use crate::terrain::{LoadedChunks, PerfHitchStats};
 
 use super::foliage::needs_foliage_materials;
 use super::{
-    try_spawn_simple_prop_mesh, BuildZoneChunkIndex, EnvironmentProp, LoadedPropChunks,
-    NeedsFoliageMaterials, PendingPropSpawns, PendingPropVisibility, PropAssets, PropChunkIndex,
-    PropFootprintSources, PropKindTag, SimplePropMeshCache, TreeActiveLod, TreeLodMeshHandles,
-    TreeLodRoot, TreeLodRuntimeState,
+    BuildZoneChunkIndex, EnvironmentProp, LoadedPropChunks, NeedsFoliageMaterials,
+    PendingPropSpawns, PendingPropVisibility, PropAssets, PropChunkIndex, PropFootprintSources,
+    PropKindTag, SimplePropMeshCache, TreeActiveLod, TreeLodMeshHandles, TreeLodRoot,
+    TreeLodRuntimeState, try_spawn_simple_prop_mesh,
 };
 
 /// Maximum prop instances realized per frame across all pending chunks.
@@ -58,6 +58,25 @@ pub(super) fn invalidate_props_for_farm_fields(
     }
 }
 
+/// The shared landing, narrow approach and T-head claim their actual ground,
+/// with a small blade/sway margin. The hull berth stays open water.
+fn port_vegetation_zones(port: &SettlementPort) -> Vec<shared::building::BuildZoneEntry> {
+    if !port.built || !port.geometry.valid() {
+        return Vec::new();
+    }
+    port.geometry
+        .footprints()
+        .into_iter()
+        .map(|footprint| {
+            shared::building::BuildZoneEntry::from_rotated_rect(
+                footprint.center,
+                footprint.half_extents + Vec2::splat(0.6),
+                footprint.yaw,
+            )
+        })
+        .collect()
+}
+
 /// Reconcile actual footprint changes, never component change ticks alone.
 /// Interest removals and upgrades release only their previous plots; surviving
 /// scenery remains visible while the normal streamer fills newly free ground.
@@ -80,15 +99,22 @@ pub(super) fn invalidate_props_for_new_buildings(
     >,
     mut removed_squares: RemovedComponents<shared::components::SettlementCivicSquare>,
     mut sources: ResMut<PropFootprintSources>,
+    port_changes: (
+        Query<(Entity, &SettlementPort), Changed<SettlementPort>>,
+        RemovedComponents<SettlementPort>,
+    ),
     all_sources: (
         Query<(Entity, &PlacedBuilding, &BuildingPosition)>,
         Query<(Entity, &shared::components::SettlementCivicSquare)>,
+        Query<(Entity, &SettlementPort)>,
     ),
 ) {
-    let (all_buildings, all_squares) = all_sources;
+    let (all_buildings, all_squares, all_ports) = all_sources;
+    let (changed_ports, mut removed_ports) = port_changes;
     let PropFootprintSources {
         buildings: previous_buildings,
         squares: previous_squares,
+        ports: previous_ports,
         field_revision,
         initialized,
     } = &mut *sources;
@@ -158,6 +184,27 @@ pub(super) fn invalidate_props_for_new_buildings(
         }
         added_zones.push(next);
     }
+    for entity in removed_ports.read() {
+        if let Some(previous) = previous_ports.remove(&entity) {
+            released_zones.extend(previous);
+        }
+    }
+    for (entity, port) in changed_ports
+        .iter()
+        .chain(all_ports.iter().take(if initial { usize::MAX } else { 0 }))
+    {
+        let next = port_vegetation_zones(port);
+        if previous_ports.get(&entity) == Some(&next) {
+            continue;
+        }
+        if let Some(previous) = previous_ports.remove(&entity) {
+            released_zones.extend(previous);
+        }
+        if !next.is_empty() {
+            added_zones.extend(next.iter().copied());
+            previous_ports.insert(entity, next);
+        }
+    }
     if added_zones.is_empty() && released_zones.is_empty() {
         return;
     }
@@ -214,6 +261,7 @@ pub(super) fn sync_build_zone_chunk_index(
     mut build_zone_index: ResMut<BuildZoneChunkIndex>,
     buildings_query: Query<(&PlacedBuilding, &BuildingPosition)>,
     squares: Query<&shared::components::SettlementCivicSquare>,
+    ports: Query<&SettlementPort>,
 ) {
     if !build_zone_index.dirty {
         return;
@@ -224,12 +272,14 @@ pub(super) fn sync_build_zone_chunk_index(
         .map(|(building, position)| (position.0, building.building_type, building.rotation))
         .collect();
     build_zone_index.by_chunk = build_zone_index.fields.building_zones_by_chunk(&buildings);
-    for square in &squares {
-        let zone = shared::building::BuildZoneEntry::from_rotated_rect(
+    let civic_zones = squares.iter().map(|square| {
+        shared::building::BuildZoneEntry::from_rotated_rect(
             square.center.xz(),
             square.half_extents,
             square.rotation,
-        );
+        )
+    });
+    for zone in civic_zones.chain(ports.iter().flat_map(port_vegetation_zones)) {
         let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
         for x in min_x..=max_x {
             for z in min_z..=max_z {
@@ -793,11 +843,12 @@ mod tests {
         for _ in 0..3 {
             app.update();
         }
-        assert!(app
-            .world()
-            .resource::<PropFootprintSources>()
-            .buildings
-            .contains_key(&old));
+        assert!(
+            app.world()
+                .resource::<PropFootprintSources>()
+                .buildings
+                .contains_key(&old)
+        );
         super::super::reset_world_streaming(app.world_mut());
         let cache = app.world().resource::<PropFootprintSources>();
         assert!(cache.buildings.is_empty() && cache.squares.is_empty());
@@ -825,11 +876,12 @@ mod tests {
         // releases its old footprint correctly rather than leaving stale land.
         app.world_mut().despawn(retained);
         app.update();
-        assert!(!app
-            .world()
-            .resource::<BuildZoneChunkIndex>()
-            .by_chunk
-            .contains_key(&ChunkCoord::new(2, 0)));
+        assert!(
+            !app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .by_chunk
+                .contains_key(&ChunkCoord::new(2, 0))
+        );
         assert_eq!(
             app.world()
                 .resource::<PropFootprintSources>()
@@ -864,11 +916,12 @@ mod tests {
         app.update();
         assert!(app.world().get_entity(local).is_err());
         assert!(app.world().get_entity(remote).is_ok());
-        assert!(app
-            .world()
-            .resource::<BuildZoneChunkIndex>()
-            .fields
-            .contains_point(at.xz()));
+        assert!(
+            app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .fields
+                .contains_point(at.xz())
+        );
 
         let untouched = resident_prop(&mut app, at + Vec3::X * 12.0);
         let version = app
@@ -897,25 +950,27 @@ mod tests {
             .unwrap()
             .shape = Some(FarmFieldShape::default());
         app.update();
-        assert!(!app
-            .world()
-            .resource::<BuildZoneChunkIndex>()
-            .fields
-            .contains_point(at.xz()));
+        assert!(
+            !app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .fields
+                .contains_point(at.xz())
+        );
         assert!(app.world().get_entity(remote).is_ok());
         app.world_mut().despawn(entity);
         app.update();
-        assert!(!app
-            .world()
-            .resource::<BuildZoneChunkIndex>()
-            .fields
-            .has_farm(at));
+        assert!(
+            !app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .fields
+                .has_farm(at)
+        );
         assert!(app.world().get_entity(remote).is_ok());
     }
 
     #[test]
     fn removing_last_accepted_field_restores_only_the_legacy_farm_reservation() {
-        use shared::building::{clearance_zones_for_building, BuildingType};
+        use shared::building::{BuildingType, clearance_zones_for_building};
         use shared::components::{FarmField, FarmFieldShape, PlayerPosition, PlayerRotation};
         let mut app = square_app();
         let at = Vec3::new(32.0, 0.0, 32.0);
@@ -1014,11 +1069,12 @@ mod tests {
             app.world().resource::<PendingPropSpawns>().queue.len(),
             original_queue
         );
-        assert!(app
-            .world()
-            .resource::<LoadedPropChunks>()
-            .chunks
-            .contains(&ChunkCoord::new(0, 0)));
+        assert!(
+            app.world()
+                .resource::<LoadedPropChunks>()
+                .chunks
+                .contains(&ChunkCoord::new(0, 0))
+        );
 
         let newly_covered = resident_prop(&mut app, old + Vec3::X * 64.0);
         app.world_mut()
@@ -1032,11 +1088,12 @@ mod tests {
         app.update();
         assert!(app.world().get_entity(neighbor).is_ok());
         assert!(app.world().get_entity(remote).is_ok());
-        assert!(app
-            .world()
-            .resource::<LoadedPropChunks>()
-            .chunks
-            .contains(&ChunkCoord::new(11, 11)));
+        assert!(
+            app.world()
+                .resource::<LoadedPropChunks>()
+                .chunks
+                .contains(&ChunkCoord::new(11, 11))
+        );
     }
 
     fn resident_prop(app: &mut App, point: Vec3) -> Entity {
@@ -1077,11 +1134,12 @@ mod tests {
 
         assert!(app.world().get_entity(covered).is_err());
         assert!(app.world().get_entity(old_neighbor).is_ok());
-        assert!(app
-            .world()
-            .resource::<LoadedPropChunks>()
-            .chunks
-            .contains(&old_chunk));
+        assert!(
+            app.world()
+                .resource::<LoadedPropChunks>()
+                .chunks
+                .contains(&old_chunk)
+        );
         assert!(point_in_any_build_zone_entries(
             Vec2::splat(32.0),
             &app.world().resource::<BuildZoneChunkIndex>().by_chunk[&old_chunk],
@@ -1102,11 +1160,12 @@ mod tests {
         assert!(loaded.contains(&remote_chunk));
         assert!(app.world().get_entity(old_neighbor).is_ok());
         assert!(app.world().get_entity(remote).is_ok());
-        assert!(!app
-            .world()
-            .resource::<BuildZoneChunkIndex>()
-            .by_chunk
-            .contains_key(&old_chunk));
+        assert!(
+            !app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .by_chunk
+                .contains_key(&old_chunk)
+        );
         let pending = &app.world().resource::<PendingPropSpawns>().queue;
         assert!(!pending.iter().any(|(coord, _)| *coord == old_chunk));
         assert!(pending.iter().any(|(coord, _)| *coord == remote_chunk));
@@ -1128,11 +1187,12 @@ mod tests {
         app.world_mut().entity_mut(square).insert(square_at(32.0));
         app.update();
         assert!(app.world().get_entity(old_neighbor).is_ok());
-        assert!(app
-            .world()
-            .resource::<LoadedPropChunks>()
-            .chunks
-            .contains(&old_chunk));
+        assert!(
+            app.world()
+                .resource::<LoadedPropChunks>()
+                .chunks
+                .contains(&old_chunk)
+        );
 
         app.world_mut().entity_mut(square).insert(square_at(96.0));
         app.update();
@@ -1145,14 +1205,116 @@ mod tests {
         assert!(app.world().get_entity(old_neighbor).is_ok());
         assert!(app.world().get_entity(newly_covered).is_err());
         assert!(app.world().get_entity(new_neighbor).is_ok());
-        assert!(!app
-            .world()
-            .resource::<BuildZoneChunkIndex>()
-            .by_chunk
-            .contains_key(&old_chunk));
+        assert!(
+            !app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .by_chunk
+                .contains_key(&old_chunk)
+        );
         assert!(point_in_any_build_zone_entries(
             Vec2::new(96.0, 32.0),
             &app.world().resource::<BuildZoneChunkIndex>().by_chunk[&new_chunk],
         ));
+    }
+    fn port_at(x: f32) -> SettlementPort {
+        SettlementPort {
+            settlement: shared::components::SettlementId(1),
+            built: true,
+            geometry: shared::components::PortGeometry {
+                shore: Vec3::new(x, 1., 18.),
+                pier_end: Vec3::new(x, 1., 46.),
+                berth: Vec3::new(x + 5., 0., 46.),
+                departure: Vec3::new(x + 5., 0., 58.),
+                yaw: 0.,
+                maximum_ship: shared::components::ShipKind::Coaster,
+            },
+        }
+    }
+
+    #[test]
+    fn completed_port_clears_only_its_pier_and_releases_changed_or_removed_ground() {
+        let mut app = square_app();
+        let old = ChunkCoord::new(0, 0);
+        let new = ChunkCoord::new(3, 0);
+        let remote_chunk = ChunkCoord::new(8, 0);
+        let covered = resident_prop(&mut app, Vec3::new(32., 0., 30.));
+        let neighbour = resident_prop(&mut app, Vec3::new(36., 0., 30.));
+        let remote = resident_prop(&mut app, Vec3::new(544., 0., 30.));
+        let head = resident_prop(&mut app, Vec3::new(38., 0., 44.));
+        let landing = resident_prop(&mut app, Vec3::new(27., 0., 16.));
+        let mut planned = port_at(32.);
+        planned.built = false;
+        let port = app.world_mut().spawn(planned).id();
+        app.update();
+        assert!(
+            app.world().get_entity(covered).is_ok(),
+            "stakes do not claim a completed board strip"
+        );
+        app.world_mut().entity_mut(port).insert(port_at(32.));
+        app.update();
+        assert!(app.world().get_entity(covered).is_err());
+        assert!(app.world().get_entity(head).is_err());
+        assert!(app.world().get_entity(landing).is_err());
+        assert!(app.world().get_entity(neighbour).is_ok());
+        assert!(app.world().get_entity(remote).is_ok());
+        let zones = &app.world().resource::<BuildZoneChunkIndex>().by_chunk[&old];
+        assert!(
+            point_in_any_build_zone_entries(Vec2::new(32., 18.), zones),
+            "shore boards must clear grass"
+        );
+        assert!(
+            !point_in_any_build_zone_entries(Vec2::new(32., 50.), zones),
+            "a hull berth is not a land plot"
+        );
+        let newly_covered = resident_prop(&mut app, Vec3::new(224., 0., 30.));
+        app.world_mut().entity_mut(port).insert(port_at(224.));
+        app.update();
+        assert!(app.world().get_entity(newly_covered).is_err());
+        assert!(
+            !app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .by_chunk
+                .contains_key(&old)
+        );
+        assert!(
+            app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .by_chunk
+                .contains_key(&new)
+        );
+        assert!(
+            app.world()
+                .resource::<PendingPropSpawns>()
+                .refill
+                .contains(&old)
+        );
+        app.world_mut().entity_mut(port).remove::<SettlementPort>();
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<BuildZoneChunkIndex>()
+                .by_chunk
+                .contains_key(&new)
+        );
+        assert!(
+            app.world()
+                .resource::<PendingPropSpawns>()
+                .refill
+                .contains(&new)
+        );
+        assert!(
+            !app.world()
+                .resource::<PendingPropSpawns>()
+                .refill
+                .contains(&remote_chunk)
+        );
+        assert!(app.world().get_entity(neighbour).is_ok());
+        assert!(app.world().get_entity(remote).is_ok());
+        assert!(
+            app.world()
+                .resource::<LoadedPropChunks>()
+                .chunks
+                .contains(&remote_chunk)
+        );
     }
 }

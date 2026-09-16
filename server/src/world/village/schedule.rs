@@ -56,6 +56,12 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             .before(world::navgrid::sync_obstacle_grid),
     );
     app.init_resource::<world::simulation_time::SimulationDelta>();
+    app.init_resource::<world::bridges::BridgeDecks>();
+    app.init_resource::<world::regional_roads::RegionalRoadTraffic>();
+    app.init_resource::<world::regional_roads::RegionalInfrastructure>();
+    app.init_resource::<world::ports::PortDevelopment>();
+    app.init_resource::<player::boat::VesselNavigationQueue>();
+    app.init_resource::<player::boat::clearance::WaterNavigationGeometry>();
     app.init_resource::<player::combat::fronts::CombatFormations>();
     app.init_resource::<player::combat::fronts::CombatSpace>();
     app.init_resource::<player::archery::ArrowObstacles>();
@@ -64,6 +70,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
     app.init_resource::<super::CompanyDividendQueue>();
     app.init_resource::<super::CompanyEscrowRefundQueue>();
     app.init_resource::<super::MootQueueClock>();
+    app.init_resource::<super::civic_labor::CivicLaborMarket>();
     app.init_resource::<super::MortalityLedger>();
     app.init_resource::<super::RegionalTradeIntelligence>();
     app.init_resource::<super::trade_routes::RegionalMerchantDemand>();
@@ -163,10 +170,12 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 // Migrate old named civic rosters before staffing validates
                 // them against durable assignments.
                 world::identity::reconcile_stable_civic_employment,
+                super::civic_labor::review_civic_labor_market,
                 world::village_roads::staff_moot_stewards,
                 super::staff_moot_hall_roles,
                 world::village_roads::staff_public_positions,
                 super::run_civic_payroll,
+                super::civic_labor::review_civic_wages,
                 super::reconcile_work_statuses,
                 world::village_roads::audit_village_roads,
             )
@@ -179,6 +188,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     super::update_moot_market_targets,
                     super::refund_company_escrows,
                     super::run_business_payroll_and_owner_leisure,
+                    super::economy::review_business_wages,
                     super::collect_business_profit_taxes,
                     super::review_company_strategies,
                     world::village_lab_scenario::maintain_merchant_beacon_supply,
@@ -246,6 +256,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 (
                     super::review_automatic_staffing,
                     super::enforce_staffing_targets,
+                    super::civic_labor::review_civic_job_choices,
                     super::review_worker_job_choices,
                     super::fill_vacancies,
                     super::sync_company_porters,
@@ -257,6 +268,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 super::sync_porter_cargo_capacity,
                 super::refresh_character_day_plans,
                 super::run_household_schedules,
+                super::run_workplace_service_handoffs,
                 super::run_workplace_door_transits,
                 world::village_roads::build_village_roads,
                 world::settlement_development::upgrade_town_roads,
@@ -288,7 +300,6 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                         super::run_quarry_routines,
                         super::run_processing_routines,
                         super::run_tavern_routines,
-                        super::run_strategic_tavern_visits,
                         super::sync_workplace_operations,
                         super::sync_business_stock_targets,
                     )
@@ -316,13 +327,22 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                         .chain(),
                 )
                     .chain(),
+                (
+                    world::regional_roads::review_regional_investment,
+                    world::regional_roads::advance_regional_projects,
+                    world::regional_roads::bridge::run_bridge_work,
+                    world::regional_roads::lab::stage_and_observe,
+                )
+                    .chain(),
                 super::sync_character_objectives,
+                world::village_lab_scenario::worker_lifecycle::sample,
             )
                 .chain()
                 .in_set(VillageCoreSet::Activity),
             (
                 world::settlement_directory::tag_settlement_detail_regions,
                 world::settlement_directory::sync_settlement_directory,
+                world::shipping::sync_maritime_directory,
             )
                 .chain()
                 .in_set(VillageCoreSet::Directory),
@@ -331,8 +351,25 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
     );
 
     app.add_systems(
+        schedule.clone(),
+        (
+            world::ports::review_public_ports,
+            world::ports::advance_ship_orders,
+            world::shipping::advance_port_hauls,
+            world::ports::advance_port_projects,
+            world::shipping::advance_crew,
+            world::shipping::advance_shipping,
+            world::ports::lab::stage_and_observe,
+        )
+            .chain()
+            .in_set(VillageCoreSet::Activity)
+            .before(super::sync_character_objectives),
+    );
+
+    app.add_systems(
         schedule,
         (
+            world::bridges::rebuild_bridge_decks,
             world::village_roads::rebuild_village_road_graph,
             world::village_roads::queue_villager_travel_routes,
             world::village_roads::retry_failed_routes_after_obstacle_change,

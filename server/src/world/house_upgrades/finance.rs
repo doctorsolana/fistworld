@@ -43,6 +43,7 @@ pub(super) fn withdraw_claim(world: &mut World, project: &mut UpgradeProject) {
                 project.claim.unavailable,
                 project.claim.unaffordable,
                 project.claim.funded,
+                Good::Wood.base_price(),
             );
         }
     }

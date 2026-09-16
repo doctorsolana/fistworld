@@ -409,16 +409,130 @@ pub(super) fn animate(
 mod tests {
     use super::*;
     #[test]
-    fn mounted_and_wild_rig_budgets_are_separate_and_bounded() {
-        let all: Vec<_> = (0..500)
-            .map(|id| (Entity::PLACEHOLDER, id as f32, id))
-            .collect();
-        let mut wild = all.clone();
-        let mut mounted = all;
-        within_budget(&mut wild, MAX_WILD_RIGS);
-        within_budget(&mut mounted, MAX_MOUNTED_RIGS);
-        assert_eq!(wild.len(), 32);
-        assert_eq!(mounted.len(), 160);
+    fn mixed_horse_population_uses_separate_rig_budgets_and_retains_mounted_proxies() {
+        use bevy::asset::io::{memory::MemoryAssetReader, AssetSourceBuilder, AssetSourceId};
+        use shared::components::PersonId;
+
+        let mut app = App::new();
+        app.register_asset_source(
+            AssetSourceId::Default,
+            AssetSourceBuilder::new(|| Box::new(MemoryAssetReader::default())),
+        )
+        .add_plugins((
+            bevy::app::TaskPoolPlugin::default(),
+            bevy::asset::AssetPlugin {
+                watch_for_changes_override: Some(false),
+                use_asset_processor_override: Some(false),
+                ..default()
+            },
+        ))
+        .init_resource::<Time>()
+        .init_resource::<HorseAssets>()
+        .add_systems(Update, select_rigs);
+        let camera = app
+            .world_mut()
+            .spawn(CommanderCamera {
+                focus: Vec3::ZERO,
+                zoom: 100.0,
+                ..default()
+            })
+            .id();
+        let mut population = Vec::new();
+        // Start with resident scene roots to exercise real selection/eviction
+        // without asynchronous GLB loading or pretending to test animation/GPU cost.
+        // Both populations overflow, with tied distances and reversed spawn order.
+        for (mounted, count) in [(false, 40u64), (true, 176u64)] {
+            for rank in (0..count).rev() {
+                let id = rank + if mounted { 1_000 } else { 0 };
+                let position = Vec3::X * 10.0;
+                let root = app
+                    .world_mut()
+                    .spawn((
+                        Horse {
+                            id,
+                            rider: mounted.then_some(PersonId(id)),
+                        },
+                        PlayerPosition(position),
+                        Visibility::Inherited,
+                    ))
+                    .id();
+                let scene = app
+                    .world_mut()
+                    .spawn((Visibility::Inherited, ChildOf(root)))
+                    .id();
+                let proxy = mounted.then(|| {
+                    app.world_mut()
+                        .spawn((HorseProxy, Visibility::Hidden, ChildOf(root)))
+                        .id()
+                });
+                app.world_mut().entity_mut(root).insert(HorseVisual {
+                    position,
+                    received_at: 0.0,
+                    ground_normal: None,
+                    scene: Some(scene),
+                    proxy,
+                });
+                population.push((root, scene, proxy, mounted, rank));
+            }
+        }
+        app.update();
+        let mut retained = [0usize; 2];
+        for &(root, scene, proxy, mounted, rank) in &population {
+            let selected = rank < if mounted { 160 } else { 32 };
+            let visual = app.world().get::<HorseVisual>(root).unwrap();
+            assert_eq!(visual.scene, selected.then_some(scene));
+            assert_eq!(app.world().get_entity(scene).is_ok(), selected);
+            retained[usize::from(mounted)] += usize::from(visual.scene.is_some());
+            if let Some(proxy) = proxy {
+                assert_eq!(
+                    *app.world().get::<Visibility>(proxy).unwrap(),
+                    if selected {
+                        Visibility::Hidden
+                    } else {
+                        Visibility::Inherited
+                    },
+                );
+                assert_eq!(
+                    *app.world().get::<Visibility>(root).unwrap(),
+                    Visibility::Inherited
+                );
+            } else if !selected {
+                assert_eq!(
+                    *app.world().get::<Visibility>(root).unwrap(),
+                    Visibility::Hidden
+                );
+            }
+        }
+        assert_eq!(retained, [32, 160]);
+
+        app.world_mut()
+            .get_mut::<CommanderCamera>(camera)
+            .unwrap()
+            .zoom = 1_000.0;
+        app.update();
+        for &(root, scene, proxy, mounted, _) in &population {
+            assert!(app
+                .world()
+                .get::<HorseVisual>(root)
+                .unwrap()
+                .scene
+                .is_none());
+            assert!(app.world().get_entity(scene).is_err());
+            assert_eq!(
+                *app.world().get::<Visibility>(root).unwrap(),
+                if mounted {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                },
+            );
+            if let Some(proxy) = proxy {
+                assert_eq!(
+                    *app.world().get::<Visibility>(proxy).unwrap(),
+                    Visibility::Inherited
+                );
+            }
+        }
     }
     #[test]
     fn horse_rig_budget_is_bounded_and_ties_follow_identity() {

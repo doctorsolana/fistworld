@@ -11,10 +11,16 @@ mod outdoor;
 #[cfg(test)]
 mod outdoor_tests;
 mod review;
+#[cfg(test)]
+mod worker_tests;
+#[cfg(test)]
+mod admission_tests;
 pub(crate) use review::stage_tavern_review;
 
-const TAVERN_OPEN_MINUTE: u16 = 12 * 60;
-const TAVERN_CLOSE_MINUTE: u16 = 21 * 60 + 30;
+use super::worker_activity::schedule::{ORDINARY, TAVERN};
+
+const TAVERN_OPEN_MINUTE: u16 = TAVERN.clock_minutes().0;
+const TAVERN_CLOSE_MINUTE: u16 = TAVERN.clock_minutes().1;
 const TAVERN_DINING_SECONDS: f32 = 45.0;
 const MAX_TAVERN_ROUTE_FAILURES: u8 = 3;
 /// A Going-phase visitor within this range of the tavern entrance counts as
@@ -273,7 +279,6 @@ pub fn refresh_character_day_plans(
             continue;
         }
         let seed = day_seed(*person_id, clock.day);
-        let jitter = (seed % 46) as u16;
         let hungry = nutrition.is_hungry();
         let price = available_by_settlement.get(&resident_of.0).copied();
         let willingness = match work_status {
@@ -294,13 +299,12 @@ pub fn refresh_character_day_plans(
         } else {
             match work_status {
                 WorkStatus::Employed => {
-                    // A village does not have one universal factory whistle.
-                    // Small differences in shift end naturally stagger meals,
-                    // errands and leisure even before route congestion matters.
-                    let shift_end = 17 * 60 + 40 + ((seed >> 16) % 41) as u16;
+                    // Execution and planning use the same shift. Stagger
+                    // leisure afterward without scheduling it during work.
+                    let shift_end = ORDINARY.clock_minutes().1;
                     let leisure_start = shift_end + 5 + ((seed >> 32) % 36) as u16;
                     (
-                        Some((6 * 60 + jitter / 3, shift_end)),
+                        Some(ORDINARY.clock_minutes()),
                         leisure_start,
                         (leisure_start, TAVERN_CLOSE_MINUTE),
                     )
@@ -368,6 +372,8 @@ pub fn refresh_character_day_plans(
 pub fn assign_tavern_routines(
     world_time: Query<&WorldTime>,
     mut commands: Commands,
+    work_blocked: Query<(), super::worker_activity::ProductionStartBlocked>,
+    leisure_blocked: Query<(), super::worker_activity::LeisureStartBlocked>,
     mut taverns: ParamSet<(
         Query<
             (
@@ -387,7 +393,6 @@ pub fn assign_tavern_routines(
         (Entity, &shared::components::EmployedAt),
         (
             With<CharacterKind>,
-            Without<strategic::StrategicPerson>,
             Without<TavernWorkerRoutine>,
             Without<TavernVisitRoutine>,
             Without<HomeRoutine>,
@@ -400,10 +405,10 @@ pub fn assign_tavern_routines(
             &shared::components::ResidentOf,
             &PlayerPosition,
             &mut CharacterDayPlan,
+            Option<&VillagerIntent>,
         ),
         (
             With<CharacterKind>,
-            Without<strategic::StrategicPerson>,
             Without<TavernWorkerRoutine>,
             Without<TavernVisitRoutine>,
             Without<HomeRoutine>,
@@ -417,14 +422,18 @@ pub fn assign_tavern_routines(
         return;
     };
     let minute = display_minute(clock);
-    let open = (TAVERN_OPEN_MINUTE..TAVERN_CLOSE_MINUTE).contains(&minute);
+    let open = TAVERN.contains(clock);
     let mut reserved = HashMap::<Entity, u8>::new();
     for routine in active_visits.iter() {
         let count = reserved.entry(routine.tavern).or_default();
         *count = count.saturating_add(1);
     }
+    let mut assigned_workers = HashSet::new();
     if open {
         for (worker, employed_at) in workers.iter() {
+            if work_blocked.contains(worker) {
+                continue;
+            }
             let tavern = taverns
                 .p0()
                 .iter()
@@ -433,6 +442,7 @@ pub fn assign_tavern_routines(
                 })
                 .map(|(tavern, ..)| tavern);
             if let Some(tavern) = tavern {
+                assigned_workers.insert(worker);
                 commands
                     .entity(worker)
                     .remove::<ambient::AmbientRoutine>()
@@ -445,8 +455,19 @@ pub fn assign_tavern_routines(
         }
     }
 
-    for (visitor, resident_of, position, mut plan) in visitors.iter_mut() {
-        if !open || !plan.has_due_leisure(minute) {
+    for (visitor, resident_of, position, mut plan, intent) in visitors.iter_mut() {
+        // Even a stale or externally supplied ResidentOf cannot interrupt
+        // the journey, visible counter or departure before the authoritative
+        // intent becomes Resident. Heroes without an AI intent keep their
+        // existing admission behavior.
+        if intent.is_some_and(|intent| !matches!(intent, VillagerIntent::Resident { .. })) {
+            continue;
+        }
+        if !open
+            || !plan.has_due_leisure(minute)
+            || assigned_workers.contains(&visitor)
+            || leisure_blocked.contains(visitor)
+        {
             continue;
         }
         let best = taverns
@@ -509,6 +530,8 @@ fn finish_visit(
     commands
         .entity(visitor)
         .remove::<TavernVisitRoutine>()
+        .remove::<WorkplaceDoorTransit>()
+        .remove::<WorkplaceInterior>()
         .remove::<BuildingDoorUse>()
         .remove::<MoveTarget>()
         .remove::<TravelRoute>()
@@ -522,6 +545,8 @@ pub fn run_tavern_routines(
     simulation_time: crate::world::simulation_time::SimulationTime,
     world_time: Query<&WorldTime>,
     mut commands: Commands,
+    activity_busy: Query<(), super::worker_activity::TavernPausedBy>,
+    release_requested: Query<(), With<super::worker_activity::EmploymentReleaseRequested>>,
     mut companies: Query<(
         &shared::components::CompanyId,
         &mut shared::economy::CompanyAccount,
@@ -565,18 +590,16 @@ pub fn run_tavern_routines(
             &mut TavernVisitRoutine,
             Option<&MoveTarget>,
             Option<&WorkplaceDoorTransit>,
-            Option<&NavigationRouteFailed>,
+            Option<Ref<NavigationRouteFailed>>,
         ),
         Without<TavernWorkerRoutine>,
     >,
     employment: Query<&shared::components::EmployedAt, With<CharacterKind>>,
-    strategic_people: Query<Entity, With<strategic::StrategicPerson>>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
     };
-    let minute = display_minute(clock);
-    let open = (TAVERN_OPEN_MINUTE..TAVERN_CLOSE_MINUTE).contains(&minute);
+    let open = TAVERN.contains(clock);
     let dt = simulation_time.world_seconds();
     let now = f64::from(clock.day) * f64::from(clock.cycle_duration())
         + f64::from(clock.seconds_in_cycle);
@@ -623,11 +646,10 @@ pub fn run_tavern_routines(
     for (worker, position, mut activity, mut routine, move_target, transit, failed) in
         workers.iter_mut()
     {
-        if strategic_people.contains(worker) {
-            commands.entity(worker).remove::<TavernWorkerRoutine>();
-            continue;
-        }
-        let Ok((building, at, rotation, ..)) = taverns.get_mut(routine.tavern) else {
+        let interrupted = activity_busy.contains(worker);
+        let Ok((building, at, rotation, _, _, _, _, condition, ..)) =
+            taverns.get_mut(routine.tavern)
+        else {
             commands.entity(worker).remove::<TavernWorkerRoutine>();
             continue;
         };
@@ -635,15 +657,36 @@ pub fn run_tavern_routines(
         let inside = building.kind.interior_door_position(at.0, rotation.0);
         if failed.is_some() {
             commands.entity(worker).remove::<NavigationRouteFailed>();
-            routine.phase = TavernWorkerPhase::Leaving;
         }
-        if !open && !matches!(routine.phase, TavernWorkerPhase::Leaving) {
-            if matches!(routine.phase, TavernWorkerPhase::Serving) {
-                begin_workplace_exit(&mut commands, worker, at.0, entrance, inside, entrance);
-            }
+        let shift_ended = !open
+            || release_requested.contains(worker)
+            || !condition.state.can_operate()
+            || failed.is_some();
+        let leaving = shift_ended || interrupted;
+        if leaving
+            && transit.is_some_and(|transit| transit.direction == WorkplaceDoorDirection::Leaving)
+        {
+            // The shared paid-service handoff may already own this exit.
+            // Adopt its phase instead of reopening or reversing the doorway.
             routine.phase = TavernWorkerPhase::Leaving;
         }
         match routine.phase {
+            TavernWorkerPhase::Going if leaving => {
+                // A temporary errand keeps its own destination. No indoor
+                // service has begun, so there is no threshold left to cross.
+                commands.entity(worker).remove::<TavernWorkerRoutine>();
+                if !interrupted {
+                    activity.set_if_neq(CharacterActivity::Idle);
+                    commands
+                        .entity(worker)
+                        .remove::<(MoveTarget, TravelRoute, NavigationRoutePending)>();
+                }
+                if shift_ended {
+                    commands
+                        .entity(worker)
+                        .insert(WorkerOffDuty { day: clock.day });
+                }
+            }
             TavernWorkerPhase::Going => {
                 if ground_distance(position.0, entrance) > DOOR_REACH {
                     ensure_move_target(&mut commands, worker, move_target, entrance);
@@ -652,19 +695,33 @@ pub fn run_tavern_routines(
                     routine.phase = TavernWorkerPhase::Entering;
                 }
             }
+            TavernWorkerPhase::Entering if transit.is_none() && leaving => {
+                // Finish the inbound crossing before starting its reverse.
+                // Removing the routine as soon as entry finished left closed
+                // or dismissed innkeepers hidden inside the building.
+                begin_workplace_exit(&mut commands, worker, at.0, entrance, inside, entrance);
+                routine.phase = TavernWorkerPhase::Leaving;
+            }
             TavernWorkerPhase::Entering if transit.is_none() => {
                 routine.phase = TavernWorkerPhase::Serving;
             }
             TavernWorkerPhase::Entering => {}
+            TavernWorkerPhase::Serving if leaving => {
+                activity.set_if_neq(CharacterActivity::Idle);
+                begin_workplace_exit(&mut commands, worker, at.0, entrance, inside, entrance);
+                routine.phase = TavernWorkerPhase::Leaving;
+            }
             TavernWorkerPhase::Serving => {
                 activity.set_if_neq(CharacterActivity::Indoors);
             }
             TavernWorkerPhase::Leaving if transit.is_none() => {
                 activity.set_if_neq(CharacterActivity::Idle);
-                commands
-                    .entity(worker)
-                    .remove::<TavernWorkerRoutine>()
-                    .insert(WorkerOffDuty { day: clock.day });
+                commands.entity(worker).remove::<TavernWorkerRoutine>();
+                if shift_ended {
+                    commands
+                        .entity(worker)
+                        .insert(WorkerOffDuty { day: clock.day });
+                }
             }
             TavernWorkerPhase::Leaving => {}
         }
@@ -684,18 +741,7 @@ pub fn run_tavern_routines(
         failed,
     ) in visitors.iter_mut()
     {
-        if strategic_people.contains(visitor) {
-            outdoor::restore_ground(&mut commands, visitor, position.0, &routine);
-            activity.set_if_neq(CharacterActivity::Idle);
-            commands
-                .entity(visitor)
-                .remove::<strategic::StrategicTravel>();
-            let status = if routine.served {
-                PlannedLeisureStatus::Completed
-            } else {
-                PlannedLeisureStatus::TavernUnavailable
-            };
-            finish_visit(&mut commands, visitor, &mut plan, status);
+        if activity_busy.contains(visitor) {
             continue;
         }
         let Ok((
@@ -735,9 +781,14 @@ pub fn run_tavern_routines(
             );
             continue;
         }
-        if failed.is_some() {
-            routine.failed_routes = routine.failed_routes.saturating_add(1);
-            commands.entity(visitor).remove::<NavigationRouteFailed>();
+        if let Some(failed) = failed.as_ref() {
+            // The shared planner owns retry timing. Clearing only its failure
+            // leaves the same-goal backoff in place, so no Pending is installed
+            // and ordinary movement can walk directly along a rejected route.
+            // Count actual new outcomes, not each tick spent in that backoff.
+            if failed.is_changed() {
+                routine.failed_routes = routine.failed_routes.saturating_add(1);
+            }
             if routine.failed_routes >= MAX_TAVERN_ROUTE_FAILURES {
                 service.current_day.route_failures =
                     service.current_day.route_failures.saturating_add(1);
@@ -747,9 +798,8 @@ pub fn run_tavern_routines(
                     &mut plan,
                     PlannedLeisureStatus::CouldNotReach,
                 );
-                continue;
             }
-            commands.entity(visitor).insert(MoveTarget(entrance));
+            continue;
         }
         match routine.phase {
             TavernVisitPhase::Going => {
@@ -969,143 +1019,6 @@ pub fn run_tavern_routines(
     }
 }
 
-/// Settle the same private service for strategically simulated residents.
-/// This pass runs at most once per display minute and never creates a route or
-/// body-level routine, preserving the full economic result at cheap LOD.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn run_strategic_tavern_visits(
-    world_time: Query<&WorldTime>,
-    mut last_minute: Local<Option<(u32, u16)>>,
-    mut companies: Query<(
-        &shared::components::CompanyId,
-        &mut shared::economy::CompanyAccount,
-    )>,
-    mut taverns: ParamSet<(
-        Query<(
-            Entity,
-            &shared::components::BuildingOf,
-            &BusinessSalePolicy,
-            &BusinessCondition,
-            &GoodsInventory,
-            &TavernService,
-        )>,
-        Query<(
-            &mut GoodsInventory,
-            &BusinessSalePolicy,
-            &mut BusinessAccount,
-            &BusinessCondition,
-            &shared::components::OperatedBy,
-            &mut TavernService,
-        )>,
-    )>,
-    mut people: Query<
-        (
-            &shared::components::ResidentOf,
-            &mut Wallet,
-            &mut Nutrition,
-            &WorkStatus,
-            &mut CharacterDayPlan,
-        ),
-        (With<CharacterKind>, With<strategic::StrategicPerson>),
-    >,
-) {
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    let minute = display_minute(clock);
-    if *last_minute == Some((clock.day, minute)) {
-        return;
-    }
-    *last_minute = Some((clock.day, minute));
-    if !(TAVERN_OPEN_MINUTE..TAVERN_CLOSE_MINUTE).contains(&minute) {
-        return;
-    }
-    let offers: Vec<_> = taverns
-        .p0()
-        .iter()
-        .filter(|(_, _, _, condition, inventory, service)| {
-            condition.state.can_operate()
-                && service.innkeepers_on_duty > 0
-                && service.current_day.served_meals < service.daily_capacity()
-                && (inventory.amount(Good::Bread) > 0 || inventory.amount(Good::Meat) > 0)
-        })
-        .map(|(entity, building_of, sale, _, _, _)| {
-            (entity, building_of.0, sale.asking_unit_price.max(1))
-        })
-        .collect();
-
-    let mut live_taverns = taverns.p1();
-    for (resident_of, mut wallet, mut nutrition, work_status, mut plan) in people.iter_mut() {
-        if !plan.has_due_leisure(minute) {
-            continue;
-        }
-        let offer = offers
-            .iter()
-            .filter(|(_, settlement, _)| *settlement == resident_of.0)
-            .min_by_key(|(_, _, price)| *price)
-            .copied();
-        let Some((tavern, _, _)) = offer else {
-            plan.leisure_status = PlannedLeisureStatus::TavernUnavailable;
-            continue;
-        };
-        let Ok((mut inventory, sale, mut account, condition, operated_by, mut service)) =
-            live_taverns.get_mut(tavern)
-        else {
-            plan.leisure_status = PlannedLeisureStatus::TavernUnavailable;
-            continue;
-        };
-        service.record_planned_visit(clock.day);
-        let price = sale.asking_unit_price.max(1);
-        if !condition.state.can_operate()
-            || service.innkeepers_on_duty == 0
-            || service.current_day.served_meals >= service.daily_capacity()
-        {
-            service.current_day.unavailable_visits =
-                service.current_day.unavailable_visits.saturating_add(1);
-            plan.leisure_status = PlannedLeisureStatus::TavernUnavailable;
-            continue;
-        }
-        if !meal_is_affordable(*wallet, *work_status, nutrition.is_hungry(), price) {
-            service.current_day.unaffordable_visits =
-                service.current_day.unaffordable_visits.saturating_add(1);
-            plan.leisure_status = PlannedLeisureStatus::CouldNotAfford;
-            continue;
-        }
-        let ingredient = [Good::Bread, Good::Meat]
-            .into_iter()
-            .filter(|good| inventory.amount(*good) > 0)
-            .max_by_key(|good| inventory.amount(*good));
-        let Some(ingredient) = ingredient else {
-            service.current_day.unavailable_visits =
-                service.current_day.unavailable_visits.saturating_add(1);
-            plan.leisure_status = PlannedLeisureStatus::TavernUnavailable;
-            continue;
-        };
-        let Some((_, mut company)) = companies
-            .iter_mut()
-            .find(|(company_id, _)| **company_id == operated_by.0)
-        else {
-            service.current_day.unavailable_visits =
-                service.current_day.unavailable_visits.saturating_add(1);
-            plan.leisure_status = PlannedLeisureStatus::TavernUnavailable;
-            continue;
-        };
-        if !wallet.debit(price) {
-            service.current_day.unaffordable_visits =
-                service.current_day.unaffordable_visits.saturating_add(1);
-            plan.leisure_status = PlannedLeisureStatus::CouldNotAfford;
-            continue;
-        }
-        let consumed = inventory.remove(ingredient, 1);
-        debug_assert_eq!(consumed, 1);
-        company.credit(price);
-        account.record_service_sale(clock.day, price, 1);
-        service.record_meal(clock.day, ingredient, price);
-        nutrition.record_meal(clock.day.saturating_add(1));
-        plan.leisure_status = PlannedLeisureStatus::Completed;
-    }
-}
-
 /// Daily owner autopilot for a service business. It reacts to actual visits,
 /// turnaways, ingredient costs and payroll; no law caps manual prices.
 #[allow(clippy::type_complexity)]
@@ -1284,6 +1197,30 @@ pub fn review_tavern_businesses(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn employee_day_plans_leave_production_before_starting_leisure() {
+        let mut app = App::new();
+        app.add_systems(Update, refresh_character_day_plans);
+        app.world_mut().spawn(WorldTime::new_default());
+        for id in 1..=128 {
+            app.world_mut().spawn((
+                shared::components::PersonId(id),
+                shared::components::ResidentOf(shared::components::SettlementId(1)),
+                WorkStatus::Employed,
+                Wallet::new(1_000),
+                Nutrition::default(),
+            ));
+        }
+        app.update();
+        let world = app.world_mut();
+        let mut plans = world.query::<&CharacterDayPlan>();
+        assert_eq!(plans.iter(world).count(), 128);
+        for plan in plans.iter(world) {
+            assert_eq!(plan.work_minutes, Some(ORDINARY.clock_minutes()));
+            assert!(plan.leisure_minutes.0 >= ORDINARY.clock_minutes().1);
+        }
+    }
 
     #[test]
     fn late_same_day_plans_are_spread_instead_of_immediately_overdue() {
@@ -1500,140 +1437,5 @@ mod tests {
             true,
             4 * PENNIES_PER_COIN
         ));
-    }
-
-    #[test]
-    fn strategic_tavern_visit_moves_real_food_and_money_exactly_once() {
-        let mut app = App::new();
-        app.add_systems(Update, run_strategic_tavern_visits);
-
-        let mut clock = WorldTime::new_default();
-        clock.day = 3;
-        clock.set_normalized_time(18.5 / 24.0);
-        app.world_mut().spawn(clock);
-
-        let settlement_id = shared::components::SettlementId(10);
-        let company_id = shared::components::CompanyId(20);
-        let company = app
-            .world_mut()
-            .spawn((company_id, shared::economy::CompanyAccount::default()))
-            .id();
-
-        let price = 2 * PENNIES_PER_COIN;
-        let mut pantry = GoodsInventory::new(100);
-        assert_eq!(pantry.add(Good::Bread, 3), 3);
-        let mut service = TavernService::default();
-        service.roll_to_day(3);
-        service.innkeepers_on_duty = 1;
-        let tavern = app
-            .world_mut()
-            .spawn((
-                shared::components::BuildingOf(settlement_id),
-                shared::components::OperatedBy(company_id),
-                BusinessSalePolicy {
-                    asking_unit_price: price,
-                    ..Default::default()
-                },
-                BusinessCondition {
-                    state: BusinessState::Operating,
-                    ..Default::default()
-                },
-                BusinessAccount::default(),
-                pantry,
-                service,
-            ))
-            .id();
-
-        let visitor = app
-            .world_mut()
-            .spawn((
-                CharacterKind::Villager,
-                strategic::StrategicPerson,
-                shared::components::ResidentOf(settlement_id),
-                Wallet::new(10 * PENNIES_PER_COIN),
-                Nutrition::default(),
-                WorkStatus::Employed,
-                CharacterDayPlan {
-                    day: 3,
-                    wake_minute: 6 * 60,
-                    work_minutes: Some((6 * 60, 18 * 60)),
-                    meal_minute: 18 * 60,
-                    leisure_minutes: (18 * 60, 21 * 60),
-                    sleep_minute: 22 * 60,
-                    leisure: PlannedLeisure::TavernMeal,
-                    leisure_status: PlannedLeisureStatus::Planned,
-                    planned_work_status: WorkStatus::Employed,
-                },
-            ))
-            .id();
-
-        app.update();
-        assert_eq!(
-            app.world()
-                .entity(visitor)
-                .get::<Wallet>()
-                .unwrap()
-                .balance(),
-            8 * PENNIES_PER_COIN
-        );
-        assert_eq!(
-            app.world()
-                .entity(visitor)
-                .get::<Nutrition>()
-                .unwrap()
-                .last_meal_day,
-            Some(4)
-        );
-        assert_eq!(
-            app.world()
-                .entity(visitor)
-                .get::<CharacterDayPlan>()
-                .unwrap()
-                .leisure_status,
-            PlannedLeisureStatus::Completed
-        );
-        assert_eq!(
-            app.world()
-                .entity(tavern)
-                .get::<GoodsInventory>()
-                .unwrap()
-                .amount(Good::Bread),
-            2
-        );
-        let business = app.world().entity(tavern).get::<BusinessAccount>().unwrap();
-        assert_eq!(business.current_day.sold_units, 1);
-        assert_eq!(business.current_day.gross_revenue, price);
-        let service = app.world().entity(tavern).get::<TavernService>().unwrap();
-        assert_eq!(service.current_day.served_meals, 1);
-        assert_eq!(service.current_day.bread_used, 1);
-        assert_eq!(service.current_day.revenue, price);
-        assert_eq!(
-            app.world()
-                .entity(company)
-                .get::<shared::economy::CompanyAccount>()
-                .unwrap()
-                .cash,
-            price
-        );
-
-        // The display minute and plan are unchanged; the minute gate and
-        // completed plan must both prevent a duplicate charge or meal.
-        app.update();
-        assert_eq!(
-            app.world()
-                .entity(visitor)
-                .get::<Wallet>()
-                .unwrap()
-                .balance(),
-            8 * PENNIES_PER_COIN
-        );
-        assert_eq!(
-            app.world()
-                .entity(tavern)
-                .get::<GoodsInventory>()
-                .unwrap()
-                .amount(Good::Bread),
-            2
-        );
     }
 }

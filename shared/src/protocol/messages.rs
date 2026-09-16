@@ -286,20 +286,10 @@ pub struct HeroConstructionResult {
 /// amount and proves ownership before changing state.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum HeroBusinessAction {
-    AppointCompanyMaster(crate::components::PersonId),
-    ListCompanyShares {
-        shares: u16,
-        unit_price: u64,
-    },
-    CancelCompanyShareListing,
-    BuyCompanyShares {
-        seller: crate::components::PersonId,
-        shares: u16,
-    },
+    /// A local strategy override; it does not change company defaults.
     SetStrategy(crate::economy::BusinessStrategy),
+    /// Enabling adopts the company default now; automatic sites follow later reviews.
     SetAutopilot(bool),
-    SetAutomaticWithdrawals(bool),
-    WithdrawAvailableProfit,
     SetDailyWage(u64),
     SetEnabledPositions(u8),
     SetAutomaticWage(bool),
@@ -326,14 +316,30 @@ pub enum HeroBusinessAction {
     },
 }
 
-/// A decision applying to one local `(company, settlement)` branch rather
-/// than to one building. Company cash remains global; these controls govern
-/// only goods physically present in the selected settlement.
+/// A company decision addressed by durable identity, independent of any site's
+/// existence, operating state or visibility. Branch stock actions additionally
+/// name the settlement whose physical goods they govern.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum HeroCompanyAction {
+    AppointCompanyMaster(crate::components::PersonId),
+    ListCompanyShares {
+        shares: u16,
+        unit_price: u64,
+    },
+    CancelCompanyShareListing,
+    BuyCompanyShares {
+        seller: crate::components::PersonId,
+        shares: u16,
+    },
+    SetStrategy(crate::economy::BusinessStrategy),
+    SetAutopilot(bool),
+    SetAutomaticDividends(bool),
+    DistributeAvailableProfit,
     /// Move personal money into a sole-owned company. This is an explicit
     /// capital contribution, never revenue and never an implicit permit top-up.
-    ContributeCapital { amount: u64 },
+    ContributeCapital {
+        amount: u64,
+    },
     SetRetainUnits {
         settlement: crate::components::SettlementId,
         good: crate::economy::Good,
@@ -354,6 +360,7 @@ pub struct HeroCompanyOrder {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct HeroCompanyResult {
+    pub company: crate::components::CompanyId,
     pub success: bool,
     pub message: String,
 }
@@ -402,6 +409,43 @@ pub struct HeroTradeRouteResult {
     pub message: String,
 }
 
+/// Company executive orders for the maritime assets behind an ordinary route.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum HeroMaritimeAction {
+    OrderShip {
+        port: crate::components::BuildingId,
+        kind: crate::components::ShipKind,
+    },
+    CancelShipOrder {
+        order: crate::components::ShipOrderId,
+    },
+    CreateRoute {
+        ship: crate::components::ShipId,
+        good: crate::economy::Good,
+        cargo_target: u32,
+        maximum_purchase_price: u64,
+        minimum_destination_price: u64,
+        automatic: bool,
+        stops: Vec<crate::components::TradeRouteStop>,
+    },
+    AssignShip {
+        route: crate::components::TradeRouteId,
+        ship: crate::components::ShipId,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroMaritimeOrder {
+    pub company: crate::components::CompanyId,
+    pub action: HeroMaritimeAction,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroMaritimeResult {
+    pub success: bool,
+    pub message: String,
+}
+
 /// Establish a legal company at a settlement Hall before it owns a site.
 /// The founder receives all 1,000 shares and becomes Company Master.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -438,8 +482,15 @@ impl bevy::ecs::entity::MapEntities for HeroBusinessOrder {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct HeroBusinessResult {
+    pub business: Entity,
     pub success: bool,
     pub message: String,
+}
+
+impl bevy::ecs::entity::MapEntities for HeroBusinessResult {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.business = mapper.get_mapped(self.business);
+    }
 }
 
 /// A physical trade performed by the sender's live hero at a nearby public
@@ -989,6 +1040,83 @@ mod tests {
     }
 
     #[test]
+    fn site_feedback_roundtrips_and_maps_its_origin_before_ui_matching() {
+        use bevy::ecs::entity::{EntityMapper, MapEntities};
+        struct SiteMapper {
+            server: Entity,
+            client: Entity,
+        }
+        impl EntityMapper for SiteMapper {
+            fn get_mapped(&mut self, entity: Entity) -> Entity {
+                assert_eq!(entity, self.server);
+                self.client
+            }
+            fn set_mapped(&mut self, _source: Entity, _target: Entity) {}
+        }
+        let server = Entity::from_raw_u32(41).unwrap();
+        let client = Entity::from_raw_u32(97).unwrap();
+        for success in [false, true] {
+            let original = HeroBusinessResult {
+                business: server,
+                success,
+                message: "Site policy response".into(),
+            };
+            let wire = bincode::serialize(&original).unwrap();
+            let mut received: HeroBusinessResult = bincode::deserialize(&wire).unwrap();
+            assert_eq!(received, original);
+            received.map_entities(&mut SiteMapper { server, client });
+            assert_eq!(received.business, client);
+            assert_eq!(received.success, success);
+            assert_eq!(received.message, original.message);
+        }
+    }
+
+    #[test]
+    fn company_governance_and_feedback_roundtrip_by_company_id_without_a_site_entity() {
+        use crate::components::{CompanyId, PersonId};
+        use crate::economy::BusinessStrategy;
+        for action in [
+            HeroCompanyAction::AppointCompanyMaster(PersonId(8)),
+            HeroCompanyAction::ListCompanyShares {
+                shares: 125,
+                unit_price: 7,
+            },
+            HeroCompanyAction::CancelCompanyShareListing,
+            HeroCompanyAction::BuyCompanyShares {
+                seller: PersonId(9),
+                shares: 25,
+            },
+            HeroCompanyAction::SetStrategy(BusinessStrategy::Conservative),
+            HeroCompanyAction::SetAutopilot(false),
+            HeroCompanyAction::SetAutomaticDividends(false),
+            HeroCompanyAction::DistributeAvailableProfit,
+            HeroCompanyAction::ContributeCapital { amount: 1_275 },
+        ] {
+            let order = HeroCompanyOrder {
+                company: CompanyId(42),
+                action,
+            };
+            let bytes = bincode::serialize(&order).unwrap();
+            assert_eq!(
+                bincode::deserialize::<HeroCompanyOrder>(&bytes).unwrap(),
+                order
+            );
+        }
+        for success in [false, true] {
+            let result = HeroCompanyResult {
+                company: CompanyId(42),
+                success,
+                message: "Company response".into(),
+            };
+            let bytes = bincode::serialize(&result).unwrap();
+            assert_eq!(
+                bincode::deserialize::<HeroCompanyResult>(&bytes).unwrap(),
+                result
+            );
+        }
+    }
+
+    #[test]
     fn hero_permit_order_and_quote_roundtrip() {
         let order = HeroPermitOrder {
             action: HeroPermitAction::Purchase {
@@ -1133,5 +1261,64 @@ mod tests {
         let decoded: DevStatus = bincode::deserialize(&bytes).unwrap();
 
         assert_eq!(decoded, status);
+    }
+    #[test]
+    fn maritime_orders_roundtrip_company_hull_and_stop_authority() {
+        use crate::components::{
+            BuildingId, CompanyId, SettlementId, ShipId, ShipKind, ShipOrderId, TradeRouteId,
+            TradeRouteStop, TradeRouteStopAction,
+        };
+        for action in [
+            HeroMaritimeAction::OrderShip {
+                port: BuildingId(41),
+                kind: ShipKind::Cog,
+            },
+            HeroMaritimeAction::CancelShipOrder {
+                order: ShipOrderId(81),
+            },
+            HeroMaritimeAction::AssignShip {
+                route: TradeRouteId(63),
+                ship: ShipId(72),
+            },
+            HeroMaritimeAction::CreateRoute {
+                ship: ShipId(72),
+                good: crate::economy::Good::Iron,
+                cargo_target: 31,
+                maximum_purchase_price: 123,
+                minimum_destination_price: 177,
+                automatic: true,
+                stops: vec![
+                    TradeRouteStop {
+                        settlement: SettlementId(4),
+                        action: TradeRouteStopAction::Buy,
+                    },
+                    TradeRouteStop {
+                        settlement: SettlementId(9),
+                        action: TradeRouteStopAction::Sell,
+                    },
+                ],
+            },
+        ] {
+            let order = HeroMaritimeOrder {
+                company: CompanyId(52),
+                action,
+            };
+            let bytes = bincode::serialize(&order).unwrap();
+            assert_eq!(
+                bincode::deserialize::<HeroMaritimeOrder>(&bytes).unwrap(),
+                order
+            );
+        }
+        for success in [false, true] {
+            let result = HeroMaritimeResult {
+                success,
+                message: "Harbour result".into(),
+            };
+            let bytes = bincode::serialize(&result).unwrap();
+            assert_eq!(
+                bincode::deserialize::<HeroMaritimeResult>(&bytes).unwrap(),
+                result
+            );
+        }
     }
 }

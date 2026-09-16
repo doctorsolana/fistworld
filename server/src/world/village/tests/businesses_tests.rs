@@ -1,11 +1,15 @@
 //! Village businesses regression fixtures and invariants.
 
 use super::*;
+use crate::world::village::commerce::payroll_claims::PrivatePayrollClaims;
 
 #[test]
 fn insolvent_business_liquidates_stock_then_becomes_for_sale_without_rehiring() {
     let mut app = village_test_app();
-    app.add_systems(Update, review_business_management);
+    app.add_systems(
+        Update,
+        (review_business_management, enforce_staffing_targets).chain(),
+    );
     let clock = app.world_mut().spawn(WorldTime::new_default()).id();
     let settlement_id = shared::components::SettlementId(820);
     app.world_mut().spawn((
@@ -39,6 +43,12 @@ fn insolvent_business_liquidates_stock_then_becomes_for_sale_without_rehiring() 
                 tax_arrears: PENNIES_PER_COIN / 2,
                 ..default()
             },
+            PrivatePayrollClaims {
+                claims: vec![BusinessWageClaim {
+                    worker: shared::components::PersonId(822),
+                    pennies: PENNIES_PER_COIN,
+                }],
+            },
             BusinessSalePolicy::for_good(Good::Wood),
             BusinessWagePolicy::default(),
             BusinessManagementPolicy::default(),
@@ -52,6 +62,7 @@ fn insolvent_business_liquidates_stock_then_becomes_for_sale_without_rehiring() 
             CharacterKind::Villager,
             shared::components::EmployedAt(building_id),
             Occupation(Some("Woodcutter".into())),
+            GoodsInventory::new(shared::economy::capacity::VILLAGER),
             WorkStatus::Employed,
             Wallet::default(),
         ))
@@ -206,7 +217,10 @@ fn player_owner_receives_only_profit_above_protected_working_capital() {
 #[test]
 fn an_unbought_inherited_business_releases_staff_and_liquidates_its_inputs() {
     let mut app = village_test_app();
-    app.add_systems(Update, review_business_management);
+    app.add_systems(
+        Update,
+        (review_business_management, enforce_staffing_targets).chain(),
+    );
     let clock = app.world_mut().spawn(WorldTime::new_default()).id();
     app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 8;
     let settlement_id = shared::components::SettlementId(830);
@@ -240,6 +254,12 @@ fn an_unbought_inherited_business_releases_staff_and_liquidates_its_inputs() {
                 wage_arrears: PENNIES_PER_COIN,
                 ..default()
             },
+            PrivatePayrollClaims {
+                claims: vec![BusinessWageClaim {
+                    worker: shared::components::PersonId(833),
+                    pennies: PENNIES_PER_COIN,
+                }],
+            },
             BusinessSalePolicy::for_good(Good::Bread),
             BusinessWagePolicy::default(),
             BusinessManagementPolicy::default(),
@@ -263,6 +283,7 @@ fn an_unbought_inherited_business_releases_staff_and_liquidates_its_inputs() {
             CharacterKind::Villager,
             shared::components::EmployedAt(building_id),
             Occupation(Some("Baker".into())),
+            GoodsInventory::new(shared::economy::capacity::VILLAGER),
             WorkStatus::Employed,
             Wallet::default(),
         ))
@@ -271,7 +292,7 @@ fn an_unbought_inherited_business_releases_staff_and_liquidates_its_inputs() {
     app.update();
 
     let liquidation = app.world().get::<BusinessLiquidation>(business).unwrap();
-    assert!(liquidation.staff_released);
+    assert!(!liquidation.staff_released, "management observes staff before the shared release pass; its next review confirms the empty roster");
     assert_eq!(liquidation.outstanding_wages(), PENNIES_PER_COIN);
     assert!(app
         .world()
@@ -292,4 +313,244 @@ fn an_unbought_inherited_business_releases_staff_and_liquidates_its_inputs() {
         6,
         "liquidation exposes stock to physical porter collection; it never teleports it"
     );
+}
+
+#[test]
+fn liquidation_preserves_former_worker_claims_without_gifting_them_to_replacements_or_owners() {
+    for inherited in [false, true] {
+        for replacement_present in [false, true] {
+            let mut app = village_test_app();
+            app.add_systems(
+                Update,
+                (review_business_management, enforce_staffing_targets).chain(),
+            );
+            let mut time = WorldTime::new_default();
+            time.day = 8;
+            let clock = app.world_mut().spawn(time).id();
+            let settlement_id = shared::components::SettlementId(840);
+            let building_id = shared::components::BuildingId(841);
+            let former_id = shared::components::PersonId(842);
+            let replacement_id = shared::components::PersonId(843);
+            let owner_id = shared::components::PersonId(844);
+            let company_id = shared::components::CompanyId(845);
+            app.world_mut().spawn((
+                settlement_id,
+                Settlement {
+                    name: "Claimford".into(),
+                    tier: shared::components::SettlementTier::Village,
+                    residents: 3,
+                    treasury: 0,
+                },
+                MootMarket::founding(),
+            ));
+            let company = app
+                .world_mut()
+                .spawn((company_id, CompanyAccount::default()))
+                .id();
+            let former = if inherited {
+                app.world_mut()
+                    .spawn((
+                        former_id,
+                        shared::components::Hero {
+                            owner: lightyear::prelude::PeerId::Netcode(former_id.0),
+                        },
+                        Wallet::default(),
+                    ))
+                    .id()
+            } else {
+                app.world_mut()
+                    .spawn((
+                        former_id,
+                        Occupation(None),
+                        WorkStatus::LookingForWork,
+                        Wallet::default(),
+                    ))
+                    .id()
+            };
+            let replacement = app
+                .world_mut()
+                .spawn((
+                    replacement_id,
+                    Occupation(replacement_present.then(|| "Woodcutter".into())),
+                    GoodsInventory::new(shared::economy::capacity::VILLAGER),
+                    if replacement_present {
+                        WorkStatus::Employed
+                    } else {
+                        WorkStatus::LookingForWork
+                    },
+                    Wallet::default(),
+                ))
+                .id();
+            if replacement_present {
+                app.world_mut()
+                    .entity_mut(replacement)
+                    .insert(shared::components::EmployedAt(building_id));
+            }
+            let owner = app
+                .world_mut()
+                .spawn((
+                    owner_id,
+                    Occupation(None),
+                    WorkStatus::LookingForWork,
+                    Wallet::default(),
+                ))
+                .id();
+            let mut inventory = GoodsInventory::new(shared::economy::capacity::LUMBERJACK_HUT);
+            inventory.add(Good::Wood, 3);
+            let business = app
+                .world_mut()
+                .spawn((
+                    building_id,
+                    shared::components::BuildingOf(settlement_id),
+                    shared::components::OperatedBy(company_id),
+                    shared::components::OwnedBy(owner_id),
+                    SettlementBuilding {
+                        kind: SettlementBuildingKind::LumberjackHut,
+                        settlement: "Claimford".into(),
+                        owner: Some("New owner".into()),
+                        quality: 1.0,
+                        workers: if replacement_present {
+                            vec!["Replacement".into()]
+                        } else {
+                            Vec::new()
+                        },
+                    },
+                    inventory,
+                    BusinessAccount {
+                        wage_arrears: 100,
+                        ..default()
+                    },
+                    PrivatePayrollClaims {
+                        claims: vec![BusinessWageClaim {
+                            worker: former_id,
+                            pennies: if inherited { 60 } else { 100 },
+                        }],
+                    },
+                    BusinessSalePolicy::for_good(Good::Wood),
+                    BusinessWagePolicy::default(),
+                    BusinessManagementPolicy::default(),
+                    BusinessCondition {
+                        state: if inherited {
+                            BusinessState::Liquidating
+                        } else {
+                            BusinessState::Insolvent
+                        },
+                        opened_day: 0,
+                        last_review_day: 7,
+                        insolvent_days: 4,
+                        ..default()
+                    },
+                ))
+                .id();
+            if inherited {
+                let mut liquidation = BusinessLiquidation::owner_died(8);
+                liquidation.wage_claims.push(BusinessWageClaim {
+                    worker: former_id,
+                    pennies: 40,
+                });
+                app.world_mut().entity_mut(business).insert(liquidation);
+            }
+
+            app.update();
+            let liquidation = app.world().get::<BusinessLiquidation>(business).unwrap();
+            assert_eq!(liquidation.outstanding_wages(), 100);
+            assert!(liquidation
+                .wage_claims
+                .iter()
+                .all(|claim| claim.worker == former_id));
+            assert_eq!(
+                app.world()
+                    .get::<PrivatePayrollClaims>(business)
+                    .unwrap()
+                    .outstanding(),
+                0
+            );
+            assert_eq!(
+                app.world()
+                    .get::<BusinessAccount>(business)
+                    .unwrap()
+                    .wage_arrears,
+                100
+            );
+            assert_eq!(
+                app.world()
+                    .get::<BusinessAccount>(business)
+                    .unwrap()
+                    .defaulted_wages,
+                0
+            );
+
+            app.world_mut()
+                .get_mut::<CompanyAccount>(company)
+                .unwrap()
+                .cash = 100;
+            // The last stock has left, but a temporarily unavailable creditor
+            // still owns the debt and the company still has cash to pay it.
+            app.world_mut().entity_mut(former).remove::<Wallet>();
+            app.world_mut()
+                .get_mut::<GoodsInventory>(business)
+                .unwrap()
+                .remove(Good::Wood, 3);
+            for day in [9, 10] {
+                app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = day;
+                app.update();
+                assert_eq!(
+                    app.world()
+                        .get::<BusinessLiquidation>(business)
+                        .unwrap()
+                        .outstanding_wages(),
+                    100
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<BusinessAccount>(business)
+                        .unwrap()
+                        .wage_arrears,
+                    100
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<BusinessAccount>(business)
+                        .unwrap()
+                        .defaulted_wages,
+                    0
+                );
+                assert_eq!(
+                    app.world().get::<CompanyAccount>(company).unwrap().cash,
+                    100
+                );
+            }
+            app.world_mut().entity_mut(former).insert(Wallet::default());
+            app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 11;
+            app.update();
+            app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 12;
+            app.update();
+            assert_eq!(app.world().get::<Wallet>(former).unwrap().balance(), 100);
+            assert_eq!(app.world().get::<Wallet>(replacement).unwrap().balance(), 0);
+            assert_eq!(app.world().get::<Wallet>(owner).unwrap().balance(), 0);
+            assert_eq!(app.world().get::<CompanyAccount>(company).unwrap().cash, 0);
+            assert_eq!(
+                app.world()
+                    .get::<BusinessAccount>(business)
+                    .unwrap()
+                    .wage_arrears,
+                0
+            );
+            assert_eq!(
+                app.world()
+                    .get::<BusinessAccount>(business)
+                    .unwrap()
+                    .defaulted_wages,
+                0
+            );
+            assert!(app.world().get::<BusinessLiquidation>(business).is_none());
+            assert_eq!(
+                app.world()
+                    .get::<BusinessCondition>(business)
+                    .unwrap()
+                    .state,
+                BusinessState::ForSale
+            );
+        }
+    }
 }

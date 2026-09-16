@@ -1,7 +1,7 @@
 //! Membership edits commit in receive order, including within a single tick.
 //! Validation always sees the result of preceding assignments and disbands.
 
-use super::{ordinal_name, BattalionLedger};
+use super::{BattalionLedger, ordinal_name};
 use crate::player::orders::{feedback, owned_character, take_orders};
 use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};

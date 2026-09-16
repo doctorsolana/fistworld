@@ -1,14 +1,18 @@
 //! Visible, FIFO services in the Moot Hall forecourt.
 //!
 //! The market transaction remains authoritative when a ration is reserved or
-//! a permit is approved. Tactical villagers then occupy distinct queue places
-//! and collect the thing in person; strategic villagers use the same economic
-//! rules without paying for local paths.
+//! a permit is approved. Every villager then occupies a physical queue place
+//! and collects the thing in person, regardless of camera interest.
 
 use super::*;
 
+mod approach_progress;
+#[cfg(test)]
+mod approach_progress_tests;
 #[cfg(test)]
 mod navigation_tests;
+#[cfg(test)]
+mod physical_service_tests;
 
 const QUEUE_REACH: f32 = 0.55;
 const QUEUE_SPACING: f32 = 1.45;
@@ -21,10 +25,11 @@ const QUEUE_ROW_LENGTH: usize = 6;
 const QUEUE_FIRST_ROW_Z: f32 = -6.85;
 const QUEUE_SERVICE_Z: f32 = -5.85;
 const MAX_QUEUE_ROUTE_FAILURES: u8 = 6;
-/// Only time without measurable forward progress counts toward this fallback.
-/// A distant resident walking normally may take longer; a genuinely frozen
-/// head must release the entire line promptly.
+/// A stalled head temporarily leaves admission, retaining its paid claim.
+/// Timeouts never count as reaching the counter or receiving goods.
 const MAX_QUEUE_HEAD_WAIT_SECONDS: f32 = 15.0;
+const QUEUE_RETRY_SECONDS: f32 = 30.0;
+const MAX_LOCAL_QUEUE_STEP: f32 = 24.0;
 const QUEUE_HEAD_PROGRESS_EPSILON: f32 = 0.02;
 // These are handovers of transactions already decided by the market, not full
 // bureaucratic appointments. A hundred-household town must clear its morning
@@ -88,7 +93,9 @@ impl MootServiceKind {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum MootQueueState {
+    AwaitingHandoff,
     Queued,
+    Retrying { seconds_left: f32 },
     Serving { seconds_left: f32 },
     Ready,
 }
@@ -103,6 +110,7 @@ pub(crate) struct MootQueueTicket {
     failed_routes: u8,
     head_wait_seconds: f32,
     head_best_distance: f32,
+    head_route_progress: Option<approach_progress::RouteProgress>,
 }
 
 impl MootQueueTicket {
@@ -163,6 +171,7 @@ pub(crate) struct MootQueueTransit;
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct MootMealRoutine {
     hall: Entity,
+    kind: MootServiceKind,
     pub(crate) good: Good,
     pub(crate) meal_day: u32,
     phase: MootMealPhase,
@@ -200,29 +209,19 @@ pub(crate) fn enqueue_moot_service(
     hall: Entity,
     kind: MootServiceKind,
 ) {
-    commands
-        .entity(person)
-        .insert((
-            MootQueueTicket {
-                hall,
-                serial: clock.issue(),
-                kind,
-                state: MootQueueState::Queued,
-                failed_routes: 0,
-                head_wait_seconds: 0.0,
-                head_best_distance: f32::INFINITY,
-            },
-            CharacterActivity::Idle,
-        ))
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .remove::<BuildingDoorUse>()
-        .remove::<WorkplaceDoorTransit>()
-        .remove::<HomeRoutine>()
-        .remove::<ambient::AmbientRoutine>()
-        .remove::<MootQueueTransit>();
+    commands.entity(person).insert((
+        MootQueueTicket {
+            hall,
+            serial: clock.issue(),
+            kind,
+            state: MootQueueState::AwaitingHandoff,
+            failed_routes: 0,
+            head_wait_seconds: 0.0,
+            head_best_distance: f32::INFINITY,
+            head_route_progress: None,
+        },
+        CharacterActivity::Idle,
+    ));
 }
 
 fn local_queue_slot(lane: MootServiceLane, index: usize) -> Vec2 {
@@ -278,10 +277,12 @@ fn facing_toward(from: Vec3, to: Vec3) -> f32 {
 pub(crate) fn advance_moot_service_queues(
     simulation_time: crate::world::simulation_time::SimulationTime,
     terrain: Option<Res<WorldTerrain>>,
+    decks: Option<Res<crate::world::bridges::BridgeDecks>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     colliders: Option<Res<StaticColliders>>,
     derived: Option<Res<DerivedColliderLibrary>>,
     mut clock: ResMut<MootQueueClock>,
+    unsafe_handoff: Query<(), super::worker_activity::UnsafeToInterrupt>,
     halls: Query<
         (
             &PlayerPosition,
@@ -311,6 +312,7 @@ pub(crate) fn advance_moot_service_queues(
             Option<&NavigationRoutePending>,
             Option<&NavigationRouteFailed>,
             Has<MootQueueTransit>,
+            Option<&ConstructionMaterialRoutine>,
             &mut MootQueueTicket,
         ),
         Without<Settlement>,
@@ -318,7 +320,37 @@ pub(crate) fn advance_moot_service_queues(
     mut commands: Commands,
 ) {
     let mut queues: HashMap<(Entity, MootServiceLane), Vec<(u64, Entity, Vec3)>> = HashMap::new();
-    for (person, position, _, _, _, _, _, _, _, ticket) in people.iter_mut() {
+    for (person, position, _, _, _, _, _, _, _, material, mut ticket) in people.iter_mut() {
+        // Reserve paid service immediately, but do not replace a pier route
+        // or a doorway crossing. The current owner completes its safe egress;
+        // this ticket neither blocks the active queue nor ages its stall timer.
+        let finishing_materials = ticket.kind != MootServiceKind::ConstructionMaterial
+            && material.is_some_and(ConstructionMaterialRoutine::finishes_before_personal_needs);
+        if unsafe_handoff.contains(person) || finishing_materials {
+            continue;
+        }
+        if let MootQueueState::Retrying { seconds_left } = ticket.state {
+            let seconds_left = seconds_left - simulation_time.world_seconds();
+            ticket.state = if seconds_left <= 0.0 {
+                MootQueueState::AwaitingHandoff
+            } else {
+                MootQueueState::Retrying { seconds_left }
+            };
+            continue;
+        }
+        if ticket.state == MootQueueState::AwaitingHandoff {
+            ticket.state = MootQueueState::Queued;
+            commands.entity(person).remove::<(
+                MoveTarget,
+                TravelRoute,
+                NavigationRoutePending,
+                NavigationRouteFailed,
+                HomeRoutine,
+                ambient::AmbientRoutine,
+                MootQueueTransit,
+            )>();
+            continue;
+        }
         queues
             .entry((ticket.hall, ticket.kind.lane()))
             .or_default()
@@ -360,9 +392,9 @@ pub(crate) fn advance_moot_service_queues(
                             && building.kind == SettlementBuildingKind::Market
                     })
                     .min_by(|a, b| {
-                        a.3 .0
+                        a.3.0
                             .distance_squared(hall_position.0)
-                            .total_cmp(&b.3 .0.distance_squared(hall_position.0))
+                            .total_cmp(&b.3.0.distance_squared(hall_position.0))
                             .then_with(|| a.0.to_bits().cmp(&b.0.to_bits()))
                     })
             })
@@ -410,6 +442,7 @@ pub(crate) fn advance_moot_service_queues(
                 route_pending,
                 route_failed,
                 queue_transit,
+                _,
                 mut ticket,
             )) = people.get_mut(person)
             else {
@@ -419,36 +452,59 @@ pub(crate) fn advance_moot_service_queues(
             if ticket.is_ready() {
                 continue;
             }
-            let arrived = ground_distance(position.0, target) <= QUEUE_REACH;
+            let distance = ground_distance(position.0, target);
+            // Queue transit is only a short certified forecourt step. A remote
+            // applicant must keep the ordinary retained route planner.
+            let local_step_clear = distance <= MAX_LOCAL_QUEUE_STEP
+                && crate::player::hero::navigation_segment_clear(
+                    position.0.xz(),
+                    target.xz(),
+                    obstacles.as_deref(),
+                    colliders.as_deref(),
+                    derived.as_deref(),
+                )
+                && terrain.as_deref().is_none_or(|terrain| {
+                    crate::world::bridges::segment_walkable(
+                        terrain,
+                        decks.as_deref(),
+                        position.0.xz(),
+                        target.xz(),
+                        shared::physics::CHARACTER_NAV_RADIUS,
+                    )
+                });
+            let arrived = distance <= QUEUE_REACH && local_step_clear;
             if rank == 0 && !arrived {
                 let distance = ground_distance(position.0, target);
-                if distance + QUEUE_HEAD_PROGRESS_EPSILON < ticket.head_best_distance {
+                let route_progress = approach_progress::observe(
+                    &mut ticket.head_route_progress,
+                    position.0,
+                    target,
+                    travel_route,
+                );
+                let closer = distance + QUEUE_HEAD_PROGRESS_EPSILON < ticket.head_best_distance;
+                if closer {
                     ticket.head_best_distance = distance;
+                }
+                // A certified detour may initially move away from the Hall.
+                // Its actual leg/cursor progress is movement, even before it
+                // beats the previous straight-line distance to the counter.
+                if closer || route_progress {
                     ticket.head_wait_seconds = 0.0;
-                } else {
+                } else if route_pending.is_none() {
                     ticket.head_wait_seconds += simulation_time.world_seconds();
                 }
                 if ticket.head_wait_seconds >= MAX_QUEUE_HEAD_WAIT_SECONDS {
                     warn!(
-                        "A villager made no progress at the front of the Moot {} line for {:.0} world seconds; completing at the counter fallback (entity={person:?} at={:?} target={target:?} distance={distance:.2} route={:?})",
-                        ticket.kind.label(),
-                        ticket.head_wait_seconds,
-                        position.0,
-                        travel_route.map(|route| (route.next, route.waypoints.len())),
+                        "Moot {} approach stalled at {distance:.2}m; retaining service for a later physical retry (entity={person:?})",
+                        ticket.kind.label()
                     );
-                    ticket.state = MootQueueState::Ready;
-                    commands
-                        .entity(person)
-                        .remove::<MoveTarget>()
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>()
-                        .remove::<MootQueueTransit>();
+                    retry_service(&mut commands, person, &mut ticket);
                     continue;
                 }
             } else {
                 ticket.head_wait_seconds = 0.0;
                 ticket.head_best_distance = f32::INFINITY;
+                ticket.head_route_progress = None;
             }
             // Do not command the entire line toward newly assigned slots in
             // one synchronized burst. The authoritative positions captured at
@@ -492,26 +548,17 @@ pub(crate) fn advance_moot_service_queues(
                     .remove::<NavigationRouteFailed>()
                     .remove::<MootQueueTransit>()
                     .insert(MoveTarget(target));
-                if ticket.failed_routes >= MAX_QUEUE_ROUTE_FAILURES && rank == 0 {
+                if ticket.failed_routes >= MAX_QUEUE_ROUTE_FAILURES {
                     warn!(
-                        "A villager could not reach the Moot {} counter after {} routes; completing at the counter fallback",
+                        "Moot {} approach failed {} routes; retaining service for a later physical retry",
                         ticket.kind.label(),
                         ticket.failed_routes
                     );
-                    ticket.state = MootQueueState::Ready;
+                    retry_service(&mut commands, person, &mut ticket);
                 }
                 continue;
             }
             if !arrived {
-                let start = Vec2::new(position.0.x, position.0.z);
-                let end = Vec2::new(target.x, target.z);
-                let local_step_clear = crate::player::hero::navigation_segment_clear(
-                    start,
-                    end,
-                    obstacles.as_deref(),
-                    colliders.as_deref(),
-                    derived.as_deref(),
-                );
                 ensure_move_target(&mut commands, person, move_target, target);
                 if local_step_clear {
                     commands
@@ -553,7 +600,7 @@ pub(crate) fn advance_moot_service_queues(
                 continue;
             }
             match ticket.state {
-                MootQueueState::Queued => {
+                MootQueueState::AwaitingHandoff | MootQueueState::Queued => {
                     ticket.state = MootQueueState::Serving {
                         seconds_left: ticket.kind.service_seconds(),
                     };
@@ -566,10 +613,28 @@ pub(crate) fn advance_moot_service_queues(
                         MootQueueState::Serving { seconds_left }
                     };
                 }
-                MootQueueState::Ready => {}
+                MootQueueState::Ready | MootQueueState::Retrying { .. } => {}
             }
         }
     }
+}
+
+/// Release the blocked queue place, not its paid reservation or physical cargo.
+fn retry_service(commands: &mut Commands, person: Entity, ticket: &mut MootQueueTicket) {
+    ticket.state = MootQueueState::Retrying {
+        seconds_left: QUEUE_RETRY_SECONDS,
+    };
+    ticket.failed_routes = 0;
+    ticket.head_wait_seconds = 0.0;
+    ticket.head_best_distance = f32::INFINITY;
+    ticket.head_route_progress = None;
+    commands.entity(person).remove::<(
+        MoveTarget,
+        TravelRoute,
+        NavigationRoutePending,
+        NavigationRouteFailed,
+        MootQueueTransit,
+    )>();
 }
 
 /// The queue is the last step of permit administration. Construction material
@@ -618,6 +683,8 @@ fn commons_meal_spot(person: Entity, hall: Vec3, yaw: f32, terrain: Option<&Worl
 pub(crate) fn run_moot_meal_collections(
     simulation_time: crate::world::simulation_time::SimulationTime,
     terrain: Option<Res<WorldTerrain>>,
+    mut queue_clock: Option<ResMut<MootQueueClock>>,
+    sources: Query<()>,
     halls: Query<(&PlayerPosition, Option<&PlayerRotation>), With<Settlement>>,
     mut people: Query<
         (
@@ -631,6 +698,7 @@ pub(crate) fn run_moot_meal_collections(
             Option<&MootQueueTicket>,
             Option<&MoveTarget>,
             Option<&NavigationRouteFailed>,
+            Option<&ConstructionMaterialRoutine>,
         ),
         Without<Settlement>,
     >,
@@ -647,36 +715,79 @@ pub(crate) fn run_moot_meal_collections(
         ticket,
         move_target,
         route_failed,
+        material,
     ) in people.iter_mut()
     {
+        // A ration can already be in the carrier when a saved or concurrent
+        // construction handoff resumes. Preserve that paid food and let the
+        // current physical delivery finish before writing the commons target.
+        if material.is_some_and(ConstructionMaterialRoutine::finishes_before_personal_needs) {
+            continue;
+        }
         match meal.phase {
             MootMealPhase::Queueing => {
-                let Some(ticket) = ticket else {
-                    // The ration was paid for and removed from sale already.
-                    nutrition.record_meal(meal.meal_day);
-                    commands.entity(person).remove::<MootMealRoutine>();
-                    continue;
-                };
-                if !ticket.is_ready() {
+                if sources.get(meal.hall).is_err() {
+                    // This ration was still at its source, not in the actor's
+                    // inventory. Destruction loses that reserved stock; it is
+                    // neither nutrition nor a refund from an invented payee.
+                    info!(
+                        "Reserved {:?} ration lost with destroyed Moot {:?} (person={person:?}, meal_day={})",
+                        meal.good, meal.hall, meal.meal_day
+                    );
+                    commands.entity(person).remove::<(
+                        MootMealRoutine,
+                        MootQueueTicket,
+                        MootQueueTransit,
+                        MoveTarget,
+                        TravelRoute,
+                        NavigationRoutePending,
+                        NavigationRouteFailed,
+                    )>();
                     continue;
                 }
-                let Ok((hall, hall_rotation)) = halls.get(ticket.hall) else {
-                    nutrition.record_meal(meal.meal_day);
-                    commands
-                        .entity(person)
-                        .remove::<MootMealRoutine>()
-                        .remove::<MootQueueTicket>();
+                let Ok((hall, hall_rotation)) = halls.get(meal.hall) else {
+                    // A temporarily unavailable source retains the named paid
+                    // claim, so restoring service cannot sell this ration twice.
                     continue;
                 };
-                if carrier.add(meal.good, 1) != 1 {
-                    nutrition.record_meal(meal.meal_day);
-                    commands
-                        .entity(person)
-                        .remove::<MootMealRoutine>()
-                        .remove::<MootQueueTicket>();
+                let Some(ticket) = ticket else {
+                    if let Some(clock) = queue_clock.as_deref_mut() {
+                        enqueue_moot_service(&mut commands, clock, person, meal.hall, meal.kind);
+                    }
+                    continue;
+                };
+                if ticket.hall != meal.hall || ticket.kind != meal.kind || !ticket.is_ready() {
                     continue;
                 }
                 let yaw = hall_rotation.map_or(0.0, |rotation| rotation.0);
+                let counter = world_slot(
+                    hall.0,
+                    yaw,
+                    MootServiceLane::Resident,
+                    0,
+                    terrain.as_deref(),
+                );
+                if ground_distance(position.0, counter) > QUEUE_REACH {
+                    if let Some(clock) = queue_clock.as_deref_mut() {
+                        enqueue_moot_service(&mut commands, clock, person, meal.hall, meal.kind);
+                    }
+                    continue;
+                }
+                if carrier.add(meal.good, 1) != 1 {
+                    // A full bag can still eat the ration just served at this
+                    // counter. It never becomes freight or overwrites that cargo.
+                    nutrition.record_meal(meal.meal_day);
+                    activity.set_if_neq(CharacterActivity::Sitting);
+                    meal.phase = MootMealPhase::Eating {
+                        seconds_left: COMMONS_MEAL_SECONDS,
+                    };
+                    commands
+                        .entity(person)
+                        .remove::<MootQueueTicket>()
+                        .remove::<MootQueueTransit>()
+                        .remove::<MoveTarget>();
+                    continue;
+                }
                 let destination = commons_meal_spot(person, hall.0, yaw, terrain.as_deref());
                 meal.phase = MootMealPhase::Carrying { destination };
                 commands
@@ -707,7 +818,7 @@ pub(crate) fn run_moot_meal_collections(
                 }
                 carrier.remove(meal.good, 1);
                 nutrition.record_meal(meal.meal_day);
-                let hall_position = halls.get(meal.hall).map_or(position.0, |hall| hall.0 .0);
+                let hall_position = halls.get(meal.hall).map_or(position.0, |hall| hall.0.0);
                 rotation.set_if_neq(PlayerRotation(facing_toward(position.0, hall_position)));
                 activity.set_if_neq(CharacterActivity::Sitting);
                 meal.phase = MootMealPhase::Eating {
@@ -740,6 +851,7 @@ pub(crate) fn reserve_meal(
 ) {
     commands.entity(person).insert(MootMealRoutine {
         hall,
+        kind,
         good,
         meal_day,
         phase: MootMealPhase::Queueing,
@@ -772,6 +884,7 @@ mod tests {
             failed_routes: 0,
             head_wait_seconds: 0.0,
             head_best_distance: f32::INFINITY,
+            head_route_progress: None,
         };
         assert_eq!(
             ticket.objective(),
@@ -860,7 +973,20 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Time>();
         app.init_resource::<MootQueueClock>();
-        app.insert_resource(WorldTerrain::default());
+        // This measures queue service/physical advancement, independent of a
+        // procedural seed putting water through the hundred-person forecourt.
+        let mut map = WorldTerrain::default().generator.loaded_map().clone();
+        let bounds = shared::map::MapBounds {
+            min: [-64.0; 2],
+            max: [64.0; 2],
+        };
+        map.definition.bounds = bounds;
+        map.definition.generated = None;
+        map.heightmap = shared::map::HeightmapData::new(bounds, 2, 2, vec![4.0; 4], Some(0.0));
+        map.rivers = default();
+        map.river_segments_by_chunk.clear();
+        map.terrain_deltas_by_chunk.clear();
+        app.insert_resource(WorldTerrain::from_loaded_map(map));
         app.add_systems(Update, (advance_moot_service_queues, step_units).chain());
         app.world_mut()
             .spawn(shared::components::TimeWarp::clamped(warp));
@@ -889,6 +1015,20 @@ mod tests {
                 rank,
                 Some(app.world().resource::<WorldTerrain>()),
             );
+            let ahead = world_slot(
+                hall_position,
+                0.0,
+                MootServiceLane::Resident,
+                rank.saturating_sub(1),
+                Some(app.world().resource::<WorldTerrain>()),
+            );
+            assert!(crate::world::bridges::segment_walkable(
+                app.world().resource::<WorldTerrain>(),
+                None,
+                position.xz(),
+                ahead.xz(),
+                shared::physics::CHARACTER_NAV_RADIUS
+            ));
             app.world_mut().spawn((
                 CharacterKind::Villager,
                 CharacterActivity::Idle,
@@ -903,6 +1043,7 @@ mod tests {
                     failed_routes: 0,
                     head_wait_seconds: 0.0,
                     head_best_distance: f32::INFINITY,
+                    head_route_progress: None,
                 },
             ));
         }
@@ -978,6 +1119,7 @@ mod tests {
                     failed_routes: 0,
                     head_wait_seconds: 0.0,
                     head_best_distance: f32::INFINITY,
+                    head_route_progress: None,
                 },
             ))
             .id();
@@ -1001,16 +1143,18 @@ mod tests {
                     failed_routes: 0,
                     head_wait_seconds: 0.0,
                     head_best_distance: f32::INFINITY,
+                    head_route_progress: None,
                 },
             ))
             .id();
 
         app.update();
-        assert!(app
-            .world()
-            .get::<MootQueueTicket>(first)
-            .unwrap()
-            .is_ready());
+        assert!(
+            app.world()
+                .get::<MootQueueTicket>(first)
+                .unwrap()
+                .is_ready()
+        );
         assert_eq!(
             app.world().get::<MootQueueTicket>(second).unwrap().state,
             MootQueueState::Queued
@@ -1060,6 +1204,7 @@ mod tests {
                             failed_routes: 0,
                             head_wait_seconds: 0.0,
                             head_best_distance: f32::INFINITY,
+                            head_route_progress: None,
                         },
                     ))
                     .id(),
@@ -1115,6 +1260,7 @@ mod tests {
                             failed_routes: 0,
                             head_wait_seconds: 0.0,
                             head_best_distance: f32::INFINITY,
+                            head_route_progress: None,
                         },
                     ))
                     .id(),
@@ -1122,14 +1268,15 @@ mod tests {
         }
 
         app.update();
-        assert!(heads.iter().all(|person| app
-            .world()
-            .get::<MootQueueTicket>(*person)
-            .is_some_and(|ticket| ticket.is_ready())));
+        assert!(heads.iter().all(|person| {
+            app.world()
+                .get::<MootQueueTicket>(*person)
+                .is_some_and(|ticket| ticket.is_ready())
+        }));
     }
 
     #[test]
-    fn a_pending_route_cannot_freeze_the_front_of_a_moot_queue() {
+    fn a_stalled_route_retains_its_service_for_a_physical_retry() {
         let mut app = App::new();
         app.init_resource::<MootQueueClock>();
         app.add_systems(Update, advance_moot_service_queues);
@@ -1151,16 +1298,18 @@ mod tests {
                     failed_routes: 0,
                     head_wait_seconds: MAX_QUEUE_HEAD_WAIT_SECONDS,
                     head_best_distance: ground_distance(target + Vec3::X * 10.0, target),
+                    head_route_progress: None,
                 },
             ))
             .id();
 
         app.update();
 
-        assert!(app
-            .world()
-            .get::<MootQueueTicket>(person)
-            .is_some_and(|ticket| ticket.is_ready()));
+        assert!(
+            app.world()
+                .get::<MootQueueTicket>(person)
+                .is_some_and(|ticket| matches!(ticket.state, MootQueueState::Retrying { .. }))
+        );
         assert!(app.world().get::<MoveTarget>(person).is_none());
         assert!(app.world().get::<NavigationRoutePending>(person).is_none());
     }
@@ -1206,9 +1355,25 @@ mod tests {
         app.update();
         let ticket = app.world().get::<MootQueueTicket>(immigrant).unwrap();
         assert_eq!(ticket.kind, MootServiceKind::Immigration);
+        assert_eq!(ticket.state, MootQueueState::Queued);
         assert!(matches!(
             app.world().get::<VillagerIntent>(immigrant),
             Some(VillagerIntent::Travelling { .. })
+        ));
+        assert_eq!(
+            app.world()
+                .get::<Settlement>(hall_entity)
+                .unwrap()
+                .residents,
+            0
+        );
+
+        // Admission has accepted movement ownership; entering the actual
+        // counter service is a separate transition and must not grant residency.
+        app.update();
+        assert!(matches!(
+            app.world().get::<MootQueueTicket>(immigrant).unwrap().state,
+            MootQueueState::Serving { .. }
         ));
         assert_eq!(
             app.world()
@@ -1224,11 +1389,12 @@ mod tests {
                 IMMIGRATION_SERVICE_SECONDS + 0.1,
             ));
         app.update();
-        assert!(app
-            .world()
-            .get::<MootQueueTicket>(immigrant)
-            .unwrap()
-            .is_ready());
+        assert!(
+            app.world()
+                .get::<MootQueueTicket>(immigrant)
+                .unwrap()
+                .is_ready()
+        );
         assert_eq!(
             app.world()
                 .get::<Settlement>(hall_entity)
@@ -1239,10 +1405,11 @@ mod tests {
 
         app.update();
         assert!(app.world().get::<MootQueueTicket>(immigrant).is_some());
-        assert!(app
-            .world()
-            .get::<super::population::ImmigrationDeparture>(immigrant)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<super::population::ImmigrationDeparture>(immigrant)
+                .is_some()
+        );
         assert!(matches!(
             app.world().get::<VillagerIntent>(immigrant),
             Some(VillagerIntent::Travelling { settlement }) if *settlement == hall_entity
@@ -1261,10 +1428,11 @@ mod tests {
             .insert(PlayerPosition(departure));
         app.update();
         assert!(app.world().get::<MootQueueTicket>(immigrant).is_none());
-        assert!(app
-            .world()
-            .get::<super::population::ImmigrationDeparture>(immigrant)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<super::population::ImmigrationDeparture>(immigrant)
+                .is_none()
+        );
         assert!(matches!(
             app.world().get::<VillagerIntent>(immigrant),
             Some(VillagerIntent::Resident { settlement }) if *settlement == hall_entity
@@ -1280,9 +1448,9 @@ mod tests {
 
     #[test]
     fn hundred_immigrants_keep_their_fifo_line_through_a_hall_upgrade() {
-        use crate::collision::building_index::{sync_building_spatial_index, BuildingSpatialIndex};
+        use crate::collision::building_index::{BuildingSpatialIndex, sync_building_spatial_index};
         use crate::player::hero::step_units;
-        use crate::world::navgrid::{sync_obstacle_grid, ObstacleGridState};
+        use crate::world::navgrid::{ObstacleGridState, sync_obstacle_grid};
         use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
         use shared::components::{CivicHallLevel, TimeWarp};
         use shared::region::RegionCoord;
@@ -1367,6 +1535,7 @@ mod tests {
                         failed_routes: 0,
                         head_wait_seconds: 0.0,
                         head_best_distance: f32::INFINITY,
+                        head_route_progress: None,
                     },
                 ))
                 .id();
@@ -1485,14 +1654,16 @@ mod tests {
                     failed_routes: 0,
                     head_wait_seconds: 0.0,
                     head_best_distance: f32::INFINITY,
+                    head_route_progress: None,
                 },
                 PermitPickupRoutine { site },
             ))
             .id();
-        assert!(app
-            .world()
-            .get::<ConstructionMaterialRoutine>(applicant)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<ConstructionMaterialRoutine>(applicant)
+                .is_none()
+        );
         app.update();
         let routine = app
             .world()
@@ -1529,9 +1700,11 @@ mod tests {
                     failed_routes: 0,
                     head_wait_seconds: 0.0,
                     head_best_distance: f32::INFINITY,
+                    head_route_progress: None,
                 },
                 MootMealRoutine {
                     hall: hall_entity,
+                    kind: MootServiceKind::PoorRelief,
                     good: Good::Bread,
                     meal_day: 4,
                     phase: MootMealPhase::Queueing,
@@ -1632,6 +1805,7 @@ mod freight_counter_tests {
                         failed_routes: 0,
                         head_wait_seconds: 0.0,
                         head_best_distance: f32::INFINITY,
+                        head_route_progress: None,
                     },
                 ))
                 .id();

@@ -88,11 +88,12 @@ fn counter_detour(previous_ground_height: f32) {
                 failed_routes: 0,
                 head_wait_seconds: 0.,
                 head_best_distance: f32::INFINITY,
+                head_route_progress: None,
             },
         ))
         .id();
     // Real movement for ten seconds: long enough to walk the detour and be
-    // served, shorter than the fifteen-second no-progress escape hatch.
+    // served, shorter than the fifteen-second no-progress retry threshold.
     for _ in 0..600 {
         app.world_mut()
             .resource_mut::<Time>()
@@ -103,19 +104,21 @@ fn counter_detour(previous_ground_height: f32) {
             "a certified counter approach must not be restarted on the next queue tick"
         );
         let at = app.world().get::<PlayerPosition>(person).unwrap().0;
-        assert!(!app
-            .world()
-            .resource::<SpatialObstacleGrid>()
-            .point_blocked(at.xz()));
+        assert!(
+            !app.world()
+                .resource::<SpatialObstacleGrid>()
+                .point_blocked(at.xz())
+        );
     }
     let at = app.world().get::<PlayerPosition>(person).unwrap().0;
     assert!(
         ground_distance(at, target) <= QUEUE_REACH,
-        "arrival must be physical, not the counter fallback: {at:?}"
+        "arrival must be physical, not elapsed service time: {at:?}"
     );
-    assert!(app
-        .world()
-        .get::<MootQueueTicket>(person)
-        .unwrap()
-        .is_ready());
+    assert!(
+        app.world()
+            .get::<MootQueueTicket>(person)
+            .unwrap()
+            .is_ready()
+    );
 }

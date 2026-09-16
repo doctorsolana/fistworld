@@ -5,6 +5,164 @@
 
 use super::*;
 
+const FARM_WORK_REACH: f32 = 0.45;
+// The pier's work point is a visible standing position, not the wider staging
+// area. Movement reaches goals within 0.15m, so this permits ordinary arrival
+// without starting the fishing clip several metres before the end of the deck.
+const FISH_WORK_REACH: f32 = 0.6;
+
+#[cfg(test)]
+#[path = "producer_recovery_tests.rs"]
+mod producer_recovery_tests;
+
+#[cfg(test)]
+#[path = "loaded_delivery_recovery_tests.rs"]
+mod loaded_delivery_recovery_tests;
+
+/// Test-journal evidence for hired farmers that have no productive routine.
+/// This samples the real admission inputs, including loaded prop collision;
+/// it never schedules work or changes the simulation.
+#[cfg(test)]
+pub(crate) fn farmer_admission_diagnostics(world: &mut World) -> serde_json::Value {
+    let blocked: HashSet<_> = world
+        .query_filtered::<Entity, super::worker_activity::ProductionStartBlocked>()
+        .iter(world)
+        .collect();
+    let requests: HashSet<_> = world
+        .query_filtered::<Entity, With<RoadRequest>>()
+        .iter(world)
+        .collect();
+    let fields: Vec<_> = world
+        .query::<(
+            Entity,
+            &FarmField,
+            &PlayerPosition,
+            &PlayerRotation,
+            &shared::components::AttachedTo,
+        )>()
+        .iter(world)
+        .map(|(e, f, p, r, a)| (e, f.clone(), p.0, r.0, a.0))
+        .collect();
+    let farms: Vec<_> = world
+        .query::<(
+            Entity,
+            &SettlementBuilding,
+            &PlayerPosition,
+            &PlayerRotation,
+            &shared::components::BuildingId,
+            &shared::components::BuildingOf,
+        )>()
+        .iter(world)
+        .filter(|(_, b, ..)| b.kind == SettlementBuildingKind::Farmstead)
+        .map(|(e, b, p, r, id, home)| (e, b.kind, p.0, r.0, *id, home.0))
+        .collect();
+    let employees: Vec<_> = world
+        .query::<(
+            Entity,
+            &CharacterName,
+            &shared::components::PersonId,
+            &shared::components::EmployedAt,
+            &VillagerIntent,
+        )>()
+        .iter(world)
+        .map(|(e, n, id, job, intent)| (e, n.0.clone(), *id, job.0, intent.clone()))
+        .collect();
+    let roads: Vec<_> = world
+        .query::<(&VillageRoad, &shared::components::RoadOf)>()
+        .iter(world)
+        .map(|(r, home)| (r.clone(), home.0))
+        .collect();
+    let halls: HashMap<_, _> = world
+        .query::<(
+            Entity,
+            &shared::components::SettlementId,
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+        )>()
+        .iter(world)
+        .map(|(e, id, p, r)| (*id, (e, p.0, r.map_or(0.0, |r| r.0))))
+        .collect();
+    let clock = world.query::<&WorldTime>().iter(world).next().cloned();
+    let terrain = world.get_resource::<WorldTerrain>();
+    let obstacles = world.get_resource::<SpatialObstacleGrid>();
+    let colliders = world.get_resource::<StaticColliders>();
+    let derived = world.get_resource::<DerivedColliderLibrary>();
+    let mut records = Vec::new();
+    for (farm, kind, at, yaw, id, home) in farms {
+        let road_refs: Vec<_> = roads
+            .iter()
+            .filter_map(|(r, h)| (*h == home).then_some(r))
+            .collect();
+        let hall = halls.get(&home);
+        let road_ready = !requests.contains(&farm)
+            && hall.is_some_and(|(_, p, r)| {
+                road_refs.is_empty()
+                    || crate::world::village_roads::building_has_connected_road(
+                        kind, at, yaw, *p, *r, &road_refs,
+                    )
+            });
+        for (worker, name, person, job, intent) in &employees {
+            if *job != id {
+                continue;
+            }
+            let mut owners = Vec::new();
+            macro_rules! owner {
+                ($ty:ty) => {
+                    if world.get::<$ty>(*worker).is_some() {
+                        owners.push(stringify!($ty));
+                    }
+                };
+            }
+            owner!(FarmerRoutine);
+            owner!(FishingRoutine);
+            owner!(LumberjackRoutine);
+            owner!(QuarryRoutine);
+            owner!(ProcessingRoutine);
+            owner!(HouseholdShoppingRoutine);
+            owner!(HomeRoutine);
+            owner!(MootQueueTicket);
+            owner!(MootMealRoutine);
+            owner!(MarketCollectionRoutine);
+            owner!(InternalDeliveryRoutine);
+            owner!(TradeRouteRoutine);
+            owner!(TavernWorkerRoutine);
+            owner!(TavernVisitRoutine);
+            owner!(RoadBuilderRoutine);
+            owner!(ConstructionMaterialRoutine);
+            owner!(WorkplaceDoorTransit);
+            owner!(PierTraversal);
+            owner!(super::worker_activity::doors::WorkplaceInterior);
+            owner!(super::worker_activity::EmploymentReleaseRequested);
+            let stands: Vec<_> = fields.iter().filter(|(_,f,_,_,attached)|
+                *attached == id || f.farmstead.xz().distance_squared(at.xz()) < 0.01)
+                .map(|(entity,field,p,r,attached)| {
+                    let stand = terrain.and_then(|terrain| crate::world::village_roads::reachable_farm_work_stand_in_shape(
+                        terrain,at,yaw,*p,stable_name_hash(name),obstacles,colliders,derived,field.shape.as_ref()));
+                    let without_props = terrain.and_then(|terrain| crate::world::village_roads::reachable_farm_work_stand_in_shape(
+                        terrain,at,yaw,*p,stable_name_hash(name),obstacles,None,None,field.shape.as_ref()));
+                    serde_json::json!({"entity":entity.to_bits().to_string(), "attached_to":attached,
+                        "plot":field.plot_index,"productive_fraction":field.productive_fraction(),
+                        "field_position":p,"field_rotation":r,"actual_work_stand":stand,
+                        "work_stand_without_props":without_props})
+                }).collect();
+            let props: Vec<_> = colliders.into_iter().flat_map(|c|c.instances.iter())
+                .filter(|(_,p)|p.position.xz().distance_squared(at.xz()) < 40_f32.powi(2))
+                .map(|(id,p)|serde_json::json!({"id":id,"kind":format!("{:?}",p.kind),"position":p.position,
+                    "scale":p.scale,"radius":derived.and_then(|d|d.by_kind.get(&p.kind)).map(|d|d.horizontal_radius*p.scale)}))
+                .collect();
+            records.push(serde_json::json!({"business":id,"person":person,
+                "road_ready":road_ready,"road_request":requests.contains(&farm),
+                "settled_in_hall":hall.is_some_and(|(h,_,_)| intent.is_settled() && intent.settlement()==Some(*h)),
+                "off_duty_day":world.get::<WorkerOffDuty>(*worker).map(|d|d.day),
+                "production_start_blocked":blocked.contains(worker),"owners":owners,"fields":stands,
+                "nearby_live_props":props,
+                "work_hours":clock.as_ref().is_some_and(|clock| super::worker_activity::schedule::ORDINARY.contains(clock)),
+                "day":clock.as_ref().map(|clock|clock.day)}));
+        }
+    }
+    serde_json::json!(records)
+}
+
 pub(super) fn workplace_road_is_ready(
     building: Entity,
     kind: SettlementBuildingKind,
@@ -80,7 +238,6 @@ pub fn ensure_farm_fields(
         ),
         (
             Or<(With<CharacterKind>, With<shared::components::Horse>)>,
-            Without<strategic::StrategicPerson>,
             Without<shared::components::AboardBoat>,
             Without<crate::player::hero::OfflineHero>,
         ),
@@ -355,13 +512,13 @@ mod livestock_pasture_tests {
             .iter(world)
             .collect();
         assert_eq!(pastures.len(), 1, "the ensure pass must be idempotent");
-        assert_eq!(pastures[0].1 .0, building_id);
+        assert_eq!(pastures[0].1.0, building_id);
         assert_eq!(pastures[0].0.quality, 0.82);
         let expected = SettlementBuildingKind::LivestockFarm
             .pasture_position(origin, 0.0)
             .unwrap();
-        assert_eq!(pastures[0].2 .0.x, expected.x);
-        assert_eq!(pastures[0].2 .0.z, expected.z);
+        assert_eq!(pastures[0].2.0.x, expected.x);
+        assert_eq!(pastures[0].2.0.z, expected.z);
     }
 }
 
@@ -423,6 +580,7 @@ pub fn ensure_fishing_piers(
 pub fn assign_farmer_routines(
     mut commands: Commands,
     off_duty_workers: Query<&WorkerOffDuty>,
+    committed_workers: Query<(), super::worker_activity::ProductionStartBlocked>,
     world_time: Query<&WorldTime>,
     terrain: Option<Res<WorldTerrain>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
@@ -445,7 +603,6 @@ pub fn assign_farmer_routines(
     )>,
     roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
     road_requests: Query<(), With<RoadRequest>>,
-    operating_plans: Query<&BusinessOperatingPlan>,
     settlements: Query<(
         Entity,
         &shared::components::SettlementId,
@@ -470,14 +627,13 @@ pub fn assign_farmer_routines(
             Without<ProcessingRoutine>,
             Without<MootQueueTicket>,
             Without<MootMealRoutine>,
-            Without<strategic::StrategicPerson>,
         ),
     >,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
     };
-    if villagers.is_empty() || !ordinary_workday(clock) {
+    if villagers.is_empty() || !super::worker_activity::schedule::ORDINARY.contains(clock) {
         return;
     }
     let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
@@ -520,18 +676,6 @@ pub fn assign_farmer_routines(
         let Some(employees) = eligible_by_building.get(building_id) else {
             continue;
         };
-        // An autonomous owner can rationally close a weak or oversupplied
-        // field for the day. Do not make its still-employed farmer enter the
-        // Farmstead, walk to the crop, discover a zero-unit target and walk
-        // straight back out. They remain employed and resume on the first day
-        // whose cached operating plan has real work.
-        if operating_plans
-            .get(farmstead)
-            .is_ok_and(|plan| plan.day == clock.day && plan.remaining(clock.day) == 0)
-        {
-            release_workers_for_day(&mut commands, employees, clock.day);
-            continue;
-        }
         let Some(farm_fields) = fields_by_farm.get(building_id) else {
             continue;
         };
@@ -573,7 +717,8 @@ pub fn assign_farmer_routines(
             else {
                 continue;
             };
-            if claimed.contains(&worker)
+            if committed_workers.get(worker).is_ok()
+                || claimed.contains(&worker)
                 || !intent.is_settled()
                 || intent.settlement() != Some(hall)
                 || off_duty.is_some_and(|off_duty| off_duty.day == clock.day)
@@ -581,9 +726,11 @@ pub fn assign_farmer_routines(
             {
                 continue;
             }
-            let harvest_seconds = progress
-                .filter(|progress| progress.farmstead == farmstead && progress.field == field)
-                .map_or(0.0, |progress| progress.seconds);
+            let progress = progress
+                .filter(|progress| progress.farmstead == farmstead && progress.field == field);
+            let harvest_seconds = progress.map_or(0.0, |progress| progress.seconds);
+            let production_day = progress.map_or(u32::MAX, |progress| progress.production_day);
+            let produced_today = progress.map_or(0, |progress| progress.produced_today);
             let worker_salt = stable_name_hash(&name.0);
             let work_stand = if let Some(terrain) = terrain.as_deref() {
                 crate::world::village_roads::reachable_farm_work_stand_in_shape(
@@ -638,8 +785,8 @@ pub fn assign_farmer_routines(
                         work_stand,
                         harvest_seconds,
                         failed_workplace_routes: 0,
-                        production_day: u32::MAX,
-                        produced_today: 0,
+                        production_day,
+                        produced_today,
                         phase: FarmerPhase::GoingToFarmstead,
                     },
                     CharacterActivity::Idle,
@@ -672,8 +819,12 @@ pub fn run_farmer_routines(
     mut fields: farm_productivity::FarmProductivity,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
-    mut operating_plans: Query<&mut BusinessOperatingPlan, Without<CharacterKind>>,
-    moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
+    mut operating_plans: Query<&mut BusinessStaffingForecast, Without<CharacterKind>>,
+    (activity_busy, interiors): (
+        Query<(), super::worker_activity::ProductionPausedBy>,
+        Query<&WorkplaceInterior>,
+    ),
+    release_requested: Query<(), With<super::worker_activity::EmploymentReleaseRequested>>,
     mut workers: Query<
         (
             Entity,
@@ -700,7 +851,7 @@ pub fn run_farmer_routines(
         return;
     };
     let production_day = clock.day;
-    let workday_active = ordinary_workday(clock);
+    let workday_active = super::worker_activity::schedule::ORDINARY.contains(clock);
 
     for (
         worker,
@@ -719,19 +870,27 @@ pub fn run_farmer_routines(
         route_failed,
     ) in workers.iter_mut()
     {
+        let workday_active = workday_active && !release_requested.contains(worker);
         if routine.production_day != production_day {
             routine.production_day = production_day;
             routine.produced_today = 0;
         }
         if home_routine.is_some()
             || shopping.is_some()
-            || moot_service_busy.get(worker).is_ok()
+            || activity_busy.get(worker).is_ok()
             || road_builder.is_some()
-            || door_transit.is_some()
         {
+            // Keep the accumulated harvest, but recover the physical commute
+            // after another routine takes the worker away from the field.
+            // Returning also deposits any company crop still in their basket.
+            routine.phase = FarmerPhase::ReturningToFarmstead;
+            continue;
+        }
+        if door_transit.is_some() {
             continue;
         }
         if !intent.is_settled() {
+            routine.phase = FarmerPhase::ReturningToFarmstead;
             if *activity != CharacterActivity::Idle {
                 activity.set_if_neq(CharacterActivity::Idle);
             }
@@ -740,22 +899,18 @@ pub fn run_farmer_routines(
         let Ok((farm, farm_position, farm_rotation, building_id, building_of)) =
             farms.get(routine.farmstead)
         else {
-            commands
-                .entity(worker)
-                .remove::<FarmerRoutine>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>();
+            commands.entity(worker).remove::<FarmerRoutine>();
+            super::worker_activity::lifecycle::cancel_travel(&mut commands, worker, None);
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
         };
         if farm.kind != SettlementBuildingKind::Farmstead || employment.0 != *building_id {
-            commands
-                .entity(worker)
-                .remove::<FarmerRoutine>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>();
+            commands.entity(worker).remove::<FarmerRoutine>();
+            super::worker_activity::lifecycle::cancel_travel(
+                &mut commands,
+                worker,
+                interiors.get(worker).ok().filter(|_| intent.is_settled()),
+            );
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
@@ -775,34 +930,21 @@ pub fn run_farmer_routines(
             .kind
             .interior_door_position(farm_position.0, farm_rotation.0);
 
-        // A repeatedly impossible certified route must not become an
-        // unbounded A* loop. Preserve the same finite-inventory handoff, but
-        // collapse only this failed last leg after the retry budget is spent.
-        if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES
+        if route_failed.is_some()
             && inventories
                 .get_mut(worker)
                 .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0)
         {
-            commands
-                .entity(worker)
-                .remove::<MoveTarget>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
-            activity.set_if_neq(CharacterActivity::Idle);
-            if unload_worker_output(&mut inventories, worker, routine.farmstead, Good::Wheat) {
-                warn!(
-                    "Farmer {} completed a loaded workplace handoff abstractly after {} failed routes",
-                    name.0, routine.failed_workplace_routes,
-                );
-                finish_farmer_shift(
-                    &mut commands,
-                    worker,
-                    production_day,
-                    &routine,
-                    &mut activity,
-                );
-            }
+            routine.phase = FarmerPhase::ReturningToFarmstead;
+            super::worker_activity::lifecycle::retain_failed_delivery(
+                &mut commands,
+                worker,
+                position.0,
+                farm_entrance,
+                DOOR_REACH,
+                move_target,
+                &mut activity,
+            );
             continue;
         }
 
@@ -822,33 +964,16 @@ pub fn run_farmer_routines(
                 .remove::<NavigationRouteFailed>()
                 .remove::<NavigationRoutePending>()
                 .remove::<TravelRoute>();
-            let carrying_wheat = inventories
-                .get_mut(worker)
-                .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0);
-            if carrying_wheat {
-                if routine.failed_workplace_routes == MAX_WORKPLACE_ROUTE_FAILURES {
-                    warn!(
-                        "Farmer {} still carries Wheat after {} failed workplace routes; retaining the load for a bounded last-leg handoff before going off duty",
-                        name.0, routine.failed_workplace_routes,
-                    );
-                }
-                if routine.failed_workplace_routes < MAX_WORKPLACE_ROUTE_FAILURES {
-                    commands.entity(worker).insert(MoveTarget(farm_entrance));
-                }
-                routine.phase = FarmerPhase::ReturningToFarmstead;
-                activity.set_if_neq(CharacterActivity::Idle);
-                continue;
-            }
             if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
                 warn!(
                     "Farmer {} could not reach the workplace at {:.1},{:.1} after {} routes; ending the empty-handed shift",
                     name.0, failed.goal.x, failed.goal.z, routine.failed_workplace_routes,
                 );
-                finish_farmer_shift(
+                super::worker_activity::lifecycle::finish(
                     &mut commands,
                     worker,
                     production_day,
-                    &routine,
+                    &*routine,
                     &mut activity,
                 );
                 continue;
@@ -900,11 +1025,11 @@ pub fn run_farmer_routines(
                         routine.phase = FarmerPhase::ReturningToFarmstead;
                         continue;
                     }
-                    finish_farmer_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -918,11 +1043,11 @@ pub fn run_farmer_routines(
                         routine.phase = FarmerPhase::ReturningToFarmstead;
                         continue;
                     }
-                    finish_farmer_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -943,11 +1068,11 @@ pub fn run_farmer_routines(
                             routine.phase = FarmerPhase::ReturningToFarmstead;
                             continue;
                         }
-                        finish_farmer_shift(
+                        super::worker_activity::lifecycle::finish(
                             &mut commands,
                             worker,
                             production_day,
-                            &routine,
+                            &*routine,
                             &mut activity,
                         );
                         continue;
@@ -974,6 +1099,15 @@ pub fn run_farmer_routines(
                     routine.phase = FarmerPhase::Inside { seconds_left: left };
                     continue;
                 }
+                if inventories
+                    .get(routine.farmstead)
+                    .is_ok_and(|store| store.free_bulk() < Good::Wheat.bulk_per_unit())
+                {
+                    // Resume when a porter frees storage, without starting
+                    // repeated empty field trips or discarding carried goods.
+                    routine.phase = FarmerPhase::Inside { seconds_left: 0.0 };
+                    continue;
+                }
                 let stand = routine.work_stand;
                 activity.set_if_neq(CharacterActivity::Idle);
                 begin_workplace_exit(
@@ -990,7 +1124,6 @@ pub fn run_farmer_routines(
                 // Work candidates are inset 0.6m into accepted crop ground.
                 // The general 2.5m interaction reach stopped farmers outside
                 // small parcels before they ever reached their crop rows.
-                const FARM_WORK_REACH: f32 = 0.45;
                 if ground_distance(position.0, stand) <= FARM_WORK_REACH {
                     routine.failed_workplace_routes = 0;
                     commands.entity(worker).remove::<MoveTarget>();
@@ -1001,8 +1134,14 @@ pub fn run_farmer_routines(
                 }
             }
             FarmerPhase::Farming => {
+                if ground_distance(position.0, routine.work_stand) > FARM_WORK_REACH {
+                    let stand = routine.work_stand;
+                    activity.set_if_neq(CharacterActivity::Idle);
+                    ensure_move_target(&mut commands, worker, move_target, stand);
+                    routine.phase = FarmerPhase::WalkingToField { stand };
+                    continue;
+                }
                 activity.set_if_neq(CharacterActivity::Farming);
-                routine.harvest_seconds += dt * fields.fraction(*building_id);
                 let seconds_per_wheat = farmer_seconds_per_wheat(farm.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
                     // The carried bundle is a completed field basket, not a
@@ -1013,18 +1152,16 @@ pub fn run_farmer_routines(
                     // labour internally, then materialise the full batch and
                     // leave the field on the same tick.
                     let carried = carrier.amount(Good::Wheat);
-                    let remaining = operating_plans
-                        .get(routine.farmstead)
-                        .map_or(u32::MAX, |plan| plan.remaining(production_day));
                     let needed = FARM_CARRY_BATCH_UNITS
                         .saturating_sub(carried)
-                        .min(remaining);
+                        .min(carrier.free_bulk() / Good::Wheat.bulk_per_unit());
                     if needed == 0 {
                         activity.set_if_neq(CharacterActivity::Idle);
                         commands.entity(worker).insert(MoveTarget(farm_entrance));
                         routine.phase = FarmerPhase::ReturningToFarmstead;
                         continue;
                     }
+                    routine.harvest_seconds += dt * fields.fraction(*building_id);
                     let batch_seconds = seconds_per_wheat * needed as f32;
                     if needed > 0 && routine.harvest_seconds < batch_seconds {
                         continue;
@@ -1032,9 +1169,9 @@ pub fn run_farmer_routines(
                     let first_harvest_today = routine.produced_today == 0;
                     let produced = carrier.add(Good::Wheat, needed);
                     if produced > 0 {
-                        routine.harvest_seconds = (routine.harvest_seconds
-                            - seconds_per_wheat * produced as f32)
-                            .max(0.0);
+                        // This basket ends the field visit. Any remainder of
+                        // an accelerated tick happened after it was full.
+                        routine.harvest_seconds = 0.0;
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
                     if let Ok(mut plan) = operating_plans.get_mut(routine.farmstead) {
@@ -1062,6 +1199,7 @@ pub fn run_farmer_routines(
                 routine.phase = FarmerPhase::ReturningToFarmstead;
             }
             FarmerPhase::ReturningToFarmstead => {
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, farm_entrance) > DOOR_REACH {
                     ensure_move_target(&mut commands, worker, move_target, farm_entrance);
                     continue;
@@ -1079,11 +1217,11 @@ pub fn run_farmer_routines(
                     continue;
                 }
                 if !workday_active {
-                    finish_farmer_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -1101,6 +1239,7 @@ pub fn run_farmer_routines(
                 };
             }
             FarmerPhase::EndingShift => {
+                activity.set_if_neq(CharacterActivity::Idle);
                 if inventories
                     .get_mut(worker)
                     .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0)
@@ -1109,11 +1248,11 @@ pub fn run_farmer_routines(
                     routine.phase = FarmerPhase::ReturningToFarmstead;
                     continue;
                 }
-                finish_farmer_shift(
+                super::worker_activity::lifecycle::finish(
                     &mut commands,
                     worker,
                     production_day,
-                    &routine,
+                    &*routine,
                     &mut activity,
                 );
             }
@@ -1125,6 +1264,7 @@ pub fn run_farmer_routines(
 pub fn assign_fishing_routines(
     mut commands: Commands,
     off_duty_workers: Query<&WorkerOffDuty>,
+    committed_workers: Query<(), super::worker_activity::ProductionStartBlocked>,
     world_time: Query<&WorldTime>,
     huts: Query<(
         Entity,
@@ -1161,14 +1301,13 @@ pub fn assign_fishing_routines(
             Without<ProcessingRoutine>,
             Without<MootQueueTicket>,
             Without<MootMealRoutine>,
-            Without<strategic::StrategicPerson>,
         ),
     >,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
     };
-    if villagers.is_empty() || !ordinary_workday(clock) {
+    if villagers.is_empty() || !super::worker_activity::schedule::ORDINARY.contains(clock) {
         return;
     }
     let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
@@ -1231,6 +1370,7 @@ pub fn assign_fishing_routines(
                 continue;
             };
             if claimed.contains(&worker)
+                || committed_workers.get(worker).is_ok()
                 || !intent.is_settled()
                 || intent.settlement() != Some(hall)
                 || off_duty.is_some_and(|off_duty| off_duty.day == clock.day)
@@ -1238,9 +1378,11 @@ pub fn assign_fishing_routines(
             {
                 continue;
             }
-            let catch_seconds = progress
-                .filter(|progress| progress.hut == hut_entity && progress.pier == pier)
-                .map_or(0.0, |progress| progress.seconds);
+            let progress =
+                progress.filter(|progress| progress.hut == hut_entity && progress.pier == pier);
+            let catch_seconds = progress.map_or(0.0, |progress| progress.seconds);
+            let production_day = progress.map_or(u32::MAX, |progress| progress.production_day);
+            let produced_today = progress.map_or(0, |progress| progress.produced_today);
             claimed.insert(worker);
             commands
                 .entity(worker)
@@ -1256,8 +1398,8 @@ pub fn assign_fishing_routines(
                         hall,
                         catch_seconds,
                         failed_workplace_routes: 0,
-                        production_day: u32::MAX,
-                        produced_today: 0,
+                        production_day,
+                        produced_today,
                         phase: FishingPhase::GoingToHut,
                     },
                     CharacterActivity::Idle,
@@ -1348,8 +1490,13 @@ pub fn run_fishing_routines(
     >,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
-    mut operating_plans: Query<&mut BusinessOperatingPlan, Without<CharacterKind>>,
-    moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
+    mut operating_plans: Query<&mut BusinessStaffingForecast, Without<CharacterKind>>,
+    (activity_busy, interiors): (
+        Query<(), super::worker_activity::ProductionPausedBy>,
+        Query<&WorkplaceInterior>,
+    ),
+    release_requested: Query<(), With<super::worker_activity::EmploymentReleaseRequested>>,
+    on_pier: Query<(), With<PierTraversal>>,
     mut workers: Query<
         (
             Entity,
@@ -1377,7 +1524,7 @@ pub fn run_fishing_routines(
         return;
     };
     let production_day = clock.day;
-    let workday_active = ordinary_workday(clock);
+    let workday_active = super::worker_activity::schedule::ORDINARY.contains(clock);
 
     for (
         worker,
@@ -1395,16 +1542,27 @@ pub fn run_fishing_routines(
         route_failed,
     ) in workers.iter_mut()
     {
+        let workday_active = workday_active && !release_requested.contains(worker);
         if routine.production_day != production_day {
             routine.production_day = production_day;
             routine.produced_today = 0;
         }
-        if home_routine.is_some()
+        let interrupted = home_routine.is_some()
             || shopping.is_some()
-            || moot_service_busy.get(worker).is_ok()
-            || road_builder.is_some()
-            || door_transit.is_some()
-        {
+            || activity_busy.get(worker).is_ok()
+            || road_builder.is_some();
+        let exiting_for_errand = interrupted && on_pier.contains(worker);
+        if interrupted && !exiting_for_errand {
+            // Another routine owns the trip and presentation. Remember work
+            // progress, not the old physical phase: a meal can leave a fisher
+            // at the Hall after removing its route to the pier.
+            if !matches!(routine.phase, FishingPhase::GoingToHut) {
+                routine.phase = FishingPhase::GoingToHut;
+                commands.entity(worker).remove::<PierTraversal>();
+            }
+            continue;
+        }
+        if door_transit.is_some() {
             continue;
         }
         if !intent.is_settled() {
@@ -1413,26 +1571,18 @@ pub fn run_fishing_routines(
         }
         let Ok((hut, hut_position, hut_rotation, building_id, building_of)) = huts.get(routine.hut)
         else {
-            commands
-                .entity(worker)
-                .remove::<FishingRoutine>()
-                .remove::<PierTraversal>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<MoveTarget>();
+            commands.entity(worker).remove::<FishingRoutine>();
+            super::worker_activity::lifecycle::cancel_travel(&mut commands, worker, None);
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
         };
         if hut.kind != SettlementBuildingKind::FishermansHut || employment.0 != *building_id {
-            commands
-                .entity(worker)
-                .remove::<FishingRoutine>()
-                .remove::<PierTraversal>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<MoveTarget>();
+            commands.entity(worker).remove::<FishingRoutine>();
+            super::worker_activity::lifecycle::cancel_travel(
+                &mut commands,
+                worker,
+                interiors.get(worker).ok().filter(|_| intent.is_settled()),
+            );
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
@@ -1474,29 +1624,92 @@ pub fn run_fishing_routines(
             deck_end: fish_spot,
         };
 
-        if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES
+        // Paid personal service can reserve a ticket while the fisher is on
+        // the pier, but must wait for this authored route to reach dry land.
+        // Do not reset to a land-only hut route or stop behind the busy filter.
+        if exiting_for_errand && !matches!(routine.phase, FishingPhase::ReturningFromPier { .. }) {
+            activity.set_if_neq(CharacterActivity::Idle);
+            install_fishing_route(
+                &mut commands,
+                worker,
+                staging,
+                [deck_start, rear, nets, staging],
+                traversal,
+            );
+            routine.phase = FishingPhase::ReturningFromPier { staging };
+            continue;
+        }
+
+        // Recover interrupted authored routes before doing work. Never grant
+        // fish or play the fishing clip just because an old phase survived a
+        // different routine's movement. Walk off the deck through its real
+        // shoreline approach; ordinary land navigation cannot cross its water.
+        let stranded_pier_phase = match routine.phase {
+            FishingPhase::Fishing => ground_distance(position.0, fish_spot) > FISH_WORK_REACH,
+            FishingPhase::WalkingToPier => {
+                move_target.is_none() && ground_distance(position.0, fish_spot) > FISH_WORK_REACH
+            }
+            FishingPhase::ReturningFromPier { .. } => {
+                move_target.is_none() && ground_distance(position.0, staging) > WORK_REACH
+            }
+            _ => false,
+        };
+        if stranded_pier_phase && route_failed.is_none() {
+            activity.set_if_neq(CharacterActivity::Idle);
+            if traversal
+                .deck_height_at(Vec2::new(position.0.x, position.0.z))
+                .is_some()
+            {
+                install_fishing_route(
+                    &mut commands,
+                    worker,
+                    staging,
+                    [deck_start, rear, nets, staging],
+                    traversal,
+                );
+                routine.phase = FishingPhase::ReturningFromPier { staging };
+            } else {
+                commands
+                    .entity(worker)
+                    .remove::<PierTraversal>()
+                    .remove::<TravelRoute>()
+                    .remove::<NavigationRoutePending>()
+                    .remove::<NavigationRouteFailed>()
+                    .insert(MoveTarget(entrance));
+                routine.phase = FishingPhase::GoingToHut;
+            }
+            continue;
+        }
+
+        if route_failed.is_some()
             && inventories
                 .get_mut(worker)
                 .is_ok_and(|inventory| inventory.amount(Good::Food) > 0)
         {
-            commands
-                .entity(worker)
-                .remove::<MoveTarget>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>()
-                .remove::<PierTraversal>();
-            activity.set_if_neq(CharacterActivity::Idle);
-            if unload_worker_output(&mut inventories, worker, routine.hut, Good::Food) {
-                warn!(
-                    "Fisher completed a loaded workplace handoff abstractly after {} failed routes",
-                    routine.failed_workplace_routes,
-                );
-                finish_fishing_shift(
+            if traversal
+                .deck_height_at(Vec2::new(position.0.x, position.0.z))
+                .is_some()
+            {
+                // A loaded fisher must leave the actual deck before asking the
+                // land navigator to resume the failed workplace delivery.
+                activity.set_if_neq(CharacterActivity::Idle);
+                install_fishing_route(
                     &mut commands,
                     worker,
-                    production_day,
-                    &routine,
+                    staging,
+                    [deck_start, rear, nets, staging],
+                    traversal,
+                );
+                routine.phase = FishingPhase::ReturningFromPier { staging };
+            } else {
+                routine.phase = FishingPhase::ReturningToHut;
+                super::worker_activity::lifecycle::retain_failed_delivery(
+                    &mut commands,
+                    worker,
+                    position.0,
+                    entrance,
+                    DOOR_REACH,
+                    move_target,
                     &mut activity,
                 );
             }
@@ -1510,33 +1723,16 @@ pub fn run_fishing_routines(
                 .remove::<NavigationRouteFailed>()
                 .remove::<NavigationRoutePending>()
                 .remove::<TravelRoute>();
-            let carrying_catch = inventories
-                .get_mut(worker)
-                .is_ok_and(|inventory| inventory.amount(Good::Food) > 0);
-            if carrying_catch {
-                if routine.failed_workplace_routes == MAX_WORKPLACE_ROUTE_FAILURES {
-                    warn!(
-                        "Fisher still carries a catch after {} failed workplace routes; retaining it for a bounded last-leg handoff before going off duty",
-                        routine.failed_workplace_routes,
-                    );
-                }
-                if routine.failed_workplace_routes < MAX_WORKPLACE_ROUTE_FAILURES {
-                    commands.entity(worker).insert(MoveTarget(entrance));
-                }
-                routine.phase = FishingPhase::ReturningToHut;
-                activity.set_if_neq(CharacterActivity::Idle);
-            } else if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES
-                || !workday_active
-            {
+            if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
                 warn!(
                     "Fisher could not reach the hut at {:.1},{:.1} after {} routes; ending the empty-handed shift",
                     failed.goal.x, failed.goal.z, routine.failed_workplace_routes,
                 );
-                finish_fishing_shift(
+                super::worker_activity::lifecycle::finish(
                     &mut commands,
                     worker,
                     production_day,
-                    &routine,
+                    &*routine,
                     &mut activity,
                 );
             } else {
@@ -1592,11 +1788,11 @@ pub fn run_fishing_routines(
                         routine.phase = FishingPhase::ReturningToHut;
                         continue;
                     }
-                    finish_fishing_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -1610,11 +1806,11 @@ pub fn run_fishing_routines(
                         routine.phase = FishingPhase::ReturningToHut;
                         continue;
                     }
-                    finish_fishing_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -1629,19 +1825,19 @@ pub fn run_fishing_routines(
             FishingPhase::GoingToHut => {
                 if ground_distance(position.0, entrance) <= DOOR_REACH {
                     routine.failed_workplace_routes = 0;
+                    if inventories
+                        .get_mut(worker)
+                        .is_ok_and(|inventory| inventory.amount(Good::Food) > 0)
+                    {
+                        routine.phase = FishingPhase::ReturningToHut;
+                        continue;
+                    }
                     if !workday_active {
-                        if inventories
-                            .get_mut(worker)
-                            .is_ok_and(|inventory| inventory.amount(Good::Food) > 0)
-                        {
-                            routine.phase = FishingPhase::ReturningToHut;
-                            continue;
-                        }
-                        finish_fishing_shift(
+                        super::worker_activity::lifecycle::finish(
                             &mut commands,
                             worker,
                             production_day,
-                            &routine,
+                            &*routine,
                             &mut activity,
                         );
                         continue;
@@ -1689,13 +1885,13 @@ pub fn run_fishing_routines(
                 routine.phase = FishingPhase::WalkingToPier;
             }
             FishingPhase::WalkingToPier => {
-                if ground_distance(position.0, fish_spot) <= WORK_REACH {
+                if ground_distance(position.0, fish_spot) <= FISH_WORK_REACH {
                     commands
                         .entity(worker)
                         .remove::<MoveTarget>()
                         .remove::<TravelRoute>()
                         .remove::<NavigationRoutePending>()
-                        .remove::<PierTraversal>();
+                        .insert(traversal);
                     let outward = Vec2::new(fish_spot.x - deck_start.x, fish_spot.z - deck_start.z);
                     if outward.length_squared() > 1e-4 {
                         facing.0 = f32::atan2(-outward.x, -outward.y);
@@ -1705,17 +1901,19 @@ pub fn run_fishing_routines(
                 }
             }
             FishingPhase::Fishing => {
+                // Deck ownership lasts while standing still as well as while
+                // walking. Otherwise a personal errand can request a land
+                // route straight across the water under the fishing spot.
+                if !on_pier.contains(worker) {
+                    commands.entity(worker).insert(traversal);
+                }
                 activity.set_if_neq(CharacterActivity::Fishing);
-                routine.catch_seconds += dt;
                 let seconds_per_food = fisher_seconds_per_food(pier.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
                     let carried = carrier.amount(Good::Food);
-                    let remaining = operating_plans
-                        .get(routine.hut)
-                        .map_or(u32::MAX, |plan| plan.remaining(production_day));
                     let needed = FISH_CARRY_BATCH_UNITS
                         .saturating_sub(carried)
-                        .min(remaining);
+                        .min(carrier.free_bulk() / Good::Food.bulk_per_unit());
                     if needed == 0 {
                         activity.set_if_neq(CharacterActivity::Idle);
                         install_fishing_route(
@@ -1725,17 +1923,19 @@ pub fn run_fishing_routines(
                             [deck_start, rear, nets, staging],
                             traversal,
                         );
-                        routine.phase = FishingPhase::ReturningToHut;
+                        routine.phase = FishingPhase::ReturningFromPier { staging };
                         continue;
                     }
+                    routine.catch_seconds += dt;
                     let batch_seconds = seconds_per_food * needed as f32;
                     if needed > 0 && routine.catch_seconds < batch_seconds {
                         continue;
                     }
                     let produced = carrier.add(Good::Food, needed);
                     if produced > 0 {
-                        routine.catch_seconds =
-                            (routine.catch_seconds - seconds_per_food * produced as f32).max(0.0);
+                        // A full catch must be carried ashore before another
+                        // work interval can earn fish.
+                        routine.catch_seconds = 0.0;
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
                     if let Ok(mut plan) = operating_plans.get_mut(routine.hut) {
@@ -1760,6 +1960,7 @@ pub fn run_fishing_routines(
                 routine.phase = FishingPhase::ReturningFromPier { staging };
             }
             FishingPhase::ReturningFromPier { staging } => {
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, staging) > WORK_REACH {
                     continue;
                 }
@@ -1772,6 +1973,7 @@ pub fn run_fishing_routines(
                 routine.phase = FishingPhase::ReturningToHut;
             }
             FishingPhase::ReturningToHut => {
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, entrance) > DOOR_REACH {
                     ensure_move_target(&mut commands, worker, move_target, entrance);
                     continue;
@@ -1786,11 +1988,11 @@ pub fn run_fishing_routines(
                     continue;
                 }
                 if !workday_active {
-                    finish_fishing_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -1809,17 +2011,21 @@ pub fn run_fishing_routines(
                     routine.phase = FishingPhase::ReturningToHut;
                     continue;
                 }
-                finish_fishing_shift(
+                super::worker_activity::lifecycle::finish(
                     &mut commands,
                     worker,
                     production_day,
-                    &routine,
+                    &*routine,
                     &mut activity,
                 );
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "fishing_routine_tests.rs"]
+mod fishing_routine_tests;
 
 /// Attach a physical work routine to every staffed lumberjack hut.
 ///
@@ -1828,6 +2034,7 @@ pub fn run_fishing_routines(
 pub fn assign_lumberjack_routines(
     mut commands: Commands,
     off_duty_workers: Query<&WorkerOffDuty>,
+    committed_workers: Query<(), super::worker_activity::ProductionStartBlocked>,
     world_time: Query<&WorldTime>,
     huts: Query<(
         Entity,
@@ -1863,14 +2070,13 @@ pub fn assign_lumberjack_routines(
             Without<ProcessingRoutine>,
             Without<MootQueueTicket>,
             Without<MootMealRoutine>,
-            Without<strategic::StrategicPerson>,
         ),
     >,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
     };
-    if villagers.is_empty() || !ordinary_workday(clock) {
+    if villagers.is_empty() || !super::worker_activity::schedule::ORDINARY.contains(clock) {
         return;
     }
     let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
@@ -1927,7 +2133,8 @@ pub fn assign_lumberjack_routines(
             else {
                 continue;
             };
-            if claimed.contains(&worker)
+            if committed_workers.get(worker).is_ok()
+                || claimed.contains(&worker)
                 || !intent.is_settled()
                 || intent.settlement() != Some(hall)
                 || off_duty.is_some_and(|off_duty| off_duty.day == clock.day)
@@ -1935,9 +2142,11 @@ pub fn assign_lumberjack_routines(
             {
                 continue;
             }
-            let (cycle, chop_seconds) = progress
-                .filter(|progress| progress.hut == hut_entity)
-                .map_or((0, 0.0), |progress| (progress.cycle, progress.chop_seconds));
+            let progress = progress.filter(|progress| progress.hut == hut_entity);
+            let (cycle, chop_seconds) =
+                progress.map_or((0, 0.0), |progress| (progress.cycle, progress.chop_seconds));
+            let production_day = progress.map_or(u32::MAX, |progress| progress.production_day);
+            let produced_today = progress.map_or(0, |progress| progress.produced_today);
             claimed.insert(worker);
             let entrance = building
                 .kind
@@ -1957,8 +2166,8 @@ pub fn assign_lumberjack_routines(
                         failed_tree_routes: 0,
                         failed_hut_routes: 0,
                         chop_seconds,
-                        production_day: u32::MAX,
-                        produced_today: 0,
+                        production_day,
+                        produced_today,
                         phase: LumberjackPhase::GoingToHut,
                     },
                     CharacterActivity::Idle,
@@ -1999,9 +2208,13 @@ pub fn run_lumberjack_routines(
     >,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
-    mut operating_plans: Query<&mut BusinessOperatingPlan, Without<CharacterKind>>,
+    mut operating_plans: Query<&mut BusinessStaffingForecast, Without<CharacterKind>>,
     mut tree_candidates: Local<TreeWorkCandidateCache>,
-    moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
+    (activity_busy, interiors): (
+        Query<(), super::worker_activity::ProductionPausedBy>,
+        Query<&WorkplaceInterior>,
+    ),
+    release_requested: Query<(), With<super::worker_activity::EmploymentReleaseRequested>>,
     mut workers: Query<
         (
             Entity,
@@ -2031,7 +2244,7 @@ pub fn run_lumberjack_routines(
         return;
     };
     let production_day = clock.day;
-    let workday_active = ordinary_workday(clock);
+    let workday_active = super::worker_activity::schedule::ORDINARY.contains(clock);
 
     for (
         worker,
@@ -2051,22 +2264,30 @@ pub fn run_lumberjack_routines(
         route_failed,
     ) in workers.iter_mut()
     {
+        let workday_active = workday_active && !release_requested.contains(worker);
         if routine.production_day != production_day {
             routine.production_day = production_day;
             routine.produced_today = 0;
         }
         if home_routine.is_some()
             || shopping.is_some()
-            || moot_service_busy.get(worker).is_ok()
+            || activity_busy.get(worker).is_ok()
             || road_builder.is_some()
-            || door_transit.is_some()
         {
+            // Shopping, meals or building work may finish far from the tree.
+            // Preserve labour and cargo while recovering through the hut;
+            // the interrupted physical work phase is no longer trustworthy.
+            routine.phase = LumberjackPhase::ReturningToHut;
+            continue;
+        }
+        if door_transit.is_some() {
             continue;
         }
         // A permit temporarily takes this person's builder time. Construction
         // owns their destination until it releases them back to residency;
-        // their ordinary job then resumes from the same physical phase.
+        // their ordinary job then resumes with a physical return to the hut.
         if !intent.is_settled() {
+            routine.phase = LumberjackPhase::ReturningToHut;
             if *activity != CharacterActivity::Idle {
                 activity.set_if_neq(CharacterActivity::Idle);
             }
@@ -2074,24 +2295,20 @@ pub fn run_lumberjack_routines(
         }
         let Ok((hut, hut_position, hut_rotation, building_id, building_of)) = huts.get(routine.hut)
         else {
-            commands
-                .entity(worker)
-                .remove::<LumberjackRoutine>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>();
+            commands.entity(worker).remove::<LumberjackRoutine>();
+            super::worker_activity::lifecycle::cancel_travel(&mut commands, worker, None);
             if *activity != CharacterActivity::Idle {
                 activity.set_if_neq(CharacterActivity::Idle);
             }
             continue;
         };
         if hut.kind != SettlementBuildingKind::LumberjackHut || employment.0 != *building_id {
-            commands
-                .entity(worker)
-                .remove::<LumberjackRoutine>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>();
+            commands.entity(worker).remove::<LumberjackRoutine>();
+            super::worker_activity::lifecycle::cancel_travel(
+                &mut commands,
+                worker,
+                interiors.get(worker).ok().filter(|_| intent.is_settled()),
+            );
             if *activity != CharacterActivity::Idle {
                 activity.set_if_neq(CharacterActivity::Idle);
             }
@@ -2109,31 +2326,21 @@ pub fn run_lumberjack_routines(
             .kind
             .interior_door_position(hut_position.0, hut_rotation.0);
 
-        if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES
+        if route_failed.is_some()
             && inventories
                 .get_mut(worker)
                 .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0)
         {
-            commands
-                .entity(worker)
-                .remove::<MoveTarget>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
-            activity.set_if_neq(CharacterActivity::Idle);
-            if unload_worker_output(&mut inventories, worker, routine.hut, Good::Wood) {
-                warn!(
-                    "Woodcutter {} completed a loaded workplace handoff abstractly after {} failed routes",
-                    name.0, routine.failed_hut_routes,
-                );
-                finish_lumberjack_shift(
-                    &mut commands,
-                    worker,
-                    production_day,
-                    &routine,
-                    &mut activity,
-                );
-            }
+            routine.phase = LumberjackPhase::ReturningToHut;
+            super::worker_activity::lifecycle::retain_failed_delivery(
+                &mut commands,
+                worker,
+                position.0,
+                hut_entrance,
+                DOOR_REACH,
+                move_target,
+                &mut activity,
+            );
             continue;
         }
 
@@ -2143,43 +2350,17 @@ pub fn run_lumberjack_routines(
                 LumberjackPhase::GoingToHut | LumberjackPhase::ReturningToHut
             )
         }) {
-            // A failed route used to be handled only while walking to a tree.
-            // A woodcutter carrying Wood home could therefore retain the
-            // terminal failure forever and silently disable the business.
-            // Clear the terminal navigation state and submit the hut entrance
-            // again; the planner can then use updated obstacle geometry or a
-            // different A* corridor without losing the carried goods.
             routine.failed_hut_routes = routine.failed_hut_routes.saturating_add(1);
-            let carrying_wood = inventories
-                .get_mut(worker)
-                .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0);
-            if carrying_wood {
-                if routine.failed_hut_routes == MAX_WORKPLACE_ROUTE_FAILURES {
-                    warn!(
-                        "Woodcutter {} still carries Wood after {} failed hut routes; retaining the load for a bounded last-leg handoff before going off duty",
-                        name.0, routine.failed_hut_routes,
-                    );
-                }
-                commands
-                    .entity(worker)
-                    .remove::<NavigationRouteFailed>()
-                    .remove::<NavigationRoutePending>()
-                    .remove::<TravelRoute>();
-                if routine.failed_hut_routes < MAX_WORKPLACE_ROUTE_FAILURES {
-                    commands.entity(worker).insert(MoveTarget(hut_entrance));
-                }
-                routine.phase = LumberjackPhase::ReturningToHut;
-                activity.set_if_neq(CharacterActivity::Idle);
-            } else if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
+            if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
                 warn!(
                     "Woodcutter {} could not reach the hut at {:.1},{:.1} after {} routes; ending the empty-handed shift",
                     name.0, failed.goal.x, failed.goal.z, routine.failed_hut_routes,
                 );
-                finish_lumberjack_shift(
+                super::worker_activity::lifecycle::finish(
                     &mut commands,
                     worker,
                     production_day,
-                    &routine,
+                    &*routine,
                     &mut activity,
                 );
             } else {
@@ -2209,7 +2390,7 @@ pub fn run_lumberjack_routines(
                     routine.phase = LumberjackPhase::EndingShift;
                     continue;
                 }
-                LumberjackPhase::WalkingToTree { .. } | LumberjackPhase::Chopping => {
+                LumberjackPhase::WalkingToTree { .. } | LumberjackPhase::Chopping { .. } => {
                     commands
                         .entity(worker)
                         .remove::<TravelRoute>()
@@ -2230,11 +2411,11 @@ pub fn run_lumberjack_routines(
                         routine.phase = LumberjackPhase::ReturningToHut;
                         continue;
                     }
-                    finish_lumberjack_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -2248,11 +2429,11 @@ pub fn run_lumberjack_routines(
                         routine.phase = LumberjackPhase::ReturningToHut;
                         continue;
                     }
-                    finish_lumberjack_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -2273,11 +2454,11 @@ pub fn run_lumberjack_routines(
                             routine.phase = LumberjackPhase::ReturningToHut;
                             continue;
                         }
-                        finish_lumberjack_shift(
+                        super::worker_activity::lifecycle::finish(
                             &mut commands,
                             worker,
                             production_day,
-                            &routine,
+                            &*routine,
                             &mut activity,
                         );
                         continue;
@@ -2304,6 +2485,13 @@ pub fn run_lumberjack_routines(
                 let left = seconds_left - dt;
                 if left > 0.0 {
                     routine.phase = LumberjackPhase::Inside { seconds_left: left };
+                    continue;
+                }
+                if inventories
+                    .get(routine.hut)
+                    .is_ok_and(|store| store.free_bulk() < Good::Wood.bulk_per_unit())
+                {
+                    routine.phase = LumberjackPhase::Inside { seconds_left: 0.0 };
                     continue;
                 }
                 let salt = stable_name_hash(&name.0);
@@ -2393,12 +2581,27 @@ pub fn run_lumberjack_routines(
                         facing.0 = f32::atan2(-to_tree.x, -to_tree.z);
                     }
                     activity.set_if_neq(CharacterActivity::Chopping);
-                    routine.phase = LumberjackPhase::Chopping;
+                    routine.phase = LumberjackPhase::Chopping { tree, stand };
                 } else {
                     ensure_move_target(&mut commands, worker, move_target, stand);
                 }
             }
-            LumberjackPhase::Chopping => {
+            LumberjackPhase::Chopping { tree, stand } => {
+                if ground_distance(position.0, stand) > TREE_WORK_REACH {
+                    activity.set_if_neq(CharacterActivity::Idle);
+                    ensure_move_target(&mut commands, worker, move_target, stand);
+                    routine.phase = LumberjackPhase::WalkingToTree { tree, stand };
+                    continue;
+                }
+                if inventories
+                    .get(worker)
+                    .is_ok_and(|carrier| carrier.free_bulk() < Good::Wood.bulk_per_unit())
+                {
+                    activity.set_if_neq(CharacterActivity::Idle);
+                    ensure_move_target(&mut commands, worker, move_target, hut_entrance);
+                    routine.phase = LumberjackPhase::ReturningToHut;
+                    continue;
+                }
                 if *activity != CharacterActivity::Chopping {
                     activity.set_if_neq(CharacterActivity::Chopping);
                 }
@@ -2409,12 +2612,11 @@ pub fn run_lumberjack_routines(
                 }
                 let yield_units = lumber_tree_yield(hut.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
-                    let remaining = operating_plans
-                        .get(routine.hut)
-                        .map_or(u32::MAX, |plan| plan.remaining(production_day));
-                    let produced = carrier.add(Good::Wood, yield_units.min(remaining));
+                    let produced = carrier.add(Good::Wood, yield_units);
                     if produced > 0 {
-                        routine.chop_seconds = (routine.chop_seconds - required_seconds).max(0.0);
+                        // One tree interaction ends at its physical load; the
+                        // trip back cannot be banked as work on another tree.
+                        routine.chop_seconds = 0.0;
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
                     if let Ok(mut plan) = operating_plans.get_mut(routine.hut) {
@@ -2428,6 +2630,7 @@ pub fn run_lumberjack_routines(
                 routine.phase = LumberjackPhase::ReturningToHut;
             }
             LumberjackPhase::ReturningToHut => {
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, hut_entrance) > DOOR_REACH {
                     ensure_move_target(&mut commands, worker, move_target, hut_entrance);
                     continue;
@@ -2442,11 +2645,11 @@ pub fn run_lumberjack_routines(
                     continue;
                 }
                 if !workday_active {
-                    finish_lumberjack_shift(
+                    super::worker_activity::lifecycle::finish(
                         &mut commands,
                         worker,
                         production_day,
-                        &routine,
+                        &*routine,
                         &mut activity,
                     );
                     continue;
@@ -2464,6 +2667,7 @@ pub fn run_lumberjack_routines(
                 };
             }
             LumberjackPhase::EndingShift => {
+                activity.set_if_neq(CharacterActivity::Idle);
                 if inventories
                     .get_mut(worker)
                     .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0)
@@ -2472,11 +2676,11 @@ pub fn run_lumberjack_routines(
                     routine.phase = LumberjackPhase::ReturningToHut;
                     continue;
                 }
-                finish_lumberjack_shift(
+                super::worker_activity::lifecycle::finish(
                     &mut commands,
                     worker,
                     production_day,
-                    &routine,
+                    &*routine,
                     &mut activity,
                 );
             }
@@ -2510,8 +2714,9 @@ pub fn sync_carried_load(
 
 /// Publish the physical handcart only while a porter is performing a freight
 /// trip. The empty outbound leg still needs the cart; outside a trip the
-/// Moot's dual-role steward must remain free to build roads without dragging
-/// freight equipment behind them.
+/// Moot's dual-role steward stays unburdened between trips. Bridge contracts
+/// explicitly borrow a cart; a captain leaves it ashore throughout boarding,
+/// sailing and disembarkation.
 pub fn sync_porter_cart_state(
     mut commands: Commands,
     porters: Query<
@@ -2521,6 +2726,8 @@ pub fn sync_porter_cart_state(
             Has<MarketCollectionRoutine>,
             Has<InternalDeliveryRoutine>,
             Has<PorterCargoCapacity>,
+            Has<crate::world::regional_roads::bridge::BridgeBuilder>,
+            Has<crate::world::shipping::crew::ShipCrew>,
             Option<&shared::economy::PorterCartState>,
         ),
         (
@@ -2529,16 +2736,32 @@ pub fn sync_porter_cart_state(
                 With<MarketCollectionRoutine>,
                 With<InternalDeliveryRoutine>,
                 With<PorterCargoCapacity>,
+                With<crate::world::regional_roads::bridge::BridgeBuilder>,
+                With<crate::world::shipping::crew::ShipCrew>,
                 With<shared::economy::PorterCartState>,
             )>,
         ),
     >,
 ) {
-    for (entity, inventory, collecting, delivering, porter_capacity, current) in porters.iter() {
+    for (
+        entity,
+        inventory,
+        collecting,
+        delivering,
+        porter_capacity,
+        bridge_builder,
+        ship_crew,
+        current,
+    ) in porters.iter()
+    {
         // Keep an abnormal in-flight load visible even if its routine was
         // cancelled. `sync_porter_cargo_capacity` preserves the matching
         // allowance until the goods have safely left the character inventory.
-        let active = collecting || delivering || (porter_capacity && !inventory.is_empty());
+        let active = !ship_crew
+            && (collecting
+                || delivering
+                || bridge_builder
+                || (porter_capacity && !inventory.is_empty()));
         if !active {
             if current.is_some() {
                 commands
@@ -3052,10 +3275,6 @@ pub(super) fn exterior_door_clearance_position(building: Vec3, door: Vec3) -> Ve
     )
 }
 
-pub(super) fn ordinary_workday(clock: &WorldTime) -> bool {
-    clock.is_ordinary_work_time()
-}
-
 /// Move one trade's physical output from its worker into the owning workplace.
 /// `false` means cargo remains (normally because finite workplace storage is
 /// full), so callers must retain the work routine rather than clocking off.
@@ -3070,99 +3289,4 @@ fn unload_worker_output(
     };
     carrier.transfer_to(&mut store, good, u32::MAX);
     carrier.amount(good) == 0
-}
-
-/// Release employees when the operating plan deliberately has no work today.
-fn release_workers_for_day(commands: &mut Commands, employees: &[Entity], day: u32) {
-    for employee in employees {
-        commands.entity(*employee).insert(WorkerOffDuty { day });
-    }
-}
-
-fn finish_farmer_shift(
-    commands: &mut Commands,
-    worker: Entity,
-    day: u32,
-    routine: &FarmerRoutine,
-    activity: &mut CharacterActivity,
-) {
-    if *activity != CharacterActivity::Idle {
-        *activity = CharacterActivity::Idle;
-    }
-    commands
-        .entity(worker)
-        .remove::<FarmerRoutine>()
-        .remove::<WorkplaceDoorTransit>()
-        .remove::<BuildingDoorUse>()
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert((
-            WorkerOffDuty { day },
-            FarmerHarvestProgress {
-                farmstead: routine.farmstead,
-                field: routine.field,
-                seconds: routine.harvest_seconds,
-            },
-        ));
-}
-
-fn finish_fishing_shift(
-    commands: &mut Commands,
-    worker: Entity,
-    day: u32,
-    routine: &FishingRoutine,
-    activity: &mut CharacterActivity,
-) {
-    if *activity != CharacterActivity::Idle {
-        *activity = CharacterActivity::Idle;
-    }
-    commands
-        .entity(worker)
-        .remove::<FishingRoutine>()
-        .remove::<PierTraversal>()
-        .remove::<WorkplaceDoorTransit>()
-        .remove::<BuildingDoorUse>()
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert((
-            WorkerOffDuty { day },
-            FishingWorkProgress {
-                hut: routine.hut,
-                pier: routine.pier,
-                seconds: routine.catch_seconds,
-            },
-        ));
-}
-
-fn finish_lumberjack_shift(
-    commands: &mut Commands,
-    worker: Entity,
-    day: u32,
-    routine: &LumberjackRoutine,
-    activity: &mut CharacterActivity,
-) {
-    if *activity != CharacterActivity::Idle {
-        *activity = CharacterActivity::Idle;
-    }
-    commands
-        .entity(worker)
-        .remove::<LumberjackRoutine>()
-        .remove::<WorkplaceDoorTransit>()
-        .remove::<BuildingDoorUse>()
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert((
-            WorkerOffDuty { day },
-            LumberjackWorkProgress {
-                hut: routine.hut,
-                cycle: routine.cycle,
-                chop_seconds: routine.chop_seconds,
-            },
-        ));
 }

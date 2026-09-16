@@ -127,9 +127,6 @@ pub(super) fn close_on_escape_or_backdrop(
     market: Option<Res<crate::ui::market::MarketPageTarget>>,
     mut open: ResMut<EncyclopediaOpen>,
 ) {
-    if input.text_input_blocking() {
-        return;
-    }
     let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
     let clicked_out = clicked && handle_backdrop_pressed(&backdrop);
     let clicked_close = clicked
@@ -142,7 +139,10 @@ pub(super) fn close_on_escape_or_backdrop(
         || business.is_some_and(|business| business.0.is_some())
         || founding.is_some_and(|founding| founding.0)
         || market.is_some_and(|market| market.0.is_some());
-    if (keyboard.just_pressed(KeyCode::Escape) && !page_open) || clicked_out || clicked_close {
+    if (keyboard.just_pressed(KeyCode::Escape) && !page_open && !input.text_input_blocking())
+        || clicked_out
+        || clicked_close
+    {
         open.0 = false;
     }
 }

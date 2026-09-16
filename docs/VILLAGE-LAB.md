@@ -38,6 +38,14 @@ repeated housing and workforce recovery on every run. The live population gates 
 12 for Village, 30 for Town, and a provisional 75 for City.
 The test is ignored by ordinary `cargo test` runs.
 
+When reusing a compiled lab through `tools/town_growth.py --test-binary`, select
+the executable from the relevant successful Cargo artifact or current verified
+run. Workspace feature unification can produce several `server-<hash>` test
+executables; a memorized filename can silently run an older or differently built
+server. The runner records the selected path and SHA-256 in `experiment.json`
+and each `run.json`. That identifies the executable; its correspondence to the
+intended source/build must still be established before the run.
+
 Useful overrides:
 
 ```bash
@@ -366,6 +374,31 @@ cabins and the physical trip history were retained. Across 324,000 updates the s
 separately prove that funded food scarcity can produce an NPC one-cart trial while an unfunded
 starving market does not.
 
+The **2026-09-15** worker-ownership regression completed `trade-comparison` for 900 simulated
+minutes at 10x using test binary SHA-256 `9a9f9c62f8e4e517a826f7bfd90c11c4b0e164b4d70d65bc90d014d1c69c8626`.
+The [run record](../logs/economy-reform-final/trade-site-needs.run.json) and
+[complete report](../logs/economy-reform-final/trade-site-needs.log) identify this acceptance:
+
+- All 70 residents finished alive and housed, both settlements completed their physical Town
+  Works, and all 70 roads finished. The unchanged embodied-progress checks reported no stall;
+  the earlier construction-material/personal-meal movement conflict did not recur.
+- Eight remote Stone contracts fulfilled 13 units through eight completed physical trips,
+  paying 8.60 coin for goods and 16.44 freight. One unfulfilled contract cancelled with no
+  remaining escrow. Three reusable civic routes retained the trips; a fourth, autonomous
+  Wood trial carried 35 units, recorded a 1.75 purchase and 17.50 consignment, then mothballed.
+  A consignment is stock offered for sale, not proof of realised retail profit.
+- All 182 sampled account totals reconciled. Final cash was exactly 740.00 coin: 280.00 opening
+  cash plus 46 immigrants' ordinary 10.00 wallets. Of that, 230.43 remained in wallets, 2.82 in
+  households, 436.06 in companies and 70.69 in treasuries; all escrows and clearing balances
+  were zero.
+
+This proves bounded physical completion and accounting for this growing two-town fixture,
+not complete economic balance. Final unmet food remained **4 people in Meadow and 9 in
+Stonefield**, despite adequate aggregate production and stock; those residents had only
+0.00–0.51 coin personally, and most were unemployed. The fixed-money `closed-32` experiment
+remains a separate control. The 1,589.209-second wall time includes concurrent work on the host
+and is not an isolated performance or client-FPS measurement.
+
 `merchant-beacon`/`./run.sh merchantworld` is the controlled acceptance test for natural merchant
 discovery. It uses two closely matched, overland-connected inland Meadows so quarry, shoreline and
 poor-land failures cannot decide the result. `Lab Meadow` begins as an ordinary 12-person Village,
@@ -476,12 +509,35 @@ self-supply yields only two Wood from the same interaction and normally visits a
 nearby safe trees to fill a six-Wood personal load before returning. Final,
 dusk and blocked-next-tree loads return partially, making the loop both deadlock-safe
 and a bootstrap fallback rather than a competitive industry.
-The physical interactions have no authored daily resource grant. Manual firms can
-run the entire ordinary shift; autonomous firms instead share a cached daily output
-budget derived from recent sales, unmet demand, stock already onsite/listed and the
-owner's strategy. They stop after filling that budget, retain partial progress toward
-the next unit overnight, and yield to ambient, household and home behaviour until the
-next shift. This same budget is consumed by the strategic off-screen path.
+The physical interactions have no authored daily resource grant or daily output
+quota. Manual and autonomous firms both work the ordinary shift while real inputs,
+carry capacity and workplace storage permit. Cached sales forecasts guide the
+manager's staffing decision; they never stop an already assigned worker early.
+Workers retain partial labour over interruptions and finish their last physical
+deposit before releasing the shift. The same authoritative routines execute for
+all workers; the former aggregate offscreen production and needs paths are retired.
+
+Every positioned person collects meals and household baskets through the physical
+service and shopping routines, including headless worlds. Absence of clients or
+`RegionRegistry` never authorizes immediate nutrition or pantry delivery. A household
+waits for an eligible real shopper rather than using an unseen member to bypass the
+trip. See [WORKER-ACTIVITIES.md](WORKER-ACTIVITIES.md) for ownership and
+[SIMULATION-PARITY.md](SIMULATION-PARITY.md) for the current verification limits.
+
+Connected worker acceptance on **2026-09-15** completed one physical work → cargo
+→ own-store deposit → return-to-work cycle each for a fisher and livestock worker
+at genuine **1×**, then two cycles each at **25×**. The
+[worker-lifecycle-v9 report](../logs/economy-reform-final/worker-lifecycle-v9/report.json)
+records both binary hashes, post-readiness baselines and per-worker events;
+continuous captures accompany the sampled state. This validates two trade
+representatives, not every job or complete headless/connected economy parity.
+
+The separate six-day seed-23 `closed-32` diagnostic using the recorded current
+test binary observed production at all four farms and valid field work stands.
+Its [run record](../logs/economy-reform-final/farm-admission-current/seed-23__closed-32/run.json)
+and [final worker/business sample](../logs/economy-reform-final/farm-admission-current/seed-23__closed-32/people-0048.json)
+identify that evidence. This is a focused farm-admission check; it does not
+establish long-run affordability, trade health or town-wide economic balance.
 
 Once a settlement reaches Village, the Reeve supplies and raises its Marketplace while a
 private investor can answer the advertised Tavern opportunity; a Town later requests its Church. Essential farmers,
@@ -505,7 +561,7 @@ working, every additional roadless or disconnected building receives an explicit
 audited repair-backlog marker. Detached components are repaired first, then the
 oldest stable BuildingId in each class, so a real queue remains observable without
 pretending one person can construct several roads simultaneously. Reeve, Moot Stewards and
-Guards all use the same one-coin salary ledger; a short treasury records each person's
+Guards all use the same funded civic wage ledger; a short treasury records each person's
 arrears rather than erasing them or creating money. Hiring stops unless the treasury can
 retain the policy's payroll reserve. Click the hall to inspect both stewards, the last audit,
 connection counts, civic strategy, rates, positions and aggregate arrears.
@@ -581,9 +637,9 @@ The `dense-stress` contract applies the same crowd, construction, production,
 inventory, task-liveness and road-lifecycle checks to one settlement with
 exactly 1,000 admitted residents. A mature building fails the run if it spends
 ten world minutes outside every completed connector, live road, retained
-request or explicit steward backlog. Off-screen civic audits still run as cheap
-bookkeeping; only the accountable Moot Steward is woken into tactical movement
-when physical repair is actually required.
+request or explicit steward backlog. Civic audits run in every town; an available
+accountable Moot Steward accepts physical repair without cancelling another job
+or live journey. Cameras do not control recruitment or worker execution.
 
 The lab reports structural changes immediately and prints a compact economy row
 every five simulated minutes. Each settlement row includes filled/total/vacant private
@@ -623,6 +679,52 @@ must retain the expense. The lab's completed `LAB business history` rows are the
 authority for wage-inclusive daily P&L; worker wallet history and company treasury changes
 prove whether the claim was actually paid or remains in arrears.
 
+### Labour and market review (2026-09-15)
+
+The current implementation adds demand price bands, funded wage competition,
+import-supported processor entry, economic takeover review, adaptive merchant/freight
+quotes, household necessities ordering and budgeted emergency relief. Historical
+results elsewhere in this document retain their original dates; they do not verify
+this revision's balance or performance.
+
+Use [the closed-32 town-growth profile](TOWN-GROWTH-LAB.md#fixed-money-economy-experiment)
+to separate money circulation from immigration-funded growth. It starts with 32
+ordinary wallets, the normal finite treasury and 96 physical Bread, then grants
+nothing and admits no immigrants. Compare low/burst immigration cases separately.
+The first housed commercial-base milestone records startup progress, not a sustainable
+economy: inspect the subsequent days for hunger, deaths, unemployment, exhausted
+treasuries, closed firms and stranded edible stock. Record the test binary hash,
+seed, duration, warp and output directory when reporting a new result.
+
+For this revision, interpret observations as follows:
+
+- A wage may remain unchanged when its company lacks contribution or protected
+  cash. Compare local funded vacancies and actual rosters; increasing every salary
+  is not an acceptance condition. Job changes must wait for cargo and committed work.
+- Earned arrears remain owed to the original `PersonId` after leaving a job.
+  A replacement receives only their own earnings. Liquidation/takeover must retain
+  the named claims; death settles the affordable part into the estate and explicitly
+  defaults the remainder. Payment lowers cash and debt together; a default lowers
+  debt without destroying cash.
+- `funded_unmet_at(price)` is the useful demand quantity for a proposed price.
+  A total shortage does not imply every customer can pay the same high ask. Household
+  retries replace dated claims; they must not multiply missing demand.
+- Food purchases precede relief. Emergency Budget may buy real ready meals from at
+  most one third of discretionary treasury cash after public payroll protection;
+  it cannot guarantee everyone eats or manufacture stock.
+- A failed plant may remain unbought when input costs, hiring wages or funded demand
+  make its restart unviable. Imports can support processors without a local upstream
+  building, but must still be real affordable input supply.
+- Unsold imported goods should stop automatic restocking and receive bounded price
+  review. An unaccepted civic tender can reprice or expire/refund; neither action
+  proves that a physical trade route completed. `merchant-beacon` deliberately refills
+  its source shelf, so it is a logistics/discovery control, not the fixed-money test.
+
+Source ownership is documented in
+[ARCHITECTURE.md](ARCHITECTURE.md#bounded-labour-and-market-decisions-2026-09-15).
+Connected NPC movement still needs the real client/server lab; a passing headless
+money audit is not visual evidence that a worker or cart moved correctly.
+
 Settlement history distinguishes total physical food from food currently purchasable on
 the order book and edible stock still at businesses. A healthy circulation run should not
 finish with large `at businesses` food beside hungry households. Failed firms should move
@@ -632,8 +734,8 @@ profit—not merely to one large Wheat or Flour stockpile.
 
 No-porter regressions should remove the applicable civic/private carrier and verify that
 the producer moves one personal-capacity load, leaves its work routine for the trip, and
-later resumes production. The strategic equivalent must cap the load identically and
-charge the Hall-to-workplace round trip against productive seconds. A specialist cart
+later resumes production. The same routine, real load and route must execute with
+no observer; there is no alternate timed transfer at a distance. A specialist cart
 must restore six-times personal capacity without interrupting the producer.
 
 Economy reports include the current Fish/Flour/Bread asks so a starvation event can be
@@ -836,8 +938,8 @@ opening camera and starting at 10x:
 ./run.sh stressworld
 ```
 
-This is the rendered counterpart of `triple-stress`. It keeps all three village
-regions tactical, enables server and client performance telemetry, and writes
+This is the rendered counterpart of `triple-stress`. It observes all three village
+regions, enables server and client performance telemetry, and writes
 complete logs to a timestamped `logs/stressworld-*` directory. The HUD remains
 in control, so pause or switch to 1x, 25x or 100x at any time. Stress runs save
 the complete logs without mirroring their thousands of setup lines into the
@@ -1209,42 +1311,76 @@ fishing search. The rings are siting preferences, not a hard village border.
 
 ## Scale Lab
 
-`cargo village-scale-lab` is the release-optimised server scale probe. Its
-default fixture is deliberately severe: 5,000 individually embodied residents
-across 30 settlements, with 1,260 occupied cabins, roughly 2,500 staffed
-Farmsteads, physical fields, work states, household purses/pantries, business
-accounts/payroll, wallets, inventories, homes, work routines and two combined
-Moot Stewards per settlement. It
-reports average, p50, p95, p99 and maximum time for the main village systems as
-a share of the 16.67 ms 60 Hz budget. It also measures a full 5,000-person daily
-food/market/history boundary, the stable-identity pass, aggregate off-screen
-production and commerce, and a 512-person local movement and bounded route burst.
-The nutrition probe deliberately places all 5,000 people into active recovery
-at once; ordinary healthy residents carry no adjustment component and therefore
-cost less than this reported worst case.
+`cargo village-scale-lab` is a release-only **synthetic subsystem probe**, not a
+complete server tick, an economy soak or a certified population limit. It runs the
+same canonical routines but deliberately isolates their costs:
+
+- record/index probes use a roster of employed farmers waiting indoors;
+- the active production probe stages almost-finished field work outside the timer,
+  then runs real basket completion and business-event posting. It asserts carried
+  Wheat matches the production ledger and personal money is unchanged; removing
+  those test baskets between samples does not model freight or consumption;
+- daily-review samples jump the calendar and refill finite Hall food storage;
+  nutrition samples restage injured residents. These are explicit synthetic inputs;
+- the independent movement fixture spaces residents three metres apart on an
+  authored flat, dry, empty forecourt. It reports the complete cold route-queue
+  drain, then times certified movement plus the crowd index. It includes neither
+  real prop loading nor village door, service, freight or construction contention.
+
+Timing reports include average/p50/p95/p99/max, a fraction of a 60 Hz tick for
+context, actual production counts, cold-queue drain ticks and minimum movement.
+Setup and assertions are outside each timed interval. These measurements cannot
+be added together to estimate full-server throughput.
 
 ```bash
 cargo village-scale-lab
-
-# Optional fixture controls.
-FISTWORLD_SCALE_NPCS=10000 \
-FISTWORLD_SCALE_TOWNS=60 \
-FISTWORLD_SCALE_TACTICAL_NPCS=1000 \
-FISTWORLD_SCALE_SAMPLES=120 \
-cargo village-scale-lab
+# Run separately with the same sample count and proportional moving cohorts.
+FISTWORLD_SCALE_NPCS=250 FISTWORLD_SCALE_TOWNS=4 FISTWORLD_SCALE_MOVING_NPCS=125 cargo village-scale-lab
+FISTWORLD_SCALE_NPCS=1000 FISTWORLD_SCALE_TOWNS=8 FISTWORLD_SCALE_MOVING_NPCS=500 cargo village-scale-lab
+FISTWORLD_SCALE_NPCS=5000 FISTWORLD_SCALE_TOWNS=30 FISTWORLD_SCALE_MOVING_NPCS=2500 cargo village-scale-lab
 ```
 
-The probe asserts exact resident recounting, no steady-state entity growth, no
-ambient orders in unobserved regions and complete draining of the route queue.
-It must run in `--release`; debug timings are not performance evidence.
+`FISTWORLD_SCALE_SAMPLES` defaults to 60. The moving cohort defaults to 512,
+capped by the requested population. Run each size without concurrent builds or
+other labs. Measure the actual normal server separately using the headless and
+observation-comparison drivers in [SIMULATION-PARITY.md](SIMULATION-PARITY.md),
+including real clock delivery and path/queue latency before claiming capacity.
+The former aggregate-work probe was removed with that simulation fork.
 
-The scale fixture also runs the same daily business and civic systems used in the world:
-owner wage offers, catch-up arrears, profit levies, strategy/solvency review, civic
-payroll, policy review and company dividends remain once-per-world-day work. Production
-receipts are drained through the same aggregated stable-ID event queue as gameplay.
-Character attributes are three bounded bytes of simulation state; skill
-checks happen when a vacancy is filled and farm training happens only when a
-physical production cycle succeeds, not in a per-NPC decision loop every frame.
+### Canonical subsystem measurement — 2026-09-16
+
+The corrected probes passed at all three sizes, with 60 measured samples and no
+concurrent game/build workload. Artifacts are
+`logs/canonical-world-scale-{250,1000,5000}-final.log`.
+
+| People | Moving cohort | Selected village systems p95 | Physical movement p95 | Cold route queue drain |
+|---:|---:|---:|---:|---:|
+| 250 | 125 | 0.266 ms | 0.039 ms | 8 ticks / 0.133 s |
+| 1,000 | 500 | 16.107 ms | 0.129 ms | 32 ticks / 0.533 s |
+| 5,000 | 2,500 | 34.725 ms | 0.638 ms | 157 ticks / 2.617 s |
+
+Every mover advanced at least 3.813 m. Production accounting and retained-worker
+ownership checks passed. These are separate fixtures; queue seconds assume 60 Hz,
+and the movement fixture has clear authored ground, not a crowded live town.
+
+The composed village measurement includes unfinished field migration. Fields start
+at layout version zero; two farms can be fitted per call. The small fixture clears
+that backlog before composed timing, whereas the larger fixtures do not. The
+5,000-person field-only pass reached 49.619 ms maximum. Consequently these rows
+must not be presented as comparable reconciled steady-state costs or supported
+population limits. The composed pass also excludes navigation/movement, freight,
+construction, shipping, immigration, wildlife, combat, collider streaming and
+networking; its 34.725 ms p95 already exceeds a 16.67 ms tick budget.
+
+The next profiling boundary is field fitting versus worker assignment inside the
+composed pass. Local spatial indexes and retained, change-driven fitting work must
+preserve acceptance order, land claims and occupied-fence safety. Measure both the
+backlog and fully reconciled state, then normal growing-world ticks; do not regain
+speed by restoring a different unobserved simulation.
+
+**Historical measurement — superseded simulation model.** The following dated
+numbers measured the retired aggregate/physical design and do not certify the
+current canonical world simulation, balance, camera parity or sustainable tick rate.
 
 Reference 60-sample measurement on the 10-core Apple Silicon development
 machine on 2026-08-05:
@@ -1262,17 +1398,12 @@ machine on 2026-08-05:
 - the test reported 217.9 MiB RSS after constructing 16,384 ECS entities and
   284.2 MiB after the measurements, with no entity growth.
 
-These are machine-specific reference numbers, not pass/fail thresholds; the
-invariants and the emitted distribution are the durable regression evidence.
-
-This is not a claim that 5,000 simultaneously visible characters are shippable.
-The probe excludes rendering, replication, loaded prop collision and a genuine
-crowd fighting over routes. Distant residents remain durable ECS identity,
-money, household and employment records, but shed routes, door choreography and
-trade phases; production and commerce run in aggregate. Armies, battles and
-travelling parties still need their own promotion contracts. The result says the
-current village calculations have comfortable headroom and gives those future
-seams a repeatable regression target.
+The old probe excluded rendering, replication, loaded prop collision and genuine
+world-wide route/queue contention. It cannot certify that thousands of people can
+now navigate, work, shop and build together at 60 Hz. Fresh isolated timing must
+record clock delivery, latency/backlog and memory as well as average tick cost.
+See [SIMULATION-PARITY.md](SIMULATION-PARITY.md) for normal headless and matched
+observation acceptance; old soaks are not balance acceptance for the new source.
 
 ## Inspect the empty map
 

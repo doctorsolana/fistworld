@@ -1,7 +1,7 @@
 //! Opt-in connected tavern inspection: ordinary people, doors, payment and routes.
 //! Start both processes with FISTWORLD_TAVERN_REVIEW=1 on village_lab.
 use super::*;
-use lightyear::prelude::{server::ClientOf, NetworkTarget, Replicate};
+use lightyear::prelude::{NetworkTarget, Replicate, server::ClientOf};
 use shared::components::{BuildingOf, EmployedAt, Occupation, OwnedBy, PersonId, ResidentOf};
 
 pub(crate) fn stage_tavern_review(
@@ -21,7 +21,7 @@ pub(crate) fn stage_tavern_review(
     }
     if registry
         .get(shared::region::RegionCoord::from_world_pos(Vec3::ZERO))
-        .is_none_or(|region| region.sim_level != shared::region::SimLevel::Tactical)
+        .is_none_or(|region| region.observers == 0)
     {
         return;
     }

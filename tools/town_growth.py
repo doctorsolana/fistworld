@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SMALL_PROFILES = ("low", "steady", "burst")
 CITY_PROFILES = tuple(f"city-{population}-{pace}" for population in (100, 250, 500)
                       for pace in ("gradual", "surge"))
-PROFILES = SMALL_PROFILES + ("inland-boats",) + CITY_PROFILES
+PROFILES = SMALL_PROFILES + ("closed-32", "inland-boats") + CITY_PROFILES
 DATA_MARKER = "__TOWN_GROWTH_DATA__"
 
 
@@ -72,6 +72,8 @@ def case_environment(base: dict[str, str], seed: int, profile: str,
         "FISTWORLD_TOWN_WARP": str(warp),
         "CARGO_TERM_COLOR": "never",
     })
+    if profile == "closed-32":
+        environment["FISTWORLD_NATURAL_IMMIGRATION"] = "0"
     return environment
 
 
@@ -201,7 +203,7 @@ def summarize_growth(snapshots: list[dict], profile: str) -> dict:
         return {}
     last = snapshots[-1]
     target = int(profile.split("-")[1]) if profile in CITY_PROFILES else {
-        "low": 14, "steady": 29, "burst": 32, "inland-boats": 65,
+        "low": 14, "steady": 29, "burst": 32, "closed-32": 32, "inland-boats": 65,
     }.get(profile)
     residents = [frame["metrics"].get("residents", 0) for frame in snapshots]
     complete = [frame["metrics"].get("completed_buildings", 0) for frame in snapshots]
@@ -224,6 +226,10 @@ def summarize_growth(snapshots: list[dict], profile: str) -> dict:
                                     "tier": state[0], "gate": state[1]})
                 previous[identity] = state
     return {
+        "first_housed_commercial_base_day": next((frame["day"] for frame in snapshots
+            if frame["metrics"].get("housed", 0) >= 24
+            and any(town["development"].get("evidence", {}).get("operating_business_types", 0) >= 2
+                    for town in frame["settlements"])), None),
         "offered_population_target": target,
         "population_target_reached": target is not None and max(residents) >= target,
         "peak_residents": max(residents),
@@ -318,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seeds", type=seed_list, default=[23, 41, 77])
     parser.add_argument("--profiles", type=profile_list, default=list(SMALL_PROFILES))
     parser.add_argument("--minutes", type=positive_number,
-                        help="simulated minutes per case (default 240; 720 for inland-boats; 1440 when any city profile is selected)")
+                        help="simulated minutes per case (default 240; 720 for inland-boats; 1440 for closed-32 or any city profile)")
     parser.add_argument("--snapshot-minutes", type=positive_number, default=20.0)
     parser.add_argument("--warp", type=positive_number, default=25.0)
     parser.add_argument("--timeout", type=positive_number,
@@ -330,9 +336,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     large_profiles = any(profile in CITY_PROFILES for profile in args.profiles)
     if args.minutes is None:
-        args.minutes = 1440.0 if large_profiles else (720.0 if "inland-boats" in args.profiles else 240.0)
+        args.minutes = 1440.0 if large_profiles or "closed-32" in args.profiles else (720.0 if "inland-boats" in args.profiles else 240.0)
     if args.timeout is None:
-        args.timeout = 3600.0 if large_profiles else 1800.0
+        args.timeout = 3600.0 if large_profiles or "closed-32" in args.profiles else 1800.0
     if args.minutes > 2880:
         parser.error("--minutes must be at most 2880")
     if args.warp > 1000:

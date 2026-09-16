@@ -38,7 +38,7 @@ use crate::world::village_roads::{NavigationRouteFailed, NavigationRoutePending,
 /// `MoveTarget` every tick, which is why a conscript used to obey a player
 /// order for exactly one tick before snapping back toward the hall. Removing
 /// the intent excludes the soldier from every decision system at once
-/// (including strategic-LOD demotion, whose sweep requires the intent);
+/// (including autonomous civilian work, which requires the intent);
 /// removing the in-flight routines stops the errand they were mid-way
 /// through; removing employment stops payroll and staffing from re-hiring
 /// them. `tag_villager_intent` is gated on `CommandedBy` so it cannot re-seed
@@ -67,6 +67,7 @@ pub fn discharge_from_village_life(entity: &mut bevy::ecs::system::EntityCommand
             crate::world::village::InternalDeliveryRoutine,
             crate::world::village::HouseholdShoppingRoutine,
             crate::world::village::WorkplaceDoorTransit,
+            crate::world::village::WorkplaceInterior,
             crate::world::village::HomeRoutine,
         )>()
         .remove::<(
@@ -74,9 +75,6 @@ pub fn discharge_from_village_life(entity: &mut bevy::ecs::system::EntityCommand
             crate::world::village::moot_services::MootQueueTicket,
             crate::world::village::moot_services::MootQueueTransit,
             crate::world::village::population::ImmigrationDeparture,
-            crate::world::village::strategic::StrategicPerson,
-            crate::world::village::strategic::StrategicTravel,
-            crate::world::village::strategic::PendingStrategicDemotion,
             PlayerConstructionAssignment,
         )>()
         .remove::<(
@@ -139,8 +137,8 @@ fn ordinal_name(ordinal: u64) -> String {
 mod membership;
 pub use membership::{apply_army_order, handle_army_orders};
 mod response;
-pub use response::{react_to_bombardment, EvadingBombardment};
-pub(crate) use response::{set_stance, DirectedAttack, UnansweredBombardment};
+pub(crate) use response::{DirectedAttack, UnansweredBombardment, set_stance};
+pub use response::{EvadingBombardment, react_to_bombardment};
 
 /// Housekeeping at a slow, fixed cadence: refresh each battalion's replicated
 /// centroid (for LOCATE and the map), and appoint missing standard bearers.

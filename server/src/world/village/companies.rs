@@ -11,9 +11,9 @@ use shared::components::{
     OwnedBy, PersonId, PlayerPermitLedger,
 };
 use shared::economy::{
-    business_working_capital, BusinessDayLedger, BusinessProcurementPolicy, BusinessStrategy,
-    CompanyAccount, CompanyBranchPolicies, CompanyDayLedger, CompanyDecisionHistory,
-    CompanyDecisionReason, CompanyDecisionRecord, CompanyManagementPolicy,
+    BusinessDayLedger, BusinessProcurementPolicy, BusinessStrategy, CompanyAccount,
+    CompanyBranchPolicies, CompanyDayLedger, CompanyDecisionHistory, CompanyDecisionReason,
+    CompanyDecisionRecord, CompanyManagementPolicy, business_working_capital,
 };
 
 /// One authoritative constructor for a legal company. Player incorporation,
@@ -282,6 +282,27 @@ struct CompanyOperatingReading {
     distressed_sites: u16,
 }
 
+fn propagate_company_strategies(
+    changed: &HashMap<CompanyId, BusinessStrategy>,
+    site_policies: &mut Query<(&OperatedBy, &mut BusinessManagementPolicy)>,
+) {
+    if changed.is_empty() {
+        return;
+    }
+    for (operated_by, mut management) in site_policies.iter_mut() {
+        if !management.autopilot {
+            continue;
+        }
+        if let Some(strategy) = changed.get(&operated_by.0).copied() {
+            let reserve_days = strategy.payroll_reserve_days();
+            if management.strategy != strategy || management.payroll_reserve_days != reserve_days {
+                management.strategy = strategy;
+                management.payroll_reserve_days = reserve_days;
+            }
+        }
+    }
+}
+
 /// The appointed Company Master reviews consolidated results at a deliberately
 /// sparse three-day cadence. This is a bounded decision tree over company
 /// aggregates, not a per-NPC/per-frame planner. Player Masters can pause it and
@@ -301,6 +322,16 @@ pub fn review_company_strategies(
     mut site_policies: Query<(&OperatedBy, &mut BusinessManagementPolicy)>,
 ) {
     let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    // Explicit company choices also govern its other automatic sites. Apply
+    // those changes on the same day, even with the executive paused or its
+    // next three-day financial review still pending. Manual sites keep their
+    // local overrides, and unchanged policies do not dirty site replication.
+    let chosen: HashMap<_, _> = companies
+        .iter_mut()
+        .filter(|(_, _, _, policy, _)| policy.is_changed())
+        .map(|(id, _, _, policy, _)| (*id, policy.strategy))
+        .collect();
+    propagate_company_strategies(&chosen, &mut site_policies);
     if *processed_day == Some(day) {
         return;
     }
@@ -358,24 +389,17 @@ pub fn review_company_strategies(
             reading.revenue >= reading.costs.saturating_mul(3).saturating_div(2).max(1);
         let (next, reason) = if reading.liabilities > 0 || reading.distressed_sites > 0 {
             (
-                BusinessStrategy::Cautious,
+                BusinessStrategy::Conservative,
                 CompanyDecisionReason::FinancialStress,
             )
         } else if strongly_profitable && reading.cash > reading.costs.saturating_mul(3) {
-            if master.charm() > master.intelligence().saturating_add(3) {
-                (
-                    BusinessStrategy::HighMargin,
-                    CompanyDecisionReason::StrongMarketPosition,
-                )
-            } else {
-                (
-                    BusinessStrategy::Growth,
-                    CompanyDecisionReason::ProfitableExpansion,
-                )
-            }
+            (
+                BusinessStrategy::Aggressive,
+                CompanyDecisionReason::ProfitableExpansion,
+            )
         } else if profitable && master.charm() >= 18 {
             (
-                BusinessStrategy::Opportunistic,
+                BusinessStrategy::Aggressive,
                 CompanyDecisionReason::StrongMarketPosition,
             )
         } else {
@@ -398,18 +422,7 @@ pub fn review_company_strategies(
             changed.insert(*company_id, next);
         }
     }
-    if changed.is_empty() {
-        return;
-    }
-    for (operated_by, mut management) in site_policies.iter_mut() {
-        if !management.autopilot {
-            continue;
-        }
-        if let Some(strategy) = changed.get(&operated_by.0).copied() {
-            management.strategy = strategy;
-            management.payroll_reserve_days = strategy.payroll_reserve_days();
-        }
-    }
+    propagate_company_strategies(&changed, &mut site_policies);
 }
 
 #[derive(Clone, Copy)]
@@ -477,6 +490,8 @@ pub fn review_company_finance(
     world_time: Query<&WorldTime>,
     mut requests: ResMut<CompanyDividendQueue>,
     mut processed_day: Local<Option<u32>>,
+    employees: Query<&shared::components::EmployedAt>,
+    markets: Query<(&shared::components::SettlementId, &MootMarket), With<Settlement>>,
     mut companies: Query<(
         &CompanyId,
         &CompanyOwnership,
@@ -495,6 +510,7 @@ pub fn review_company_finance(
             Option<&BusinessProcurementPolicy>,
             &BusinessManagementPolicy,
             Option<&BusinessStaffingPolicy>,
+            Option<&shared::components::BuildingOf>,
         )>,
         Query<&mut BusinessAccount>,
     )>,
@@ -511,6 +527,13 @@ pub fn review_company_finance(
         .iter()
         .map(|(entity, id)| (*id, entity))
         .collect();
+    let mut employees_by_site = HashMap::<shared::components::BuildingId, u8>::new();
+    for employment in &employees {
+        let count = employees_by_site.entry(employment.0).or_default();
+        *count = count.saturating_add(1);
+    }
+    let market_by_settlement: HashMap<_, _> =
+        markets.iter().map(|(id, market)| (*id, market)).collect();
     let mut sites_by_company: HashMap<CompanyId, Vec<DividendSite>> = HashMap::new();
     for (
         entity,
@@ -523,6 +546,7 @@ pub fn review_company_finance(
         procurement,
         management,
         staffing,
+        building_of,
     ) in sites.p0().iter()
     {
         let procurement = procurement.copied().unwrap_or_default();
@@ -530,17 +554,26 @@ pub fn review_company_finance(
             .copied()
             .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions()))
             .target_for(building.kind);
+        // A reduction can wait for existing cargo or a threshold crossing.
+        // Those employees still earn wages until the ordinary release pass
+        // ends their job, so dividends must protect their payroll as well.
+        let protected_positions = enabled_positions.max(
+            employees_by_site
+                .get(building_id)
+                .copied()
+                .unwrap_or_default(),
+        );
         let mut stock = [0; Good::COUNT];
         for good in Good::ALL {
             stock[good.index()] = inventory.amount(good);
         }
         let working = business_working_capital(
-            enabled_positions,
+            protected_positions,
             wage,
             management,
             &procurement,
             Some(&stock),
-            None,
+            building_of.and_then(|home| market_by_settlement.get(&home.0).copied()),
         );
         let protected = account
             .wage_arrears
@@ -612,6 +645,35 @@ pub fn review_company_finance(
             continue;
         }
 
+        // Validate the whole transfer before debiting the treasury. Wide
+        // multiplication preserves the cap-table ratio even for large valid
+        // balances; saturating either the ratio or a receiving wallet would
+        // otherwise misallocate or destroy real coin.
+        let mut dividends: Vec<_> = ownership
+            .shares()
+            .iter()
+            .map(|holding| {
+                let amount = (u128::from(wanted) * u128::from(holding.shares)
+                    / u128::from(shared::components::COMPANY_TOTAL_SHARES))
+                    as u64;
+                (people_by_id[&holding.shareholder], amount)
+            })
+            .collect();
+        let allocated: u64 = dividends.iter().map(|(_, amount)| *amount).sum();
+        let Some((_, first_amount)) = dividends.first_mut() else {
+            continue;
+        };
+        // The stable first shareholder receives only whole-penny rounding.
+        *first_amount += wanted - allocated;
+        if dividends.iter().any(|(entity, amount)| {
+            people.p1().get(*entity).map_or(true, |wallet| {
+                wallet.balance().checked_add(*amount).is_none()
+            })
+        }) {
+            // Retain the money and the profit entitlement for a later request;
+            // do not silently redirect one shareholder's share to another.
+            continue;
+        }
         if !company_account.debit(wanted) {
             continue;
         }
@@ -631,28 +693,12 @@ pub fn review_company_finance(
                 account.record_company_dividend(day, distributed);
             }
         }
-        let mut credited = 0u64;
-        for holding in ownership.shares() {
-            let dividend = distributed.saturating_mul(u64::from(holding.shares))
-                / u64::from(shared::components::COMPANY_TOTAL_SHARES);
-            if let Some(entity) = people_by_id.get(&holding.shareholder).copied() {
-                if let Ok(mut wallet) = people.p1().get_mut(entity) {
-                    wallet.credit(dividend);
-                    credited = credited.saturating_add(dividend);
-                }
-            }
-        }
-        // Whole pennies cannot always divide cleanly across 1,000 shares. The
-        // first (stable PersonId-sorted) shareholder receives the remainder.
-        let rounding = distributed.saturating_sub(credited);
-        if rounding > 0 {
-            if let Some(first) = ownership.shares().first() {
-                if let Some(entity) = people_by_id.get(&first.shareholder).copied() {
-                    if let Ok(mut wallet) = people.p1().get_mut(entity) {
-                        wallet.credit(rounding);
-                    }
-                }
-            }
+        for (entity, amount) in dividends {
+            people
+                .p1()
+                .get_mut(entity)
+                .expect("shareholder wallet validated before treasury debit")
+                .credit(amount);
         }
     }
 }
@@ -1028,6 +1074,368 @@ mod tests {
     }
 
     #[test]
+    fn a_large_dividend_preserves_exact_share_ratios_without_product_overflow() {
+        let mut app = App::new();
+        app.init_resource::<CompanyDividendQueue>();
+        app.add_systems(Update, review_company_finance);
+        app.world_mut().spawn(WorldTime::new_default());
+        let company = CompanyId(990);
+        let first_id = PersonId(990);
+        let second_id = PersonId(991);
+        let first = app.world_mut().spawn((first_id, Wallet::new(0))).id();
+        let second = app.world_mut().spawn((second_id, Wallet::new(0))).id();
+        let mut ownership = CompanyOwnership::sole(first_id);
+        assert!(ownership.transfer(first_id, second_id, 400));
+        let payout = u64::MAX / 2;
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                ownership,
+                CompanyAccount {
+                    cash: u64::MAX,
+                    ..default()
+                },
+                CompanyManagementPolicy::default(),
+            ))
+            .id();
+        app.world_mut().spawn(farm_site(
+            company,
+            992,
+            BusinessAccount {
+                gross_revenue: payout,
+                ..default()
+            },
+        ));
+        app.world_mut()
+            .resource_mut::<CompanyDividendQueue>()
+            .request(company);
+        app.update();
+
+        let second_due = (u128::from(payout) * 400 / 1_000) as u64;
+        assert_eq!(
+            app.world().get::<Wallet>(second).unwrap().balance(),
+            second_due
+        );
+        assert_eq!(
+            app.world().get::<Wallet>(first).unwrap().balance(),
+            payout - second_due
+        );
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            u64::MAX - payout
+        );
+        let total = u128::from(app.world().get::<Wallet>(first).unwrap().balance())
+            + u128::from(app.world().get::<Wallet>(second).unwrap().balance())
+            + u128::from(app.world().get::<CompanyAccount>(treasury).unwrap().cash);
+        assert_eq!(total, u128::from(u64::MAX));
+    }
+
+    #[test]
+    fn a_full_shareholder_wallet_keeps_the_whole_dividend_in_the_company() {
+        let mut app = App::new();
+        app.init_resource::<CompanyDividendQueue>();
+        app.add_systems(Update, review_company_finance);
+        app.world_mut().spawn(WorldTime::new_default());
+        let company = CompanyId(994);
+        let first_id = PersonId(994);
+        let second_id = PersonId(995);
+        let first = app
+            .world_mut()
+            .spawn((first_id, Wallet::new(u64::MAX - 1)))
+            .id();
+        let second = app.world_mut().spawn((second_id, Wallet::new(0))).id();
+        let mut ownership = CompanyOwnership::sole(first_id);
+        assert!(ownership.transfer(first_id, second_id, 400));
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                ownership,
+                CompanyAccount {
+                    cash: 2_000,
+                    ..default()
+                },
+                CompanyManagementPolicy::default(),
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn(farm_site(
+                company,
+                996,
+                BusinessAccount {
+                    gross_revenue: 1_000,
+                    ..default()
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<CompanyDividendQueue>()
+            .request(company);
+        app.update();
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            2_000
+        );
+        assert_eq!(
+            app.world()
+                .get::<CompanyAccount>(treasury)
+                .unwrap()
+                .owner_withdrawals,
+            0
+        );
+        assert_eq!(
+            app.world()
+                .get::<BusinessAccount>(site)
+                .unwrap()
+                .owner_withdrawals,
+            0
+        );
+        assert_eq!(
+            app.world().get::<Wallet>(first).unwrap().balance(),
+            u64::MAX - 1
+        );
+        assert_eq!(app.world().get::<Wallet>(second).unwrap().balance(), 0);
+
+        assert!(
+            app.world_mut()
+                .get_mut::<Wallet>(first)
+                .unwrap()
+                .debit(1_000)
+        );
+        app.world_mut()
+            .resource_mut::<CompanyDividendQueue>()
+            .request(company);
+        app.update();
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            1_000
+        );
+        assert_eq!(
+            app.world().get::<Wallet>(first).unwrap().balance(),
+            u64::MAX - 401
+        );
+        assert_eq!(app.world().get::<Wallet>(second).unwrap().balance(), 400);
+    }
+
+    #[test]
+    fn dividends_protect_employees_until_a_deferred_layoff_really_finishes() {
+        let mut app = App::new();
+        app.init_resource::<CompanyDividendQueue>();
+        app.add_systems(Update, review_company_finance);
+        app.world_mut().spawn(WorldTime::new_default());
+        let founder = PersonId(960);
+        let company = CompanyId(961);
+        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 700,
+                    ..default()
+                },
+                CompanyManagementPolicy::default(),
+            ))
+            .id();
+        let mut account = BusinessAccount::default();
+        account.record_sale(0, 2_000, 0, 20);
+        app.world_mut()
+            .spawn(farm_site(company, 962, account))
+            .insert((
+                BusinessStaffingPolicy::new(0),
+                BusinessWagePolicy {
+                    daily_wage: 100,
+                    ..default()
+                },
+            ));
+        let worker = app
+            .world_mut()
+            .spawn(shared::components::EmployedAt(
+                shared::components::BuildingId(962),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<CompanyDividendQueue>()
+            .request(company);
+        app.update();
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            500
+        );
+        assert_eq!(app.world().get::<Wallet>(person).unwrap().balance(), 200);
+
+        // Once cargo/door work is finished, removing the durable employment
+        // releases that payroll reserve on the next explicit dividend request.
+        app.world_mut()
+            .entity_mut(worker)
+            .remove::<shared::components::EmployedAt>();
+        app.world_mut()
+            .resource_mut::<CompanyDividendQueue>()
+            .request(company);
+        app.update();
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            200
+        );
+        assert_eq!(app.world().get::<Wallet>(person).unwrap().balance(), 500);
+    }
+
+    #[test]
+    fn dividends_protect_input_shortfall_at_the_actual_local_quote() {
+        let mut app = App::new();
+        app.init_resource::<CompanyDividendQueue>();
+        app.add_systems(Update, review_company_finance);
+        app.world_mut().spawn(WorldTime::new_default());
+        let founder = PersonId(970);
+        let company = CompanyId(971);
+        let town = shared::components::SettlementId(972);
+        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 1_000,
+                    ..default()
+                },
+                CompanyManagementPolicy::default(),
+            ))
+            .id();
+        let mut market = MootMarket::founding();
+        market.consign(
+            MarketSeller::Business(shared::components::BuildingId(974)),
+            Good::Flour,
+            8,
+            200,
+        );
+        app.world_mut().spawn((
+            town,
+            market,
+            Settlement {
+                name: "Millford".into(),
+                tier: shared::components::SettlementTier::Village,
+                residents: 1,
+                treasury: 0,
+            },
+        ));
+        let mut account = BusinessAccount::default();
+        account.record_sale(0, 2_000, 0, 20);
+        let mut stock = GoodsInventory::new(100);
+        stock.add(Good::Flour, 1);
+        app.world_mut()
+            .spawn(farm_site(company, 973, account))
+            .insert((
+                shared::components::BuildingOf(town),
+                BusinessStaffingPolicy::new(0),
+                stock,
+                BusinessProcurementPolicy::none().with_rule(
+                    Good::Flour,
+                    BusinessInputRule {
+                        enabled: true,
+                        target_units: 4,
+                        ..default()
+                    },
+                ),
+            ));
+        app.world_mut()
+            .resource_mut::<CompanyDividendQueue>()
+            .request(company);
+        app.update();
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            800,
+            "three missing Flour at the live 200-penny quote plus one 200-penny company buffer"
+        );
+        assert_eq!(app.world().get::<Wallet>(person).unwrap().balance(), 200);
+    }
+
+    #[test]
+    fn a_manual_company_choice_reaches_automatic_siblings_on_the_same_day() {
+        let mut app = App::new();
+        app.add_systems(Update, review_company_strategies);
+        app.world_mut().spawn(WorldTime::new_default());
+        let company = CompanyId(980);
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyLeadership {
+                    master: PersonId(980),
+                },
+                CompanyAccount::default(),
+                CompanyManagementPolicy {
+                    autopilot: false,
+                    ..default()
+                },
+                CompanyDecisionHistory::default(),
+            ))
+            .id();
+        let selected = app
+            .world_mut()
+            .spawn(farm_site(company, 981, default()))
+            .id();
+        let sibling = app
+            .world_mut()
+            .spawn(farm_site(company, 982, default()))
+            .id();
+        let manual = app
+            .world_mut()
+            .spawn(farm_site(company, 983, default()))
+            .insert(BusinessManagementPolicy {
+                autopilot: false,
+                ..BusinessManagementPolicy::for_strategy(BusinessStrategy::Conservative)
+            })
+            .id();
+        app.update();
+
+        // The owner command changes the selected site and its company policy.
+        // The executive is paused and has already reviewed this exact day.
+        *app.world_mut()
+            .get_mut::<BusinessManagementPolicy>(selected)
+            .unwrap() = BusinessManagementPolicy::for_strategy(BusinessStrategy::Aggressive);
+        {
+            let mut policy = app
+                .world_mut()
+                .get_mut::<CompanyManagementPolicy>(treasury)
+                .unwrap();
+            policy.strategy = BusinessStrategy::Aggressive;
+            policy.payroll_reserve_days = BusinessStrategy::Aggressive.payroll_reserve_days();
+            policy.autopilot = false;
+        }
+        app.update();
+        for site in [selected, sibling] {
+            let management = app.world().get::<BusinessManagementPolicy>(site).unwrap();
+            assert_eq!(management.strategy, BusinessStrategy::Aggressive);
+            assert_eq!(management.payroll_reserve_days, 2);
+        }
+        let override_policy = app.world().get::<BusinessManagementPolicy>(manual).unwrap();
+        assert_eq!(override_policy.strategy, BusinessStrategy::Conservative);
+        assert_eq!(override_policy.payroll_reserve_days, 5);
+        assert!(!override_policy.autopilot);
+        assert!(
+            app.world()
+                .get::<CompanyDecisionHistory>(treasury)
+                .unwrap()
+                .entries()
+                .is_empty()
+        );
+
+        app.world_mut().clear_trackers();
+        app.update();
+        assert!(
+            !app.world_mut()
+                .query_filtered::<Entity, Changed<BusinessManagementPolicy>>()
+                .iter(app.world())
+                .any(|entity| [selected, sibling, manual].contains(&entity)),
+            "an unchanged company choice must not dirty its site policies"
+        );
+    }
+
+    #[test]
     fn appointed_master_changes_strategy_from_consolidated_books() {
         let mut app = App::new();
         app.add_systems(Update, review_company_strategies);
@@ -1067,14 +1475,14 @@ mod tests {
                 .get::<CompanyManagementPolicy>(company_entity)
                 .unwrap()
                 .strategy,
-            BusinessStrategy::HighMargin
+            BusinessStrategy::Aggressive
         );
         assert_eq!(
             app.world()
                 .get::<BusinessManagementPolicy>(site)
                 .unwrap()
                 .strategy,
-            BusinessStrategy::HighMargin
+            BusinessStrategy::Aggressive
         );
         let history = app
             .world()

@@ -113,6 +113,7 @@ pub fn shoot_bows(
             With<BowEquipped>,
             Without<OfflineHero>,
             Without<AboardBoat>,
+            Without<shared::components::AboardShip>,
             // Mounted bow combat is not implemented. This also keeps the
             // mounted collision poses disjoint from mutable archer facing.
             Without<Mounted>,

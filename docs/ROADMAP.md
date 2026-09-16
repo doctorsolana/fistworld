@@ -11,13 +11,35 @@ those recommendations do not replace the agreed phases below.
 
 **Ordering principle: risk first.** Phases are ordered by which unknown, discovered late,
 would invalidate the most already-built work — not by narrative order. The big reordering
-against the old lists: the promotion/demotion seam moves from position 4 to position 2, and
-flow-field pathfinding moves from position 3 to position 6. Reasons in each phase.
+against the old lists brought observation invariance forward to Phase 2 and
+flow-field pathfinding to Phase 6. Phase 2 now validates one execution model, not two.
 
 **Every phase ends in something a player can do.** A phase whose only output is
 infrastructure is a phase that cannot be tested.
 
 ---
+
+Implemented 2026-09-15: bid-band demand, company-funded wage competition, import-aware
+processor entry, viable takeover review, adaptive merchant/freight offers, staged
+household necessities and budgeted emergency relief. Earned private wages stay attached
+to the worker through job changes, liquidation and takeover. Families, clothing and
+recurring housing maintenance remain outside this pass. These implementation boundaries
+do not establish long-run balance; multi-seed economic tuning remains open.
+
+Implemented 2026-09-15: retained sliced boat/arrival searches, shared bounded regional
+land routes, delivery-evidenced paid dirt connections and short physically supplied bridges.
+[REGIONAL-TRAVEL.md](REGIONAL-TRAVEL.md) records exact scope and bounded scheduling.
+Public Town/City ports and company-owned Coaster/Cog construction and maritime
+Buy/Sell routes now have a first implemented slice: real materials, finite wages,
+warehouse crew, hull clearance and one shared town market. Iron production, naval
+combat, strategic caravan parties and measured large-world acceptance remain separate.
+
+Implementation decision **2026-09-16**: one canonical world simulation replaces
+camera-driven strategic/physical execution. All people retain actual work, travel,
+cargo, needs and service ownership everywhere. Region interest and rendering LOD
+remain separate. Earlier aggregate benchmarks and parity checkmarks below are
+historical unless explicitly revised; they do not certify current balance or scale.
+[SIMULATION-PARITY.md](SIMULATION-PARITY.md) owns the pending acceptance inventory.
 
 ## Status at a glance
 
@@ -31,7 +53,7 @@ Stables, horse acquisition and charge momentum remain future work. See
 |---|---|---|---|
 | 0 | Let me in | M | non-dev arrival, a seeded inhabited opening and session reconnect are live |
 | 1 | The world remembers | L | in progress — stable identity, settlement directory, founding, picking and panels are live; world-state persistence is not |
-| 2 | The seam | L | in progress — ordinary villagers now demote to aggregate strategic work; the traveller/army promotion contract is not built |
+| 2 | Observation invariance | L | canonical routines implemented; full matched world acceptance and measured scale remain pending |
 | 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village → Town are live; City is deferred; births and decline are not |
 | 4 | Prices and the hand cart | M | in progress — player trading, companies, Storage Halls, porter carts and inter-town cargo are live; a personally purchasable hand cart and restart durability remain |
 | 5 | Caravans | L | in progress — civic contracts, player timetables and bounded NPC merchant trials are live; strategic parties, escorts and interception remain |
@@ -58,12 +80,11 @@ same-process reconnects. See [NEW-WORLD.md](NEW-WORLD.md).
 - [x] Clamp client-supplied `view_radius` (was a one-message remote OOM)
 - [x] Keep Docker workspace stubs aligned with non-server workspace members
 - [x] Copy map assets into the image (server panicked at boot without them)
-- [x] Decouple the strategic tick rate from time warp (ran 60x/sec at 100x warp)
+- [x] Retire the independent strategic tick; all gameplay uses shared simulation time.
 - [x] Add a release-only 5,000-resident / 30-settlement scale lab and remove
       unchanged household, field and work-routine reconciliation from the hot
-      path. The current village bundle is within one 60 Hz tick on the reference
-      machine; Phase 2 now also compresses ordinary off-screen villagers, while
-      traveller and army promotion remain separate work.
+      path. Its old aggregate timing is historical; remeasure complete canonical
+      navigation, needs and work before claiming a sustainable world size.
 - [x] Fix the interest cache that could never hit (~4k-entry set rebuilt at 60Hz per client)
 - [x] Stop replicating the whole world to connected-but-unnamed clients
 - [x] Retain heroes, personal cargo/coin and account-keyed retinues across disconnects to
@@ -292,16 +313,9 @@ results establish their original fixtures, not every later balance revision.
       households fade warm emissive panes and tight window-anchored light pools
       after dark, derived from the cabin's own replicated roster; empty cabins
       and daylight stay dark.
-- [x] Cheap ambient life for unemployed or unhoused residents. Only observed
-      tactical regions receive deterministic walking/resting orders; villagers
-      reuse the bounded road route queue, sit on collision-checked path verges,
-      and use the authored seated loop. Stable per-person world-time deadlines
-      and cached gathering geometry keep cost independent of frame rate and warp
-      without synchronized crowd batches;
-      unobserved regions receive no ambient movement work. Ordinary residents
-      now demote to durable strategic records, while an existing personal journey
-      keeps a cheap route cursor and resumes losslessly on promotion; regional
-      traveller and army round trips remain Phase 2 work.
+- [x] Ambient life for unemployed or unhoused residents in every town. Personal
+      deadlines and cached gathering geometry feed bounded ordinary navigation.
+      Observation no longer suppresses movement, rest or night shelter.
 - [x] Builder-made local paths. The person who finishes a building surveys from
       its authored door to the closest existing village path (or hall door),
       visibly builds the route in sections, pauses for their household at night,
@@ -373,10 +387,11 @@ results establish their original fixtures, not every later balance revision.
       price and wisdom rather than legality. Marketplace/Tavern unlock at Village
       and Church at Town, with real private permit prices alongside public works.
 - [x] Explicit Poor Relief policy. `Off` settlements let insolvent residents
-      go hungry; `Surplus Only` settlements buy their ration from public treasury coin
-      only when recent production covers the population and the purchase leaves
-      their enacted food-reserve target intact, while both Moot stock and funds last. The panel
-      and encyclopedia expose it.
+      go hungry; `Emergency Budget` settlements may buy one real ready meal per unfed
+      resident from at most one third of discretionary treasury cash after public
+      wage claims and payroll reserves. The purchase still needs physical stock and
+      money; a production-history or surplus-stock veto no longer blocks emergency
+      food. The panel and encyclopedia expose the policy.
 - [x] Full civic policy charter. Balanced foundations enact a 5% market fee, 10%
       positive-profit levy, three food-reserve days, seven payroll-reserve days,
       Balanced staffing and a demand-only business-permit subsidy. Essential/Balanced/Full
@@ -427,45 +442,29 @@ them; clicking one opens a panel with real data.
 
 ---
 
-## Phase 2 — The seam
+## Phase 2 — Observation invariance
 
-**Playable:** watch a traveller cross the map as an icon, zoom in and see it become a
-person walking real terrain around a bay, zoom out and see it lose nothing.
+**Playable:** watch a town grow or a carrier cross the world, move the camera away,
+return later and find the same people continuing the same actual activities.
 
-ARCHITECTURE's own closing line says step 4 "is where the design actually gets tested, so
-do not leave it until last" — and then the old build order stacked four phases of economy
-on top of a seam it never validated. This phase pulls it forward and tests it on the
-cheapest entity that has one.
+The former aggregate economy and promotion/demotion seam are retired. Every person
+uses the same bounded movement, job, cargo, need and service systems. Interest only
+changes what a client receives. No formula-vs-physical arrival-time substitute is planned.
 
-The insight that makes it cheap: **the first formula-vs-observed test needs no combat.**
-Use *arrival time*. A strategic leg is interpolation along a graph edge; a promoted leg
-walks real terrain around obstacles. If tactical travel is systematically slower, players
-learn to look away at the right moment — that is the look-away exploit, falsifiable with
-one entity and zero combat code.
+- [x] Remove camera-driven actor simulation levels, progress stripping and aggregate work.
+- [x] Route every civic/private builder and carrier through ordinary movement and actual arrival.
+- [x] Remove observer-specific ambient/wildlife activation and collider camera anchors.
+- [ ] Record the complete workspace suite against the canonical integration.
+- [ ] Run the normal no-client small-Frontier world: actual homes/businesses, production,
+      meals, physical immigration and exact money including recorded newcomer endowments.
+- [ ] Run equal-opening observed/unobserved/alternating-interest scenarios; compare
+      jobs, cargo, work, needs, financial events and travel timing without adding consumers.
+- [ ] Repeat material flows, pauses, shift boundaries and encounters at 1× and 25×.
+- [ ] Measure full-world tick distribution, clock delivery, queues, memory and sustained growth.
 
-The first half of this seam is now exercised by ordinary villagers: outside tactical
-regions they retain durable identity, household, wallet and employment state, shed tactical
-pathfinding and animation phases, and contribute through aggregate workplace production and
-Moot commerce. A journey already in progress keeps its waypoint cursor, advances at 1 Hz,
-and restores the exact remaining route when observed again. This proves the scheduling,
-state-shedding and individual resident travel mechanism, but it does not satisfy the
-regional traveller/army round-trip or formula-vs-observed arrival-time contract below.
-
-- [ ] One strategic traveller entity: position, route, ETA
-- [ ] Promotion: strategic entity to a real walking body, deterministic from strategic state
-- [ ] Demotion: back to numbers, losing nothing
-- [ ] Hysteresis on the transition (promote and demote at different thresholds)
-- [ ] Round-trip test: promote, demote, promote again — state must be identical
-- [ ] **Arrival-time agreement test:** N runs formula-only vs N runs observed; the
-      distributions must overlap
-- [ ] Regional traveller traversability and arrival-time agreement. Existing tactical
-      land movement already validates water, slope and obstacles; individual Hero swimming
-      and vessel navigation have separate explicit rules.
-- [ ] A scripted second client that can CHOOSE whether to observe, so the look-away exploit
-      is testable at all
-
-**Exit:** the promotion contract is enforced by tests, and observing a traveller does not
-change when it arrives.
+**Exit:** observation does not change game rules or outcomes within documented movement
+sampling tolerance, and a supported world size is established by real isolated measurements.
+Old aggregate soaks are not this acceptance. See [SIMULATION-PARITY.md](SIMULATION-PARITY.md).
 
 ---
 
@@ -473,9 +472,9 @@ change when it arrives.
 
 **Playable:** watch a meadows village outgrow a moor one; starve a hamlet down to Ruins.
 
-The strategic tick now advances aggregate off-screen workplace production, Moot Steward commerce
-and household purchasing. Tactical villagers retain the visible per-trip loops; unobserved
-ordinary residents shed paths, door choreography and work-animation phases.
+Workplace production, Moot Steward commerce and household purchasing use the same
+physical per-trip loops everywhere. Unobserved residents retain their routes, doorway
+choreography, work progress, cargo and service commitments.
 
 - [x] Work slots on built plots, and people filling them
 - [x] One quality-scaled observed Wood loop from a filled Lumberjack Hut slot
@@ -499,13 +498,12 @@ ordinary residents shed paths, door choreography and work-animation phases.
       occupied housing, operating commerce and civic construction. Qualification
       uses two of the last three dated observations, independent of temporary hunger.
       The enacted gates are 12 residents for Village and 30 for Town; City is a future rung.
-- [x] Reconcile observed per-trip production with the distant strategic tick. Both use the
-      same quality-scaled rates, worker counts, one-field/two-field Farmstead capacity,
-      storage limits, sale policy and market transaction code.
+- [x] Use one production executor everywhere, preserving quality, staffing, accepted field
+      area, work/carry phases, storage and sale policy. End-to-end parity remains Phase 2 acceptance.
 - [x] Filled-slot processing businesses: Windmills transform Wheat to Flour and
       Bakeries transform Flour to Bread only while a real employee is working.
       Both use bounded inventories, private input procurement, wages, prices,
-      solvency, Moot Steward transport and strategic/tactical parity.
+      solvency and physical Moot Steward transport regardless of observation.
 - [x] Starvation mortality as a real roster event: people have 100 Health; missed meals
       progressively lower the safe ceiling, with direct lethal starvation beginning
       after ten consecutive misses. Eating restores the ceiling and permits gradual
@@ -523,11 +521,10 @@ ordinary residents shed paths, door choreography and work-animation phases.
       only the last needs destruction, deliberate razing, or long physical decay.
       Destroying the hall alone must not erase a populated town.
 - [ ] Stagger economy work per settlement (30-60s) rather than sweeping every region
-- [x] Measure the tick at full world scale and write the real numbers into ARCHITECTURE.
-      `cargo village-scale-lab` holds 5,000 NPCs in 30 towns and fails on entity/route growth.
-- [x] **Make current strategic production warp-invariant.** `SimulationDelta` captures the
-      master speed once, and strategic trades integrate exact elapsed work-shift overlap,
-      so a 100x step cannot skip dawn, shift end or a whole short work window.
+- [ ] Remeasure canonical world-scale cost. Earlier 5,000-person aggregate measurements
+      are historical; synthetic subsystem probes alone do not certify real route contention.
+- [x] `SimulationDelta` captures the shared speed once and ordinary work schedules handle
+      shift overlap. Full high-warp physical lifecycle acceptance remains Phase 2 work.
 - [ ] Decide a sub-step policy before adding future nonlinear population or disease models;
       the current linear production, commerce and daily boundaries do not need one.
 - [ ] **Decide who may warp.** `TimeWarp` is a single replicated global set by a dev
@@ -553,7 +550,7 @@ sell it dear. The M&B opening hour.
       stable identity, pays only on customer purchase and sends its fee to the treasury.
 - [x] Real business accounting: contributed capital, gross revenue, wage/input/fee
       expenses, liabilities, retained profit and bounded shareholder distributions.
-- [x] NPC owner autopilot with Balanced, Growth, High-Margin, Cautious and Opportunistic
+- [x] NPC owner autopilot with Aggressive, Balanced and Conservative
       strategies, bounded daily repricing, adaptive wages, personal rescue capital and
       durable new/cash-tight/distressed/insolvent/liquidating/for-sale states.
 - [x] Business working-capital protection covers strategy-defined payroll, planned inputs,
@@ -599,7 +596,7 @@ sell it dear. The M&B opening hour.
       changing issued shares or company cash; majority holders can appoint the Master.
 - [x] Same-company vertical integration: per-input `PreferOwned`, `CheapestAvailable` and
       `OwnedOnly` sourcing, public-surplus reservation, tactical door-to-door Moot Steward
-      carriage, strategic parity, one-penny-per-bulk civic delivery fees and elimination of
+      carriage everywhere, one-penny-per-bulk civic delivery fees and elimination of
       equal internal site memoranda from company profit.
 - [x] Settlement-local company logistics: one global treasury but independent physical branch
       inventory, absolute per-good retain/sell rules, finite 2,400-bulk Storage Halls and up to
@@ -608,9 +605,10 @@ sell it dear. The M&B opening hour.
 - [x] Operator staffing targets: every private site exposes zero through its physical position
       maximum, vacancy matching obeys the target, and a porter finishes an active shipment before
       the closing position releases them.
-- [x] Marginal automatic operations: one daily indexed review budgets output from sales,
-      unavailable demand and stock, adds/releases at most one position, caps processor input
-      procurement to that budget, and drives both tactical and strategic production.
+- [x] Marginal automatic staffing: one daily indexed review forecasts sellable output from sales,
+      funded demand and stock, and adds/releases at most one position. The forecast guides
+      staffing and investment only. Workers everywhere continue their shift
+      subject to actual resources, inputs and storage; procurement has no forecast quota.
 - [x] Recoverable capacity and logistics investment: unwanted solvent sites mothball/reopen;
       idle, mothballed, liquidating and for-sale plant suppresses duplicate permits; depot
       opportunities use stranded value, recent cart throughput, free bulk and porter cost.
@@ -643,12 +641,12 @@ Cargo rides the seam proven in Phase 2, so this phase adds economics, not archit
       (proved first with civic Stone; Phase 5 adds merchant risk and the regional graph)
 - [x] Player-authored two-to-eight-stop merchant timetable with physical Buy/Load/Sell/Unload,
       company cash risk, public consignment settlement and manual/repeating service
-- [ ] A TRAVERSABLE BASE GRAPH first: rough cross-country routes between
-      settlements, so "roads emerge from traffic" is not circular -- traffic
-      cannot wear a path along a route it cannot take.
-- [ ] Cached routes over it, one per origin/destination pair, shared by everyone
-      travelling it. Traffic UPGRADES a route (track -> trail -> road) rather
-      than creating connectivity.
+- [x] Bounded shared cross-country route searches and exact certified-route reuse
+      for embodied inter-town carriers. Their actual delivered journeys provide a
+      traversable starting corridor for regional investment.
+- [x] Delivery-evidenced regional dirt roads and short bridges, surveyed in small
+      sections, paid from protected treasury cash and built by a real worker.
+      This does not complete the future strategic caravan-party graph.
 - [ ] Positions DERIVED from `(route, departed_at, speed, now)` rather than
       stepped, so an unobserved traveller costs nothing per tick and still has a
       minimap position at all times.
@@ -722,10 +720,9 @@ border without a battle.
 - [ ] `Settlement.owner`, and territory DERIVED from it (never stored, never saved)
 - [ ] Influence propagation over the region graph, recomputed on events under a budget
 - [ ] Political tint overlay at map zoom
-- [ ] **Emergent roads — resolve the invariant conflict first.** Roads-from-traffic as
-      written would write flatten strokes into the map recipe, which the determinism
-      boundary forbids. Resolution: roads modify travel cost and surface paint, never
-      heights.
+- [x] **Paid roads from actual traffic without recipe mutation.** Regional dirt paths
+      change travel cost and surface paint; completed bridge decks add explicit traversable
+      structures. Wider trade/influence feedback remains part of this phase.
 - [ ] NPC clan AI on one-step goals per disposition
 
 **Exit:** the map is coloured by who holds what, and trade visibly moves borders.
@@ -791,5 +788,5 @@ Town, and immigration targets are offered people rather than guaranteed growth.
 
 Residential wards, reserved central public space and paid defenses extend actual
 accepted building history. Open gateways support civic traffic; closing, siege
-destruction and aggregate off-screen wall building remain future work. See
+destruction remains future work. Offscreen wall construction uses the same physical worker lifecycle. See
 [TOWN-GROWTH-LAB.md](TOWN-GROWTH-LAB.md) and [FORTIFICATIONS.md](FORTIFICATIONS.md).

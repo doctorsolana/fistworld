@@ -1,4 +1,4 @@
-//! Observation-budgeted ambient behavior; no offscreen pathfinding or ticking rigs.
+//! Authoritative wildlife behavior, independent of camera and client presence.
 use super::*;
 use crate::world::simulation_time::SimulationTime;
 use bevy::ecs::system::SystemState;
@@ -7,76 +7,31 @@ use shared::worldgen::splitmix64;
 use shared::{components::*, region::RegionCoord, terrain::WorldTerrain};
 
 #[derive(Default)]
-pub struct ObservationScratch {
-    elapsed: f32,
-    observers: Vec<Vec3>,
-    candidates: Vec<(Entity, f32, u64)>,
-}
-
-pub fn update_observation(
-    mut commands: Commands,
-    time: SimulationTime,
-    players: Query<&PlayerPosition, With<Player>>,
-    horses: Query<(Entity, &Horse, &PlayerPosition, Has<ActiveWildHorse>)>,
-    clocks: Query<&WorldTime>,
-    mut scratch: Local<ObservationScratch>,
-) {
-    scratch.elapsed += time.real_seconds();
-    if scratch.elapsed < 0.5 {
-        return;
-    }
-    scratch.elapsed = 0.0;
-    scratch.observers.clear();
-    scratch.observers.extend(players.iter().map(|p| p.0));
-    scratch.candidates.clear();
-    for (e, horse, at, active) in &horses {
-        if horse.rider.is_some() {
-            continue;
-        }
-        let distance = scratch
-            .observers
-            .iter()
-            .map(|p| p.xz().distance_squared(at.0.xz()))
-            .fold(f32::INFINITY, f32::min);
-        let radius = OBSERVATION_RADIUS + if active { 25.0 } else { 0.0 };
-        if distance <= radius * radius {
-            scratch.candidates.push((e, distance, horse.id));
-        }
-    }
-    scratch
-        .candidates
-        .sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.2.cmp(&b.2)));
-    scratch.candidates.truncate(MAX_ACTIVE_HORSES);
-    let now = clocks.iter().next().map_or(0., |c| {
-        f64::from(c.day) * f64::from(c.cycle_duration()) + f64::from(c.seconds_in_cycle)
-    });
-    for (e, horse, _, active) in &horses {
-        let wanted = scratch.candidates.iter().any(|candidate| candidate.0 == e);
-        if wanted && !active {
-            commands.entity(e).insert(ActiveWildHorse);
-        }
-        if !wanted && active {
-            commands.entity(e).remove::<ActiveWildHorse>();
-            // Keep the exact ground position. Demotion only clears velocity;
-            // it never invents a replacement horse or teleports an old one.
-            if horse.rider.is_none() {
-                commands.entity(e).insert((
-                    CharacterMotion::STATIONARY,
-                    HorseAnimation {
-                        activity: HorseActivity::Graze,
-                        since: now,
-                    },
-                ));
-            }
-        }
-    }
-}
-
-#[derive(Default)]
 pub struct WildlifeScratch {
     time: Option<SystemState<SimulationTime<'static, 'static>>>,
     actors: Vec<(Entity, u64, Vec3)>,
     bodies: Vec<(Entity, Vec2)>,
+}
+
+/// A grazing step may straddle a chunk boundary. Missing blockers mean wait,
+/// not clear ground; retain the same decision and destination until ready.
+fn blockers_ready(world: &World, from: Vec3, to: Vec3) -> bool {
+    let Some(colliders) = world.get_resource::<crate::collision::library::StaticColliders>() else {
+        return true;
+    };
+    let min = shared::terrain::ChunkCoord::from_world_pos(
+        from.min(to) - Vec3::new(HORSE_CLEARANCE, 0., HORSE_CLEARANCE),
+    );
+    let max = shared::terrain::ChunkCoord::from_world_pos(
+        from.max(to) + Vec3::new(HORSE_CLEARANCE, 0., HORSE_CLEARANCE),
+    );
+    (min.x..=max.x).all(|x| {
+        (min.z..=max.z).all(|z| {
+            colliders
+                .loaded_chunks
+                .contains(&shared::terrain::ChunkCoord::new(x, z))
+        })
+    })
 }
 
 pub fn tick(world: &mut World, mut scratch: Local<WildlifeScratch>) {
@@ -88,7 +43,7 @@ pub fn tick(world: &mut World, mut scratch: Local<WildlifeScratch>) {
     scratch.actors.clear();
     scratch.actors.extend(
         world
-            .query_filtered::<(Entity, &Horse, &PlayerPosition), With<ActiveWildHorse>>()
+            .query_filtered::<(Entity, &Horse, &PlayerPosition), With<WildHorse>>()
             .iter(world)
             .filter(|(_, h, _)| h.rider.is_none())
             .map(|(e, h, p)| (e, h.id, p.0)),
@@ -106,8 +61,8 @@ pub fn tick(world: &mut World, mut scratch: Local<WildlifeScratch>) {
     );
     for index in 0..scratch.actors.len() {
         let (entity, id, at) = scratch.actors[index];
-        // Activation asks the existing streamer for local blockers. Wait for
-        // that chunk before taking the first physical step after promotion.
+        // Every wild horse requests a small local blocker footprint. Wait for
+        // its chunk before moving; cameras never control this readiness.
         if world
             .get_resource::<crate::collision::library::StaticColliders>()
             .is_some_and(|c| {
@@ -130,6 +85,9 @@ pub fn tick(world: &mut World, mut scratch: Local<WildlifeScratch>) {
                 world,
                 at + Vec3::new(delta.x, 0., delta.y).normalize_or_zero() * step,
             );
+            if !blockers_ready(world, at, next) {
+                continue;
+            }
             let crowded = scratch.bodies.iter().any(|(other, p)| {
                 *other != entity
                     && shared::components::distance_squared_to_segment(*p, at.xz(), next.xz())
@@ -178,6 +136,9 @@ pub fn tick(world: &mut World, mut scratch: Local<WildlifeScratch>) {
                 let angle = (serial >> 32) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
                 let candidate =
                     grounded(world, home + Vec3::new(angle.cos(), 0., angle.sin()) * 5.0);
+                if !blockers_ready(world, at, candidate) {
+                    continue;
+                }
                 if world
                     .get_resource::<WorldTerrain>()
                     .is_none_or(|t| population::habitat(t, candidate))

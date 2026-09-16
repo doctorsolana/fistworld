@@ -98,6 +98,12 @@ def main():
                 assert seen_progress and seen_project, 'missed the actual qualification/project sequence'
                 assert development['material_required'] == 0
                 save('completed.json', state)
+                # The Hall's rendered model/selection may have changed during
+                # construction. Acquire the current inspector through ordinary
+                # input instead of assuming a nine-day-old selection survives.
+                session.command('view', x=at[0], z=at[2], zoom=48)
+                session.command('left_click', x=at[0], z=at[2])
+                session.wait(lambda s: button(s, 'text:EXPAND'), 'completed Hall inspector')
                 session.command('capture', name='03-completed-village')
                 session.command('button', name='text:EXPAND')
                 session.wait(lambda s: button(s, 'text:Overview'), 'Places overview')

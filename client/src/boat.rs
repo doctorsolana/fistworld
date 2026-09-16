@@ -44,6 +44,7 @@ impl Plugin for BoatPlugin {
                 attach_boat_visuals,
                 sync_boat_transforms,
                 sync_aboard_hero_visuals.after(crate::hero::sync_hero_transforms),
+                sync_company_crew_visuals.after(crate::hero::sync_hero_transforms),
                 tag_boat_sail_nodes,
                 drive_boat_sails,
                 drive_opening_cinematic.after(crate::camera_rts::update_commander_camera),
@@ -55,9 +56,30 @@ impl Plugin for BoatPlugin {
     }
 }
 
+fn sync_company_crew_visuals(
+    ships: Query<(&shared::components::ShipId, &shared::components::CompanyShip, &Transform), Without<shared::components::AboardShip>>,
+    mut sailors: Query<(&shared::components::AboardShip, &mut Transform, &mut crate::hero::HeroVisual), Without<shared::components::CompanyShip>>,
+    mut poses: Local<bevy::platform::collections::HashMap<shared::components::ShipId, Transform>>,
+) {
+    if sailors.is_empty() { return; }
+    poses.clear();
+    for (id, hull, transform) in &ships {
+        let mut pose = *transform;
+        pose.translation = transform.transform_point(Vec3::new(0.0, 0.65, hull.kind.length() * 0.28));
+        poses.insert(*id, pose);
+    }
+    for (aboard, mut transform, mut visual) in &mut sailors {
+        if let Some(pose) = poses.get(&aboard.ship) {
+            transform.translation = pose.translation;
+            transform.rotation = pose.rotation;
+            *visual = crate::hero::HeroVisual::idle();
+        }
+    }
+}
+
 #[derive(Component)]
-struct BoatVisual {
-    snapshot: Vec3,
+pub(crate) struct BoatVisual {
+    pub(crate) snapshot: Vec3,
 }
 
 /// The renderer advances its water clock from local real time. Latching one
@@ -176,18 +198,22 @@ fn sync_boat_transforms(
         Ref<PlayerPosition>,
         &PlayerRotation,
         Has<WreckedVessel>,
+        Option<&shared::components::CompanyShip>,
         &mut Transform,
         &mut BoatVisual,
     )>,
 ) {
     let blend = 1.0 - (-time.delta_secs() / 0.075).exp();
     let ocean_seconds = synchronized_ocean_seconds(&time, &world_time, &mut wave_clock);
-    for (position, rotation, wrecked, mut transform, mut visual) in boats.iter_mut() {
+    for (position, rotation, wrecked, ship, mut transform, mut visual) in boats.iter_mut() {
         if position.is_changed() {
             visual.snapshot = position.0;
         }
-        let (surface_y, buoyancy_rotation) =
-            boat_surface_pose(&terrain, visual.snapshot, rotation.0, ocean_seconds);
+        let (surface_y, buoyancy_rotation) = ship.map_or_else(
+            || boat_surface_pose(&terrain, visual.snapshot, rotation.0, ocean_seconds),
+            |ship| vessel_surface_pose(&terrain, visual.snapshot, rotation.0, ocean_seconds,
+                ship.kind.length() * 0.38, ship.kind.beam() * 0.38),
+        );
         let target_position = Vec3::new(
             visual.snapshot.x,
             surface_y + if wrecked { -0.16 } else { 0.0 },
@@ -242,40 +268,48 @@ fn boat_surface_pose(
     yaw: f32,
     ocean_seconds: f32,
 ) -> (f32, Quat) {
+    vessel_surface_pose(terrain, centre, yaw, ocean_seconds, BUOYANCY_HALF_LENGTH, BUOYANCY_HALF_BEAM)
+}
+
+fn vessel_surface_pose(
+    terrain: &WorldTerrain, centre: Vec3, yaw: f32, ocean_seconds: f32,
+    half_length: f32, half_beam: f32,
+) -> (f32, Quat) {
     let yaw_rotation = Quat::from_rotation_y(yaw);
     let forward = (yaw_rotation * Vec3::NEG_Z).xz().normalize_or_zero();
     let right = (yaw_rotation * Vec3::X).xz().normalize_or_zero();
     let centre_xz = centre.xz();
     let bow = sampled_surface_height(
         terrain,
-        centre_xz + forward * BUOYANCY_HALF_LENGTH,
+        centre_xz + forward * half_length,
         ocean_seconds,
     );
     let stern = sampled_surface_height(
         terrain,
-        centre_xz - forward * BUOYANCY_HALF_LENGTH,
+        centre_xz - forward * half_length,
         ocean_seconds,
     );
     let starboard = sampled_surface_height(
         terrain,
-        centre_xz + right * BUOYANCY_HALF_BEAM,
+        centre_xz + right * half_beam,
         ocean_seconds,
     );
     let port = sampled_surface_height(
         terrain,
-        centre_xz - right * BUOYANCY_HALF_BEAM,
+        centre_xz - right * half_beam,
         ocean_seconds,
     );
     let centre_height = sampled_surface_height(terrain, centre_xz, ocean_seconds);
 
     (
         centre_height,
-        orientation_from_surface_samples(yaw, bow, stern, starboard, port),
+        orientation_from_hull_samples(yaw, bow, stern, starboard, port, half_length, half_beam),
     )
 }
 
 /// Construct an authored-local (+X right, +Y up, -Z bow) orientation from
 /// four water heights. Kept pure so pitch/roll sign regressions are testable.
+#[cfg(test)]
 fn orientation_from_surface_samples(
     yaw: f32,
     bow: f32,
@@ -283,12 +317,19 @@ fn orientation_from_surface_samples(
     starboard: f32,
     port: f32,
 ) -> Quat {
+    orientation_from_hull_samples(yaw, bow, stern, starboard, port, BUOYANCY_HALF_LENGTH, BUOYANCY_HALF_BEAM)
+}
+
+fn orientation_from_hull_samples(
+    yaw: f32, bow: f32, stern: f32, starboard: f32, port: f32,
+    half_length: f32, half_beam: f32,
+) -> Quat {
     let yaw_rotation = Quat::from_rotation_y(yaw);
     let flat_forward = yaw_rotation * Vec3::NEG_Z;
     let flat_right = yaw_rotation * Vec3::X;
     let forward_hint =
-        (flat_forward * (BUOYANCY_HALF_LENGTH * 2.0) + Vec3::Y * (bow - stern)).normalize_or_zero();
-    let right_hint = (flat_right * (BUOYANCY_HALF_BEAM * 2.0) + Vec3::Y * (starboard - port))
+        (flat_forward * (half_length * 2.0) + Vec3::Y * (bow - stern)).normalize_or_zero();
+    let right_hint = (flat_right * (half_beam * 2.0) + Vec3::Y * (starboard - port))
         .normalize_or_zero();
     let up = right_hint.cross(forward_hint).normalize_or_zero();
     let right = forward_hint.cross(up).normalize_or_zero();

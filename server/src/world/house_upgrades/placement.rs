@@ -229,7 +229,7 @@ pub(super) fn expansion_is_occupied(
     let new = target.building_type().definition();
     let mut bodies = world.query_filtered::<&PlayerPosition, (
         Or<(With<CharacterKind>, With<Horse>)>,
-        Without<crate::world::village::strategic::StrategicPerson>,
+        (),
         Without<AboardBoat>,
     )>();
     bodies.iter(world).any(|body| {

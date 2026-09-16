@@ -978,6 +978,7 @@ pub fn plan_requested_roads(
                 settlement: request.settlement,
                 attempt: request.attempt,
                 phase: RoadBuildPhase::GoingTo { point: 0 },
+                resume_work_at: None,
             });
         commands
             .entity(building_entity)
@@ -1071,11 +1072,13 @@ pub fn build_village_roads(
     terrain: Option<Res<WorldTerrain>>,
     mut colliders: Option<ResMut<StaticColliders>>,
     mut commands: Commands,
+    personal_needs: Query<(), crate::world::village::worker_activity::PersonalNeedsOwnMovement>,
     mut roads: Query<(
         &mut VillageRoad,
         &shared::components::RoadOf,
         Option<&RoadConnectorFor>,
         Option<&mut RoadTreeClearancePlan>,
+        Has<crate::world::regional_roads::RegionalRoadSection>,
     )>,
     buildings: Query<
         (
@@ -1099,7 +1102,10 @@ pub fn build_village_roads(
             Option<&HomeRoutine>,
             Option<&NavigationRouteFailed>,
         ),
-        With<CharacterKind>,
+        (
+            With<CharacterKind>,
+            Without<crate::world::regional_roads::bridge::BridgeBuilder>,
+        ),
     >,
 ) {
     let Some(terrain) = terrain else { return };
@@ -1116,10 +1122,23 @@ pub fn build_village_roads(
         route_failed,
     ) in builders.iter_mut()
     {
+        if personal_needs.contains(builder) {
+            if routine.resume_work_at.is_none()
+                && matches!(
+                    routine.phase,
+                    RoadBuildPhase::Working { .. } | RoadBuildPhase::ChoppingTree { .. }
+                )
+            {
+                routine.resume_work_at = Some(position.0.xz());
+            }
+            continue;
+        }
         if home.is_some() {
             continue;
         }
-        let Ok((mut road, road_of, connector, mut clearance)) = roads.get_mut(routine.road) else {
+        let Ok((mut road, road_of, connector, mut clearance, regional)) =
+            roads.get_mut(routine.road)
+        else {
             activity.set_if_neq(CharacterActivity::Idle);
             *intent = VillagerIntent::Resident {
                 settlement: routine.settlement,
@@ -1264,13 +1283,21 @@ pub fn build_village_roads(
                     point,
                     routine.attempt.saturating_add(1)
                 );
-                commands.entity(road_entity).despawn();
+                if regional {
+                    // Paid ground stays in the world. The regional contract
+                    // observes the shortened plan, settles earned work and
+                    // refunds its unspent balance without a building retry.
+                    let built = usize::from(road.built_through).min(road.points.len());
+                    road.points.truncate(built);
+                } else {
+                    commands.entity(road_entity).despawn();
+                }
                 *intent = VillagerIntent::Resident {
                     settlement: routine.settlement,
                 };
                 activity.set_if_neq(CharacterActivity::Idle);
                 commands.entity(builder).remove::<RoadBuilderRoutine>();
-                if next_attempt < MAX_ROAD_SURVEY_ATTEMPTS {
+                if !regional && next_attempt < MAX_ROAD_SURVEY_ATTEMPTS {
                     if let Some(building) = building {
                         commands.entity(building).insert(RoadRequest {
                             builder,
@@ -1279,7 +1306,7 @@ pub fn build_village_roads(
                             attempt: next_attempt,
                         });
                     }
-                } else {
+                } else if !regional {
                     warn!(
                         "Road connector exhausted {} surveys; releasing it to the Road Steward audit",
                         MAX_ROAD_SURVEY_ATTEMPTS
@@ -1381,6 +1408,19 @@ pub fn build_village_roads(
                 RoadBuildPhase::ChoppingTree { .. } | RoadBuildPhase::Working { .. } => {}
             }
             continue;
+        }
+
+        // The timer remains paused throughout the return trip. Preserve the
+        // actual accepted stand: a rejected nominal waypoint may have started
+        // legitimate work from the nearby collision-safe road apron.
+        if let Some(stand) = routine.resume_work_at {
+            let target = Vec3::new(stand.x, terrain.get_height(stand.x, stand.y), stand.y);
+            if ground_distance(position.0, target) > ROAD_REACH {
+                activity.set_if_neq(CharacterActivity::Idle);
+                ensure_move_target(&mut commands, builder, move_target, target);
+                continue;
+            }
+            routine.resume_work_at = None;
         }
 
         match routine.phase {

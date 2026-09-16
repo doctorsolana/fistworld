@@ -11,7 +11,6 @@ use shared::components::{
 };
 
 use crate::world::simulation_time::SimulationTime;
-use crate::world::village::strategic::StrategicPerson;
 
 const SIDE_HYSTERESIS: f32 = 0.3;
 const OBSERVATION_DISTANCE: f32 = 12.0;
@@ -58,7 +57,7 @@ fn gate_side(gate: &FortificationSegment, point: Vec3) -> f32 {
 fn plausible_step(previous: Vec3, current: Vec3, elapsed: f32) -> bool {
     previous.is_finite() && current.is_finite() && elapsed.is_finite() && elapsed > 0.0
         // Twelve m/s includes running/riding without allowing a distant spawn,
-        // route correction or strategic promotion to masquerade as passage.
+        // route correction or a discontinuous relocation to masquerade as passage.
         && previous.distance(current) <= (elapsed * 12.0 + 0.15).min(12.0)
 }
 
@@ -108,10 +107,7 @@ pub fn trace_defense_passages(
     time: SimulationTime,
     mut trace: Local<DefensePassageTrace>,
     gates: Query<(Entity, &FortificationSegment)>,
-    people: Query<
-        (Entity, Option<&PersonId>, &CharacterKind, &PlayerPosition),
-        Without<StrategicPerson>,
-    >,
+    people: Query<(Entity, Option<&PersonId>, &CharacterKind, &PlayerPosition), ()>,
 ) {
     let enabled = *trace.enabled.get_or_insert_with(|| {
         std::env::var("FISTWORLD_LAB_DEFENSE_TRACE").is_ok_and(|value| value == "1")
@@ -186,9 +182,19 @@ pub fn trace_defense_passages(
                     }
                     let total = trace.villager_crossings + trace.hero_crossings;
                     if total <= 24 || total % 32 == 0 || trace.villager_crossings == 1 {
-                        info!("Defense passage: settlement={} circuit={} gate={} actor={:?} kind={:?} direction={} x={:.2} z={:.2} villager_crossings={} hero_crossings={}",
-                            gate.settlement_id.0, gate.circuit, gate_entity.to_bits(), actor, kind, direction,
-                            position.0.x, position.0.z, trace.villager_crossings, trace.hero_crossings);
+                        info!(
+                            "Defense passage: settlement={} circuit={} gate={} actor={:?} kind={:?} direction={} x={:.2} z={:.2} villager_crossings={} hero_crossings={}",
+                            gate.settlement_id.0,
+                            gate.circuit,
+                            gate_entity.to_bits(),
+                            actor,
+                            kind,
+                            direction,
+                            position.0.x,
+                            position.0.z,
+                            trace.villager_crossings,
+                            trace.hero_crossings
+                        );
                     }
                 }
                 let mut next = previous;
@@ -210,9 +216,15 @@ pub fn trace_defense_passages(
     }
     if trace.real_since_report >= 5.0 {
         trace.real_since_report = 0.0;
-        info!("Defense passage totals: gates={} tracked={} villagers={} heroes={} excluded_jumps={} capacity_skips={}",
-            gates.len(), trace.observations.len(), trace.villager_crossings, trace.hero_crossings,
-            trace.excluded_jumps, trace.capacity_skips);
+        info!(
+            "Defense passage totals: gates={} tracked={} villagers={} heroes={} excluded_jumps={} capacity_skips={}",
+            gates.len(),
+            trace.observations.len(),
+            trace.villager_crossings,
+            trace.hero_crossings,
+            trace.excluded_jumps,
+            trace.capacity_skips
+        );
     }
 }
 

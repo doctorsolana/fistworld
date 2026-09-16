@@ -77,7 +77,7 @@ arithmetic remain distinct.
 | Household plot ownership, refitting and boundaries | `server/src/world/household_yards.rs` |
 | Employment and embodied work | `server/src/world/village/employment.rs`, `trades.rs`, `processing.rs` |
 | Company, site and civic accounting | `server/src/world/village/companies.rs`, `businesses/`, `civic.rs` |
-| Offscreen simulation and interest management | `server/src/world/village/strategic.rs`, `server/src/world/regions.rs` |
+| World-wide simulation and separate network interest | `server/src/world/village/schedule.rs`, `server/src/world/regions.rs`; see `docs/SIMULATION-PARITY.md` |
 | Roads, resumable routing and route caches | `server/src/world/village_roads.rs` and `village_roads/` |
 | Building index and navigation obstacles | `server/src/collision/building_index.rs`, `server/src/world/navgrid.rs` |
 

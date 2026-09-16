@@ -92,7 +92,6 @@ impl BusinessEventQueue {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn pending_sale_gross(&self) -> u64 {
         self.events
             .iter()

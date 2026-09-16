@@ -1,6 +1,8 @@
 //! Local body separation with reusable scratch buffers.
 use super::*;
 use std::collections::HashMap;
+#[cfg(test)]
+mod support_tests;
 #[derive(Default)]
 pub struct SeparationScratch {
     participants: Vec<(Entity, Vec2, bool, bool, f32)>,
@@ -79,6 +81,7 @@ mod tests {
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn separate_melee_bodies(
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
+    decks: Option<Res<crate::world::bridges::BridgeDecks>>,
     obstacles: Option<Res<shared::spatial::SpatialObstacleGrid>>,
     colliders: Option<Res<crate::collision::library::StaticColliders>>,
     derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
@@ -107,7 +110,7 @@ pub fn separate_melee_bodies(
             With<CharacterKind>,
             Without<OfflineHero>,
             Without<AboardBoat>,
-            Without<crate::world::village::strategic::StrategicPerson>,
+            Without<shared::components::AboardShip>,
         ),
     >,
 ) {
@@ -257,11 +260,12 @@ pub fn separate_melee_bodies(
                 )
         });
         if (mounted
-            && !crate::player::siege::ground_clear(
+            && !crate::player::siege::ground_clear_with_bridges(
                 current,
                 next,
                 shared::components::HORSE_CLEARANCE,
                 terrain.as_deref(),
+                decks.as_deref(),
                 obstacles.as_deref(),
                 colliders.as_deref(),
                 derived.as_deref(),
@@ -278,10 +282,36 @@ pub fn separate_melee_bodies(
         {
             continue;
         }
-        let y = terrain
-            .as_deref()
-            .map(|terrain| terrain.get_height(next.x, next.y))
-            .unwrap_or(position.0.y);
+        let clearance = if mounted {
+            shared::components::HORSE_CLEARANCE
+        } else {
+            shared::physics::CHARACTER_NAV_RADIUS
+        };
+        let y = if let Some(terrain) = terrain.as_deref() {
+            let on_deck = decks
+                .as_deref()
+                .and_then(|decks| decks.height_at(current, clearance))
+                .is_some();
+            let supported_start =
+                crate::world::bridges::ground_height(terrain, decks.as_deref(), current, clearance);
+            // Separation is another authoritative movement path. It must not
+            // drop bridge fighters to the river bed, push a walker into open
+            // water, or pull a swimmer up through the underside of a deck.
+            if (on_deck && (supported_start - position.0.y).abs() > 0.48)
+                || !crate::world::bridges::segment_walkable(
+                    terrain,
+                    decks.as_deref(),
+                    current,
+                    next,
+                    clearance,
+                )
+            {
+                continue;
+            }
+            crate::world::bridges::ground_height(terrain, decks.as_deref(), next, clearance)
+        } else {
+            position.0.y
+        };
         let next_position = Vec3::new(next.x, y, next.y);
         if position.0 != next_position {
             position.0 = next_position;

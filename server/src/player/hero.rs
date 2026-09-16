@@ -24,9 +24,12 @@ use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::navgrid::VILLAGER_PROP_RADIUS;
 use crate::world::village::MootQueueTicket;
 use crate::world::village_roads::{
-    NavigationObstacleEscape, NavigationRouteFailed, NavigationRoutePending, TravelRoute,
-    VillageRoadGraph, ROAD_SPEED_MULTIPLIER,
+    NavigationObstacleEscape, NavigationRouteBackoff, NavigationRouteFailed,
+    NavigationRoutePending, ROAD_SPEED_MULTIPLIER, TravelRoute, VillageRoadGraph,
 };
+
+#[cfg(test)]
+mod route_backoff_tests;
 
 /// Where a unit is walking, if anywhere.
 ///
@@ -73,23 +76,8 @@ fn crowd_cell(point: Vec2) -> (i32, i32) {
 
 pub fn rebuild_tactical_crowd_grid(
     mut grid: Option<ResMut<TacticalCrowdGrid>>,
-    movers: Query<
-        (),
-        (
-            With<MoveTarget>,
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<crate::world::village::strategic::StrategicPerson>,
-        ),
-    >,
-    people: Query<
-        (Entity, &PlayerPosition),
-        (
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<crate::world::village::strategic::StrategicPerson>,
-        ),
-    >,
+    movers: Query<(), (With<MoveTarget>, With<CharacterKind>, Without<OfflineHero>)>,
+    people: Query<(Entity, &PlayerPosition), (With<CharacterKind>, Without<OfflineHero>)>,
 ) {
     let Some(grid) = grid.as_deref_mut() else {
         return;
@@ -440,6 +428,7 @@ pub fn hero_save(
 /// and an idle hero must generate zero network traffic.
 pub fn step_units(
     mut commands: Commands,
+    decks: Option<Res<crate::world::bridges::BridgeDecks>>,
     terrain: Option<Res<WorldTerrain>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     colliders: Option<Res<StaticColliders>>,
@@ -459,6 +448,25 @@ pub fn step_units(
             With<shared::components::Catapult>,
             With<shared::components::Mounted>,
         )>,
+    >,
+    // Match the route queue's explicit direct-motion exceptions. A stale
+    // civilian backoff cannot acquire a doorway, certified queue/ambient step
+    // or a subsequent combat/player order that now owns movement.
+    automatic_backoffs: Query<
+        &NavigationRouteBackoff,
+        (
+            Without<BuildingDoorUse>,
+            Without<crate::world::village::PierTraversal>,
+            Without<crate::world::village::ambient::AmbientDirectTransit>,
+            Without<CommandedBy>,
+            Without<super::combat::WarParty>,
+            Without<super::combat::fronts::FormationMember>,
+            Without<super::combat::DirectCombatApproach>,
+            Or<(
+                Without<crate::world::village::MootQueueTransit>,
+                Without<MootQueueTicket>,
+            )>,
+        ),
     >,
     mut reported_route_collisions: Local<HashSet<Entity>>,
     // `With<CharacterKind>` is load-bearing, not decoration: the commander
@@ -486,7 +494,6 @@ pub fn step_units(
         (
             Or<(With<CharacterKind>, With<shared::components::Catapult>)>,
             Without<OfflineHero>,
-            Without<crate::world::village::strategic::StrategicPerson>,
         ),
     >,
 ) {
@@ -501,6 +508,7 @@ pub fn step_units(
     let current_geometry_version = crate::world::village_roads::navigation_geometry_version(
         obstacles.as_deref(),
         colliders.as_deref(),
+        decks.as_deref(),
     );
 
     for (
@@ -541,9 +549,19 @@ pub fn step_units(
         // Arrival below clears it along with the MoveTarget.
         let authored_traversal =
             door_use.is_some() || pier_traversal.is_some() || obstacle_escape.is_some();
+        // Removing a reported failure does not certify its rejected path.
+        // The retained backoff still owns admission until the shared retry
+        // installs a replacement route, even when MoveTarget was unchanged.
+        let unresolved_backoff = kind == Some(&CharacterKind::Villager)
+            && automatic_backoffs
+                .get(entity)
+                .is_ok_and(|backoff| backoff.matches(target.0))
+            && !route.as_ref().is_some_and(|route| {
+                route.goal.distance_squared(target.0) <= 0.01 && route.next < route.waypoints.len()
+            });
         if (wide_mover || kind.is_some())
             && !authored_traversal
-            && (pending.is_some() || failed.is_some())
+            && (pending.is_some() || failed.is_some() || unresolved_backoff)
         {
             // A hero can request a tactical detour after meeting a defense.
             // Let that survey finish instead of replacing its pending cursor
@@ -568,6 +586,34 @@ pub fn step_units(
         let mut last_direction = None;
         let mut arrived = false;
         let mut escaping_building = obstacle_escape.is_some();
+        let bridge_height_at = |point: Vec2| {
+            let decks = decks.as_deref()?;
+            let clearance = shared::physics::CHARACTER_NAV_RADIUS;
+            let height = decks.height_at(point, clearance)?;
+            if kind == Some(&CharacterKind::Hero) {
+                // A swimmer below the deck cannot become a walker by taking a
+                // long warped step. Enter only from real supported ground and
+                // a continuous ramp, never through the side of a raised span.
+                let start_height = crate::world::bridges::ground_height(
+                    &terrain,
+                    Some(decks),
+                    start_position.xz(),
+                    clearance,
+                );
+                if (start_height - start_position.y).abs() > 0.48
+                    || !crate::world::bridges::segment_walkable(
+                        &terrain,
+                        Some(decks),
+                        start_position.xz(),
+                        point,
+                        clearance,
+                    )
+                {
+                    return None;
+                }
+            }
+            Some(height)
+        };
 
         // A route is only valid for the MoveTarget it was planned against.
         // Changed targets normally get a replacement earlier in this chained
@@ -626,7 +672,10 @@ pub fn step_units(
                 mounted.gait.speed()
             } else if is_catapult {
                 shared::components::CATAPULT_SPEED
-            } else if kind == Some(&CharacterKind::Hero) && !authored_traversal {
+            } else if kind == Some(&CharacterKind::Hero)
+                && !authored_traversal
+                && bridge_height_at(current).is_none()
+            {
                 super::swimming::speed(
                     &terrain,
                     current,
@@ -655,7 +704,7 @@ pub fn step_units(
                 if !aligned {
                     break;
                 }
-                if !super::siege::ground_clear(
+                if !super::siege::ground_clear_with_bridges(
                     current,
                     current + preferred_direction * step,
                     if mounted.is_some() {
@@ -664,6 +713,7 @@ pub fn step_units(
                         shared::components::CATAPULT_CLEARANCE
                     },
                     Some(&terrain),
+                    decks.as_deref(),
                     obstacles.as_deref(),
                     colliders.as_deref(),
                     derived.as_deref(),
@@ -710,6 +760,12 @@ pub fn step_units(
                             building_obstacles,
                             colliders.as_deref(),
                             derived.as_deref(),
+                        ) && crate::world::bridges::segment_walkable(
+                            &terrain,
+                            decks.as_deref(),
+                            current,
+                            candidate,
+                            shared::physics::CHARACTER_NAV_RADIUS,
                         ) {
                             direction = steered;
                             proposed = candidate;
@@ -741,7 +797,22 @@ pub fn step_units(
                         shared::components::FARM_FENCE_OBSTACLE_TYPE,
                     )
                 });
+            // Revalidate ground support across the whole step. Completion or
+            // removal of a bridge changes support even when no solid obstacle
+            // changed; neither a stale route nor time warp may cross its gap.
+            let unsupported_ground = (wide_mover || kind == Some(&CharacterKind::Villager))
+                && door_use.is_none()
+                && pier_traversal.is_none()
+                && (!route_geometry_is_current || proposed != base_proposed || !use_route)
+                && !crate::world::bridges::segment_walkable(
+                    &terrain,
+                    decks.as_deref(),
+                    current,
+                    proposed,
+                    shared::physics::CHARACTER_NAV_RADIUS,
+                );
             if defense_blocked
+                || unsupported_ground
                 || ((wide_mover || kind == Some(&CharacterKind::Villager))
                     && door_use.is_none()
                     && pier_traversal.is_none()
@@ -825,8 +896,12 @@ pub fn step_units(
             break;
         }
 
+        let bridge_height = bridge_height_at(current);
         let next_y = pier_traversal
             .and_then(|pier| pier.deck_height_at(current))
+            .or_else(|| {
+                bridge_height.map(|height| height.max(terrain.get_height(current.x, current.y)))
+            })
             .or_else(|| {
                 (kind == Some(&CharacterKind::Hero) && mounted.is_none() && !authored_traversal)
                     .then(|| super::swimming::surface(&terrain, current))
@@ -904,8 +979,8 @@ pub fn settle_characters_without_targets(
         (
             Without<MoveTarget>,
             Without<AboardBoat>,
+            Without<crate::world::shipping::crew::ShipCrew>,
             Without<OfflineHero>,
-            Without<crate::world::village::strategic::StrategicPerson>,
         ),
     >,
 ) {
@@ -945,6 +1020,23 @@ mod tests {
     use crate::world::village_roads::{RouteWaypoint, TravelRoute};
     use shared::components::TimeWarp;
 
+    fn dry_movement_test_terrain() -> WorldTerrain {
+        // Positive locomotion tests need a real floor. The generated map's
+        // origin is arbitrary geography, not an empty test plane.
+        let mut terrain = WorldTerrain::default();
+        terrain.apply_flatten_rect(Vec3::new(10., 100., 0.), Vec2::new(24., 12.), 0., 0.);
+        for z in [-1., 0., 1.] {
+            assert!(crate::world::bridges::segment_walkable(
+                &terrain,
+                None,
+                Vec2::new(0., z),
+                Vec2::new(20., z),
+                shared::physics::CHARACTER_NAV_RADIUS
+            ));
+        }
+        terrain
+    }
+
     #[test]
     fn removing_a_work_target_stops_villagers_and_heroes() {
         let mut app = App::new();
@@ -967,11 +1059,21 @@ mod tests {
                 .unwrap(),
             CharacterMotion::STATIONARY
         );
-        assert_eq!(*app.world().get::<CharacterMotion>(moving_hero).unwrap(), CharacterMotion::STATIONARY);
+        assert_eq!(
+            *app.world().get::<CharacterMotion>(moving_hero).unwrap(),
+            CharacterMotion::STATIONARY
+        );
         // Active movement still belongs to step_units, not this cleanup.
-        app.world_mut().entity_mut(moving_hero).insert((MoveTarget(Vec3::Z), CharacterMotion::new(Vec3::Z)));
+        app.world_mut()
+            .entity_mut(moving_hero)
+            .insert((MoveTarget(Vec3::Z), CharacterMotion::new(Vec3::Z)));
         app.update();
-        assert!(app.world().get::<CharacterMotion>(moving_hero).unwrap().is_moving());
+        assert!(
+            app.world()
+                .get::<CharacterMotion>(moving_hero)
+                .unwrap()
+                .is_moving()
+        );
     }
 
     /// Time warp scales hero movement, and the arrival clamp is what makes that
@@ -1012,16 +1114,16 @@ mod tests {
     #[test]
     fn overlapped_movers_receive_bounded_individual_crowd_steering() {
         let mut app = App::new();
-        app.insert_resource(WorldTerrain::default());
+        app.insert_resource(dry_movement_test_terrain());
         app.init_resource::<TacticalCrowdGrid>();
         app.add_systems(Update, (rebuild_tactical_crowd_grid, step_units).chain());
         app.world_mut().spawn(TimeWarp::clamped(1.0));
-        let goal = Vec3::new(20.0, 0.0, 0.0);
+        let goal = Vec3::new(20.0, 100.0, 0.0);
         let first = app
             .world_mut()
             .spawn((
                 CharacterKind::Villager,
-                PlayerPosition(Vec3::ZERO),
+                PlayerPosition(Vec3::new(0., 100., 0.)),
                 PlayerRotation(0.0),
                 RegionCoord::default(),
                 MoveTarget(goal),
@@ -1031,7 +1133,7 @@ mod tests {
             .world_mut()
             .spawn((
                 CharacterKind::Villager,
-                PlayerPosition(Vec3::ZERO),
+                PlayerPosition(Vec3::new(0., 100., 0.)),
                 PlayerRotation(0.0),
                 RegionCoord::default(),
                 MoveTarget(goal),
@@ -1076,15 +1178,15 @@ mod tests {
     #[test]
     fn hundred_x_movement_consumes_multiple_cached_road_points_per_tick() {
         let mut app = App::new();
-        app.insert_resource(WorldTerrain::default());
+        app.insert_resource(dry_movement_test_terrain());
         app.add_systems(Update, step_units);
         app.world_mut().spawn(TimeWarp::clamped(100.0));
 
-        let goal = Vec3::new(20.0, 0.0, 0.0);
+        let goal = Vec3::new(20.0, 100.0, 0.0);
         let waypoints = [2.0, 4.0, 6.0, 8.0, 10.0]
             .into_iter()
             .map(|x| RouteWaypoint {
-                position: Vec3::new(x, 0.0, 0.0),
+                position: Vec3::new(x, 100.0, 0.0),
                 on_road: true,
             })
             .chain(std::iter::once(RouteWaypoint {
@@ -1096,7 +1198,7 @@ mod tests {
             .world_mut()
             .spawn((
                 CharacterKind::Villager,
-                PlayerPosition(Vec3::ZERO),
+                PlayerPosition(Vec3::new(0., 100., 0.)),
                 PlayerRotation(0.0),
                 RegionCoord::default(),
                 MoveTarget(goal),
@@ -1187,10 +1289,11 @@ mod tests {
             Vec2::ZERO,
             "the large debug step must not tunnel through the building"
         );
-        assert!(app
-            .world()
-            .entity(mover)
-            .contains::<NavigationRoutePending>());
+        assert!(
+            app.world()
+                .entity(mover)
+                .contains::<NavigationRoutePending>()
+        );
     }
 
     #[test]
@@ -1269,7 +1372,7 @@ mod tests {
     #[test]
     fn heroes_cross_an_open_gate_but_not_its_isolated_completed_posts() {
         use crate::collision::building_index::BuildingSpatialIndex;
-        use crate::world::navgrid::{sync_obstacle_grid, ObstacleGridState};
+        use crate::world::navgrid::{ObstacleGridState, sync_obstacle_grid};
         use shared::components::{
             FortificationKind, FortificationMaterial, FortificationSegment, SettlementId,
         };
@@ -1327,13 +1430,19 @@ mod tests {
                 for (index, mover) in movers.iter().enumerate() {
                     let z = app.world().get::<PlayerPosition>(*mover).unwrap().0.z;
                     if complete && index != 0 {
-                        assert_eq!(z, -2.0, "a {material:?} gate post must block the hero before its neighboring walls finish");
+                        assert_eq!(
+                            z, -2.0,
+                            "a {material:?} gate post must block the hero before its neighboring walls finish"
+                        );
                         assert!(
                             app.world().get::<NavigationRoutePending>(*mover).is_some(),
                             "a blocked hero must request a detour"
                         );
                     } else {
-                        assert!(z > 0.0, "the open gate and pending posts must remain traversable: material={material:?}, complete={complete}, mover={index}, z={z}");
+                        assert!(
+                            z > 0.0,
+                            "the open gate and pending posts must remain traversable: material={material:?}, complete={complete}, mover={index}, z={z}"
+                        );
                     }
                 }
             }
@@ -1435,16 +1544,17 @@ mod tests {
             !app.world().entity(mover).contains::<MoveTarget>(),
             "25x should complete this short doorway crossing in one tick"
         );
-        assert!(!app
-            .world()
-            .entity(mover)
-            .contains::<NavigationRoutePending>());
+        assert!(
+            !app.world()
+                .entity(mover)
+                .contains::<NavigationRoutePending>()
+        );
     }
 
     #[test]
     fn certified_obstacle_escape_only_lasts_until_clear_ground() {
         let mut app = App::new();
-        app.insert_resource(WorldTerrain::default());
+        app.insert_resource(dry_movement_test_terrain());
         let mut obstacles = SpatialObstacleGrid::default();
         obstacles.insert(shared::spatial::ObstacleEntry {
             center: Vec2::ZERO,
@@ -1456,12 +1566,12 @@ mod tests {
         app.add_systems(Update, step_units);
         app.world_mut().spawn(TimeWarp::clamped(25.0));
 
-        let goal = Vec3::new(5.0, 0.0, 0.0);
+        let goal = Vec3::new(5.0, 100.0, 0.0);
         let mover = app
             .world_mut()
             .spawn((
                 CharacterKind::Villager,
-                PlayerPosition(Vec3::ZERO),
+                PlayerPosition(Vec3::new(0., 100., 0.)),
                 PlayerRotation(0.0),
                 RegionCoord::default(),
                 MoveTarget(goal),
@@ -1534,10 +1644,11 @@ mod tests {
 
         let stopped = app.world().get::<PlayerPosition>(mover).unwrap().0;
         assert_eq!(Vec2::new(stopped.x, stopped.z), Vec2::ZERO);
-        assert!(app
-            .world()
-            .entity(mover)
-            .contains::<NavigationRoutePending>());
+        assert!(
+            app.world()
+                .entity(mover)
+                .contains::<NavigationRoutePending>()
+        );
     }
 
     /// Yaw convention: a hero walking toward +X must face +X, i.e. rotating

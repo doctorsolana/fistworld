@@ -18,8 +18,10 @@ use shared::economy::{
     permit_price, BusinessForSale, BusinessLiquidation, BusinessSaleReason, BusinessState,
 };
 
+mod payroll;
+use payroll::DeathCompanyAccounts;
+
 const MAX_RETAINED_DEATHS: usize = 10_000;
-const TAKEOVER_PERSONAL_RESERVE: u64 = 2 * PENNIES_PER_COIN;
 const NUTRITION_HEALTH_TICK_WORLD_SECONDS: f32 = 5.0;
 const HUNGER_HEALTH_LOSS_PER_WORLD_SECOND: f32 = 0.10;
 const FED_HEALTH_RECOVERY_PER_WORLD_SECOND: f32 = 0.20;
@@ -335,12 +337,7 @@ pub fn process_character_deaths(
         ),
     >,
     living_characters: Query<(&PersonId, &CharacterName, &Health), With<CharacterKind>>,
-    companies: Query<(
-        Entity,
-        &shared::components::CompanyId,
-        &shared::components::CompanyOwnership,
-        Option<&shared::components::CompanyShareMarket>,
-    )>,
+    mut company_estates: DeathCompanyAccounts,
     mut estates: (
         Query<&shared::components::PlayerPermitLedger>,
         Query<(
@@ -378,7 +375,6 @@ pub fn process_character_deaths(
         Entity,
         &SettlementBuilding,
         &OwnedBy,
-        Option<&BusinessAccount>,
         Option<&mut BusinessCondition>,
         Option<&shared::components::OperatedBy>,
     )>,
@@ -452,6 +448,8 @@ pub fn process_character_deaths(
         )
         .collect();
 
+    let private_wage_estates = company_estates.settle(&dying.iter().map(|dead| dead.id).collect());
+
     for dead in dying {
         business_events.reroute_deceased_person_sales(dead.id, dead.settlement);
         for (company, pennies) in dead.company_permit_escrows.iter().copied() {
@@ -465,7 +463,9 @@ pub fn process_character_deaths(
         // is retired after its last site changes hands.
         let mut surviving_company_controllers =
             HashMap::<shared::components::CompanyId, (PersonId, String)>::new();
-        for (company_entity, company_id, ownership, share_market) in companies.iter() {
+        for (company_entity, company_id, ownership, share_market) in
+            company_estates.ownership.iter()
+        {
             let inherited_shares = ownership.share_count(dead.id);
             if inherited_shares == 0 {
                 continue;
@@ -502,7 +502,10 @@ pub fn process_character_deaths(
         // An unused stamped permit is fully refundable. If its holder dies,
         // return that escrow to the same household/settlement estate path as
         // their wallet instead of silently destroying coin with the entity.
-        let mut estate_cash = dead.wallet.saturating_add(dead.permit_escrow);
+        let mut estate_cash = dead
+            .wallet
+            .saturating_add(dead.permit_escrow)
+            .saturating_add(private_wage_estates.get(&dead.id).copied().unwrap_or(0));
 
         // Close the exact durable civic post and settle whatever the treasury
         // can still pay before the personal estate moves into its household.
@@ -643,7 +646,7 @@ pub fn process_character_deaths(
         // Remove every durable ownership reference. Productive workplaces are
         // retained as real sale listings; houses simply become unowned while
         // their surviving household remains intact.
-        for (property, building, owner, _account, condition, operated_by) in properties.iter_mut() {
+        for (property, building, owner, condition, operated_by) in properties.iter_mut() {
             if owner.0 != dead.id {
                 continue;
             }
@@ -675,7 +678,9 @@ pub fn process_character_deaths(
                     listed_day: day,
                     reason: BusinessSaleReason::OwnerDied,
                 });
-                if building.kind != SettlementBuildingKind::StorageHall {
+                if building.kind != SettlementBuildingKind::StorageHall
+                    && !company_estates.has_liquidation(property)
+                {
                     property_commands.insert(BusinessLiquidation::owner_died(day));
                 }
             }
@@ -779,238 +784,8 @@ fn reopened_state(account: &BusinessAccount) -> BusinessState {
     }
 }
 
-/// Residents buy inherited workplaces with personal money. Payment becomes
-/// firm capital, so ownership transfer cannot mint coin or pay a dead seller.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn acquire_businesses_for_sale(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    mut completed: Query<
-        (
-            Entity,
-            &BusinessForSale,
-            &mut SettlementBuilding,
-            &shared::components::BuildingOf,
-            &mut BusinessAccount,
-            &mut BusinessCondition,
-            &mut BusinessSalePolicy,
-            Option<&OwnedBy>,
-        ),
-        (With<SettlementBuilding>, Without<UnderConstruction>),
-    >,
-    mut sites: Query<
-        (
-            Entity,
-            &BusinessForSale,
-            &mut UnderConstruction,
-            Option<&InheritedBusinessCapital>,
-        ),
-        (With<UnderConstruction>, Without<SettlementBuilding>),
-    >,
-    active_business_owners: Query<
-        (&OwnedBy, &BusinessCondition),
-        (
-            With<BusinessAccount>,
-            With<SettlementBuilding>,
-            Without<BusinessForSale>,
-        ),
-    >,
-    mut residents: Query<(
-        Entity,
-        &PersonId,
-        &CharacterName,
-        &ResidentOf,
-        &mut VillagerIntent,
-        &mut Wallet,
-        Option<&WorkStatus>,
-        Option<&Occupation>,
-        Option<&shared::components::EmployedAt>,
-        Option<&shared::components::CivicEmployment>,
-        Option<&Health>,
-    )>,
-) {
-    if completed.is_empty() && sites.is_empty() {
-        return;
-    }
-    let day = world_time
-        .iter()
-        .next()
-        .map_or(u32::MAX, |world_time| world_time.day);
-    let mut holdings = HashMap::<PersonId, usize>::new();
-    let mut blocked_portfolios = HashSet::<PersonId>::new();
-    for (owner, condition) in active_business_owners.iter() {
-        *holdings.entry(owner.0).or_default() += 1;
-        if condition.state.blocks_owner_expansion() {
-            blocked_portfolios.insert(owner.0);
-        }
-    }
-    for (_, listing, _, _, _, condition, _, owner) in completed.iter() {
-        if let Some(owner) = owner {
-            *holdings.entry(owner.0).or_default() += 1;
-            if listing.asking_price > 0 || condition.state.blocks_owner_expansion() {
-                blocked_portfolios.insert(owner.0);
-            }
-        }
-    }
-
-    let choose_buyer = |settlement: shared::components::SettlementId,
-                        price: u64,
-                        must_build: bool,
-                        previous_owner: PersonId,
-                        residents: &mut Query<(
-        Entity,
-        &PersonId,
-        &CharacterName,
-        &ResidentOf,
-        &mut VillagerIntent,
-        &mut Wallet,
-        Option<&WorkStatus>,
-        Option<&Occupation>,
-        Option<&shared::components::EmployedAt>,
-        Option<&shared::components::CivicEmployment>,
-        Option<&Health>,
-    )>,
-                        holdings: &HashMap<PersonId, usize>,
-                        blocked_portfolios: &HashSet<PersonId>| {
-        residents
-            .iter()
-            .filter(
-                |(
-                    _,
-                    person_id,
-                    _,
-                    resident_of,
-                    intent,
-                    wallet,
-                    status,
-                    occupation,
-                    employed,
-                    civic,
-                    health,
-                )| {
-                    resident_of.0 == settlement
-                        && intent.counts_as_resident()
-                        && **person_id != previous_owner
-                        && !blocked_portfolios.contains(*person_id)
-                        && civic.is_none()
-                        && !health.is_some_and(|health| health.is_dead())
-                        && wallet.balance() >= price.saturating_add(TAKEOVER_PERSONAL_RESERVE)
-                        && (!must_build
-                            || (intent.is_settled()
-                                && employed.is_none()
-                                && occupation.is_none_or(|occupation| occupation.0.is_none())
-                                && status
-                                    .is_none_or(|status| *status == WorkStatus::LookingForWork)))
-                },
-            )
-            .min_by_key(|(_, person_id, _, _, _, wallet, ..)| {
-                (
-                    holdings.get(person_id).copied().unwrap_or(0),
-                    std::cmp::Reverse(wallet.balance()),
-                    person_id.0,
-                )
-            })
-            .map(|(entity, person_id, name, ..)| (entity, *person_id, name.0.clone()))
-    };
-
-    for (business, listing, mut building, building_of, mut account, mut condition, mut sale, _) in
-        completed.iter_mut()
-    {
-        if day.saturating_sub(listing.listed_day) < PROPERTY_MARKET_EXPOSURE_DAYS {
-            continue;
-        }
-        let Some((buyer, buyer_id, buyer_name)) = choose_buyer(
-            building_of.0,
-            listing.asking_price,
-            false,
-            listing.previous_owner,
-            &mut residents,
-            &holdings,
-            &blocked_portfolios,
-        ) else {
-            continue;
-        };
-        let Ok((_, _, _, _, _, mut wallet, ..)) = residents.get_mut(buyer) else {
-            continue;
-        };
-        if !wallet.debit(listing.asking_price) {
-            continue;
-        }
-        account.contribute_capital(listing.asking_price);
-        condition.state = reopened_state(&account);
-        condition.insolvent_days = 0;
-        condition.cash_tight_days = 0;
-        condition.opened_day = u32::MAX;
-        condition.operating_days = 0;
-        condition.liquidation_days = 0;
-        sale.collection_enabled = true;
-        building.owner = Some(buyer_name.clone());
-        commands
-            .entity(business)
-            .insert(OwnedBy(buyer_id))
-            .remove::<BusinessForSale>()
-            .remove::<BusinessLiquidation>();
-        *holdings.entry(buyer_id).or_default() += 1;
-        blocked_portfolios.insert(buyer_id);
-        info!(
-            "{} bought the inherited {} in '{}' for {} coin",
-            buyer_name,
-            building.kind.label(),
-            building.settlement,
-            shared::economy::format_money(listing.asking_price),
-        );
-    }
-
-    for (site_entity, listing, mut site, inherited_capital) in sites.iter_mut() {
-        if day.saturating_sub(listing.listed_day) < PROPERTY_MARKET_EXPOSURE_DAYS {
-            continue;
-        }
-        let Some((buyer, buyer_id, buyer_name)) = choose_buyer(
-            site.settlement_id,
-            listing.asking_price,
-            true,
-            listing.previous_owner,
-            &mut residents,
-            &holdings,
-            &blocked_portfolios,
-        ) else {
-            continue;
-        };
-        let Ok((_, _, _, _, mut intent, mut wallet, ..)) = residents.get_mut(buyer) else {
-            continue;
-        };
-        if !wallet.debit(listing.asking_price) {
-            continue;
-        }
-        site.owner = Some(buyer_name.clone());
-        site.owner_id = Some(buyer_id);
-        site.builder = Some(buyer);
-        *intent = VillagerIntent::Building {
-            settlement: site.settlement,
-            site: site_entity,
-        };
-        commands
-            .entity(site_entity)
-            .insert(InheritedBusinessCapital(
-                inherited_capital
-                    .map_or(0, |capital| capital.0)
-                    .saturating_add(listing.asking_price),
-            ))
-            .remove::<BusinessForSale>();
-        commands.entity(buyer).insert((
-            ConstructionMaterialRoutine::new(site_entity),
-            CharacterActivity::Idle,
-        ));
-        *holdings.entry(buyer_id).or_default() += 1;
-        blocked_portfolios.insert(buyer_id);
-        info!(
-            "{} took over the unfinished {} for {} coin",
-            buyer_name,
-            site.kind.label(),
-            shared::economy::format_money(listing.asking_price),
-        );
-    }
-}
+mod takeovers;
+pub use takeovers::acquire_businesses_for_sale;
 
 /// Adopt a non-business worksite whose builder vanished. Delivered materials,
 /// plot reservation and road access all remain attached to the original site.
@@ -1816,6 +1591,10 @@ mod tests {
             "new property must remain visible on the public board for a full world day"
         );
         app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
+        app.world_mut()
+            .get_mut::<MootMarket>(settlement)
+            .unwrap()
+            .record_unmet_demand(Good::Wheat, 15, 0, 15, 50);
         app.update();
 
         assert_eq!(

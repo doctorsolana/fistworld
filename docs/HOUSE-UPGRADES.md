@@ -18,8 +18,10 @@ an upgrade funding source. Scarce or expensive materials may delay procurement.
 
 The construction site is separate from the home. A free local worker carries
 the purchased Wood from the Hall and performs sixty world seconds of building
-work at the house. Distant strategic workers use the same materials and paid
-work with explicit travel time, without creating tactical pathfinding traffic.
+work at the house. Every worker uses the same bounded navigation and actual arrival
+checks, including when unobserved. Elapsed time alone never relocates a builder.
+The shared activity boundary and live-route guard prevent stealing someone already
+carrying another contract or travelling for an accepted task.
 An ordinary worker carries six Wood on the first trip and two on the second.
 The original house retains its four-bed capacity during construction.
 Completion changes its physical level and collision footprint in place; it does

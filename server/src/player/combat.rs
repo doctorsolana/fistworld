@@ -130,6 +130,7 @@ pub fn pursue_attack_orders(
         (
             Without<OfflineHero>,
             Without<AboardBoat>,
+            Without<shared::components::AboardShip>,
             Without<shared::components::BowEquipped>,
         ),
     >,
@@ -138,6 +139,7 @@ pub fn pursue_attack_orders(
         (
             Or<(With<CharacterKind>, With<Catapult>)>,
             Without<AboardBoat>,
+            Without<shared::components::AboardShip>,
             Without<OfflineHero>,
         ),
     >,

@@ -192,10 +192,11 @@ fn request_is_paid_atomic_and_preserves_the_existing_dwelling() {
         f.world.get::<HouseAppearance>(f.home).unwrap().level,
         HouseLevel::Ground
     );
-    assert!(f
-        .world
-        .get::<crate::world::village::UnderConstruction>(f.home)
-        .is_none());
+    assert!(
+        f.world
+            .get::<crate::world::village::UnderConstruction>(f.home)
+            .is_none()
+    );
     assert_eq!(
         f.world
             .get::<GoodsInventory>(f.home)
@@ -262,10 +263,11 @@ fn paid_wood_requires_real_arrivals_and_labor_before_capacity_changes() {
         HouseLevel::Ground
     );
     f.tick(30.0);
-    assert!(!f
-        .world
-        .resource::<HouseUpgradeProjects>()
-        .contains_house(HOUSE));
+    assert!(
+        !f.world
+            .resource::<HouseUpgradeProjects>()
+            .contains_house(HOUSE)
+    );
     assert_eq!(
         f.world.get::<HouseAppearance>(f.home).unwrap().level,
         HouseLevel::UpperStorey
@@ -298,10 +300,11 @@ fn paid_wood_requires_real_arrivals_and_labor_before_capacity_changes() {
             .credit,
         5
     );
-    assert!(f
-        .world
-        .get::<HouseUpgradeBuilderRoutine>(f.worker)
-        .is_none());
+    assert!(
+        f.world
+            .get::<HouseUpgradeBuilderRoutine>(f.worker)
+            .is_none()
+    );
 }
 
 #[test]
@@ -318,6 +321,158 @@ fn empty_market_and_busy_workers_cannot_create_free_progress() {
     assert!(f.project().worker.is_none());
     assert!(f.world.get::<HouseUpgradeBuilderRoutine>(f.owner).is_none());
     assert_eq!(f.total_cash(), 1000);
+}
+
+fn reserve_builder_meal(f: &mut Fixture) {
+    use crate::world::village::moot_services::{MootQueueClock, MootServiceKind, reserve_meal};
+    use bevy::ecs::system::RunSystemOnce;
+    let worker = f.worker;
+    let hall = f.hall;
+    f.world
+        .run_system_once(move |mut commands: Commands| {
+            reserve_meal(
+                &mut commands,
+                &mut MootQueueClock::default(),
+                worker,
+                hall,
+                MootServiceKind::PersonalMeal,
+                Good::Bread,
+                0,
+            );
+        })
+        .unwrap();
+    assert!(
+        f.world
+            .get::<crate::world::village::MootMealRoutine>(worker)
+            .is_some()
+    );
+}
+
+#[test]
+fn personal_meal_owns_the_builder_trip_and_work_resumes_only_at_the_site() {
+    use crate::world::village::{MootMealRoutine, MootQueueTicket};
+    use crate::world::village_roads::NavigationRouteFailed;
+
+    for phase in [Phase::ToMarket, Phase::ToSite, Phase::Working] {
+        let mut f = fixture();
+        if phase == Phase::Working {
+            f.supply();
+            f.tick(12.0);
+        } else {
+            f.wood(8, 20);
+            request_upgrade(&mut f.world, HOUSE, OWNER).unwrap();
+            f.tick(0.0);
+            if phase == Phase::ToSite {
+                f.travel_to_goal();
+            }
+        }
+        assert_eq!(f.project().phase, phase);
+        let project_goal = if phase == Phase::ToMarket {
+            f.project().market_stand
+        } else {
+            f.project().stand
+        };
+        let state = |f: &Fixture| {
+            let project = f.project();
+            (
+                project.phase,
+                project.work_done,
+                project.paid_labor,
+                project.escrow,
+                project.delivered,
+                project.cargo.amount(Good::Wood),
+                project.worker,
+                f.world.get::<Wallet>(f.worker).unwrap().balance(),
+            )
+        };
+        let before = state(&f);
+        reserve_builder_meal(&mut f);
+        let meal_goal = project_goal + Vec3::new(20.0, 0.0, 15.0);
+        // Even at the upgrade's exact target, it must not buy, unload or work
+        // while the real meal component owns the worker's next movement.
+        f.world
+            .entity_mut(f.worker)
+            .insert((PlayerPosition(project_goal), MoveTarget(meal_goal)));
+        f.tick(45.0);
+        assert_eq!(state(&f), before, "paused {phase:?}");
+        assert_eq!(f.world.get::<MoveTarget>(f.worker).unwrap().0, meal_goal);
+        assert_eq!(
+            *f.world.get::<CharacterActivity>(f.worker).unwrap(),
+            CharacterActivity::Idle
+        );
+
+        f.world.entity_mut(f.worker).insert((
+            PlayerPosition(meal_goal),
+            NavigationRouteFailed { goal: meal_goal },
+        ));
+        f.tick(60.0);
+        assert_eq!(
+            state(&f),
+            before,
+            "meal route failure must not cancel {phase:?}"
+        );
+        assert_eq!(f.world.get::<MoveTarget>(f.worker).unwrap().0, meal_goal);
+        assert_eq!(f.total_cash(), 1000);
+        assert_eq!(f.total_wood(), 8);
+
+        // Isolate the ownership boundary: simulate the food system finishing
+        // its errand. This fixture tests physical arrival gating, not pathfinding
+        // or the separate meal purchase/queue lifecycle.
+        f.world.entity_mut(f.worker).remove::<(
+            MootMealRoutine,
+            MootQueueTicket,
+            NavigationRouteFailed,
+            MoveTarget,
+        )>();
+        f.tick(1.0);
+        assert_eq!(state(&f), before, "cannot resume remotely after {phase:?}");
+        assert_eq!(f.world.get::<MoveTarget>(f.worker).unwrap().0, project_goal);
+        f.tick(45.0);
+        assert_eq!(state(&f), before, "walking time is not work");
+        f.travel_to_goal();
+        match phase {
+            Phase::ToMarket => {
+                assert_eq!(f.project().cargo.amount(Good::Wood), 6);
+                assert_eq!(f.project().phase, Phase::ToSite);
+            }
+            Phase::ToSite => {
+                assert_eq!(f.project().delivered, 6);
+                assert_eq!(f.project().cargo.amount(Good::Wood), 0);
+            }
+            Phase::Working => assert_eq!(f.project().work_done, before.1 + 1.0),
+            _ => unreachable!(),
+        }
+        assert_eq!(f.total_cash(), 1000);
+        assert_eq!(f.total_wood(), 8);
+    }
+}
+
+#[test]
+fn cancelling_an_upgrade_during_a_meal_preserves_the_food_movement_owner() {
+    let mut f = fixture();
+    f.supply();
+    f.tick(12.0);
+    reserve_builder_meal(&mut f);
+    let meal_goal = f.project().stand + Vec3::X * 25.0;
+    f.world.entity_mut(f.worker).insert(MoveTarget(meal_goal));
+    cancel_upgrade(&mut f.world, HOUSE, OWNER).unwrap();
+    assert!(
+        f.world
+            .get::<HouseUpgradeBuilderRoutine>(f.worker)
+            .is_none()
+    );
+    assert!(
+        f.world
+            .get::<crate::world::village::MootMealRoutine>(f.worker)
+            .is_some()
+    );
+    assert_eq!(f.world.get::<MoveTarget>(f.worker).unwrap().0, meal_goal);
+    assert_eq!(
+        *f.world.get::<CharacterActivity>(f.worker).unwrap(),
+        CharacterActivity::Idle
+    );
+    assert_eq!(f.total_cash(), 1000);
+    assert_eq!(f.total_wood(), 8);
 }
 
 #[test]
@@ -337,10 +492,11 @@ fn cancellation_returns_purchased_goods_cash_and_releases_worker_once() {
     );
     assert_eq!(f.total_cash(), 1000);
     assert_eq!(f.total_wood(), 8);
-    assert!(f
-        .world
-        .get::<HouseUpgradeBuilderRoutine>(f.worker)
-        .is_none());
+    assert!(
+        f.world
+            .get::<HouseUpgradeBuilderRoutine>(f.worker)
+            .is_none()
+    );
     assert!(f.world.get::<MoveTarget>(f.worker).is_none());
     assert!(cancel_upgrade(&mut f.world, HOUSE, OWNER).is_err());
     f.tick(30.0);
@@ -363,10 +519,11 @@ fn destroyed_worksite_recovers_owned_pile_without_losing_materials() {
             .amount(Good::Wood),
         8
     );
-    assert!(f
-        .world
-        .get::<HouseUpgradeBuilderRoutine>(f.worker)
-        .is_none());
+    assert!(
+        f.world
+            .get::<HouseUpgradeBuilderRoutine>(f.worker)
+            .is_none()
+    );
 }
 
 #[test]
@@ -389,37 +546,39 @@ fn dead_owner_and_destroyed_house_settle_to_real_treasury_and_hall_stock() {
     );
     assert_eq!(f.total_cash(), 1000);
     assert_eq!(f.total_wood(), 8);
-    assert!(!f
-        .world
-        .resource::<HouseUpgradeProjects>()
-        .contains_house(HOUSE));
+    assert!(
+        !f.world
+            .resource::<HouseUpgradeProjects>()
+            .contains_house(HOUSE)
+    );
 }
 
 #[test]
-fn strategic_builder_has_finite_travel_and_work_without_tactical_orders() {
+fn unobserved_house_builder_requires_physical_arrival_and_never_teleports_on_elapsed_time() {
     let mut f = fixture();
-    f.world
-        .entity_mut(f.worker)
-        .insert(crate::world::village::strategic::StrategicPerson);
     f.wood(8, 20);
     request_upgrade(&mut f.world, HOUSE, OWNER).unwrap();
+    let opening = f.world.get::<PlayerPosition>(f.worker).unwrap().0;
     f.tick(0.0);
-    assert!(f.world.get::<MoveTarget>(f.worker).is_none());
-    assert!(f.project().travel_left > 0.0);
-    f.tick(0.1);
+    assert!(f.world.get::<MoveTarget>(f.worker).is_some());
+    f.tick(60.0);
+    assert_eq!(f.world.get::<PlayerPosition>(f.worker).unwrap().0, opening);
     assert_eq!(f.project().cargo.amount(Good::Wood), 0);
-    f.tick(20.0);
-    assert_eq!(f.project().cargo.amount(Good::Wood), 6);
-    f.tick(0.1);
-    assert_eq!(f.project().delivered, 0);
-    f.tick(20.0);
-    assert_eq!(f.project().delivered, 6);
     assert_eq!(f.project().work_done, 0.0);
-    f.tick(20.0);
-    assert_eq!(f.project().cargo.amount(Good::Wood), 2);
-    f.tick(0.1);
+    f.travel_to_goal();
+    assert_eq!(f.project().cargo.amount(Good::Wood), 6);
+    let pickup = f.world.get::<PlayerPosition>(f.worker).unwrap().0;
+    f.tick(60.0);
+    assert_eq!(f.world.get::<PlayerPosition>(f.worker).unwrap().0, pickup);
+    assert_eq!(f.project().delivered, 0);
+    assert_eq!(f.project().work_done, 0.0);
+    // Supply each actual arrival independently of the work timer. This tests
+    // handoffs and labor, not the separate navigation solver.
+    f.travel_to_goal();
     assert_eq!(f.project().delivered, 6);
-    f.tick(20.0);
+    f.travel_to_goal();
+    assert_eq!(f.project().cargo.amount(Good::Wood), 2);
+    f.travel_to_goal();
     assert_eq!(f.project().delivered, 8);
     assert_eq!(f.project().work_done, 0.0);
     f.tick(30.0);
@@ -433,6 +592,62 @@ fn strategic_builder_has_finite_travel_and_work_without_tactical_orders() {
         HouseLevel::UpperStorey
     );
     assert!(f.world.get::<MoveTarget>(f.worker).is_none());
+    assert_eq!(f.total_cash(), 1000);
+}
+
+#[test]
+fn house_upgrade_preserves_existing_route_and_foreign_construction_commitment() {
+    use crate::world::village_roads::{RouteWaypoint, TravelRoute};
+    let mut f = fixture();
+    f.wood(8, 20);
+    request_upgrade(&mut f.world, HOUSE, OWNER).unwrap();
+    let destination = Vec3::Z * 20.0;
+    f.world.entity_mut(f.worker).insert((
+        MoveTarget(destination),
+        TravelRoute {
+            goal: destination,
+            waypoints: vec![RouteWaypoint {
+                position: destination,
+                on_road: false,
+            }],
+            next: 0,
+            geometry_version: 0,
+        },
+    ));
+    f.tick(0.0);
+    assert!(f.project().worker.is_none());
+    assert_eq!(
+        f.world.get::<TravelRoute>(f.worker).unwrap().goal,
+        destination
+    );
+    // An existing port construction contract also blocks assignment after the
+    // route ends. This is one of the owners missing from the old manual list.
+    f.world
+        .entity_mut(f.worker)
+        .remove::<(MoveTarget, TravelRoute)>();
+    let port = f.world.spawn_empty().id();
+    f.world
+        .entity_mut(f.worker)
+        .insert(crate::world::ports::PortBuilder { project: port });
+    f.tick(16.0);
+    assert!(f.project().worker.is_none());
+    assert_eq!(
+        f.world
+            .get::<crate::world::ports::PortBuilder>(f.worker)
+            .unwrap()
+            .project,
+        port
+    );
+    f.world
+        .entity_mut(f.worker)
+        .remove::<crate::world::ports::PortBuilder>();
+    f.tick(16.0);
+    assert_eq!(f.project().worker, Some(f.worker));
+    assert!(
+        f.world
+            .get::<HouseUpgradeBuilderRoutine>(f.worker)
+            .is_some()
+    );
     assert_eq!(f.total_cash(), 1000);
 }
 
@@ -526,10 +741,11 @@ fn blocked_refund_keeps_cargo_until_real_storage_is_available() {
     assert_eq!(f.project().cargo.amount(Good::Wood), 8);
     assert_eq!(f.project().escrow, 0);
     assert_eq!(f.total_cash(), 1000);
-    assert!(f
-        .world
-        .get::<HouseUpgradeBuilderRoutine>(f.worker)
-        .is_none());
+    assert!(
+        f.world
+            .get::<HouseUpgradeBuilderRoutine>(f.worker)
+            .is_none()
+    );
     f.tick(1.0);
     assert_eq!(f.project().cargo.amount(Good::Wood), 8);
     f.world.get_mut::<GoodsInventory>(f.home).unwrap().remove(
@@ -537,10 +753,11 @@ fn blocked_refund_keeps_cargo_until_real_storage_is_available() {
         HOUSE_UPGRADE_WOOD_REQUIRED * Good::Wood.bulk_per_unit(),
     );
     f.tick(15.0);
-    assert!(!f
-        .world
-        .resource::<HouseUpgradeProjects>()
-        .contains_house(HOUSE));
+    assert!(
+        !f.world
+            .resource::<HouseUpgradeProjects>()
+            .contains_house(HOUSE)
+    );
     assert_eq!(f.total_wood(), 8);
     assert_eq!(f.total_cash(), 1000);
 }
@@ -631,16 +848,19 @@ fn waiting_project_search_budget_is_fair_at_five_thousand_people() {
                 .last_worker_reviewed,
             Some(ids[iteration % ids.len()])
         );
-        assert!(f
-            .world
-            .resource::<HouseUpgradeProjects>()
-            .entries
-            .values()
-            .all(|project| project.worker.is_none()));
+        assert!(
+            f.world
+                .resource::<HouseUpgradeProjects>()
+                .entries
+                .values()
+                .all(|project| project.worker.is_none())
+        );
     }
     samples.sort_by(f64::total_cmp);
-    eprintln!("HouseUpgradeWaitingBench people=5000 projects=50 samples=500 p50_ms={:.3} p95_ms={:.3} max_ms={:.3}",
-        samples[250], samples[475], samples[499]);
+    eprintln!(
+        "HouseUpgradeWaitingBench people=5000 projects=50 samples=500 p50_ms={:.3} p95_ms={:.3} max_ms={:.3}",
+        samples[250], samples[475], samples[499]
+    );
     assert_eq!(
         f.world
             .resource::<HouseUpgradeProjects>()
@@ -722,7 +942,7 @@ fn market_claims_use_whole_contract_affordability_and_actually_listed_stock() {
 
 #[test]
 fn daily_history_keeps_reserved_private_upgrade_capital_in_local_money() {
-    use crate::world::village::history::{capture_settlement_history, SettlementHistoryRuntime};
+    use crate::world::village::history::{SettlementHistoryRuntime, capture_settlement_history};
     use bevy::ecs::system::RunSystemOnce;
     let mut f = fixture();
     f.world

@@ -38,7 +38,7 @@ pub(super) struct BookSnapshot {
     company_filter: encyclopedia::companies::CompanyFilter,
     history: Option<(Option<Entity>, history::HistoryView)>,
     history_range: history::HistoryRange,
-    business: Option<Entity>,
+    business: Option<business_management::BusinessManagementSelection>,
     founding: bool,
     market: Option<SettlementId>,
 }

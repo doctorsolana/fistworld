@@ -127,20 +127,6 @@ impl RegionCoord {
     }
 }
 
-/// How much simulation a region is currently receiving.
-///
-/// Every region always runs the strategic tick. `Tactical` additionally instantiates
-/// individual units, which is expensive and only justified where someone is watching or
-/// something is contested.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum SimLevel {
-    /// Cheap aggregate simulation. Runs everywhere, forever.
-    #[default]
-    Strategic,
-    /// Full 60Hz unit simulation.
-    Tactical,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

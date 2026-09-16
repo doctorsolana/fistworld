@@ -14,11 +14,12 @@ mod civic_tests;
 mod commerce_tests;
 mod construction_tests;
 mod employment_tests;
-mod fixtures;
+pub(super) mod fixtures;
 mod households_tests;
 mod household_economy_tests;
 mod immigration_tests;
 mod integration_tests;
+mod offscreen_construction_tests;
 mod planning_tests;
 mod production_tests;
 

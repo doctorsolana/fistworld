@@ -1,4 +1,4 @@
-//! Exclusively assigned construction labor and finite embodied/strategic travel.
+//! Exclusively assigned construction labor and physical travel.
 use super::project::*;
 use crate::player::hero::MoveTarget;
 use crate::world::village::{self, VillagerIntent};
@@ -9,6 +9,7 @@ use shared::economy::{GoodsInventory, Wallet};
 const WORK_REACH: f32 = 1.35;
 
 pub(super) fn choose_worker(world: &mut World, project: &UpgradeProject) -> Option<Entity> {
+    let mut blocked = world.query_filtered::<(), village::worker_activity::JobChangeBlocked>();
     let mut people = world.query::<(
         Entity,
         &PersonId,
@@ -39,38 +40,12 @@ pub(super) fn choose_worker(world: &mut World, project: &UpgradeProject) -> Opti
                     .is_some_and(|intent| matches!(intent, VillagerIntent::Resident { .. }))
                 && world.get::<EmployedAt>(*entity).is_none()
                 && world.get::<CivicEmployment>(*entity).is_none()
-                && world.get::<village::HomeRoutine>(*entity).is_none()
-                && world
-                    .get::<village::ConstructionMaterialRoutine>(*entity)
-                    .is_none()
-                && world
-                    .get::<village::HouseholdShoppingRoutine>(*entity)
-                    .is_none()
-                && world.get::<village::MootQueueTicket>(*entity).is_none()
-                && world.get::<village::MootMealRoutine>(*entity).is_none()
-                && world.get::<village::TradeRouteRoutine>(*entity).is_none()
-                && world.get::<village::LumberjackRoutine>(*entity).is_none()
-                && world.get::<village::FarmerRoutine>(*entity).is_none()
-                && world.get::<village::FishingRoutine>(*entity).is_none()
-                && world.get::<village::ProcessingRoutine>(*entity).is_none()
-                && world.get::<village::QuarryRoutine>(*entity).is_none()
-                && world
-                    .get::<village::MarketCollectionRoutine>(*entity)
-                    .is_none()
-                && world
-                    .get::<village::InternalDeliveryRoutine>(*entity)
-                    .is_none()
-                && world.get::<village::TavernWorkerRoutine>(*entity).is_none()
+                && blocked.get(world, *entity).is_err()
+                && world.get::<MoveTarget>(*entity).is_none()
+                && world.get::<TravelRoute>(*entity).is_none()
+                && world.get::<NavigationRoutePending>(*entity).is_none()
                 && world.get::<village::MootSteward>(*entity).is_none()
                 && world.get::<village::CompanyPorter>(*entity).is_none()
-                && world.get::<village::TavernVisitRoutine>(*entity).is_none()
-                && world
-                    .get::<village::WorkplaceDoorTransit>(*entity)
-                    .is_none()
-                && world
-                    .get::<crate::world::village_roads::RoadBuilderRoutine>(*entity)
-                    .is_none()
-                && world.get::<HouseUpgradeBuilderRoutine>(*entity).is_none()
         })
         .min_by_key(|(_, id, _, _, position, _, _)| {
             (
@@ -89,63 +64,25 @@ pub(super) fn start_trip(world: &mut World, project: &mut UpgradeProject, phase:
         project.stand
     };
     let worker = project.worker.expect("assigned worker");
-    let current = world
+    world
+        .entity_mut(worker)
+        .insert((MoveTarget(target), CharacterActivity::Idle));
+}
+
+pub(super) fn arrive(world: &mut World, project: &UpgradeProject, target: Vec3) -> bool {
+    let worker = project.worker.expect("assigned worker");
+    let position = world
         .get::<PlayerPosition>(worker)
         .expect("worker position")
         .0;
-    // Same base walking speed as embodied villagers, without road speedups.
-    project.travel_left = current.xz().distance(target.xz()) / shared::player::HERO_MOVE_SPEED;
-    if world
-        .get::<village::strategic::StrategicPerson>(worker)
-        .is_none()
-    {
-        world
-            .entity_mut(worker)
-            .insert((MoveTarget(target), CharacterActivity::Idle));
-    } else {
-        world
-            .entity_mut(worker)
-            .remove::<MoveTarget>()
-            .remove::<TravelRoute>()
-            .remove::<NavigationRoutePending>();
-    }
-}
-
-pub(super) fn arrive(
-    world: &mut World,
-    project: &mut UpgradeProject,
-    target: Vec3,
-    dt: f32,
-) -> bool {
-    let worker = project.worker.expect("assigned worker");
-    if world
-        .get::<village::strategic::StrategicPerson>(worker)
-        .is_some()
-    {
-        project.travel_left = (project.travel_left - dt).max(0.0);
-        if project.travel_left > 0.0 {
-            return false;
-        }
+    if position.xz().distance(target.xz()) > WORK_REACH {
         if world
-            .get::<PlayerPosition>(worker)
-            .is_none_or(|position| position.0 != target)
+            .get::<MoveTarget>(worker)
+            .is_none_or(|goal| goal.0.distance_squared(target) > 0.01)
         {
-            world.entity_mut(worker).insert(PlayerPosition(target));
+            world.entity_mut(worker).insert(MoveTarget(target));
         }
-    } else {
-        let position = world
-            .get::<PlayerPosition>(worker)
-            .expect("worker position")
-            .0;
-        if position.xz().distance(target.xz()) > WORK_REACH {
-            if world
-                .get::<MoveTarget>(worker)
-                .is_none_or(|goal| goal.0.distance_squared(target) > 0.01)
-            {
-                world.entity_mut(worker).insert(MoveTarget(target));
-            }
-            return false;
-        }
+        return false;
     }
     world
         .entity_mut(worker)
@@ -162,9 +99,20 @@ pub(super) fn release_worker(world: &mut World, project: &mut UpgradeProject) {
             .get::<HouseUpgradeBuilderRoutine>(worker)
             .is_some_and(|routine| routine.project == project.worksite)
         {
+            let needs_own_movement = world
+                .query_filtered::<(), village::worker_activity::PersonalNeedsOwnMovement>()
+                .get(world, worker)
+                .is_ok();
             world
                 .entity_mut(worker)
-                .remove::<HouseUpgradeBuilderRoutine>()
+                .remove::<HouseUpgradeBuilderRoutine>();
+            if needs_own_movement {
+                // Cancelling the construction contract releases only its own
+                // marker; the meal/shopping owner still has a trip to finish.
+                return;
+            }
+            world
+                .entity_mut(worker)
                 .remove::<MoveTarget>()
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()

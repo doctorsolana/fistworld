@@ -45,7 +45,8 @@ pub(super) fn spawn_route_card(
                     .with_children(|copy| {
                         copy.spawn((
                             Text::new(format!(
-                                "CARAVAN ROUTE #{}  /  {}",
+                                "{} ROUTE #{}  /  {}",
+                                if route.ship.is_some(){"SHIP"}else{"CARAVAN"},
                                 route.id.0,
                                 route.good.label().to_uppercase()
                             )),
@@ -55,7 +56,7 @@ pub(super) fn spawn_route_card(
                         copy.spawn((
                             Text::new(format!(
                                 "{}  /  HOME {}",
-                                route.mode.label().to_uppercase(),
+                                route.ship.map_or_else(||route.mode.label().to_uppercase(),|(id,kind)|format!("{} #{}",kind.label().to_uppercase(),id.0)),
                                 route.warehouse_name.to_uppercase()
                             )),
                             crate::ui::ledger::reading(11.5),
@@ -63,7 +64,7 @@ pub(super) fn spawn_route_card(
                         ));
                     });
                 header.spawn((
-                    Text::new(route.status.label().to_uppercase()),
+                    Text::new(if route.ship.is_some() && route.status==TradeRouteStatus::WaitingForPorter{"WAITING FOR SAILOR".into()}else if route.ship.is_some() && route.status==TradeRouteStatus::Returning{"RETURNING TO HOME PORT".into()}else{route.status.label().to_uppercase()}),
                     crate::ui::ledger::reading(12.0),
                     TextColor(if route.status == TradeRouteStatus::Mothballed {
                         EMBER
@@ -146,7 +147,8 @@ pub(super) fn spawn_route_card(
                 for text in [
                     format!("CARGO  {} / {}", route.cargo_onboard, route.cargo_target),
                     format!(
-                        "CARAVANER  {}",
+                        "{}  {}",
+                        if route.ship.is_some(){"SAILOR"}else{"CARAVANER"},
                         route
                             .assigned_caravaner
                             .as_deref()
@@ -276,6 +278,8 @@ pub(super) fn spawn_route_card(
                             },
                             "MOTHBALL",
                         );
+                    } else if route.ship.is_some() && route.status!=TradeRouteStatus::Mothballed {
+                        detail_button(actions,TradeRouteQuickActionButton{company,route:route.id,action:TradeRouteQuickAction::Mothball},"STOP AFTER VOYAGE");
                     } else if route.status == TradeRouteStatus::Mothballed {
                         detail_button(
                             actions,

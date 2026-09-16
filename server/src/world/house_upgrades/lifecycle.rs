@@ -229,7 +229,6 @@ pub fn request_upgrade(
             worker: None,
             phase: Phase::Waiting,
             work_done: 0.0,
-            travel_left: 0.0,
             last_time: now,
             next_attempt: now,
             claim: DemandClaim::default(),
@@ -285,6 +284,8 @@ pub fn run_house_upgrade_projects(world: &mut World) {
     let Some((clock, now)) = clock(world) else {
         return;
     };
+    let mut personal_needs =
+        world.query_filtered::<(), village::worker_activity::PersonalNeedsOwnMovement>();
     world.resource_scope(|world, mut book: Mut<HouseUpgradeProjects>| {
         let ready = |project: &&UpgradeProject| {
             project.phase == Phase::Waiting && now >= project.next_attempt
@@ -305,7 +306,18 @@ pub fn run_house_upgrade_projects(world: &mut World) {
         book.entries.retain(|id, project| {
             let dt = (now - project.last_time).clamp(0.0, 60.0) as f32;
             project.last_time = now;
-            !step_project(world, project, &clock, now, dt, reviewed == Some(*id))
+            let needs_own_movement = project
+                .worker
+                .is_some_and(|worker| personal_needs.get(world, worker).is_ok());
+            !step_project(
+                world,
+                project,
+                &clock,
+                now,
+                dt,
+                reviewed == Some(*id),
+                needs_own_movement,
+            )
         });
     });
 }
@@ -317,6 +329,7 @@ fn step_project(
     now: f64,
     dt: f32,
     review_worker: bool,
+    needs_own_movement: bool,
 ) -> bool {
     if project.phase == Phase::Refunding {
         if now < project.next_attempt {
@@ -355,9 +368,20 @@ fn step_project(
             && world.get::<ResidentOf>(worker).map(|of| of.0) == Some(project.settlement)
             && world.get::<EmployedAt>(worker).is_none()
             && world.get::<CivicEmployment>(worker).is_none();
-        if !still_assigned || world.get::<NavigationRouteFailed>(worker).is_some() {
+        if !still_assigned {
             // Never strand a worker or resurrect a destroyed body's personal
             // inventory. Transit wood belongs to this retained project.
+            begin_refund(world, project);
+            return settle_refund(world, project);
+        }
+        // The paid meal/shopping routine owns the current route, activity and
+        // any navigation failure. Keep the project and its cargo/progress, but
+        // let last_time advance so the interruption cannot earn building work.
+        // Every productive phase rechecks its physical destination on resume.
+        if needs_own_movement {
+            return false;
+        }
+        if world.get::<NavigationRouteFailed>(worker).is_some() {
             begin_refund(world, project);
             return settle_refund(world, project);
         }
@@ -395,7 +419,6 @@ fn step_project(
                 .remove::<village::ambient::AmbientRoutine>()
                 .remove::<MoveTarget>()
                 .remove::<TravelRoute>()
-                .remove::<village::strategic::StrategicTravel>()
                 .remove::<NavigationRoutePending>()
                 .remove::<NavigationRouteFailed>()
                 .insert(HouseUpgradeBuilderRoutine {
@@ -413,7 +436,7 @@ fn step_project(
             );
         }
         Phase::ToMarket => {
-            if !arrive(world, project, project.market_stand, dt) {
+            if !arrive(world, project, project.market_stand) {
                 return false;
             }
             withdraw_claim(world, project);
@@ -459,7 +482,7 @@ fn step_project(
             start_trip(world, project, Phase::ToSite);
         }
         Phase::ToSite => {
-            if !arrive(world, project, project.stand, dt) {
+            if !arrive(world, project, project.stand) {
                 return false;
             }
             let amount = project.cargo.remove(Good::Wood, u32::MAX);
@@ -486,7 +509,7 @@ fn step_project(
             }
         }
         Phase::Working => {
-            if !clock.is_day() || !arrive(world, project, project.stand, dt) {
+            if !clock.is_day() || !arrive(world, project, project.stand) {
                 return false;
             }
             let worker = project.worker.expect("working builder");

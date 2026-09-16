@@ -148,7 +148,10 @@ pub fn seek_settlement(
             &mut VillagerIntent,
             Option<&MigrationCooldown>,
         ),
-        Without<shared::components::CommandedBy>,
+        (
+            Without<shared::components::CommandedBy>,
+            Without<shared::components::AboardBoat>,
+        ),
     >,
     road_graph: Option<Res<VillageRoadGraph>>,
 ) {
@@ -192,9 +195,9 @@ pub fn seek_settlement(
                 })
             })
             .min_by(|a, b| {
-                a.2 .0
+                a.2.0
                     .distance_squared(position.0)
-                    .total_cmp(&b.2 .0.distance_squared(position.0))
+                    .total_cmp(&b.2.0.distance_squared(position.0))
             });
         // No settlement anywhere: stay idle and look again next tick. A villager
         // with nowhere to go is a real state, not an error.
@@ -223,7 +226,7 @@ pub fn seek_settlement(
 pub fn arrive_at_settlement(
     mut commands: Commands,
     simulation_time: crate::world::simulation_time::SimulationTime,
-    mut queue_clock: Option<ResMut<MootQueueClock>>,
+    mut queue_clock: ResMut<MootQueueClock>,
     terrain: Option<Res<WorldTerrain>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     colliders: Option<Res<StaticColliders>>,
@@ -237,20 +240,17 @@ pub fn arrive_at_settlement(
         Option<&NavigationRouteFailed>,
         Option<&MigrationCooldown>,
         Option<&MootQueueTicket>,
-        Has<strategic::StrategicPerson>,
         Has<ImmigrationDeparture>,
     )>,
     road_graph: Option<Res<VillageRoadGraph>>,
+    departure_positions: Query<&PlayerPosition, With<VillagerIntent>>,
 ) {
     let now = simulation_time.elapsed_real_seconds_f64();
     // Departure destinations are small physical reservations, not abstract
     // labels. Include every embodied person already occupying the apron so a
     // blocked candidate search cannot make two different service serials
     // converge on the same first valid point.
-    let mut occupied_departure_places = villagers
-        .iter()
-        .map(|(_, position, ..)| Vec2::new(position.0.x, position.0.z))
-        .collect::<Vec<_>>();
+    let mut occupied_departure_places: Option<Vec<Vec2>> = None;
     for (
         entity,
         position,
@@ -259,7 +259,6 @@ pub fn arrive_at_settlement(
         route_failed,
         cooldown,
         queue_ticket,
-        strategic,
         departing,
     ) in villagers.iter_mut()
     {
@@ -278,7 +277,7 @@ pub fn arrive_at_settlement(
             continue;
         };
 
-        // The served applicant remains a tactical migrant and retains their
+        // The served applicant remains a migrant and retains their
         // ready queue ticket until `advance_immigration_departures` observes
         // them at the clear exit. Do not enqueue them again or let this pass
         // replace that protected destination.
@@ -286,7 +285,7 @@ pub fn arrive_at_settlement(
             continue;
         }
 
-        // Once the tactical migrant reaches the hall, the visible Moot line
+        // Once the migrant reaches the hall, the visible Moot line
         // owns their movement. Some queue slots are deliberately farther than
         // ARRIVAL_RADIUS from the hall, so ordinary migration repair must not
         // pull a waiting applicant out of the line.
@@ -295,25 +294,27 @@ pub fn arrive_at_settlement(
                 if !ticket.is_ready() {
                     continue;
                 }
-                if strategic {
-                    finish_immigration(&mut commands, entity, &mut intent, settlement, place);
-                } else {
-                    let destination = begin_immigration_departure(
-                        &mut commands,
-                        entity,
-                        settlement,
-                        ticket.serial(),
-                        position.0,
-                        hall.0,
-                        rotation.map_or(0.0, |rotation| rotation.0),
-                        terrain.as_deref(),
-                        obstacles.as_deref(),
-                        colliders.as_deref(),
-                        derived.as_deref(),
-                        &occupied_departure_places,
-                    );
-                    occupied_departure_places.push(Vec2::new(destination.x, destination.z));
-                }
+                let occupied = occupied_departure_places.get_or_insert_with(|| {
+                    departure_positions
+                        .iter()
+                        .map(|position| position.0.xz())
+                        .collect()
+                });
+                let destination = begin_immigration_departure(
+                    &mut commands,
+                    entity,
+                    settlement,
+                    ticket.serial(),
+                    position.0,
+                    hall.0,
+                    rotation.map_or(0.0, |rotation| rotation.0),
+                    terrain.as_deref(),
+                    obstacles.as_deref(),
+                    colliders.as_deref(),
+                    derived.as_deref(),
+                    occupied,
+                );
+                occupied.push(Vec2::new(destination.x, destination.z));
                 continue;
             }
             // A travelling villager cannot legitimately use another hall
@@ -323,16 +324,9 @@ pub fn arrive_at_settlement(
         }
         let hall_rotation = rotation.map_or(0.0, |rotation| rotation.0);
         let entrance = SettlementBuildingKind::Hall.entrance_position(hall.0, hall_rotation);
-        // Strategic migrants have no embodied forecourt. Focused tests without
-        // the queue resource likewise preserve the old cheap radial handoff.
-        // A visible migrant must actually reach the permanently clear area in
-        // FRONT of the Hall; entering the radius from behind must not cancel
-        // the certified route that is taking them around the building.
-        let reached_arrival = if strategic || queue_clock.is_none() {
-            ground_distance(position.0, hall.0) <= ARRIVAL_RADIUS
-        } else {
-            reached_visible_moot_forecourt(position.0, hall.0, hall_rotation)
-        };
+        // Registration starts only at the authored Hall forecourt. Approaching
+        // from behind must not cancel a route around the solid building.
+        let reached_arrival = reached_visible_moot_forecourt(position.0, hall.0, hall_rotation);
         if !reached_arrival {
             if let Some(failed) = route_failed {
                 debug!(
@@ -365,20 +359,14 @@ pub fn arrive_at_settlement(
             continue;
         }
 
-        // Strategic migrants have no embodied forecourt to display. Tactical
-        // migrants register through the same FIFO line used by permits and
-        // food, becoming residents only when the counter serves them.
-        if strategic || queue_clock.is_none() {
-            finish_immigration(&mut commands, entity, &mut intent, settlement, place);
-        } else if let Some(clock) = queue_clock.as_deref_mut() {
-            moot_services::enqueue_moot_service(
-                &mut commands,
-                clock,
-                entity,
-                settlement,
-                MootServiceKind::Immigration,
-            );
-        }
+        // Every migrant registers through the same FIFO service and clear exit.
+        moot_services::enqueue_moot_service(
+            &mut commands,
+            &mut queue_clock,
+            entity,
+            settlement,
+            MootServiceKind::Immigration,
+        );
     }
 }
 

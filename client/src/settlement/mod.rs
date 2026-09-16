@@ -10,6 +10,9 @@
 //! livestock, animation, lighting and stock displays own their presentation state.
 
 mod roads;
+mod structure_mesh;
+pub(crate) mod bridges;
+pub(crate) mod shipping;
 pub(crate) mod roadside;
 pub(crate) mod smoke;
 
@@ -65,6 +68,8 @@ impl Plugin for SettlementPlugin {
         app.add_plugins(bevy::pbr::MaterialPlugin::<farm_wind::CropWindMaterial>::default());
         app.add_plugins(roadside::RoadsidePlugin);
         app.add_plugins(fortifications::FortificationPlugin);
+        app.add_plugins(bridges::BridgePlugin);
+        app.add_plugins(shipping::ShippingVisualPlugin);
         app.init_resource::<BuildingDoorAssets>();
         app.init_resource::<roads::VillageRoadPaintState>();
         app.init_resource::<roads::GroundPaintReadiness>();

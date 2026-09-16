@@ -82,6 +82,15 @@ impl Plugin for ProtocolPlugin {
         app.component::<CompanyTradeRoute>().replicate();
         app.component::<TradeRouteSchedule>().replicate();
         app.component::<TradeRouteHistory>().replicate();
+        app.component::<crate::components::ShipId>().replicate();
+        app.component::<crate::components::ShipOrderId>().replicate();
+        app.component::<crate::components::SettlementPort>().replicate();
+        app.component::<crate::components::CompanyShip>().replicate();
+        app.component::<crate::components::CompanyFleet>().replicate();
+        app.component::<crate::components::SettlementPortSummary>().replicate();
+        app.component::<crate::components::ShipConstructionOrder>().replicate();
+        app.component::<crate::components::MaritimeTradeRoute>().replicate();
+        app.component::<crate::components::AboardShip>().replicate();
         app.component::<ResidentOf>().replicate();
         app.component::<BuildingOf>().replicate();
         app.component::<AttachedTo>().replicate();
@@ -182,6 +191,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<WorkforceRequirements>().replicate();
         app.component::<BuildingDoorDemand>().replicate();
         app.component::<VillageRoad>().replicate();
+        app.component::<crate::components::RoadBridge>().replicate();
         app.component::<crate::components::FortificationSegment>()
             .replicate();
         app.component::<crate::components::SettlementCivicSquare>()
@@ -253,6 +263,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HeroTradeRouteOrder>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroMaritimeOrder>()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HeroCompanyFoundingOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
@@ -292,10 +304,13 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<HeroConstructionResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroBusinessResult>()
+            .add_map_entities()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroCompanyResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroTradeRouteResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HeroMaritimeResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroCompanyFoundingResult>()
             .add_direction(NetworkDirection::ServerToClient);

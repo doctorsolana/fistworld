@@ -22,6 +22,7 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::player::hero::HeroIndex>();
     app.init_resource::<crate::player::hero::TacticalCrowdGrid>();
     app.init_resource::<crate::player::boat::VesselNavigationQueue>();
+    app.init_resource::<crate::player::boat::clearance::WaterNavigationGeometry>();
     app.init_resource::<crate::player::permits::PermitIdAllocator>();
     app.init_resource::<crate::player::army::BattalionLedger>();
     app.init_resource::<crate::world::dev::VillagerSeed>();
@@ -31,8 +32,6 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::world::navgrid::ObstacleGridState>();
     app.init_resource::<crate::world::regions::RegionRegistry>();
     app.init_resource::<crate::world::regions::ClientInterest>();
-    app.init_resource::<crate::world::regions::StrategicClock>();
-    app.init_resource::<crate::world::regions::StrategicStep>();
     app.init_resource::<crate::world::identity::WorldIdAllocator>();
     app.init_resource::<crate::world::identity::WorldIdentityIndex>();
     app.init_resource::<crate::world::settlement_directory::SettlementDirectory>();
@@ -42,7 +41,6 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::world::village::ambient::AmbientClock>();
     app.init_resource::<crate::world::village::ambient::AmbientSpotCache>();
     app.init_resource::<crate::world::village::PublishedTerrainDeltas>();
-    app.init_resource::<crate::world::village::strategic::StrategicProductionProgress>();
     app.init_resource::<crate::world::village_roads::VillageRoadGraph>();
     app.init_resource::<crate::world::village_roads::NavigationLoad>();
     app.init_resource::<crate::world::pathfinding::PathfindingBudgetSettings>();

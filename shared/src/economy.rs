@@ -14,6 +14,7 @@ mod accounts;
 mod business;
 mod civic;
 mod company;
+mod demand;
 mod goods;
 mod history;
 mod inventory;
@@ -49,6 +50,7 @@ pub use company::{
     CompanyDayLedger, CompanyDecisionHistory, CompanyDecisionReason, CompanyDecisionRecord,
     CompanyManagementPolicy, CompanyResourcePolicy,
 };
+pub use demand::FundedDemandCurve;
 pub use goods::{Good, MarketTradeTier};
 pub use history::{
     BusinessHistoryArchive, BusinessHistoryDay, CivicHistoryDay, CompanyHistoryArchive,

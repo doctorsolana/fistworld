@@ -3,8 +3,8 @@
 use super::*;
 use crate::player::{
     combat::{
+        AttackOrder, MELEE_REACH, WarParty,
         hostility::{Allegiance, CombatIntents, HostilityIndex},
-        AttackOrder, WarParty, MELEE_REACH,
     },
     hero::{MoveTarget, OfflineHero},
     orders::CommandStance,
@@ -188,7 +188,7 @@ pub fn rebuild_combat_space(
             Or<(With<CommandedBy>, With<WarParty>)>,
             Without<OfflineHero>,
             Without<AboardBoat>,
-            Without<crate::world::village::strategic::StrategicPerson>,
+            Without<shared::components::AboardShip>,
         ),
     >,
     intents: CombatIntents,

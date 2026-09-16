@@ -210,7 +210,10 @@ fn migration_repairs_an_obsolete_hall_centre_target() {
 fn a_failed_migrant_on_the_front_forecourt_joins_the_line_instead_of_cooling_down() {
     let mut app = village_test_app();
     app.init_resource::<MootQueueClock>();
-    app.add_systems(Update, arrive_at_settlement);
+    app.add_systems(
+        Update,
+        (arrive_at_settlement, advance_moot_service_queues).chain(),
+    );
 
     let hall_position = Vec3::new(120.0, 18.0, -40.0);
     let settlement = app
@@ -232,6 +235,8 @@ fn a_failed_migrant_on_the_front_forecourt_joins_the_line_instead_of_cooling_dow
         .world_mut()
         .spawn((
             PlayerPosition(position),
+            PlayerRotation(0.0),
+            CharacterActivity::Idle,
             VillagerIntent::Travelling { settlement },
             MoveTarget(goal),
             NavigationRouteFailed { goal },
@@ -290,9 +295,11 @@ fn rear_hall_upgrade_reservation_cannot_steal_a_migrants_door_route() {
 
     let villager = app.world().entity(villager);
     assert!(villager.get::<MootQueueTicket>().is_none());
-    assert!(villager
-        .get::<MoveTarget>()
-        .is_some_and(|target| target.0.distance_squared(entrance) < 0.01));
+    assert!(
+        villager
+            .get::<MoveTarget>()
+            .is_some_and(|target| target.0.distance_squared(entrance) < 0.01)
+    );
     assert!(matches!(
         villager.get::<VillagerIntent>(),
         Some(VillagerIntent::Travelling { settlement: target }) if *target == settlement
@@ -301,9 +308,9 @@ fn rear_hall_upgrade_reservation_cannot_steal_a_migrants_door_route() {
 
 #[test]
 fn rear_reservation_migrant_walks_around_the_moot_and_clears_the_line_at_one_and_ten_x() {
-    use crate::collision::building_index::{sync_building_spatial_index, BuildingSpatialIndex};
+    use crate::collision::building_index::{BuildingSpatialIndex, sync_building_spatial_index};
     use crate::player::hero::step_units;
-    use crate::world::navgrid::{sync_obstacle_grid, ObstacleGridState};
+    use crate::world::navgrid::{ObstacleGridState, sync_obstacle_grid};
     use crate::world::pathfinding::PathfindingBudgetSettings;
     use shared::components::TimeWarp;
     use shared::region::RegionCoord;
@@ -399,13 +406,17 @@ fn rear_reservation_migrant_walks_around_the_moot_and_clears_the_line_at_one_and
             }
         }
 
-        assert!(matches!(
-            app.world().get::<VillagerIntent>(villager),
-            Some(VillagerIntent::Resident { settlement: home }) if *home == settlement
-        ), "the {warp}x migrant never reached the front queue from the rear reservation; position={:?} target={:?} pending={} failed={} ticket={:?}",
+        assert!(
+            matches!(
+                app.world().get::<VillagerIntent>(villager),
+                Some(VillagerIntent::Resident { settlement: home }) if *home == settlement
+            ),
+            "the {warp}x migrant never reached the front queue from the rear reservation; position={:?} target={:?} pending={} failed={} ticket={:?}",
             app.world().get::<PlayerPosition>(villager),
             app.world().get::<MoveTarget>(villager),
-            app.world().get::<NavigationRoutePending>(villager).is_some(),
+            app.world()
+                .get::<NavigationRoutePending>(villager)
+                .is_some(),
             app.world().get::<NavigationRouteFailed>(villager).is_some(),
             app.world().get::<MootQueueTicket>(villager),
         );
@@ -414,127 +425,259 @@ fn rear_reservation_migrant_walks_around_the_moot_and_clears_the_line_at_one_and
             1
         );
         assert!(app.world().get::<MootQueueTicket>(villager).is_none());
-        assert!(app
-            .world()
-            .get::<NavigationRoutePending>(villager)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<NavigationRoutePending>(villager)
+                .is_none()
+        );
         assert!(app.world().get::<NavigationRouteFailed>(villager).is_none());
     }
 }
 
-#[test]
-fn thirty_then_thirty_immigrants_recover_across_day_two_and_warp_changes() {
-    use shared::components::TimeWarp;
-
+/// Complete shared immigration flow on explicitly dry, finite ground. The final
+/// walk-away order stands in for downstream daily activity, but uses the real
+/// navigation/movement systems and never rewrites a migrant's position.
+fn physical_immigration_app() -> App {
+    use crate::collision::building_index::{BuildingSpatialIndex, sync_building_spatial_index};
+    use crate::world::navgrid::{ObstacleGridState, sync_obstacle_grid};
     let mut app = village_test_app();
-    app.init_resource::<Time>();
-    app.init_resource::<VillageClock>();
+    app.init_resource::<Time>()
+        .init_resource::<VillageClock>()
+        .init_resource::<BuildingSpatialIndex>()
+        .init_resource::<ObstacleGridState>()
+        .init_resource::<SpatialObstacleGrid>()
+        .init_resource::<VillageRoadGraph>()
+        .insert_resource(super::fixtures::dry_test_terrain())
+        .insert_resource(crate::world::pathfinding::PathfindingBudgetSettings {
+            max_requests_per_tick: 16,
+            max_milliseconds_per_tick: 50.0,
+        });
     app.add_systems(
         Update,
-        (seek_settlement, arrive_at_settlement, recount_residents).chain(),
+        (
+            claim_settlement_hall_obstacles,
+            sync_building_spatial_index,
+            sync_obstacle_grid,
+            tag_villager_intent,
+            seek_settlement,
+            arrive_at_settlement,
+            advance_immigration_departures,
+            advance_moot_service_queues,
+            walk_registered_immigrants_away,
+            recount_residents,
+            crate::world::village_roads::rebuild_village_road_graph,
+            crate::world::village_roads::queue_villager_travel_routes,
+            crate::world::village_roads::plan_villager_travel_routes,
+            crate::player::hero::step_units,
+        )
+            .chain(),
     );
+    app
+}
 
-    let first_hall_position = Vec3::ZERO;
-    let second_hall_position = Vec3::new(100.0, 0.0, 0.0);
-    let first_hall = app
-        .world_mut()
-        .spawn((
-            Settlement {
-                name: "Nearford".into(),
-                tier: shared::components::SettlementTier::Hamlet,
-                residents: 0,
-                treasury: 0,
-            },
-            PlayerPosition(first_hall_position),
-            PlayerRotation(0.0),
-        ))
-        .id();
-    let second_hall = app
-        .world_mut()
-        .spawn((
-            Settlement {
-                name: "Farford".into(),
-                tier: shared::components::SettlementTier::Hamlet,
-                residents: 0,
-                treasury: 0,
-            },
-            PlayerPosition(second_hall_position),
-            PlayerRotation(0.0),
-        ))
-        .id();
-    let clock = app
-        .world_mut()
-        .spawn((WorldTime::new_default(), TimeWarp::clamped(100.0)))
-        .id();
-    let failed_goal = SettlementBuildingKind::Hall.entrance_position(first_hall_position, 0.0);
-
-    let mut first_wave = Vec::new();
-    for index in 0..30 {
-        let position = Vec3::new(20.0, 0.0, index as f32 * 0.05);
-        first_wave.push(
-            app.world_mut()
-                .spawn((
-                    PlayerPosition(position),
-                    VillagerIntent::Travelling {
-                        settlement: first_hall,
-                    },
-                    MoveTarget(failed_goal),
-                    NavigationRouteFailed { goal: failed_goal },
-                ))
-                .id(),
-        );
+fn walk_registered_immigrants_away(
+    mut commands: Commands,
+    people: Query<
+        (Entity, &shared::components::PersonId, &VillagerIntent),
+        Changed<VillagerIntent>,
+    >,
+    halls: Query<&PlayerPosition, With<Settlement>>,
+) {
+    for (entity, id, intent) in &people {
+        let VillagerIntent::Resident { settlement } = intent else {
+            continue;
+        };
+        let Ok(hall) = halls.get(*settlement) else {
+            continue;
+        };
+        let rank = id.0 % 120;
+        let destination = hall.0
+            + Vec3::new(
+                30.0 + (rank % 10) as f32 * 1.5,
+                0.0,
+                -35.0 - (rank / 10) as f32 * 1.5,
+            );
+        commands.entity(entity).insert(MoveTarget(destination));
     }
+}
 
-    // The failed cohort must return to decision-making, not remain counted
-    // as embodied-but-not-resident travellers forever.
+fn migrant(app: &mut App, index: usize, position: Vec3, intent: VillagerIntent) -> Entity {
+    app.world_mut()
+        .spawn((
+            CharacterName(format!("Migrant{index:03}")),
+            CharacterKind::Villager,
+            CharacterActivity::Idle,
+            PlayerPosition(position),
+            PlayerRotation(0.0),
+            shared::region::RegionCoord::from_world_pos(position),
+            intent,
+        ))
+        .id()
+}
+
+fn tick_immigration(app: &mut App, seconds: f32) {
     app.world_mut()
         .resource_mut::<Time>()
-        .advance_by(std::time::Duration::from_secs_f32(3.1));
+        .advance_by(std::time::Duration::from_secs_f32(seconds));
     app.update();
+}
+
+fn registered(app: &App, entity: Entity, hall: Entity) -> bool {
+    matches!(app.world().get::<VillagerIntent>(entity), Some(VillagerIntent::Resident { settlement }) if *settlement == hall)
+}
+
+#[test]
+fn thirty_then_thirty_immigrants_recover_across_day_two_and_warp_changes() {
+    let mut app = physical_immigration_app();
+    let first_hall_position = Vec3::ZERO;
+    let second_hall_position = Vec3::new(100.0, 0.0, 0.0);
+    let halls: Vec<_> = [
+        ("Nearford", first_hall_position),
+        ("Farford", second_hall_position),
+    ]
+    .into_iter()
+    .map(|(name, position)| {
+        app.world_mut()
+            .spawn((
+                Settlement {
+                    name: name.into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 0,
+                    treasury: 0,
+                },
+                PlayerPosition(position),
+                PlayerRotation(0.0),
+            ))
+            .id()
+    })
+    .collect();
+    let (first_hall, second_hall) = (halls[0], halls[1]);
+    let clock = app
+        .world_mut()
+        .spawn((
+            WorldTime::new_default(),
+            shared::components::TimeWarp::clamped(100.0),
+        ))
+        .id();
+    let failed_goal = SettlementBuildingKind::Hall.entrance_position(first_hall_position, 0.0);
+    let mut first_wave = Vec::new();
+    for index in 0..30 {
+        let at = Vec3::new(
+            20.0 + (index % 6) as f32 * 1.1,
+            0.0,
+            -20.0 + (index / 6) as f32 * 1.1,
+        );
+        let entity = migrant(
+            &mut app,
+            index,
+            at,
+            VillagerIntent::Travelling {
+                settlement: first_hall,
+            },
+        );
+        app.world_mut().entity_mut(entity).insert((
+            MoveTarget(failed_goal),
+            NavigationRouteFailed { goal: failed_goal },
+        ));
+        first_wave.push(entity);
+    }
+    tick_immigration(&mut app, 3.1);
     assert!(first_wave.iter().all(|entity| matches!(
         app.world().get::<VillagerIntent>(*entity),
         Some(VillagerIntent::Idle)
     )));
+    assert!(
+        first_wave
+            .iter()
+            .all(|entity| app.world().get::<NavigationRouteFailed>(*entity).is_none())
+    );
 
-    // At 10x the next bounded seek passes exclude Nearford only for these
-    // people, so they choose the other viable town. Thirty migrants require
-    // four real-time admission batches; warp changes never alter that CPU
-    // pacing or the state transition.
-    app.world_mut().get_mut::<TimeWarp>(clock).unwrap().0 = 10.0;
+    // A failed cohort chooses the other town in bounded real-time batches,
+    // then actually walks to its FIFO counter and clears the protected exit.
+    app.world_mut()
+        .get_mut::<shared::components::TimeWarp>(clock)
+        .unwrap()
+        .0 = 10.0;
     for _ in 0..4 {
-        app.world_mut()
-            .resource_mut::<Time>()
-            .advance_by(std::time::Duration::from_secs_f32(0.26));
-        app.update();
+        tick_immigration(&mut app, 0.26);
     }
-    assert!(first_wave.iter().all(|entity| matches!(
-        app.world().get::<VillagerIntent>(*entity),
-        Some(VillagerIntent::Travelling { settlement }) if *settlement == second_hall
-    )));
-    for entity in &first_wave {
-        app.world_mut()
-            .get_mut::<PlayerPosition>(*entity)
-            .unwrap()
-            .0 = second_hall_position;
+    assert!(first_wave.iter().all(
+        |entity| matches!(app.world().get::<VillagerIntent>(*entity),
+        Some(VillagerIntent::Travelling { settlement }) if *settlement == second_hall)
+    ));
+    let mut saw_queue = false;
+    let mut saw_departure = false;
+    for _ in 0..6_000 {
+        tick_immigration(&mut app, 1.0 / 60.0);
+        saw_queue |= first_wave
+            .iter()
+            .any(|entity| app.world().get::<MootQueueTicket>(*entity).is_some());
+        saw_departure |= first_wave.iter().any(|entity| {
+            app.world()
+                .get::<super::super::population::ImmigrationDeparture>(*entity)
+                .is_some()
+        });
+        if first_wave
+            .iter()
+            .all(|entity| registered(&app, *entity, second_hall))
+        {
+            break;
+        }
     }
-    app.update();
+    assert!(
+        saw_queue && saw_departure,
+        "first cohort skipped physical registration"
+    );
+    assert!(
+        first_wave
+            .iter()
+            .all(|entity| registered(&app, *entity, second_hall)),
+        "first cohort did not clear Farford's queue"
+    );
 
-    // Day two receives a fresh cohort. Their choices are independent of
-    // the first cohort's cooldown, so they can join the nearer town.
     app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 2;
-    app.world_mut().get_mut::<TimeWarp>(clock).unwrap().0 = 100.0;
+    app.world_mut()
+        .get_mut::<shared::components::TimeWarp>(clock)
+        .unwrap()
+        .0 = 100.0;
+    let mut second_wave = Vec::new();
     for index in 0..30 {
-        let position = first_hall_position + Vec3::new(0.0, 0.0, index as f32 * 0.01);
-        app.world_mut()
-            .spawn((PlayerPosition(position), VillagerIntent::Idle));
+        let at = Vec3::new(
+            20.0 + (index % 6) as f32 * 1.1,
+            0.0,
+            -20.0 + (index / 6) as f32 * 1.1,
+        );
+        second_wave.push(migrant(&mut app, index + 30, at, VillagerIntent::Idle));
     }
-    for _ in 0..4 {
-        app.world_mut()
-            .resource_mut::<Time>()
-            .advance_by(std::time::Duration::from_secs_f32(0.26));
-        app.update();
+    saw_queue = false;
+    saw_departure = false;
+    for _ in 0..3_600 {
+        tick_immigration(&mut app, 1.0 / 60.0);
+        saw_queue |= second_wave
+            .iter()
+            .any(|entity| app.world().get::<MootQueueTicket>(*entity).is_some());
+        saw_departure |= second_wave.iter().any(|entity| {
+            app.world()
+                .get::<super::super::population::ImmigrationDeparture>(*entity)
+                .is_some()
+        });
+        if second_wave
+            .iter()
+            .all(|entity| registered(&app, *entity, first_hall))
+        {
+            break;
+        }
     }
-
+    assert!(
+        saw_queue && saw_departure,
+        "second cohort skipped physical registration"
+    );
+    assert!(
+        second_wave
+            .iter()
+            .all(|entity| registered(&app, *entity, first_hall)),
+        "second cohort did not clear Nearford's queue"
+    );
     assert_eq!(
         app.world().get::<Settlement>(first_hall).unwrap().residents,
         30
@@ -546,57 +689,21 @@ fn thirty_then_thirty_immigrants_recover_across_day_two_and_warp_changes() {
             .residents,
         30
     );
-    let (resident_intents, failed_routes) = {
-        let world = app.world_mut();
-        let resident_intents = world
-            .query::<&VillagerIntent>()
-            .iter(world)
-            .filter(|intent| intent.counts_as_resident())
-            .count();
-        let failed_routes = world.query::<&NavigationRouteFailed>().iter(world).count();
-        (resident_intents, failed_routes)
-    };
-    assert_eq!(resident_intents, 60);
-    assert_eq!(failed_routes, 0);
+    for entity in first_wave.into_iter().chain(second_wave) {
+        assert!(app.world().get::<MootQueueTicket>(entity).is_none());
+        assert!(
+            app.world()
+                .get::<super::super::population::ImmigrationDeparture>(entity)
+                .is_none()
+        );
+        assert!(app.world().get::<NavigationRouteFailed>(entity).is_none());
+    }
 }
 
 #[test]
-fn one_hundred_twenty_real_routes_join_without_queue_starvation_at_100x() {
-    use crate::player::hero::step_units;
-    use crate::world::pathfinding::PathfindingBudgetSettings;
-    use shared::components::{CharacterKind, TimeWarp};
-    use shared::region::RegionCoord;
-
-    let mut app = village_test_app();
-    app.init_resource::<Time>();
-    app.init_resource::<VillageClock>();
-    app.init_resource::<crate::world::village_roads::VillageRoadGraph>();
-    app.insert_resource(PathfindingBudgetSettings {
-        max_requests_per_tick: 16,
-        ..default()
-    });
-    app.insert_resource(WorldTerrain::default());
-    app.add_systems(
-        Update,
-        (
-            claim_settlement_hall_obstacles,
-            tag_villager_intent,
-            seek_settlement,
-            arrive_at_settlement,
-            recount_residents,
-            crate::world::village_roads::rebuild_village_road_graph,
-            crate::world::village_roads::queue_villager_travel_routes,
-            crate::world::village_roads::plan_villager_travel_routes,
-            step_units,
-        )
-            .chain(),
-    );
-
-    let hall_y = app
-        .world()
-        .resource::<WorldTerrain>()
-        .get_height(1_700.0, 0.0);
-    let hall_position = Vec3::new(1_700.0, hall_y, 0.0);
+fn one_hundred_twenty_immigrants_pass_bounded_admission_then_the_physical_counter_at_100x() {
+    let mut app = physical_immigration_app();
+    let hall_position = Vec3::ZERO;
     let hall = app
         .world_mut()
         .spawn((
@@ -610,68 +717,168 @@ fn one_hundred_twenty_real_routes_join_without_queue_starvation_at_100x() {
             PlayerRotation(0.0),
         ))
         .id();
-    app.world_mut()
-        .spawn((WorldTime::new_default(), TimeWarp::clamped(100.0)));
+    app.world_mut().spawn((
+        WorldTime::new_default(),
+        shared::components::TimeWarp::clamped(100.0),
+    ));
+    let mut people = Vec::new();
     for index in 0..120 {
-        let x = 1_738.0 + (index % 6) as f32 * 0.35;
-        let z = (index / 6) as f32 * 0.08 - 0.8;
-        let y = app.world().resource::<WorldTerrain>().get_height(x, z);
-        let position = Vec3::new(x, y, z);
-        app.world_mut().spawn((
-            CharacterName(format!("CrowdImmigrant{index:03}")),
-            CharacterKind::Villager,
-            CharacterActivity::Idle,
-            PlayerPosition(position),
-            PlayerRotation(0.0),
-            RegionCoord::from_world_pos(position),
-        ));
+        let at = Vec3::new(
+            38.0 + (index % 6) as f32 * 1.2,
+            0.0,
+            -24.0 + (index / 6) as f32 * 1.2,
+        );
+        people.push(migrant(&mut app, index, at, VillagerIntent::Idle));
     }
-
-    let tick = std::time::Duration::from_secs_f32(1.0 / 60.0);
     let started = std::time::Instant::now();
-    // Admissions are intentionally paced at 32 people per real second, so a
-    // paused 120-person burst cannot become 120 simultaneous A* requests.
-    // Five real seconds covers admission plus the final embodied approach.
-    for _ in 0..300 {
-        app.world_mut().resource_mut::<Time>().advance_by(tick);
-        app.update();
-    }
-    let elapsed = started.elapsed();
-
-    let counted_residents = app.world().get::<Settlement>(hall).unwrap().residents;
-    let (idle, travelling, residents, pending, failed) = {
-        let world = app.world_mut();
-        let mut totals = (0, 0, 0, 0, 0);
-        for (intent, route_pending, route_failed) in world
-            .query::<(
-                &VillagerIntent,
-                Has<NavigationRoutePending>,
-                Has<NavigationRouteFailed>,
-            )>()
-            .iter(world)
-        {
-            totals.0 += usize::from(matches!(intent, VillagerIntent::Idle));
-            totals.1 += usize::from(matches!(intent, VillagerIntent::Travelling { .. }));
-            totals.2 += usize::from(intent.counts_as_resident());
-            totals.3 += usize::from(route_pending);
-            totals.4 += usize::from(route_failed);
+    let mut queued = HashSet::new();
+    let mut departing = HashSet::new();
+    for tick in 0..3_600 {
+        tick_immigration(&mut app, 1.0 / 60.0);
+        for entity in &people {
+            if app.world().get::<MootQueueTicket>(*entity).is_some() {
+                queued.insert(*entity);
+            }
+            if app
+                .world()
+                .get::<super::super::population::ImmigrationDeparture>(*entity)
+                .is_some()
+            {
+                departing.insert(*entity);
+            }
         }
-        totals
-    };
+        if tick == 299 {
+            assert!(
+                people.iter().all(|entity| !matches!(
+                    app.world().get::<VillagerIntent>(*entity),
+                    Some(VillagerIntent::Idle)
+                )),
+                "bounded seek admissions starved part of the 120-person cohort"
+            );
+        }
+        if tick >= 299 && people.iter().all(|entity| registered(&app, *entity, hall)) {
+            break;
+        }
+    }
     assert_eq!(
-        (
-            counted_residents,
-            idle,
-            travelling,
-            residents,
-            pending,
-            failed
-        ),
-        (120, 0, 0, 120, 0, 0),
-        "120-person migration failed after {elapsed:?}"
+        queued.len(),
+        120,
+        "every applicant must physically join the Moot queue"
     );
-    assert!(
-        elapsed < std::time::Duration::from_secs(8),
-        "cached shared-destination migration took {elapsed:?}"
+    assert_eq!(
+        departing.len(),
+        120,
+        "every applicant must retain the physical departure phase"
     );
+    assert_eq!(app.world().get::<Settlement>(hall).unwrap().residents, 120);
+    for entity in people {
+        assert!(registered(&app, entity, hall));
+        assert!(app.world().get::<MootQueueTicket>(entity).is_none());
+        assert!(
+            app.world()
+                .get::<super::super::population::ImmigrationDeparture>(entity)
+                .is_none()
+        );
+        assert!(app.world().get::<NavigationRouteFailed>(entity).is_none());
+    }
+    eprintln!(
+        "120-person bounded admission, FIFO and physical departure completed in {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn citizenship_begins_after_actual_hall_service_and_departure_at_both_warps() {
+    use shared::components::{EmployedAt, ResidentOf, SettlementId, TimeWarp};
+    for warp in [1.0, 25.0] {
+        let mut app = physical_immigration_app();
+        // The production chain reconciles identity after departures. The
+        // reusable fixture also has a PreUpdate mirror; this last pass makes
+        // the same-tick registration boundary explicit for this regression.
+        app.add_systems(
+            PostUpdate,
+            crate::world::identity::reconcile_stable_world_relationships,
+        );
+        app.world_mut()
+            .spawn((WorldTime::new_default(), TimeWarp::clamped(warp)));
+        let id = SettlementId(91);
+        let hall = app
+            .world_mut()
+            .spawn((
+                id,
+                Settlement {
+                    name: "Registration boundary".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 0,
+                    treasury: 0,
+                },
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.),
+            ))
+            .id();
+        let start = Vec3::new(-22., 0., -26.);
+        let actor = migrant(
+            &mut app,
+            0,
+            start,
+            VillagerIntent::Travelling { settlement: hall },
+        );
+        let entrance = SettlementBuildingKind::Hall.entrance_position(Vec3::ZERO, 0.);
+        app.world_mut()
+            .entity_mut(actor)
+            .insert(MoveTarget(entrance));
+        let mut saw_queue = false;
+        let mut saw_ready = false;
+        let mut saw_departure = false;
+        for _ in 0..3_600 {
+            tick_immigration(&mut app, 1. / 60.);
+            if let Some(ticket) = app.world().get::<MootQueueTicket>(actor) {
+                saw_queue = true;
+                saw_ready |= ticket.is_ready();
+            }
+            saw_departure |= app
+                .world()
+                .get::<crate::world::village::population::ImmigrationDeparture>(actor)
+                .is_some();
+            if registered(&app, actor, hall) {
+                break;
+            }
+            assert!(
+                app.world().get::<ResidentOf>(actor).is_none(),
+                "{warp}x travel/queue published citizenship early"
+            );
+            assert!(app.world().get::<Residence>(actor).is_none());
+            assert!(app.world().get::<EmployedAt>(actor).is_none());
+            assert!(app.world().get::<HomeAssignment>(actor).is_none());
+            assert_eq!(app.world().get::<Settlement>(hall).unwrap().residents, 0);
+        }
+        assert!(
+            registered(&app, actor, hall),
+            "{warp}x physical registration did not finish"
+        );
+        assert!(
+            saw_queue && saw_ready && saw_departure,
+            "registration must include real FIFO service and protected exit"
+        );
+        assert_eq!(app.world().get::<ResidentOf>(actor), Some(&ResidentOf(id)));
+        assert_eq!(app.world().get::<Settlement>(hall).unwrap().residents, 1);
+        assert_eq!(
+            app.world().get::<Residence>(actor).unwrap().0,
+            "Registration boundary"
+        );
+        assert!(app.world().get::<MootQueueTicket>(actor).is_none());
+        assert!(
+            app.world()
+                .get::<crate::world::village::population::ImmigrationDeparture>(actor)
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .get::<PlayerPosition>(actor)
+                .unwrap()
+                .0
+                .distance(start)
+                > 10.
+        );
+    }
 }

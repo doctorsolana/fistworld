@@ -1,0 +1,122 @@
+{
+  "status": "standalone art draft; not registered in the game",
+  "axes": "Blender +Y seaward / glTF -Z seaward; origin at shore water datum",
+  "deck_height": 1.0,
+  "main_pier_width": 4.4,
+  "main_pier_length": 14.0,
+  "head_width": 16.0,
+  "head_depth": 4.0,
+  "shore_to_head": 20.0,
+  "walkable_rectangles_blender_xy": [
+    [
+      -8.4,
+      6.4,
+      -5.4,
+      2.0
+    ],
+    [
+      -2.2,
+      2.2,
+      2.0,
+      16.0
+    ],
+    [
+      -8.0,
+      8.0,
+      16.0,
+      20.0
+    ]
+  ],
+  "minimum_clear_main_lane": 2.4,
+  "primary_cog_envelope_blender": {
+    "center": [
+      0,
+      22.6,
+      0
+    ],
+    "length_along_x": 9.0,
+    "beam": 3.2,
+    "draft": 1.0
+  },
+  "anchors_blender": {
+    "Anchor_Shore": [
+      0,
+      0,
+      1.0
+    ],
+    "Anchor_PierEnd": [
+      0,
+      20,
+      1.0
+    ],
+    "Anchor_Berth": [
+      0,
+      22.6,
+      0
+    ],
+    "Anchor_Departure": [
+      15,
+      22.6,
+      0
+    ],
+    "Anchor_GangwayPier": [
+      0,
+      20,
+      1.0
+    ],
+    "Anchor_GangwayShip": [
+      0,
+      21.05,
+      0.64
+    ],
+    "Anchor_Door": [
+      -5.25,
+      1.55,
+      1.0
+    ],
+    "Anchor_Cargo": [
+      4.3,
+      -1.4,
+      1.0
+    ],
+    "Light_Office": [
+      -5.25,
+      -2.0,
+      2.8
+    ],
+    "Light_Door": [
+      -6.38,
+      0.6,
+      3.38
+    ],
+    "Light_Pier": [
+      -7.1,
+      18.95,
+      3.7
+    ],
+    "Anchor_HoistHook": [
+      9.15,
+      18.4,
+      2.25
+    ]
+  },
+  "geometry": {
+    "gpu_vertices": 19500,
+    "triangles": 9812,
+    "bytes": 771952,
+    "meshes": 10,
+    "materials": 2,
+    "animations": [
+      "door_close",
+      "door_open"
+    ],
+    "editable_vertices": 7661
+  },
+  "integration_notes": [
+    "The existing port uses a 2 m surveyed straight pier, one berth and variable length.",
+    "This wider T-head requires a later survey/navigation contract update; do not replace procedural geometry blindly.",
+    "Pile bottoms are a -2.8 m study depth; adapt them to the surveyed seabed.",
+    "Never bake one solid convex hull around the port. Walkable deck and obstacle data must remain separate.",
+    "Door clips and light anchors are prepared; runtime wiring is intentionally not added."
+  ]
+}

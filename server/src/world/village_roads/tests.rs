@@ -1,6 +1,86 @@
 use super::*;
 
+mod goal_props;
+mod long_range;
+mod personal_needs;
+mod ports;
+mod regional_replay;
 mod tavern;
+
+#[test]
+fn regional_survey_refines_a_narrow_gate_beyond_both_endpoint_aprons() {
+    let mut terrain = WorldTerrain::default();
+    terrain.apply_flatten_rect(
+        Vec3::new(1700.0, 80.0, 0.0),
+        Vec2::new(150.0, 70.0),
+        0.0,
+        4.0,
+    );
+    // A two-metre opening at z=3 cannot be crossed by the coarse z=0/6
+    // lattice. It is far outside both endpoint circles and still a valid
+    // ordinary pedestrian lane. These are already-expanded collision boxes.
+    let buildings = [
+        BuildingBlocker {
+            center: Vec2::new(1700.0, -49.0),
+            half: Vec2::new(0.75, 51.0),
+            rotation: 0.0,
+        },
+        BuildingBlocker {
+            center: Vec2::new(1700.0, 53.0),
+            half: Vec2::new(0.75, 49.0),
+            rotation: 0.0,
+        },
+    ];
+    let mut live = SpatialObstacleGrid::default();
+    for building in buildings {
+        live.insert(shared::spatial::ObstacleEntry {
+            center: building.center,
+            half_extents: building.half,
+            rotation: building.rotation,
+            obstacle_type: 0,
+        });
+    }
+    let props = PropBlockers::default();
+    let survey = RoadSurvey {
+        decks: None,
+        terrain: &terrain,
+        buildings: &buildings,
+        live_buildings: Some(&live),
+        props: &props,
+        start: Vec2::new(1602.0, 0.0),
+        goal: Vec2::new(1800.0, 0.0),
+        min: Vec2::new(1580.0, -20.0),
+        max: Vec2::new(1820.0, 20.0),
+        max_nodes: INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: INTERSETTLEMENT_SURVEY_STRIDE,
+        fine_endpoint_radius: INTERSETTLEMENT_FINE_ENDPOINT_RADIUS,
+    };
+    assert_eq!(
+        survey.stride_at(Vec2::new(1650.0, 0.0)),
+        4,
+        "open country must keep coarse cells"
+    );
+    assert_eq!(
+        survey.stride_at(Vec2::new(1692.0, 3.0)),
+        1,
+        "a real narrow opening needs a fine approach outside the endpoint circle"
+    );
+    let mut scratch = SurveyScratch::default();
+    let path = survey_a_star(&survey, &mut scratch);
+    assert!(
+        !path.is_empty(),
+        "the existing bounded search must find the actual gate"
+    );
+    assert!(
+        path.windows(2)
+            .all(|p| survey.line_clear(p[0], p[1], &mut scratch))
+    );
+    assert!(
+        path.iter()
+            .any(|p| (p.x - 1700.0).abs() <= 1.5 && (p.y - 3.0).abs() < 1.0)
+    );
+}
 
 #[test]
 fn founding_corridor_reserves_dense_checks_for_the_chosen_route() {
@@ -13,6 +93,7 @@ fn founding_corridor_reserves_dense_checks_for_the_chosen_route() {
         rotation: 0.0,
     }];
     let survey = RoadSurvey {
+        decks: None,
         terrain: &terrain,
         buildings: &walls,
         live_buildings: None,
@@ -39,9 +120,10 @@ fn founding_corridor_reserves_dense_checks_for_the_chosen_route() {
         measured.metrics.line_checks,
         reference.metrics.line_checks
     );
-    assert!(path
-        .windows(2)
-        .all(|edge| survey.line_clear(edge[0], edge[1], &mut measured)));
+    assert!(
+        path.windows(2)
+            .all(|edge| survey.line_clear(edge[0], edge[1], &mut measured))
+    );
 }
 
 #[test]
@@ -58,6 +140,7 @@ fn optimistic_corridor_never_certifies_a_missed_thin_obstruction() {
             rotation: 0.0,
         };
         let survey = RoadSurvey {
+            decks: None,
             terrain: &terrain,
             buildings: &[wall],
             live_buildings: None,
@@ -83,9 +166,10 @@ fn optimistic_corridor_never_certifies_a_missed_thin_obstruction() {
         if half_length < 24.0 {
             assert_eq!(path.first(), Some(&survey.start));
             assert_eq!(path.last(), Some(&survey.goal));
-            assert!(path
-                .windows(2)
-                .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
+            assert!(
+                path.windows(2)
+                    .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch))
+            );
         } else {
             assert!(
                 path.is_empty(),
@@ -224,6 +308,7 @@ fn long_visible_route_simplification_checks_fewer_rays_and_preserves_endpoints()
     );
     let props = PropBlockers::default();
     let survey = RoadSurvey {
+        decks: None,
         terrain: &terrain,
         buildings: &[],
         live_buildings: None,
@@ -247,6 +332,99 @@ fn long_visible_route_simplification_checks_fewer_rays_and_preserves_endpoints()
         scratch.metrics.line_checks < 20,
         "long clear stretches must not resample every growing prefix"
     );
+}
+
+#[test]
+#[ignore = "loads village_lab terrain and changes process-global map bounds; run isolated"]
+fn trade_lab_carrier_can_leave_stone_housing_for_meadow_market() {
+    let terrain = WorldTerrain::from_loaded_map(shared::map::load_map("village_lab").unwrap());
+    let mut app = App::new();
+    app.add_systems(Update, crate::collision::library::setup_baked_colliders);
+    app.update();
+    let derived = app
+        .world_mut()
+        .remove_resource::<DerivedColliderLibrary>()
+        .unwrap();
+    let start = Vec2::new(-406.45, 79.712944);
+    let goal = Vec2::new(-108.0, 212.55);
+    let (stride, padding) = regional_survey_profile(start.distance(goal));
+    let props = blockers_for_agent_route(
+        &terrain,
+        start,
+        goal,
+        &SpatialObstacleGrid::default(),
+        Some(&derived),
+        None,
+        padding,
+        &mut RoutePropChunkCache::default(),
+    );
+    let origin_buildings = [
+        BuildingBlocker {
+            center: Vec2::new(-412.81, 67.0),
+            half: Vec2::new(3.28, 3.96),
+            rotation: -std::f32::consts::FRAC_PI_2,
+        },
+        BuildingBlocker {
+            center: Vec2::new(-412.81, 79.712944),
+            half: Vec2::new(4.339, 3.08),
+            rotation: -std::f32::consts::FRAC_PI_2,
+        },
+        BuildingBlocker {
+            center: Vec2::new(-417.56497, 72.72983),
+            half: Vec2::new(2.459821, 0.345),
+            rotation: std::f32::consts::FRAC_PI_2,
+        },
+        BuildingBlocker {
+            center: Vec2::new(-406.74084, 74.03235),
+            half: Vec2::new(1.2179563, 0.345),
+            rotation: -1.20918,
+        },
+        BuildingBlocker {
+            center: Vec2::new(-411.987, 74.909645),
+            half: Vec2::new(5.857988, 0.345),
+            rotation: -std::f32::consts::PI,
+        },
+    ];
+    for (label, props, buildings) in [
+        ("terrain", &PropBlockers::default(), &[][..]),
+        ("props", &props, &[][..]),
+        ("origin yard", &props, &origin_buildings[..]),
+    ] {
+        let survey = RoadSurvey {
+            decks: None,
+            terrain: &terrain,
+            buildings,
+            live_buildings: None,
+            props,
+            start,
+            goal,
+            min: start.min(goal) - Vec2::splat(padding),
+            max: start.max(goal) + Vec2::splat(padding),
+            max_nodes: INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+            cell_size: SURVEY_CELL,
+            coarse_stride: stride,
+            fine_endpoint_radius: INTERSETTLEMENT_FINE_ENDPOINT_RADIUS,
+        };
+        let mut scratch = SurveyScratch::default();
+        let mut state = SurveySearchState::default();
+        let result = resume_survey_a_star(&survey, &mut scratch, &mut state, None);
+        let SurveySearchResult::Found(path) = result else {
+            panic!(
+                "recorded {label} corridor failed: expanded={} frontier={} visited={} start_blocked={} goal_blocked={}",
+                state.expanded,
+                scratch.open.len(),
+                scratch.closed.len(),
+                survey.blocked(start, &mut scratch),
+                survey.blocked(goal, &mut scratch),
+            );
+        };
+        assert_eq!(path.first(), Some(&start));
+        assert_eq!(path.last(), Some(&goal));
+        assert!(
+            path.windows(2)
+                .all(|pair| survey.line_clear(pair[0], pair[1], &mut scratch))
+        );
+    }
 }
 
 #[test]
@@ -277,6 +455,7 @@ fn regional_journey_can_round_a_seeded_river_head() {
         &mut RoutePropChunkCache::default(),
     );
     let survey = RoadSurvey {
+        decks: None,
         terrain: &terrain,
         buildings: &[],
         live_buildings: None,
@@ -298,12 +477,14 @@ fn regional_journey_can_round_a_seeded_river_head() {
     );
     assert_eq!(path.first(), Some(&start));
     assert_eq!(path.last(), Some(&goal));
-    assert!(path
-        .iter()
-        .any(|p| p.y > start.y + INTERSETTLEMENT_SURVEY_PADDING));
-    assert!(path
-        .windows(2)
-        .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
+    assert!(
+        path.iter()
+            .any(|p| p.y > start.y + INTERSETTLEMENT_SURVEY_PADDING)
+    );
+    assert!(
+        path.windows(2)
+            .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch))
+    );
 }
 
 #[test]
@@ -324,6 +505,7 @@ fn regional_survey_reaches_a_distant_goal_within_its_node_budget() {
     });
     let props = PropBlockers::default();
     let survey = RoadSurvey {
+        decks: None,
         terrain: &terrain,
         buildings: &[],
         live_buildings: Some(&grid),
@@ -346,9 +528,10 @@ fn regional_survey_reaches_a_distant_goal_within_its_node_budget() {
     );
     assert_eq!(path.first(), Some(&survey.start));
     assert_eq!(path.last(), Some(&survey.goal));
-    assert!(path
-        .windows(2)
-        .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
+    assert!(
+        path.windows(2)
+            .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch))
+    );
 }
 
 fn road_test_app() -> App {
@@ -391,13 +574,15 @@ fn permit_access_reuse_preserves_network_and_hall_endpoints() {
         ),
         Some(vec![approach, hall_approach]),
     );
-    assert!(construction::planned_access_survey_points(
-        &[door, approach, network],
-        door,
-        network + Vec2::X,
-        None,
-    )
-    .is_none());
+    assert!(
+        construction::planned_access_survey_points(
+            &[door, approach, network],
+            door,
+            network + Vec2::X,
+            None,
+        )
+        .is_none()
+    );
 }
 
 fn one_static_prop(
@@ -608,7 +793,7 @@ fn a_burst_of_reasserted_failed_routes_sleeps_until_real_time_backoff() {
                 MoveTarget(goal),
             ))
             .id();
-        let backoff = NavigationRouteBackoff::after_failure(None, goal, 7, 0, 0.0, mover);
+        let backoff = NavigationRouteBackoff::after_failure(None, goal, 7, 0, 0, 0.0, mover);
         app.world_mut().entity_mut(mover).insert(backoff);
         movers.push(mover);
     }
@@ -645,9 +830,11 @@ fn a_burst_of_reasserted_failed_routes_sleeps_until_real_time_backoff() {
             .count(),
         40
     );
-    assert!(movers
-        .iter()
-        .all(|mover| app.world().get::<NavigationRouteBackoff>(*mover).is_none()));
+    assert!(
+        movers
+            .iter()
+            .all(|mover| app.world().get::<NavigationRouteBackoff>(*mover).is_none())
+    );
 }
 
 #[test]
@@ -813,6 +1000,7 @@ fn unchanged_geometry_rejects_a_cached_failure_without_another_survey() {
         failures: 1,
         retry_after: 0.0,
         geometry_version: obstacle_version,
+        terrain_version: 0,
         road_opportunity_version: 0,
     };
     app.world_mut().entity_mut(mover).insert(backoff);
@@ -1115,9 +1303,11 @@ fn farmer_can_walk_from_front_door_around_farmstead_to_rear_field() {
         route.len() >= 2,
         "a farmer released outside the front door must route around the Farmstead to field 2"
     );
-    assert!(route
-        .windows(2)
-        .all(|edge| !live.segment_blocked(edge[0], edge[1])));
+    assert!(
+        route
+            .windows(2)
+            .all(|edge| !live.segment_blocked(edge[0], edge[1]))
+    );
 }
 
 #[test]
@@ -1543,9 +1733,11 @@ fn embodied_route_rejection_discards_stale_tactical_answers() {
 
     assert!(graph.tactical_route(start, goal).is_none());
     assert!(graph.tactical_route(goal, start).is_none());
-    assert!(graph
-        .tactical_route(unrelated_start, unrelated_goal)
-        .is_some());
+    assert!(
+        graph
+            .tactical_route(unrelated_start, unrelated_goal)
+            .is_some()
+    );
 }
 
 #[test]
@@ -1580,6 +1772,7 @@ fn extended_agent_search_yields_and_resumes_instead_of_monopolising_a_tick() {
     let goal = Vec2::new(1900.0, 0.0);
     let props = PropBlockers::default();
     let survey = RoadSurvey {
+        decks: None,
         terrain: &terrain,
         buildings: &[],
         live_buildings: None,
@@ -1670,6 +1863,7 @@ fn survey_memoizes_repeated_geometry_checks_within_one_search() {
     let mut scratch = SurveyScratch::default();
     let props = PropBlockers::default();
     let survey = RoadSurvey {
+        decks: None,
         terrain: &terrain,
         buildings: &[],
         live_buildings: None,
@@ -1755,10 +1949,11 @@ fn villager_route_uses_the_road_and_never_crosses_a_building() {
         route.waypoints.iter().any(|waypoint| waypoint.on_road),
         "the safe precomputed road should beat a fresh direct detour"
     );
-    assert!(!app
-        .world()
-        .entity(villager)
-        .contains::<NavigationRoutePending>());
+    assert!(
+        !app.world()
+            .entity(villager)
+            .contains::<NavigationRoutePending>()
+    );
 
     let footprint = building_type.definition().footprint;
     let blocker = BuildingBlocker {
@@ -2124,6 +2319,7 @@ fn assert_road_tree_clearance_completes(waypoint_was_rejected: bool) {
             RoadBuilderRoutine {
                 road,
                 settlement,
+                resume_work_at: None,
                 attempt: 0,
                 phase: RoadBuildPhase::GoingTo { point: 1 },
             },
@@ -2330,15 +2526,21 @@ fn detached_and_unfinished_roads_are_not_public_network_anchors() {
 
     assert_eq!(network.disconnected_components, 1);
     assert!(network.connected_keys.contains(&graph_key(hall_door)));
-    assert!(network
-        .connected_keys
-        .contains(&graph_key(hall_door + Vec2::X * 8.0)));
-    assert!(!network
-        .connected_keys
-        .contains(&graph_key(detached.points[0])));
-    assert!(!network
-        .connected_keys
-        .contains(&graph_key(unfinished.points[0])));
+    assert!(
+        network
+            .connected_keys
+            .contains(&graph_key(hall_door + Vec2::X * 8.0))
+    );
+    assert!(
+        !network
+            .connected_keys
+            .contains(&graph_key(detached.points[0]))
+    );
+    assert!(
+        !network
+            .connected_keys
+            .contains(&graph_key(unfinished.points[0]))
+    );
 }
 
 #[test]
@@ -2599,7 +2801,7 @@ fn a_second_moot_steward_waits_for_a_real_collection_backlog() {
 }
 
 #[test]
-fn strategic_moot_steward_audits_offscreen_and_wakes_for_repairs() {
+fn unobserved_moot_steward_audits_but_does_not_steal_an_existing_journey() {
     let mut app = road_test_app();
     app.add_systems(
         Update,
@@ -2610,7 +2812,7 @@ fn strategic_moot_steward_audits_offscreen_and_wakes_for_repairs() {
         )
             .chain(),
     );
-    app.world_mut().spawn(WorldTime::new_default());
+    let clock = app.world_mut().spawn(WorldTime::new_default()).id();
     let settlement_id = shared::components::SettlementId(610);
     let settlement = app
         .world_mut()
@@ -2636,11 +2838,16 @@ fn strategic_moot_steward_audits_offscreen_and_wakes_for_repairs() {
             VillagerIntent::Resident { settlement },
             Occupation(None),
             Wallet::new(1_000),
-            crate::world::village::strategic::StrategicPerson,
-            crate::world::village::strategic::StrategicTravel::for_test(
-                Vec3::new(1_704.0, 0.0, 2.0),
-                0.0,
-            ),
+            MoveTarget(Vec3::new(1_704.0, 0.0, 2.0)),
+            TravelRoute {
+                goal: Vec3::new(1_704.0, 0.0, 2.0),
+                waypoints: vec![RouteWaypoint {
+                    position: Vec3::new(1_704.0, 0.0, 2.0),
+                    on_road: false,
+                }],
+                next: 0,
+                geometry_version: 0,
+            },
         ))
         .id();
     let house = app
@@ -2662,24 +2869,33 @@ fn strategic_moot_steward_audits_offscreen_and_wakes_for_repairs() {
 
     app.update();
 
-    let request = app.world().get::<RoadRequest>(house).unwrap();
-    assert_eq!(request.builder, steward);
-    assert!(
-        app.world()
-            .get::<crate::world::village::strategic::StrategicPerson>(steward)
-            .is_none(),
-        "an off-screen steward must wake before adopting physical road work"
+    assert!(app.world().get::<RoadRequest>(house).is_none());
+    assert_eq!(
+        app.world().get::<TravelRoute>(steward).unwrap().goal,
+        Vec3::new(1_704.0, 0.0, 2.0)
     );
-    assert!(
+    assert_eq!(
         app.world()
-            .get::<crate::world::village::strategic::StrategicTravel>(steward)
-            .is_none(),
-        "the repair commitment must replace abstract leisure travel"
+            .get::<MootAdministration>(settlement)
+            .unwrap()
+            .roadless_buildings,
+        1
     );
-    assert!(app
-        .world()
-        .get::<crate::world::village::strategic::PendingStrategicDemotion>(steward)
-        .is_some());
+
+    // This assignment fixture supplies completion of the old journey; the
+    // audit continues without a camera, and the next review may recruit them.
+    app.world_mut()
+        .entity_mut(steward)
+        .remove::<(MoveTarget, TravelRoute)>();
+    app.world_mut()
+        .get_mut::<WorldTime>(clock)
+        .unwrap()
+        .seconds_in_cycle += (ROAD_AUDIT_INTERVAL_SECONDS + 1.0) as f32;
+    app.update();
+    assert_eq!(
+        app.world().get::<RoadRequest>(house).unwrap().builder,
+        steward
+    );
 }
 
 #[test]
@@ -3150,6 +3366,7 @@ fn moot_steward_reclaims_a_live_connector_that_makes_no_daylight_progress() {
             RoadBuilderRoutine {
                 road,
                 settlement,
+                resume_work_at: None,
                 attempt: 0,
                 phase: RoadBuildPhase::GoingTo { point: 1 },
             },
@@ -3203,6 +3420,7 @@ fn active_road_builder_is_not_hired_for_a_production_job() {
             RoadBuilderRoutine {
                 road,
                 settlement,
+                resume_work_at: None,
                 attempt: 0,
                 phase: RoadBuildPhase::GoingTo { point: 0 },
             },
@@ -3224,12 +3442,13 @@ fn active_road_builder_is_not_hired_for_a_production_job() {
 
     app.update();
 
-    assert!(app
-        .world()
-        .get::<SettlementBuilding>(farm)
-        .unwrap()
-        .workers
-        .is_empty());
+    assert!(
+        app.world()
+            .get::<SettlementBuilding>(farm)
+            .unwrap()
+            .workers
+            .is_empty()
+    );
     assert_eq!(
         *app.world().get::<WorkStatus>(worker).unwrap(),
         WorkStatus::LookingForWork
@@ -3285,12 +3504,13 @@ fn moot_steward_cannot_also_be_hired_as_a_farmer() {
 
     app.update();
 
-    assert!(app
-        .world()
-        .get::<SettlementBuilding>(farm)
-        .unwrap()
-        .workers
-        .is_empty());
+    assert!(
+        app.world()
+            .get::<SettlementBuilding>(farm)
+            .unwrap()
+            .workers
+            .is_empty()
+    );
     assert_eq!(
         app.world().get::<Occupation>(steward).unwrap().0.as_deref(),
         Some("Moot Steward")
@@ -3508,6 +3728,7 @@ fn road_builder_skips_a_failed_already_built_door_anchor() {
             RoadBuilderRoutine {
                 road,
                 settlement,
+                resume_work_at: None,
                 attempt: 0,
                 phase: RoadBuildPhase::GoingTo { point: 0 },
             },
@@ -3577,6 +3798,7 @@ fn road_builder_discards_a_failed_route_from_an_older_destination() {
             RoadBuilderRoutine {
                 road,
                 settlement,
+                resume_work_at: None,
                 attempt: 0,
                 phase: RoadBuildPhase::GoingTo { point: 1 },
             },
@@ -3640,6 +3862,7 @@ fn road_builder_works_a_nearby_waypoint_instead_of_resurveying_forever() {
             RoadBuilderRoutine {
                 road,
                 settlement,
+                resume_work_at: None,
                 attempt: 0,
                 phase: RoadBuildPhase::GoingTo { point: 1 },
             },
@@ -3719,6 +3942,7 @@ fn failed_embodied_road_keeps_the_buildings_access_reserved_for_resurvey() {
             RoadBuilderRoutine {
                 road,
                 settlement,
+                resume_work_at: None,
                 attempt: 0,
                 phase: RoadBuildPhase::GoingTo { point: 1 },
             },
@@ -3791,6 +4015,7 @@ fn exhausted_embodied_road_immediately_enters_the_steward_backlog() {
             RoadBuilderRoutine {
                 road,
                 settlement,
+                resume_work_at: None,
                 attempt: MAX_ROAD_SURVEY_ATTEMPTS - 1,
                 phase: RoadBuildPhase::GoingTo { point: 1 },
             },
@@ -3944,13 +4169,15 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
         complete: false,
     };
     let mut cache = NavigationBuildingCache::default();
-    assert!(cache
-        .rebuild(
-            std::iter::empty(),
-            std::iter::once(&wall),
-            std::iter::empty()
-        )
-        .is_empty());
+    assert!(
+        cache
+            .rebuild(
+                std::iter::empty(),
+                std::iter::once(&wall),
+                std::iter::empty()
+            )
+            .is_empty()
+    );
     wall.complete = true;
     assert_eq!(
         cache
@@ -3962,20 +4189,24 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
             .len(),
         1
     );
-    assert!(cache
-        .spatial
-        .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.)));
+    assert!(
+        cache
+            .spatial
+            .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.))
+    );
     assert!(
         cache.buildings.is_empty(),
         "a wall must not invent a house doorway for obstacle escape"
     );
-    assert!(cache
-        .rebuild(
-            std::iter::empty(),
-            std::iter::once(&wall),
-            std::iter::empty()
-        )
-        .is_empty());
+    assert!(
+        cache
+            .rebuild(
+                std::iter::empty(),
+                std::iter::once(&wall),
+                std::iter::empty()
+            )
+            .is_empty()
+    );
     wall.kind = FortificationKind::Gate;
     assert_eq!(
         cache
@@ -3987,9 +4218,11 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
             .len(),
         3
     );
-    assert!(!cache
-        .spatial
-        .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.)));
+    assert!(
+        !cache
+            .spatial
+            .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.))
+    );
     for post in wall.gate_post_centers() {
         assert!(cache.spatial.point_blocked(post.xz()));
     }
@@ -4000,9 +4233,11 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
             .len(),
         2
     );
-    assert!(!cache
-        .spatial
-        .point_blocked(wall.gate_post_centers()[0].xz()));
+    assert!(
+        !cache
+            .spatial
+            .point_blocked(wall.gate_post_centers()[0].xz())
+    );
 }
 
 #[test]
@@ -4022,48 +4257,58 @@ fn household_yard_changes_invalidate_routes_without_inventing_a_doorway() {
     let origin = PlayerPosition(Vec3::ZERO);
     let yaw = PlayerRotation(0.0);
     let mut cache = NavigationBuildingCache::default();
-    assert!(!cache
-        .rebuild(
-            std::iter::empty(),
-            std::iter::empty(),
-            std::iter::once((&yard, &origin, &yaw))
-        )
-        .is_empty());
+    assert!(
+        !cache
+            .rebuild(
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::once((&yard, &origin, &yaw))
+            )
+            .is_empty()
+    );
     assert!(cache.spatial.point_blocked(Vec2::new(7., 0.)));
-    assert!(!cache
-        .spatial
-        .segment_blocked(Vec2::new(4., 0.), Vec2::new(6., 0.)));
+    assert!(
+        !cache
+            .spatial
+            .segment_blocked(Vec2::new(4., 0.), Vec2::new(6., 0.))
+    );
     assert!(
         cache.buildings.is_empty(),
         "a fence is never a doorway escape exemption"
     );
-    assert!(cache
-        .rebuild(
-            std::iter::empty(),
-            std::iter::empty(),
-            std::iter::once((&yard, &origin, &yaw))
-        )
-        .is_empty());
+    assert!(
+        cache
+            .rebuild(
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::once((&yard, &origin, &yaw))
+            )
+            .is_empty()
+    );
 
     let moved = PlayerPosition(Vec3::new(30., 0., 0.));
-    assert!(!cache
-        .rebuild(
-            std::iter::empty(),
-            std::iter::empty(),
-            std::iter::once((&yard, &moved, &yaw))
-        )
-        .is_empty());
+    assert!(
+        !cache
+            .rebuild(
+                std::iter::empty(),
+                std::iter::empty(),
+                std::iter::once((&yard, &moved, &yaw))
+            )
+            .is_empty()
+    );
     assert!(!cache.spatial.point_blocked(Vec2::new(7., 0.)));
     assert!(cache.spatial.point_blocked(Vec2::new(37., 0.)));
-    assert!(!cache
-        .rebuild(std::iter::empty(), std::iter::empty(), std::iter::empty())
-        .is_empty());
+    assert!(
+        !cache
+            .rebuild(std::iter::empty(), std::iter::empty(), std::iter::empty())
+            .is_empty()
+    );
     assert!(!cache.spatial.point_blocked(Vec2::new(37., 0.)));
 }
 
 #[test]
 fn residents_can_route_out_of_yards_beside_rotated_upgraded_houses() {
-    use shared::components::{fit_household_yard, HouseAppearance, YardSide, YardUse};
+    use shared::components::{HouseAppearance, YardSide, YardUse, fit_household_yard};
     let base = Vec3::new(1700.0, 80.0, 0.0);
     let mut terrain = WorldTerrain::default();
     terrain.apply_flatten_rect(base, Vec2::splat(55.0), 0.0, 4.0);
@@ -4263,9 +4508,11 @@ fn residents_can_route_through_road_shaped_yards_at_rotated_homes() {
                         !route.is_empty(),
                         "road-shaped {art:?}/{side:?} trapped a resident, yaw={yaw}, offset={offset:?}"
                     );
-                    assert!(route
-                        .windows(2)
-                        .all(|leg| !cache.spatial.segment_blocked(leg[0], leg[1])));
+                    assert!(
+                        route
+                            .windows(2)
+                            .all(|leg| !cache.spatial.segment_blocked(leg[0], leg[1]))
+                    );
                 }
             }
         }
@@ -4288,6 +4535,7 @@ fn certified_diagonal_ignores_only_off_path_building_cells() {
         obstacle_type: BuildingType::CabinL2 as u32,
     });
     let survey = RoadSurvey {
+        decks: None,
         terrain: &terrain,
         buildings: &[],
         live_buildings: Some(&grid),
@@ -4332,6 +4580,7 @@ fn certified_diagonal_ignores_only_off_path_building_cells() {
     let mut props = PropBlockers::default();
     props.insert_radius(side, 0.35);
     let survey = RoadSurvey {
+        decks: None,
         props: &props,
         ..survey
     };
@@ -4355,6 +4604,7 @@ fn certified_building_diagonals_do_not_relax_water_corner_checks() {
     let point = Vec2::new(water.x, water.z);
     let props = PropBlockers::default();
     let survey = RoadSurvey {
+        decks: None,
         terrain: &terrain,
         buildings: &[],
         live_buildings: None,

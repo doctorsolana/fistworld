@@ -1,6 +1,6 @@
 use super::*;
-use crate::collision::building_index::{sync_building_spatial_index, BuildingSpatialIndex};
-use crate::world::navgrid::{sync_obstacle_grid, ObstacleGridState};
+use crate::collision::building_index::{BuildingSpatialIndex, sync_building_spatial_index};
+use crate::world::navgrid::{ObstacleGridState, sync_obstacle_grid};
 
 #[test]
 fn tavern_route_cache_matches_rotated_live_courtyard_collision() {
@@ -60,13 +60,15 @@ fn tavern_route_cache_matches_rotated_live_courtyard_collision() {
                 assert_eq!(cache.spatial.point_blocked(p), live.point_blocked(p));
             }
         }
-        assert!(cache
-            .rebuild(
-                std::iter::once((&building, &position)),
-                std::iter::empty(),
-                std::iter::empty(),
-            )
-            .is_empty());
+        assert!(
+            cache
+                .rebuild(
+                    std::iter::once((&building, &position)),
+                    std::iter::empty(),
+                    std::iter::empty(),
+                )
+                .is_empty()
+        );
     }
     assert_eq!(
         cache
@@ -118,9 +120,11 @@ fn tavern_courtyard_routes_detour_around_tables_before_live_certification() {
             assert!(route.len() > 2, "missing courtyard detour at yaw {yaw}");
             assert_eq!(route.first(), Some(&start));
             assert_eq!(route.last(), Some(&goal));
-            assert!(route
-                .windows(2)
-                .all(|leg| !cache.spatial.segment_blocked(leg[0], leg[1])));
+            assert!(
+                route
+                    .windows(2)
+                    .all(|leg| !cache.spatial.segment_blocked(leg[0], leg[1]))
+            );
         }
     }
 }

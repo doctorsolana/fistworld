@@ -4,26 +4,22 @@
 //! merely a remote control: identity, ownership, operating state and numeric
 //! bounds are proved again here for every click.
 
-use std::collections::HashMap;
-
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender, RemoteId};
 
 use shared::components::{
-    BuildingId, BuildingOf, CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket,
-    Hero, OperatedBy, OwnedBy, PersonId, SettlementBuilding, SettlementId, WorldTime,
+    BuildingId, BuildingOf, CompanyId, CompanyLeadership, Hero, OperatedBy, OwnedBy, PersonId,
+    SettlementBuilding, SettlementId,
 };
 use shared::economy::{
-    format_money, BusinessAccount, BusinessCondition, BusinessManagementPolicy,
-    BusinessProcurementPolicy, BusinessSalePolicy, BusinessStaffingPolicy, BusinessSupplyPolicy,
-    BusinessWagePolicy, CompanyAccount, CompanyBranchPolicies, CompanyManagementPolicy,
-    GoodsInventory, MarketSeller, MootMarket, Wallet, MAXIMUM_BUSINESS_DAILY_WAGE,
-    MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
+    BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessProcurementPolicy,
+    BusinessSalePolicy, BusinessStaffingPolicy, BusinessState, BusinessStrategy,
+    BusinessSupplyPolicy, BusinessWagePolicy, CompanyManagementPolicy, MAXIMUM_BUSINESS_DAILY_WAGE,
+    MINIMUM_BUSINESS_DAILY_WAGE, MarketSeller, MootMarket, PENNIES_PER_COIN,
 };
 use shared::protocol::{
-    HeroBusinessAction, HeroBusinessOrder, HeroBusinessResult, HeroCompanyAction, HeroCompanyOrder,
-    HeroCompanyResult, ReliableChannel,
+    HeroBusinessAction, HeroBusinessOrder, HeroBusinessResult, ReliableChannel,
 };
 
 use super::hero::OfflineHero;
@@ -32,49 +28,27 @@ use super::hero::OfflineHero;
 /// hostile packets from filling histories/UI with overflow-adjacent values.
 const MAX_MANUAL_UNIT_PRICE: u64 = 1_000 * PENNIES_PER_COIN;
 
-fn execute_share_purchase(
-    ownership: &mut CompanyOwnership,
-    market: &mut CompanyShareMarket,
-    buyer: PersonId,
-    buyer_wallet: &mut Wallet,
-    seller: PersonId,
-    seller_wallet: &mut Wallet,
-    shares: u16,
-) -> Result<u64, &'static str> {
-    if buyer == seller {
-        return Err("You cannot buy your own share offer.");
-    }
-    let Some(offer) = market.offer_from(seller) else {
-        return Err("That share offer is no longer available.");
-    };
-    if shares == 0 || shares > offer.shares {
-        return Err("That many shares are not available from this seller.");
-    }
-    let Some(total_price) = offer.unit_price.checked_mul(u64::from(shares)) else {
-        return Err("That share purchase is too large.");
-    };
-    if !buyer_wallet.can_afford(total_price) {
-        return Err("You cannot afford that share purchase.");
-    }
-    if seller_wallet.balance().checked_add(total_price).is_none() {
-        return Err("The seller cannot receive that payment.");
-    }
-    if !buyer_wallet.debit(total_price) {
-        return Err("You cannot afford that share purchase.");
-    }
-    seller_wallet.credit(total_price);
-    if !market.fill(ownership, seller, buyer, shares) {
-        let rolled_back = seller_wallet.debit(total_price);
-        buyer_wallet.credit(total_price);
-        debug_assert!(rolled_back, "share-payment rollback must conserve coin");
-        return Err("The cap table changed before the purchase completed; payment was refunded.");
-    }
-    Ok(total_price)
+fn accepts_operating_policy(condition: Option<&BusinessCondition>) -> bool {
+    condition.is_none_or(|condition| {
+        condition.state.can_operate() || condition.state == BusinessState::Mothballed
+    })
+}
+
+fn apply_site_strategy(
+    strategy: BusinessStrategy,
+    management: &mut BusinessManagementPolicy,
+    sale: &mut BusinessSalePolicy,
+) {
+    management.strategy = strategy;
+    management.payroll_reserve_days = strategy.payroll_reserve_days();
+    sale.target_margin_bps = strategy.target_margin_bps();
+    sale.max_daily_price_change_bps = strategy.daily_price_step_bps();
 }
 
 #[allow(clippy::too_many_arguments)]
 fn apply_owner_action(
     action: HeroBusinessAction,
+    condition: Option<&mut BusinessCondition>,
     management: &mut BusinessManagementPolicy,
     wage: &mut BusinessWagePolicy,
     sale: &mut BusinessSalePolicy,
@@ -83,34 +57,22 @@ fn apply_owner_action(
     staffing: &mut BusinessStaffingPolicy,
     maximum_positions: u8,
 ) -> Result<&'static str, &'static str> {
+    if !accepts_operating_policy(condition.as_deref()) {
+        return Err("A closed, liquidating or for-sale business cannot change operating policy.");
+    }
     match action {
-        HeroBusinessAction::AppointCompanyMaster(_)
-        | HeroBusinessAction::ListCompanyShares { .. }
-        | HeroBusinessAction::CancelCompanyShareListing
-        | HeroBusinessAction::BuyCompanyShares { .. } => {
-            Err("That company action requires the cap table.")
-        }
         HeroBusinessAction::SetStrategy(strategy) => {
-            management.strategy = strategy;
-            management.payroll_reserve_days = strategy.payroll_reserve_days();
-            sale.target_margin_bps = strategy.target_margin_bps();
-            sale.max_daily_price_change_bps = strategy.daily_price_step_bps();
-            Ok("Business strategy updated.")
+            apply_site_strategy(strategy, management, sale);
+            management.autopilot = false;
+            Ok("Site strategy updated; automatic company policy is disabled for this site.")
         }
         HeroBusinessAction::SetAutopilot(enabled) => {
             management.autopilot = enabled;
             Ok(if enabled {
-                "Owner autopilot enabled."
+                "Automatic site management enabled."
             } else {
-                "Owner autopilot paused; your policy values will be retained."
+                "Automatic site management paused; your local policy values will be retained."
             })
-        }
-        HeroBusinessAction::SetAutomaticWithdrawals(enabled) => {
-            management.automatic_withdrawals = enabled;
-            Ok("Profit-withdrawal policy updated.")
-        }
-        HeroBusinessAction::WithdrawAvailableProfit => {
-            Err("Profit withdrawal requires the business account.")
         }
         HeroBusinessAction::SetDailyWage(value) => {
             wage.daily_wage = value.clamp(MINIMUM_BUSINESS_DAILY_WAGE, MAXIMUM_BUSINESS_DAILY_WAGE);
@@ -120,6 +82,18 @@ fn apply_owner_action(
         HeroBusinessAction::SetEnabledPositions(positions) => {
             staffing.enabled_positions = positions.min(maximum_positions);
             management.autopilot = false;
+            if staffing.enabled_positions > 0 {
+                if let Some(condition) =
+                    condition.filter(|condition| condition.state == BusinessState::Mothballed)
+                {
+                    // Reuse the intact site. Financial liabilities, production
+                    // history and physical inventory survive this manual restart.
+                    condition.state = BusinessState::Operating;
+                    return Ok(
+                        "Business reopened with your open-position target; owner autopilot is paused.",
+                    );
+                }
+            }
             Ok("Open-position target updated; owner autopilot is paused.")
         }
         HeroBusinessAction::SetAutomaticWage(enabled) => {
@@ -142,7 +116,7 @@ fn apply_owner_action(
         HeroBusinessAction::SetOutputReserveDays(days) => {
             sale.company_reserve_days = days.min(shared::economy::MAXIMUM_STOCK_COVERAGE_DAYS);
             management.autopilot = false;
-            Ok("Company output reserve updated; owner autopilot is paused.")
+            Ok("Site output reserve updated; automatic site management is paused.")
         }
         HeroBusinessAction::SetAutomaticProcurement(enabled) => {
             procurement.automatic = enabled;
@@ -189,6 +163,9 @@ fn apply_owner_action(
     }
 }
 
+mod company;
+pub use company::handle_hero_company_orders;
+
 #[allow(clippy::type_complexity)]
 pub fn handle_hero_business_orders(
     mut links: Query<
@@ -199,16 +176,8 @@ pub fn handle_hero_business_orders(
         ),
         With<ClientOf>,
     >,
-    heroes: Query<(Entity, &Hero, &PersonId), Without<OfflineHero>>,
-    mut wallets: Query<(Entity, &PersonId, &mut Wallet)>,
-    mut dividend_requests: ResMut<crate::world::village::CompanyDividendQueue>,
-    mut companies: Query<(
-        &CompanyId,
-        &mut CompanyOwnership,
-        &mut CompanyLeadership,
-        &mut CompanyManagementPolicy,
-        &mut CompanyShareMarket,
-    )>,
+    heroes: Query<(&Hero, &PersonId), Without<OfflineHero>>,
+    companies: Query<(&CompanyId, &CompanyLeadership, &CompanyManagementPolicy)>,
     mut businesses: Query<(
         Option<&OwnedBy>,
         Option<&OperatedBy>,
@@ -222,25 +191,18 @@ pub fn handle_hero_business_orders(
         &mut BusinessProcurementPolicy,
         &mut BusinessSupplyPolicy,
         &mut BusinessStaffingPolicy,
-        Option<&BusinessCondition>,
+        Option<&mut BusinessCondition>,
     )>,
     suppliers: Query<(&BuildingId, &OperatedBy, &SettlementBuilding)>,
     mut halls: Query<(&SettlementId, &mut MootMarket)>,
-    world_time: Query<&WorldTime>,
 ) {
-    let day = world_time.iter().next().map_or(0, |clock| clock.day);
-    let wallet_entities: HashMap<PersonId, Entity> = wallets
-        .iter()
-        .map(|(entity, person, _)| (*person, entity))
-        .collect();
     for (remote, mut receiver, mut sender) in links.iter_mut() {
         for order in receiver.receive() {
             let response = (|| {
                 if order.business == Entity::PLACEHOLDER {
                     return Err("That business is unavailable.");
                 }
-                let Some((hero_entity, _, person_id)) =
-                    heroes.iter().find(|(_, hero, _)| hero.owner == remote.0)
+                let Some((_, person)) = heroes.iter().find(|(hero, _)| hero.owner == remote.0)
                 else {
                     return Err("Create your hero before managing a business.");
                 };
@@ -257,357 +219,94 @@ pub fn handle_hero_business_orders(
                     mut procurement,
                     mut supply,
                     mut staffing,
-                    condition,
+                    mut condition,
                 )) = businesses.get_mut(order.business)
                 else {
                     return Err("That building is not an operating business.");
                 };
-                let company_id = operated_by.map(|company| company.0);
-                let company_authorized = company_id.is_some_and(|wanted| {
-                    companies
-                        .iter()
-                        .find(|(id, ..)| **id == wanted)
-                        .is_some_and(|(_, _, leadership, ..)| leadership.can_manage(*person_id))
-                });
-                let governance_authorized = company_id.is_some_and(|wanted| {
-                    companies
-                        .iter()
-                        .find(|(id, ..)| **id == wanted)
-                        .is_some_and(|(_, ownership, ..)| ownership.can_appoint_master(*person_id))
-                });
-                let legacy_authorized =
-                    company_id.is_none() && owned_by.is_some_and(|owner| owner.0 == *person_id);
-                let appointing =
-                    matches!(order.action, HeroBusinessAction::AppointCompanyMaster(_));
-                let trading_shares = matches!(
-                    order.action,
-                    HeroBusinessAction::ListCompanyShares { .. }
-                        | HeroBusinessAction::CancelCompanyShareListing
-                        | HeroBusinessAction::BuyCompanyShares { .. }
-                );
-                if appointing && !governance_authorized {
+                let company = operated_by.map(|operation| operation.0);
+                let company_policy =
+                    company.and_then(|company| companies.iter().find(|(id, ..)| **id == company));
+                let authorized = if company.is_some() {
+                    company_policy.is_some_and(|(_, leadership, _)| leadership.can_manage(*person))
+                } else {
+                    owned_by.is_some_and(|owner| owner.0 == *person)
+                };
+                if !authorized {
                     return Err(
-                        "Appointing a Company Master requires more than 500 of the 1,000 shares.",
+                        "Only this company's appointed Company Master may change operating decisions.",
                     );
                 }
-                if !appointing && !trading_shares && !company_authorized && !legacy_authorized {
-                    return Err("Only this company's appointed Company Master may change operating decisions.");
-                }
-                if !appointing
-                    && !trading_shares
-                    && condition.is_some_and(|condition| !condition.state.can_operate())
-                {
-                    return Err("A closed or liquidating business cannot change operating policy.");
-                }
-                let mut market = halls
-                    .iter_mut()
-                    .find(|(settlement_id, _)| **settlement_id == building_of.0)
-                    .map(|(_, market)| market);
                 if let HeroBusinessAction::SetPreferredSupplier {
                     good,
                     supplier: Some(supplier),
                 } = order.action
                 {
-                    let Some(company_id) = company_id else {
+                    let Some(company) = company else {
                         return Err("Private suppliers require a company.");
                     };
-                    let valid = suppliers.iter().any(|(id, operation, candidate)| {
+                    if !suppliers.iter().any(|(id, operation, candidate)| {
                         *id == supplier
-                            && operation.0 == company_id
+                            && operation.0 == company
                             && crate::world::village::business_output(candidate.kind) == Some(good)
-                    });
-                    if !valid {
+                    }) {
                         return Err("That site is not an owned supplier of the selected good.");
                     }
                 }
-                let message = if let HeroBusinessAction::AppointCompanyMaster(candidate) =
-                    order.action
-                {
-                    let Some(company_id) = company_id else {
-                        return Err("An independent site has no Company Master office.");
-                    };
-                    let Some((_, ownership, mut leadership, ..)) =
-                        companies.iter_mut().find(|(id, ..)| **id == company_id)
-                    else {
-                        return Err("That company is unavailable.");
-                    };
-                    if ownership.share_count(candidate) == 0 {
-                        return Err(
-                            "The first governance UI may appoint only a current shareholder.",
+                let message = apply_owner_action(
+                    order.action,
+                    condition.as_deref_mut(),
+                    &mut management,
+                    &mut wage,
+                    &mut sale,
+                    &mut procurement,
+                    &mut supply,
+                    &mut staffing,
+                    building.kind.positions(),
+                )?;
+                if matches!(order.action, HeroBusinessAction::SetAutopilot(true)) {
+                    if let Some((_, _, policy)) = company_policy {
+                        // Company fanout is change-driven. Resume this site from
+                        // its current default even when the company is unchanged.
+                        apply_site_strategy(policy.strategy, &mut management, &mut sale);
+                    }
+                }
+                // Site commands never mutate company governance or policy.
+                // Reprice this site's existing consignment immediately.
+                if matches!(order.action, HeroBusinessAction::SetAskingPrice(_)) {
+                    if let (Some((_, mut market)), Some(good)) = (
+                        halls.iter_mut().find(|(id, _)| **id == building_of.0),
+                        crate::world::village::business_output(building.kind),
+                    ) {
+                        market.reprice(
+                            MarketSeller::Business(*building_id),
+                            good,
+                            sale.asking_unit_price,
                         );
                     }
-                    leadership.master = candidate;
-                    format!("Appointed Person #{} as Company Master.", candidate.0)
-                } else if let HeroBusinessAction::ListCompanyShares { shares, unit_price } =
-                    order.action
-                {
-                    let Some(company_id) = company_id else {
-                        return Err("An independent site has no company shares.");
-                    };
-                    if shares == 0 || shares > shared::components::COMPANY_TOTAL_SHARES {
-                        return Err("A share offer must contain between 1 and 1,000 shares.");
-                    }
-                    if unit_price == 0 || unit_price > MAX_MANUAL_UNIT_PRICE {
-                        return Err("That per-share asking price is outside the supported range.");
-                    }
-                    let Some((_, ownership, _, _, mut share_market)) =
-                        companies.iter_mut().find(|(id, ..)| **id == company_id)
-                    else {
-                        return Err("That company is unavailable.");
-                    };
-                    if !share_market.list(&ownership, *person_id, shares, unit_price, day) {
-                        return Err("You cannot offer more whole shares than you currently own.");
-                    }
-                    format!(
-                        "Listed {shares} shares at {} coin each.",
-                        format_money(unit_price)
-                    )
-                } else if order.action == HeroBusinessAction::CancelCompanyShareListing {
-                    let Some(company_id) = company_id else {
-                        return Err("An independent site has no company shares.");
-                    };
-                    let Some((_, _, _, _, mut share_market)) =
-                        companies.iter_mut().find(|(id, ..)| **id == company_id)
-                    else {
-                        return Err("That company is unavailable.");
-                    };
-                    if !share_market.cancel(*person_id) {
-                        return Err("You have no active share offer in this company.");
-                    }
-                    "Cancelled your company share offer.".to_string()
-                } else if let HeroBusinessAction::BuyCompanyShares { seller, shares } = order.action
-                {
-                    let Some(company_id) = company_id else {
-                        return Err("An independent site has no company shares.");
-                    };
-                    let Some((_, mut ownership, mut leadership, _, mut share_market)) =
-                        companies.iter_mut().find(|(id, ..)| **id == company_id)
-                    else {
-                        return Err("That company is unavailable.");
-                    };
-                    let Some(seller_entity) = wallet_entities.get(&seller).copied() else {
-                        return Err("The seller's wallet is unavailable; no coin or shares moved.");
-                    };
-                    let Ok([(_, _, mut buyer_wallet), (_, _, mut seller_wallet)]) =
-                        wallets.get_many_mut([hero_entity, seller_entity])
-                    else {
-                        return Err("The buyer or seller wallet is unavailable.");
-                    };
-                    let total_price = execute_share_purchase(
-                        &mut ownership,
-                        &mut share_market,
-                        *person_id,
-                        &mut buyer_wallet,
-                        seller,
-                        &mut seller_wallet,
-                        shares,
-                    )?;
-                    if ownership.share_count(leadership.master) == 0 {
-                        if let Some(successor) = ownership.controlling_shareholder() {
-                            leadership.master = successor;
-                        }
-                    }
-                    format!(
-                        "Bought {shares} shares for {} coin; the cap table still contains exactly 1,000 shares.",
-                        format_money(total_price)
-                    )
-                } else if order.action == HeroBusinessAction::WithdrawAvailableProfit {
-                    let Some(company_id) = company_id else {
-                        return Err(
-                            "That site is not attached to a company treasury yet; no money moved.",
-                        );
-                    };
-                    dividend_requests.request(company_id);
-                    "Requested the maximum dividend available after company-wide liabilities and working-capital reserves. It will be distributed to all shareholders by share count.".to_string()
-                } else {
-                    let message = apply_owner_action(
-                        order.action,
-                        &mut management,
-                        &mut wage,
-                        &mut sale,
-                        &mut procurement,
-                        &mut supply,
-                        &mut staffing,
-                        building.kind.positions(),
-                    )?;
-                    if let Some(company_id) = company_id {
-                        if let Some((_, _, _, mut company_policy, _)) =
-                            companies.iter_mut().find(|(id, ..)| **id == company_id)
-                        {
-                            match order.action {
-                                HeroBusinessAction::SetStrategy(strategy) => {
-                                    company_policy.strategy = strategy;
-                                    company_policy.payroll_reserve_days =
-                                        strategy.payroll_reserve_days();
-                                }
-                                HeroBusinessAction::SetAutopilot(enabled) => {
-                                    company_policy.autopilot = enabled;
-                                }
-                                HeroBusinessAction::SetAutomaticWithdrawals(enabled) => {
-                                    company_policy.automatic_dividends = enabled;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    // Reprice stock already at the Hall immediately. Otherwise
-                    // a valid manual ask looks ignored until the next day.
-                    if matches!(order.action, HeroBusinessAction::SetAskingPrice(_)) {
-                        if let (Some(market), Some(good)) = (
-                            market.as_deref_mut(),
-                            crate::world::village::business_output(building.kind),
-                        ) {
-                            market.reprice(
-                                MarketSeller::Business(*building_id),
-                                good,
-                                sale.asking_unit_price,
-                            );
-                        }
-                    }
-                    message.to_string()
-                };
+                }
                 Ok(format!("{}: {message}", building.kind.label()))
             })();
             let (success, message) = match response {
                 Ok(message) => (true, message),
                 Err(message) => (false, message.to_string()),
             };
-            sender.send::<ReliableChannel>(HeroBusinessResult { success, message });
-        }
-    }
-}
-
-/// Apply branch-wide physical stock controls. Unlike a site order this uses a
-/// stable CompanyId and SettlementId and therefore remains correct even when a
-/// company owns several buildings—or no longer owns the particular building
-/// from which its UI was opened.
-pub fn handle_hero_company_orders(
-    mut links: Query<
-        (
-            &RemoteId,
-            &mut MessageReceiver<HeroCompanyOrder>,
-            &mut MessageSender<HeroCompanyResult>,
-        ),
-        With<ClientOf>,
-    >,
-    mut heroes: Query<(&Hero, &PersonId, &mut Wallet), Without<OfflineHero>>,
-    mut companies: Query<(
-        &CompanyId,
-        &CompanyLeadership,
-        &CompanyOwnership,
-        &mut CompanyAccount,
-        &mut CompanyBranchPolicies,
-        &mut CompanyManagementPolicy,
-    )>,
-    settlements: Query<&SettlementId>,
-    sites: Query<(&OperatedBy, &BuildingOf, &GoodsInventory)>,
-) {
-    for (remote, mut receiver, mut sender) in links.iter_mut() {
-        for order in receiver.receive() {
-            let response = (|| {
-                let Some((_, person, mut wallet)) =
-                    heroes.iter_mut().find(|(hero, ..)| hero.owner == remote.0)
-                else {
-                    return Err("Create your hero before managing a company.");
-                };
-                let Some((_, leadership, ownership, mut account, mut branches, mut management)) =
-                    companies
-                        .iter_mut()
-                        .find(|(company, ..)| **company == order.company)
-                else {
-                    return Err("That company is unavailable.");
-                };
-                if !leadership.can_manage(*person) {
-                    return Err("Only the appointed Company Master may act for this company.");
-                }
-                if let HeroCompanyAction::ContributeCapital { amount } = order.action {
-                    if ownership.share_count(*person) != shared::components::COMPANY_TOTAL_SHARES {
-                        return Err("Direct contributions are only available while you own all 1,000 shares; co-owned funding needs a shareholder agreement.");
-                    }
-                    if amount == 0 {
-                        return Err("Choose a positive capital contribution.");
-                    }
-                    if !wallet.debit(amount) {
-                        return Err("Your personal wallet does not hold that much coin.");
-                    }
-                    account.credit(amount);
-                    account.contributed_capital =
-                        account.contributed_capital.saturating_add(amount);
-                    return Ok(format!(
-                        "Added {} coin of capital. Company treasury: {} coin.",
-                        format_money(amount),
-                        format_money(account.cash),
-                    ));
-                }
-                let settlement = match order.action {
-                    HeroCompanyAction::ContributeCapital { .. } => unreachable!(),
-                    HeroCompanyAction::SetRetainUnits { settlement, .. }
-                    | HeroCompanyAction::SetSellExcess { settlement, .. } => settlement,
-                };
-                if !settlements.iter().any(|id| *id == settlement)
-                    || !sites.iter().any(|(company, building_of, _)| {
-                        company.0 == order.company && building_of.0 == settlement
-                    })
-                {
-                    return Err("That company has no local branch in this settlement.");
-                }
-                let message = match order.action {
-                    HeroCompanyAction::ContributeCapital { .. } => unreachable!(),
-                    HeroCompanyAction::SetRetainUnits {
-                        settlement,
-                        good,
-                        units,
-                    } => {
-                        let branch_capacity = sites
-                            .iter()
-                            .filter(|(company, building_of, _)| {
-                                company.0 == order.company && building_of.0 == settlement
-                            })
-                            .map(|(_, _, inventory)| {
-                                inventory.bulk_capacity() / good.bulk_per_unit().max(1)
-                            })
-                            .fold(0u32, u32::saturating_add);
-                        let mut policy = branches.resource(settlement, good);
-                        policy.retain_units = units.min(branch_capacity);
-                        branches.set_resource(settlement, good, policy);
-                        management.autopilot = false;
-                        format!(
-                            "{} local reserve set to {} units.",
-                            good.label(),
-                            policy.retain_units
-                        )
-                    }
-                    HeroCompanyAction::SetSellExcess {
-                        settlement,
-                        good,
-                        enabled,
-                    } => {
-                        let mut policy = branches.resource(settlement, good);
-                        policy.sell_excess = enabled;
-                        branches.set_resource(settlement, good, policy);
-                        format!(
-                            "{} excess sales {} for this branch.",
-                            good.label(),
-                            if enabled { "enabled" } else { "paused" }
-                        )
-                    }
-                };
-                Ok(message)
-            })();
-            let (success, message) = match response {
-                Ok(message) => (true, message),
-                Err(message) => (false, message.to_string()),
-            };
-            sender.send::<ReliableChannel>(HeroCompanyResult { success, message });
+            sender.send::<ReliableChannel>(HeroBusinessResult {
+                business: order.business,
+                success,
+                message,
+            });
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::company::{apply_company_policy_action, execute_share_purchase};
     use super::*;
-    use shared::components::COMPANY_TOTAL_SHARES;
-    use shared::economy::{BusinessStrategy, Good};
+    use shared::components::{COMPANY_TOTAL_SHARES, CompanyOwnership, CompanyShareMarket};
+    use shared::economy::{BusinessStrategy, CompanyManagementPolicy, Good, Wallet};
+    use shared::protocol::HeroCompanyAction;
 
     #[test]
     fn manual_values_disable_only_their_own_automation() {
@@ -619,6 +318,7 @@ mod tests {
         let mut staffing = BusinessStaffingPolicy::new(2);
         apply_owner_action(
             HeroBusinessAction::SetDailyWage(275),
+            None,
             &mut management,
             &mut wage,
             &mut sale,
@@ -635,15 +335,47 @@ mod tests {
     }
 
     #[test]
-    fn selecting_strategy_updates_the_parameters_that_autopilot_reads() {
+    fn a_paused_site_can_be_edited_but_only_a_positive_staffing_order_reopens_it() {
         let mut management = BusinessManagementPolicy::default();
         let mut wage = BusinessWagePolicy::default();
         let mut sale = BusinessSalePolicy::for_good(Good::Flour);
         let mut procurement = BusinessProcurementPolicy::default();
         let mut supply = BusinessSupplyPolicy::default();
-        let mut staffing = BusinessStaffingPolicy::new(2);
+        let mut staffing = BusinessStaffingPolicy::new(0);
+        let mut condition = BusinessCondition {
+            state: BusinessState::Mothballed,
+            opened_day: 2,
+            operating_days: 8,
+            cash_tight_days: 3,
+            ..default()
+        };
+        for action in [
+            HeroBusinessAction::SetAskingPrice(77),
+            HeroBusinessAction::SetEnabledPositions(0),
+        ] {
+            apply_owner_action(
+                action,
+                Some(&mut condition),
+                &mut management,
+                &mut wage,
+                &mut sale,
+                &mut procurement,
+                &mut supply,
+                &mut staffing,
+                2,
+            )
+            .unwrap();
+            assert_eq!(
+                condition.state,
+                BusinessState::Mothballed,
+                "editing a paused policy must not create an unrequested shift"
+            );
+        }
+        assert_eq!(sale.asking_unit_price, 77);
+        assert!(!sale.automatic_pricing);
         apply_owner_action(
-            HeroBusinessAction::SetStrategy(BusinessStrategy::Growth),
+            HeroBusinessAction::SetEnabledPositions(9),
+            Some(&mut condition),
             &mut management,
             &mut wage,
             &mut sale,
@@ -653,9 +385,107 @@ mod tests {
             2,
         )
         .unwrap();
-        assert_eq!(management.strategy, BusinessStrategy::Growth);
-        assert_eq!(management.payroll_reserve_days, 2);
-        assert_eq!(sale.target_margin_bps, 750);
+        assert_eq!(condition.state, BusinessState::Operating);
+        assert_eq!(staffing.enabled_positions, 2);
+        assert!(
+            !management.autopilot,
+            "manual staffing must survive the next automatic review"
+        );
+        assert_eq!(
+            (
+                condition.opened_day,
+                condition.operating_days,
+                condition.cash_tight_days
+            ),
+            (2, 8, 3)
+        );
+    }
+
+    #[test]
+    fn terminal_business_states_reject_policy_and_restart_commands_without_mutating_them() {
+        for state in [
+            BusinessState::Closed,
+            BusinessState::Liquidating,
+            BusinessState::ForSale,
+        ] {
+            let mut management = BusinessManagementPolicy::default();
+            let mut wage = BusinessWagePolicy::default();
+            let mut sale = BusinessSalePolicy::for_good(Good::Flour);
+            let mut procurement = BusinessProcurementPolicy::default();
+            let mut supply = BusinessSupplyPolicy::default();
+            let mut staffing = BusinessStaffingPolicy::new(0);
+            let mut condition = BusinessCondition { state, ..default() };
+            assert!(
+                apply_owner_action(
+                    HeroBusinessAction::SetEnabledPositions(2),
+                    Some(&mut condition),
+                    &mut management,
+                    &mut wage,
+                    &mut sale,
+                    &mut procurement,
+                    &mut supply,
+                    &mut staffing,
+                    2
+                )
+                .is_err()
+            );
+            assert_eq!(condition.state, state);
+            assert_eq!(staffing.enabled_positions, 0);
+            assert!(management.autopilot);
+        }
+    }
+
+    #[test]
+    fn a_manual_strategy_remains_authoritative_until_autopilot_is_explicitly_reenabled() {
+        let mut policy = CompanyManagementPolicy::default();
+        apply_company_policy_action(
+            HeroCompanyAction::SetStrategy(BusinessStrategy::Aggressive),
+            &mut policy,
+        );
+        assert_eq!(policy.strategy, BusinessStrategy::Aggressive);
+        assert_eq!(
+            policy.payroll_reserve_days,
+            BusinessStrategy::Aggressive.payroll_reserve_days()
+        );
+        assert!(!policy.autopilot);
+        apply_company_policy_action(HeroCompanyAction::SetAutopilot(true), &mut policy);
+        assert!(policy.autopilot);
+        assert_eq!(policy.strategy, BusinessStrategy::Aggressive);
+    }
+
+    #[test]
+    fn selecting_strategy_updates_the_parameters_that_autopilot_reads() {
+        let mut management = BusinessManagementPolicy::default();
+        let mut wage = BusinessWagePolicy::default();
+        let mut sale = BusinessSalePolicy::for_good(Good::Flour);
+        let mut procurement = BusinessProcurementPolicy::default();
+        let mut supply = BusinessSupplyPolicy::default();
+        let mut staffing = BusinessStaffingPolicy::new(2);
+        apply_owner_action(
+            HeroBusinessAction::SetStrategy(BusinessStrategy::Aggressive),
+            None,
+            &mut management,
+            &mut wage,
+            &mut sale,
+            &mut procurement,
+            &mut supply,
+            &mut staffing,
+            2,
+        )
+        .unwrap();
+        assert_eq!(management.strategy, BusinessStrategy::Aggressive);
+        assert!(
+            !management.autopilot,
+            "a site override must survive company review"
+        );
+        assert_eq!(
+            management.payroll_reserve_days,
+            BusinessStrategy::Aggressive.payroll_reserve_days()
+        );
+        assert_eq!(
+            sale.target_margin_bps,
+            BusinessStrategy::Aggressive.target_margin_bps()
+        );
     }
 
     #[test]
@@ -688,6 +518,7 @@ mod tests {
 
         apply_owner_action(
             HeroBusinessAction::SetOutputReserveDays(99),
+            None,
             &mut management,
             &mut wage,
             &mut sale,
@@ -707,6 +538,7 @@ mod tests {
                 good: Good::Wheat,
                 days: 99,
             },
+            None,
             &mut management,
             &mut wage,
             &mut sale,
@@ -734,6 +566,7 @@ mod tests {
 
         apply_owner_action(
             HeroBusinessAction::SetAutomaticProcurement(false),
+            None,
             &mut management,
             &mut wage,
             &mut sale,

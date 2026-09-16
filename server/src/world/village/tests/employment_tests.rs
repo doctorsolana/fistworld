@@ -1,28 +1,54 @@
 //! Village employment regression fixtures and invariants.
 
+use super::super::economy::{WageReview, review_business_wages};
 use super::*;
 
 #[test]
 fn adaptive_wages_raise_for_vacancies_and_cut_under_payroll_stress() {
     let mut policy = BusinessWagePolicy::default();
-    review_automatic_wage_offer(&mut policy, 2, 0, 2, 4 * PENNIES_PER_COIN, 0);
+    let mut review = WageReview {
+        elapsed_days: 2,
+        filled: 0,
+        positions: 2,
+        headroom: 4 * PENNIES_PER_COIN,
+        arrears: 0,
+        competing_offer: 100,
+        living_cost: 120,
+        sustainable_wage: 200,
+        scarce_labour: true,
+    };
+    review_automatic_wage_offer(&mut policy, review);
     assert_eq!(
         policy.daily_wage,
         FOUNDING_DAILY_WAGE + shared::economy::BUSINESS_WAGE_REVIEW_STEP
     );
 
-    review_automatic_wage_offer(&mut policy, 2, 2, 2, 0, PENNIES_PER_COIN);
+    review.filled = 2;
+    review.headroom = 0;
+    review.arrears = PENNIES_PER_COIN;
+    review_automatic_wage_offer(&mut policy, review);
     assert_eq!(policy.daily_wage, FOUNDING_DAILY_WAGE);
 
     policy.automatic = false;
-    review_automatic_wage_offer(&mut policy, 100, 0, 2, 10_000, 0);
+    review.elapsed_days = 100;
+    review.filled = 0;
+    review.headroom = 10_000;
+    review.arrears = 0;
+    review_automatic_wage_offer(&mut policy, review);
     assert_eq!(policy.daily_wage, FOUNDING_DAILY_WAGE);
 }
 
 #[test]
 fn payroll_does_not_raise_wages_for_intentionally_disabled_positions() {
     let mut app = village_test_app();
-    app.add_systems(Update, run_business_payroll_and_owner_leisure);
+    app.add_systems(
+        Update,
+        (
+            run_business_payroll_and_owner_leisure,
+            review_business_wages,
+        )
+            .chain(),
+    );
     let mut clock = WorldTime::new_default();
     clock.day = 2;
     app.world_mut().spawn(clock);
@@ -131,14 +157,16 @@ fn closing_positions_releases_stable_workers_only_at_a_safe_logistics_boundary()
         .id();
 
     app.update();
-    assert!(app
-        .world()
-        .get::<shared::components::EmployedAt>(first)
-        .is_some());
-    assert!(app
-        .world()
-        .get::<shared::components::EmployedAt>(second)
-        .is_none());
+    assert!(
+        app.world()
+            .get::<shared::components::EmployedAt>(first)
+            .is_some()
+    );
+    assert!(
+        app.world()
+            .get::<shared::components::EmployedAt>(second)
+            .is_none()
+    );
     assert_eq!(
         *app.world().get::<WorkStatus>(second).unwrap(),
         WorkStatus::LookingForWork
@@ -165,10 +193,190 @@ fn closing_positions_releases_stable_workers_only_at_a_safe_logistics_boundary()
         .unwrap()
         .remove(Good::Wheat, 1);
     app.update();
-    assert!(app
-        .world()
-        .get::<shared::components::EmployedAt>(first)
-        .is_none());
+    assert!(
+        app.world()
+            .get::<shared::components::EmployedAt>(first)
+            .is_none()
+    );
+}
+
+#[test]
+fn closing_a_production_job_preserves_personal_materials_but_waits_for_company_outputs() {
+    use crate::world::village::worker_activity::EmploymentReleaseRequested;
+    for (kind, cargo, should_release) in [
+        (SettlementBuildingKind::StoneQuarry, Good::Wood, true),
+        (SettlementBuildingKind::StoneQuarry, Good::Stone, false),
+        (SettlementBuildingKind::LivestockFarm, Good::Wool, false),
+        (SettlementBuildingKind::StorageHall, Good::Wood, false),
+    ] {
+        let mut app = village_test_app();
+        app.add_systems(Update, enforce_staffing_targets);
+        let id = shared::components::BuildingId(948);
+        app.world_mut().spawn((
+            id,
+            SettlementBuilding {
+                kind,
+                settlement: "Releaseford".into(),
+                owner: None,
+                quality: 1.0,
+                workers: vec![],
+            },
+            BusinessStaffingPolicy::new(0),
+        ));
+        let mut inventory = GoodsInventory::new(shared::economy::capacity::VILLAGER);
+        inventory.add(cargo, 1);
+        let worker = app
+            .world_mut()
+            .spawn((
+                shared::components::PersonId(949),
+                shared::components::EmployedAt(id),
+                Occupation(Some("Worker".into())),
+                WorkStatus::Employed,
+                CharacterActivity::Idle,
+                inventory,
+                EmploymentReleaseRequested,
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<shared::components::EmployedAt>(worker)
+                .is_none(),
+            should_release,
+            "{kind:?} carrying {cargo:?}"
+        );
+        assert_eq!(
+            app.world()
+                .get::<EmploymentReleaseRequested>(worker)
+                .is_none(),
+            should_release
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(worker)
+                .unwrap()
+                .amount(cargo),
+            1,
+            "Changing jobs must never discard retained goods"
+        );
+        if should_release {
+            assert_eq!(
+                *app.world().get::<WorkStatus>(worker).unwrap(),
+                WorkStatus::LookingForWork
+            );
+            assert!(app.world().get::<Occupation>(worker).unwrap().0.is_none());
+        }
+    }
+}
+
+#[test]
+fn a_closed_fishing_position_requests_egress_before_releasing_its_employee() {
+    use crate::world::village::worker_activity::EmploymentReleaseRequested;
+    let mut app = village_test_app();
+    app.add_systems(Update, enforce_staffing_targets);
+    let id = shared::components::BuildingId(950);
+    let hut = app
+        .world_mut()
+        .spawn((
+            id,
+            SettlementBuilding {
+                kind: SettlementBuildingKind::FishermansHut,
+                settlement: "Pierford".into(),
+                owner: None,
+                quality: 1.0,
+                workers: vec![],
+            },
+            BusinessStaffingPolicy::new(0),
+        ))
+        .id();
+    let goal = Vec3::new(10.0, 0.0, 10.0);
+    let person = app
+        .world_mut()
+        .spawn((
+            shared::components::PersonId(951),
+            shared::components::EmployedAt(id),
+            Occupation(Some("Fisher".into())),
+            WorkStatus::Employed,
+            GoodsInventory::new(shared::economy::capacity::VILLAGER),
+            CharacterActivity::Fishing,
+            FishingRoutine {
+                hut,
+                pier: hut,
+                hall: hut,
+                catch_seconds: 40.0,
+                failed_workplace_routes: 0,
+                production_day: 0,
+                produced_today: 0,
+                phase: FishingPhase::Fishing,
+            },
+            PierTraversal {
+                deck_start: Vec3::ZERO,
+                deck_end: goal,
+            },
+            MoveTarget(goal),
+        ))
+        .id();
+    app.update();
+    assert!(
+        app.world()
+            .get::<EmploymentReleaseRequested>(person)
+            .is_some()
+    );
+    assert!(
+        app.world()
+            .get::<shared::components::EmployedAt>(person)
+            .is_some()
+    );
+    assert!(app.world().get::<PierTraversal>(person).is_some());
+    assert_eq!(app.world().get::<MoveTarget>(person).unwrap().0, goal);
+    assert_eq!(
+        app.world()
+            .get::<FishingRoutine>(person)
+            .unwrap()
+            .catch_seconds,
+        40.0
+    );
+
+    // A revised operator decision cancels the pending release without
+    // replacing the actor's physical work or discarding invested labour.
+    app.world_mut()
+        .get_mut::<BusinessStaffingPolicy>(hut)
+        .unwrap()
+        .enabled_positions = 1;
+    app.update();
+    assert!(
+        app.world()
+            .get::<EmploymentReleaseRequested>(person)
+            .is_none()
+    );
+    assert!(app.world().get::<FishingRoutine>(person).is_some());
+
+    app.world_mut()
+        .get_mut::<BusinessStaffingPolicy>(hut)
+        .unwrap()
+        .enabled_positions = 0;
+    app.update();
+    // The job runner, whose real deck egress is tested separately, owns this
+    // completion. Staffing may release employment only after it relinquishes
+    // the routine and crossing, with cargo already delivered.
+    app.world_mut()
+        .entity_mut(person)
+        .remove::<(FishingRoutine, PierTraversal, MoveTarget)>();
+    app.update();
+    assert!(
+        app.world()
+            .get::<shared::components::EmployedAt>(person)
+            .is_none()
+    );
+    assert!(
+        app.world()
+            .get::<EmploymentReleaseRequested>(person)
+            .is_none()
+    );
+    assert_eq!(
+        *app.world().get::<CharacterActivity>(person).unwrap(),
+        CharacterActivity::Idle
+    );
 }
 
 #[test]
@@ -418,6 +626,12 @@ fn payroll_catches_up_arrears_instead_of_stranding_them() {
                 last_payroll_day: 1,
                 ..default()
             },
+            super::super::commerce::payroll_claims::PrivatePayrollClaims {
+                claims: vec![shared::economy::BusinessWageClaim {
+                    worker: shared::components::PersonId(43),
+                    pennies: 2 * PENNIES_PER_COIN,
+                }],
+            },
             BusinessWagePolicy::default(),
         ))
         .id();
@@ -450,11 +664,14 @@ fn a_financially_secure_owner_delegates_only_when_payroll_and_a_replacement_are_
         Update,
         (run_business_payroll_and_owner_leisure, fill_vacancies).chain(),
     );
-    app.world_mut().spawn({
-        let mut clock = WorldTime::new_default();
-        clock.day = 2;
-        clock
-    });
+    let clock = app
+        .world_mut()
+        .spawn({
+            let mut clock = WorldTime::new_default();
+            clock.day = 2;
+            clock
+        })
+        .id();
     let settlement_id = shared::components::SettlementId(5_100);
     let settlement = app
         .world_mut()
@@ -512,7 +729,7 @@ fn a_financially_secure_owner_delegates_only_when_payroll_and_a_replacement_are_
         .spawn((
             shared::components::PersonId(5_104),
             CharacterName("Bea".to_string()),
-            VillagerIntent::Resident { settlement },
+            VillagerIntent::ArrivingBySea { settlement },
             PlayerPosition(Vec3::ZERO),
             Wallet::default(),
             Occupation::default(),
@@ -520,6 +737,46 @@ fn a_financially_secure_owner_delegates_only_when_payroll_and_a_replacement_are_
         ))
         .id();
 
+    for intent in [
+        VillagerIntent::ArrivingBySea { settlement },
+        VillagerIntent::Travelling { settlement },
+    ] {
+        app.world_mut().entity_mut(replacement).insert(intent);
+        app.update();
+        assert_eq!(
+            app.world().get::<WorkStatus>(owner),
+            Some(&WorkStatus::Employed),
+            "an incoming newcomer cannot make an owner delegate before registration"
+        );
+        assert_eq!(
+            app.world().get::<shared::components::EmployedAt>(owner),
+            Some(&shared::components::EmployedAt(business_id))
+        );
+        assert!(
+            app.world()
+                .get::<shared::components::EmployedAt>(replacement)
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .get::<shared::components::ResidentOf>(replacement)
+                .is_none()
+        );
+        assert_eq!(
+            app.world()
+                .get::<SettlementBuilding>(business)
+                .unwrap()
+                .workers,
+            ["Ada"]
+        );
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day += 1;
+    }
+    // Stage only the completed-registration fact here; the immigration test
+    // separately exercises its real navigation, FIFO service and counter exit.
+    // The next ordinary daily decision must now delegate and actually hire.
+    app.world_mut()
+        .entity_mut(replacement)
+        .insert(VillagerIntent::Resident { settlement });
     app.update();
 
     let world = app.world();
@@ -711,5 +968,197 @@ fn a_resting_master_returns_when_their_company_cannot_find_a_worker() {
             .workers,
         ["Ada"],
         "a secure owner should still cover a needed position when no replacement exists",
+    );
+}
+
+#[test]
+fn retention_wages_need_real_profit_and_company_headroom() {
+    let base = WageReview {
+        elapsed_days: 1,
+        filled: 1,
+        positions: 1,
+        headroom: 1_000,
+        arrears: 0,
+        competing_offer: 130,
+        living_cost: 150,
+        sustainable_wage: 180,
+        scarce_labour: true,
+    };
+    let mut policy = BusinessWagePolicy::default();
+    review_automatic_wage_offer(&mut policy, base);
+    assert_eq!(policy.daily_wage, 110);
+    for review in [
+        WageReview {
+            headroom: 0,
+            ..base
+        },
+        WageReview {
+            sustainable_wage: 100,
+            ..base
+        },
+        WageReview { arrears: 1, ..base },
+        WageReview {
+            scarce_labour: false,
+            ..base
+        },
+    ] {
+        let mut policy = BusinessWagePolicy::default();
+        review_automatic_wage_offer(&mut policy, review);
+        assert_eq!(policy.daily_wage, 100);
+    }
+    let mut policy = BusinessWagePolicy::default();
+    review_automatic_wage_offer(
+        &mut policy,
+        WageReview {
+            filled: 4,
+            positions: 1,
+            headroom: 40,
+            ..base
+        },
+    );
+    assert_eq!(
+        policy.daily_wage, 105,
+        "all remaining employees receive the raise"
+    );
+}
+
+#[test]
+fn wages_reserve_sibling_payroll_before_advertising_raises() {
+    let mut app = village_test_app();
+    app.add_systems(Update, review_business_wages);
+    let mut clock = WorldTime::new_default();
+    clock.day = 2;
+    app.world_mut().spawn(clock);
+    let sid = shared::components::SettlementId(9_001);
+    app.world_mut().spawn((sid, MootMarket::founding()));
+    let company = shared::components::CompanyId(9_002);
+    spawn_test_company(&mut app, company.0, 420);
+    let mut sites = Vec::new();
+    for number in 0..2 {
+        sites.push(
+            app.world_mut()
+                .spawn((
+                    shared::components::BuildingId(9_010 + number),
+                    shared::components::BuildingOf(sid),
+                    shared::components::OperatedBy(company),
+                    SettlementBuilding {
+                        kind: SettlementBuildingKind::LumberjackHut,
+                        settlement: "Wage test".into(),
+                        owner: None,
+                        quality: 1.0,
+                        workers: vec![],
+                    },
+                    BusinessAccount::default(),
+                    BusinessWagePolicy {
+                        vacancy_days: 1,
+                        ..default()
+                    },
+                    BusinessStaffingPolicy::new(1),
+                    BusinessStaffingForecast {
+                        day: 2,
+                        expected_sales_units: 3,
+                        produced_output_units: 0,
+                        optimal_positions: 1,
+                        marginal_daily_profit: 100,
+                    },
+                ))
+                .id(),
+        );
+    }
+    app.update();
+    let wages: Vec<_> = sites
+        .iter()
+        .map(|e| {
+            app.world()
+                .get::<BusinessWagePolicy>(*e)
+                .unwrap()
+                .daily_wage
+        })
+        .collect();
+    assert_eq!(
+        wages,
+        vec![110, 100],
+        "twenty spare pennies cannot back two two-day raises"
+    );
+    assert!(wages.iter().sum::<u64>() * 2 <= 420);
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<BusinessWagePolicy>(sites[0])
+            .unwrap()
+            .daily_wage,
+        110,
+        "same-day frames cannot repeatedly raise salaries"
+    );
+}
+
+#[test]
+fn busy_worker_reconsiders_better_job_after_delivering_same_day() {
+    let mut app = village_test_app();
+    app.add_systems(Update, review_worker_job_choices);
+    let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+    let sid = shared::components::SettlementId(9_101);
+    for (number, wage) in [(1, 100), (2, 110)] {
+        app.world_mut().spawn((
+            shared::components::BuildingId(number),
+            shared::components::BuildingOf(sid),
+            SettlementBuilding {
+                kind: SettlementBuildingKind::LumberjackHut,
+                settlement: "Switch test".into(),
+                owner: None,
+                quality: 1.0,
+                workers: vec![],
+            },
+            BusinessWagePolicy {
+                daily_wage: wage,
+                ..default()
+            },
+            BusinessStaffingPolicy::new(1),
+            BusinessAccount::default(),
+        ));
+    }
+    let mut goods = GoodsInventory::new(shared::economy::capacity::VILLAGER);
+    goods.add(Good::Wood, 1);
+    let worker = app
+        .world_mut()
+        .spawn((
+            shared::components::PersonId(9_102),
+            shared::components::EmployedAt(shared::components::BuildingId(1)),
+            Occupation(Some("Lumberjack".into())),
+            WorkStatus::Employed,
+            goods,
+        ))
+        .id();
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<shared::components::EmployedAt>(worker)
+            .unwrap()
+            .0
+            .0,
+        1
+    );
+    app.world_mut()
+        .get_mut::<GoodsInventory>(worker)
+        .unwrap()
+        .remove(Good::Wood, 1);
+    let mut time = app.world_mut().get_mut::<WorldTime>(clock).unwrap();
+    time.seconds_in_cycle += time.cycle_duration() / 12.0;
+    drop(time);
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<shared::components::EmployedAt>(worker)
+            .unwrap()
+            .0
+            .0,
+        2
+    );
+    assert_eq!(
+        app.world()
+            .get::<GoodsInventory>(worker)
+            .unwrap()
+            .amount(Good::Wood),
+        0
     );
 }

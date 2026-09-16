@@ -9,7 +9,7 @@ use crate::worldgen::{river_surface_height, river_water_reach_at};
 
 use super::map_access::load_active_map;
 use super::sampling::sample_delta_from_map;
-use super::{Biome, ChunkCoord, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING};
+use super::{Biome, CHUNK_RESOLUTION, CHUNK_SIZE, ChunkCoord, VERTEX_SPACING};
 
 /// Terrain generator backed by authored map data.
 #[derive(Clone)]
@@ -574,8 +574,9 @@ impl WorldTerrain {
     }
 
     fn mark_chunks_modified(&mut self, coords: impl IntoIterator<Item = ChunkCoord>) {
+        let bounds = self.generator.active_map_bounds();
         for coord in coords {
-            if !coord.in_world_bounds() {
+            if !coord.in_map_bounds(bounds) {
                 continue;
             }
             let version = self.chunk_versions.entry(coord).or_default();
@@ -588,6 +589,24 @@ impl WorldTerrain {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn chunk_revisions_use_the_terrain_instances_bounds() {
+        let mut terrain = WorldTerrain::default();
+        let mut map = terrain.generator.loaded_map().clone();
+        let coord = ChunkCoord::new(10_000, 10_000);
+        let low = 10_000.0 * CHUNK_SIZE;
+        map.definition.bounds = crate::map::MapBounds {
+            min: [low, low],
+            max: [low + CHUNK_SIZE, low + CHUNK_SIZE],
+        };
+        // Detached generator deliberately leaves process-wide startup bounds
+        // untouched, as independent worlds and concurrent fixtures must.
+        terrain.generator = TerrainGenerator::from_loaded_map(map);
+        terrain.mark_chunks_modified([coord, ChunkCoord::new(0, 0)]);
+        assert_eq!(terrain.chunk_versions.get(&coord), Some(&1));
+        assert!(!terrain.chunk_versions.contains_key(&ChunkCoord::new(0, 0)));
+    }
 
     #[test]
     fn river_ground_blend_builds_sand_then_a_dirt_shoulder() {
