@@ -384,16 +384,56 @@ mod tests {
 
     use super::*;
 
-    fn glb_scene_name(path: &Path) -> String {
+    fn glb_document(path: &Path) -> serde_json::Value {
         let bytes = fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert_eq!(&bytes[0..4], b"glTF", "{} is not a GLB", path.display());
         let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-        let document: serde_json::Value = serde_json::from_slice(&bytes[20..20 + json_len])
-            .unwrap_or_else(|error| panic!("{}: invalid GLB JSON: {error}", path.display()));
-        document["scenes"][0]["name"]
+        serde_json::from_slice(&bytes[20..20 + json_len])
+            .unwrap_or_else(|error| panic!("{}: invalid GLB JSON: {error}", path.display()))
+    }
+
+    fn glb_scene_name(path: &Path) -> String {
+        glb_document(path)["scenes"][0]["name"]
             .as_str()
             .unwrap_or_else(|| panic!("{}: default scene has no name", path.display()))
             .to_string()
+    }
+
+    /// Per mesh, in file order: triangle count and the glTF (Y-up) position
+    /// bounds, read from the accessor metadata alone.
+    fn glb_mesh_geometry(path: &Path) -> Vec<(usize, [f32; 3], [f32; 3])> {
+        let document = glb_document(path);
+        let accessors = document["accessors"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{}: no accessors", path.display()));
+        let vec3 = |value: &serde_json::Value| -> [f32; 3] {
+            let values: Vec<f32> = value
+                .as_array()
+                .expect("bounds array")
+                .iter()
+                .map(|v| v.as_f64().expect("bound") as f32)
+                .collect();
+            [values[0], values[1], values[2]]
+        };
+        document["meshes"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{}: no meshes", path.display()))
+            .iter()
+            .map(|mesh| {
+                let primitive = &mesh["primitives"][0];
+                let position =
+                    &accessors[primitive["attributes"]["POSITION"].as_u64().unwrap() as usize];
+                let triangles = match primitive.get("indices").and_then(|v| v.as_u64()) {
+                    Some(indices) => accessors[indices as usize]["count"].as_u64().unwrap() / 3,
+                    None => position["count"].as_u64().unwrap() / 3,
+                };
+                (
+                    triangles as usize,
+                    vec3(&position["min"]),
+                    vec3(&position["max"]),
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -421,6 +461,55 @@ mod tests {
                 file.file_stem().unwrap().to_string_lossy(),
                 "{} has stale internal scene metadata",
                 file.display()
+            );
+        }
+    }
+
+    /// The wild flowers are PATCH meshes, not sprigs: a ground-cover cell is
+    /// 2.6 m wide and the short grass it replaces stands ~0.6 m, so a patch
+    /// must be broad enough to fill the cell and tall enough to show above
+    /// the thinned grass, with a genuinely cheaper LOD1 for the sparse
+    /// swap-mesh scatter beyond 72 m.
+    #[test]
+    fn flower_assets_are_readable_patches_with_a_reduced_far_mesh() {
+        for kind in [
+            PropKind::FlowerA,
+            PropKind::FlowerB,
+            PropKind::FlowerC,
+            PropKind::FlowerD,
+        ] {
+            let relative = kind.scene_path().split('#').next().unwrap();
+            let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../client/assets")
+                .join(relative);
+            let meshes = glb_mesh_geometry(&file);
+            assert_eq!(meshes.len(), 2, "{kind:?} must ship LOD0 and LOD1");
+            let (lod0_triangles, min, max) = meshes[0];
+            let radius = (max[0] - min[0]).max(max[2] - min[2]) * 0.5;
+            let height = max[1] - min[1];
+            assert!(
+                radius >= 0.8,
+                "{kind:?} LOD0 footprint radius {radius:.2} m is a sprig, not a patch"
+            );
+            assert!(
+                (0.40..=0.62).contains(&height),
+                "{kind:?} LOD0 height {height:.2} m must clear the short grass without towering"
+            );
+            assert!(
+                min[1] <= 0.0 && min[1] >= -0.10,
+                "{kind:?} base at {:.3} m is not bedded on the ground",
+                min[1]
+            );
+            let (lod1_triangles, _, lod1_max) = meshes[1];
+            assert!(
+                lod1_triangles < lod0_triangles,
+                "{kind:?} LOD1 ({lod1_triangles} tris) must be cheaper than LOD0 ({lod0_triangles})"
+            );
+            assert!(
+                (lod1_max[1] - max[1]).abs() <= 0.10,
+                "{kind:?} LOD1 top {:.2} m disagrees with LOD0 {:.2} m",
+                lod1_max[1],
+                max[1]
             );
         }
     }

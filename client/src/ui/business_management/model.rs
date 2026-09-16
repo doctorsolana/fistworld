@@ -1,5 +1,7 @@
 //! Pure site/company presentation and authoritative action addressing.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use super::*;
 
 mod company;
@@ -7,45 +9,125 @@ mod company;
 // --- model ------------------------------------------------------------------
 
 /// What pressing a control does. Orders go to the server; draft steps edit the
-/// local share-offer draft.
+/// local share-offer or dividend-amount draft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ControlPress {
     Order(HeroBusinessAction),
     Company(CompanyId, HeroCompanyAction),
     Draft(ShareDraftAction),
+    DividendDraft(DividendDraftAction),
     Person(PersonId),
+    /// A fixed slot with no occupant this frame. The button is spawned hidden
+    /// and inert but keeps its entity and payload component, so a later
+    /// occupant binds into it instead of respawning the page.
+    Vacant(VacantSlot),
+}
+
+/// Which payload component a vacant slot's button carries, so the bind pass
+/// can fill it later without `Commands`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum VacantSlot {
+    /// A `PersonLink` slot (worker chips).
+    Person,
+    /// An `Action` slot (public share-offer buy buttons).
+    Action,
 }
 
 pub(super) struct ControlModel {
+    /// The readable id; production only needs its hash below, tests assert on it.
+    #[cfg(test)]
     pub(super) id: String,
+    /// `BoundId::of(&id)`, hashed once here so the structure key and the
+    /// bind pass compare `u64`s instead of re-hashing the string per frame.
+    pub(super) bound: BoundId,
     pub(super) label: String,
     pub(super) press: ControlPress,
     pub(super) selected: bool,
 }
 
+impl ControlModel {
+    pub(super) fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        press: ControlPress,
+    ) -> Self {
+        let id = id.into();
+        Self {
+            bound: BoundId::of(&id),
+            #[cfg(test)]
+            id,
+            label: label.into(),
+            press,
+            selected: false,
+        }
+    }
+
+    /// Vacant slots stay in the tree (`Display::None`) so the structure key
+    /// and the entity set do not depend on who currently fills them.
+    pub(super) fn visible(&self) -> bool {
+        !matches!(self.press, ControlPress::Vacant(_))
+    }
+
+    pub(super) fn vacant(id: impl Into<String>, slot: VacantSlot) -> Self {
+        Self::new(id, String::new(), ControlPress::Vacant(slot))
+    }
+}
+
+/// A bound node's id, hashed once at spawn so the per-frame bind pass keys
+/// its scratch map by `u64` instead of hashing strings or allocating.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct BoundId(u64);
+
+impl BoundId {
+    pub(super) fn of(id: &str) -> Self {
+        let mut hasher = DefaultHasher::new();
+        id.hash(&mut hasher);
+        Self(hasher.finish())
+    }
+}
+
+/// Fixed public-offer buy slots per seller: BUY 1, BUY 10 and BUY ALL, with
+/// duplicates (an offer of 10 shares) left vacant rather than dropped.
+pub(super) const BUY_SLOTS_PER_OFFER: usize = 3;
+
 pub(super) struct RowModel {
+    #[cfg(test)]
     pub(super) id: String,
+    pub(super) bound: BoundId,
     pub(super) label: String,
     pub(super) value: String,
     pub(super) controls: Vec<ControlModel>,
 }
 
 pub(super) struct MeterModel {
+    #[cfg(test)]
     pub(super) id: String,
+    pub(super) bound: BoundId,
     pub(super) title: String,
     pub(super) summary: String,
     /// Lane widths in percent of the track.
     pub(super) lanes: [f32; 2],
 }
 
-pub(super) struct WorkerModel {
-    pub(super) person: PersonId,
-    pub(super) name: String,
+/// Collect the observed employees of `site` into `scratch`: one entry per
+/// durable person (a person in replication handover can briefly have two
+/// bodies), sorted by id so a departing worker never shifts the chips that
+/// remain. The slice is reused across frames by the caller.
+pub(super) fn observed_workers(
+    scratch: &mut Vec<PersonId>,
+    site: BuildingId,
+    people: impl Iterator<Item = (PersonId, Option<BuildingId>)>,
+) {
+    scratch.clear();
+    scratch
+        .extend(people.filter_map(|(person, employer)| (employer == Some(site)).then_some(person)));
+    scratch.sort_unstable();
+    scratch.dedup();
 }
 
 pub(super) enum Block {
     Scope(BusinessManagementPage),
-    Section(String),
+    Section(&'static str),
     Row(RowModel),
     Meter(MeterModel),
 }
@@ -62,35 +144,39 @@ pub(super) struct ControlsModel {
 }
 
 impl ControlsModel {
-    /// The id sequence; equal keys mean the spawned tree can be reused.
-    pub(super) fn structure_key(&self) -> String {
-        let mut key = String::new();
+    /// A hash of the id sequence (scopes, section labels, and the pre-hashed
+    /// row, control and meter ids); equal keys mean the spawned tree can be
+    /// reused. Values, labels, selection and whether a fixed slot is occupied
+    /// are not part of it, so the key never allocates, hashes no id strings
+    /// and never changes on an economic tick, a worker walking out of
+    /// replication or a partial share sale.
+    pub(super) fn structure_key(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
         for block in &self.blocks {
             match block {
-                Block::Scope(page) => key.push_str(match page {
-                    BusinessManagementPage::Site => "scope.site",
-                    BusinessManagementPage::Company => "scope.company",
-                }),
+                Block::Scope(page) => {
+                    0u8.hash(&mut hasher);
+                    page.index().hash(&mut hasher);
+                }
                 Block::Section(label) => {
-                    key.push_str("s:");
-                    key.push_str(label);
+                    1u8.hash(&mut hasher);
+                    label.hash(&mut hasher);
                 }
                 Block::Row(row) => {
-                    key.push_str("|r:");
-                    key.push_str(&row.id);
+                    2u8.hash(&mut hasher);
+                    row.bound.hash(&mut hasher);
                     for control in &row.controls {
-                        key.push_str(",c:");
-                        key.push_str(&control.id);
+                        3u8.hash(&mut hasher);
+                        control.bound.hash(&mut hasher);
                     }
                 }
                 Block::Meter(meter) => {
-                    key.push_str("|m:");
-                    key.push_str(&meter.id);
+                    4u8.hash(&mut hasher);
+                    meter.bound.hash(&mut hasher);
                 }
             }
-            key.push('|');
         }
-        key
+        hasher.finish()
     }
 }
 
@@ -99,12 +185,7 @@ pub(super) fn order(
     label: impl Into<String>,
     action: HeroBusinessAction,
 ) -> ControlModel {
-    ControlModel {
-        id: id.into(),
-        label: label.into(),
-        press: ControlPress::Order(action),
-        selected: false,
-    }
+    ControlModel::new(id, label, ControlPress::Order(action))
 }
 
 pub(super) fn company_order(
@@ -113,12 +194,7 @@ pub(super) fn company_order(
     label: impl Into<String>,
     action: HeroCompanyAction,
 ) -> ControlModel {
-    ControlModel {
-        id: id.into(),
-        label: label.into(),
-        press: ControlPress::Company(company, action),
-        selected: false,
-    }
+    ControlModel::new(id, label, ControlPress::Company(company, action))
 }
 
 pub(super) fn company_choice(
@@ -152,8 +228,11 @@ pub(super) fn row(
     value: impl Into<String>,
     controls: Vec<ControlModel>,
 ) -> Block {
+    let id = id.into();
     Block::Row(RowModel {
-        id: id.into(),
+        bound: BoundId::of(&id),
+        #[cfg(test)]
+        id,
         label: label.into(),
         value: value.into(),
         controls,
@@ -171,8 +250,11 @@ pub(super) fn meter(
     let scale = scale_units.max(1) as f32;
     let first = (first_units as f32 / scale * 100.0).clamp(0.0, 100.0);
     let second = (second_units as f32 / scale * 100.0).clamp(0.0, 100.0 - first);
+    let id = id.into();
     Block::Meter(MeterModel {
-        id: id.into(),
+        bound: BoundId::of(&id),
+        #[cfg(test)]
+        id,
         title: title.into(),
         summary: summary.into(),
         lanes: [first, second],
@@ -196,6 +278,40 @@ pub(super) struct CompanyView<'a> {
     pub(super) policy: &'a CompanyManagementPolicy,
     pub(super) decisions: &'a CompanyDecisionHistory,
     pub(super) share_market: &'a CompanyShareMarket,
+    /// The server's latest dividend headroom snapshot; `None` until the
+    /// finance pass has published one for this company.
+    pub(super) capacity: Option<CompanyDividendCapacity>,
+}
+
+impl CompanyView<'_> {
+    /// What a distribution could pay right now according to the last
+    /// published snapshot (zero while none has arrived).
+    pub(super) fn distributable(&self) -> u64 {
+        self.capacity.map_or(0, |capacity| capacity.distributable)
+    }
+}
+
+/// The exact pennies `person` receives from a `pennies` distribution over
+/// `ownership`, from the same `pro_rata_split` the server pays with (the
+/// whole-penny remainder goes to the first cap-table entry, which need not be
+/// the local player). A thread-local scratch table keeps the preview free of
+/// per-frame allocation.
+pub(crate) fn local_dividend_take(
+    pennies: u64,
+    ownership: &CompanyOwnership,
+    person: PersonId,
+) -> u64 {
+    thread_local! {
+        static SPLIT: std::cell::RefCell<Vec<(PersonId, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    SPLIT.with(|split| {
+        let mut split = split.borrow_mut();
+        pro_rata_split(pennies, ownership, &mut split);
+        split
+            .iter()
+            .find(|(holder, _)| *holder == person)
+            .map_or(0, |(_, take)| *take)
+    })
 }
 
 pub(super) struct SiteView<'a> {
@@ -216,10 +332,13 @@ pub(super) struct SiteView<'a> {
 
 pub(super) struct ModelInputs<'a> {
     pub(super) site: Option<SiteView<'a>>,
-    pub(super) workers: &'a [WorkerModel],
+    /// Observed employees of the selected site, deduplicated and sorted by
+    /// id (see [`observed_workers`]); names come from `name_of`.
+    pub(super) workers: &'a [PersonId],
     pub(super) company: Option<CompanyView<'a>>,
     pub(super) local_person: Option<PersonId>,
     pub(super) share_draft: &'a ShareOrderDraft,
+    pub(super) dividend_draft: &'a DividendDraft,
     pub(super) page: BusinessManagementPage,
     pub(super) feedback: &'a BusinessFeedback,
     pub(super) name_of: &'a dyn Fn(PersonId) -> String,
@@ -233,6 +352,7 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
         company,
         local_person,
         share_draft,
+        dividend_draft,
         page,
         feedback,
         name_of,
@@ -294,6 +414,7 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             company,
             local_person,
             share_draft,
+            dividend_draft,
             *name_of,
             can_manage,
         );
@@ -314,7 +435,7 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
     let building = site.building;
     let site_label = site_label.as_deref().unwrap_or_default();
     blocks.push(Block::Scope(BusinessManagementPage::Site));
-    blocks.push(Block::Section("THIS WORKPLACE".into()));
+    blocks.push(Block::Section("THIS WORKPLACE"));
     blocks.push(row(
         "site.scope", "SITE OPERATIONS",
         format!("{site_label} in {}. Staffing, wages, prices and input orders below affect this workplace only.", building.settlement), vec![],
@@ -330,33 +451,30 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
         ),
         vec![],
     ));
-    blocks.push(Block::Section("EMPLOYEES AT THIS SITE".into()));
-    if workers.is_empty() {
-        blocks.push(row(
-            "workers.empty",
-            "EMPLOYEES",
-            "No observed employees at this site",
-            vec![],
-        ));
-    } else {
-        blocks.push(row(
-            "workers.list",
-            "EMPLOYEES",
-            format!(
-                "{} observed employees · select a name to view their character",
-                workers.len()
-            ),
-            workers
-                .iter()
-                .map(|worker| ControlModel {
-                    id: format!("worker.{}", worker.person.0),
-                    label: worker.name.clone(),
-                    press: ControlPress::Person(worker.person),
-                    selected: false,
-                })
-                .collect(),
-        ));
-    }
+    blocks.push(Block::Section("EMPLOYEES AT THIS SITE"));
+    // One fixed chip slot per position: interest-scoped replication makes the
+    // observed set churn, and the chips must not respawn the page when it does.
+    let positions = usize::from(building.kind.positions());
+    let observed = workers.len().min(positions);
+    blocks.push(row(
+        "workers",
+        "EMPLOYEES",
+        if observed == 0 {
+            "No observed employees at this site".to_string()
+        } else {
+            format!("{observed} observed employees · select a name to view their character")
+        },
+        (0..positions)
+            .map(|slot| match workers.get(slot) {
+                Some(person) => ControlModel::new(
+                    format!("worker.{slot}"),
+                    name_of(*person),
+                    ControlPress::Person(*person),
+                ),
+                None => ControlModel::vacant(format!("worker.{slot}"), VacantSlot::Person),
+            })
+            .collect(),
+    ));
     if can_manage {
         let management = site.management;
         blocks.push(automation_row(
@@ -365,7 +483,7 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             management.autopilot,
         ));
         blocks.push(strategy_row("strategy", management.strategy));
-        blocks.push(Block::Section("STAFFING & PAY".into()));
+        blocks.push(Block::Section("STAFFING & PAY"));
         let wage = site.wage;
         blocks.push(row(
             "wage",
@@ -421,7 +539,7 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
                 })
                 .collect(),
         ));
-        blocks.push(Block::Section("LOCAL SALES".into()));
+        blocks.push(Block::Section("LOCAL SALES"));
         let sale = site.sale;
         blocks.push(row(
             "price",
@@ -460,7 +578,7 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
         ));
 
         if let Some(service) = site.tavern_service {
-            blocks.push(Block::Section("TAVERN SERVICE".into()));
+            blocks.push(Block::Section("TAVERN SERVICE"));
             let day = service.current_day;
             blocks.push(meter(
                 "tavern.service",
@@ -496,7 +614,7 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             ));
         }
 
-        blocks.push(Block::Section("GOODS FLOW".into()));
+        blocks.push(Block::Section("GOODS FLOW"));
         let inventory = site.inventory;
         if let Some(output) = output_good(building.kind) {
             let held = inventory.amount(output);
@@ -695,42 +813,130 @@ pub(super) fn strategy_row(id: &str, strategy: BusinessStrategy) -> Block {
     )
 }
 
-pub(super) fn dividend_row(
-    id: &str,
-    label: &str,
+/// The SHAREHOLDER DIVIDENDS row (replicated headroom, policy, amount picker
+/// and confirm control) plus the IF DISTRIBUTED NOW preview row.
+///
+/// Every control is present whenever the viewer can manage, whatever the
+/// snapshot says: a headroom of zero, or none published yet, is a value
+/// (label `DISTRIBUTE 0.00 COIN`, payload `pennies: 0`, which the server
+/// refuses with a plain message), never a structural change.
+pub(super) fn push_dividend_rows(
+    blocks: &mut Vec<Block>,
     company: &CompanyView<'_>,
+    local_person: Option<PersonId>,
+    draft: &DividendDraft,
     can_manage: bool,
-) -> Block {
+) {
+    let id = "company.dividends";
     let automatic = company.policy.automatic_dividends;
+    let distributable = company.distributable();
+    let headroom = match company.capacity {
+        None => "Available now: awaiting the first finance review".to_string(),
+        Some(capacity) => {
+            let mut text = format!(
+                "Available now {} coin ({})  ·  reserves {} coin  ·  ",
+                format_money(capacity.distributable),
+                if capacity.day == u32::MAX {
+                    "not yet reviewed".to_string()
+                } else {
+                    format!("day {}", capacity.day)
+                },
+                format_money(capacity.protected_reserves),
+            );
+            if capacity.last_paid_day == u32::MAX {
+                text.push_str("never paid");
+            } else {
+                text.push_str(&format!(
+                    "last paid {} coin on day {}",
+                    format_money(capacity.last_paid),
+                    capacity.last_paid_day
+                ));
+            }
+            text
+        }
+    };
+    let policy = if automatic {
+        format!(
+            "Automatic after company-wide payroll, tax, input and operating reserves (up to {} coin per day)",
+            format_money(company.policy.max_daily_dividend)
+        )
+    } else {
+        "Retained until manually distributed".to_string()
+    };
+    // Managers distribute the drafted amount; everyone else previews a full
+    // distribution of the published headroom.
+    let amount = if can_manage {
+        draft.pennies.min(distributable)
+    } else {
+        distributable
+    };
     let controls = if can_manage {
-        vec![
-            company_choice(
-                company.id,
-                format!("{id}.auto"),
-                "AUTO DIVIDEND",
-                HeroCompanyAction::SetAutomaticDividends(!automatic),
-                automatic,
-            ),
-            company_order(
-                company.id,
-                format!("{id}.distribute"),
-                "DISTRIBUTE AVAILABLE",
-                HeroCompanyAction::DistributeAvailableProfit,
-            ),
-        ]
+        let mut controls = vec![company_choice(
+            company.id,
+            format!("{id}.auto"),
+            "AUTO DIVIDEND",
+            HeroCompanyAction::SetAutomaticDividends(!automatic),
+            automatic,
+        )];
+        controls.extend(
+            [
+                ("down", "-1 COIN", DividendDraftAction::Down),
+                ("up", "+1 COIN", DividendDraftAction::Up),
+                ("quarter", "25%", DividendDraftAction::Quarter),
+                ("half", "50%", DividendDraftAction::Half),
+                ("all", "ALL", DividendDraftAction::All),
+            ]
+            .into_iter()
+            .map(|(suffix, label, step)| {
+                ControlModel::new(
+                    format!("{id}.{suffix}"),
+                    label,
+                    ControlPress::DividendDraft(step),
+                )
+            }),
+        );
+        controls.push(company_order(
+            company.id,
+            format!("{id}.distribute"),
+            format!("DISTRIBUTE {} COIN", format_money(amount)),
+            HeroCompanyAction::DistributeDividend { pennies: amount },
+        ));
+        controls
     } else {
         vec![]
     };
-    row(
+    blocks.push(row(
         id,
-        label,
-        if automatic {
-            "Automatic after company-wide payroll, tax, input and operating reserves"
-        } else {
-            "Retained until manually distributed"
-        },
+        "SHAREHOLDER DIVIDENDS",
+        format!("{headroom}\n{policy}"),
         controls,
-    )
+    ));
+    let own = local_person
+        .filter(|person| person.is_assigned())
+        .map(|person| {
+            (
+                company.ownership.share_count(person),
+                local_dividend_take(amount, company.ownership, person),
+            )
+        });
+    blocks.push(row(
+        format!("{id}.preview"),
+        "IF DISTRIBUTED NOW",
+        format!(
+            "{} coin  ·  {} coin per 10 shares  ·  {}",
+            format_money(amount),
+            // 1,000 shares: ten shares are 1% of the distribution. The same
+            // wording as the server's reply; the exact take below carries the
+            // penny remainder.
+            format_money(amount / 100),
+            match own {
+                Some((shares, take)) if shares > 0 =>
+                    format!("your {shares} shares receive {} coin", format_money(take)),
+                _ => "you hold no shares".to_string(),
+            }
+        ),
+        vec![],
+    ));
 }
 
 pub(super) fn input_coverage_meter(

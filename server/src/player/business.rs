@@ -15,8 +15,8 @@ use shared::components::{
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessProcurementPolicy,
     BusinessSalePolicy, BusinessStaffingPolicy, BusinessState, BusinessStrategy,
-    BusinessSupplyPolicy, BusinessWagePolicy, CompanyManagementPolicy, MAXIMUM_BUSINESS_DAILY_WAGE,
-    MINIMUM_BUSINESS_DAILY_WAGE, MarketSeller, MootMarket, PENNIES_PER_COIN,
+    BusinessSupplyPolicy, BusinessWagePolicy, CompanyManagementPolicy, MarketSeller, MootMarket,
+    MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
 };
 use shared::protocol::{
     HeroBusinessAction, HeroBusinessOrder, HeroBusinessResult, ReliableChannel,
@@ -164,7 +164,9 @@ fn apply_owner_action(
 }
 
 mod company;
+mod dividend_reports;
 pub use company::handle_hero_company_orders;
+pub use dividend_reports::report_dividend_outcomes;
 
 #[allow(clippy::type_complexity)]
 pub fn handle_hero_business_orders(
@@ -304,7 +306,7 @@ pub fn handle_hero_business_orders(
 mod tests {
     use super::company::{apply_company_policy_action, execute_share_purchase};
     use super::*;
-    use shared::components::{COMPANY_TOTAL_SHARES, CompanyOwnership, CompanyShareMarket};
+    use shared::components::{CompanyOwnership, CompanyShareMarket, COMPANY_TOTAL_SHARES};
     use shared::economy::{BusinessStrategy, CompanyManagementPolicy, Good, Wallet};
     use shared::protocol::HeroCompanyAction;
 
@@ -415,20 +417,18 @@ mod tests {
             let mut supply = BusinessSupplyPolicy::default();
             let mut staffing = BusinessStaffingPolicy::new(0);
             let mut condition = BusinessCondition { state, ..default() };
-            assert!(
-                apply_owner_action(
-                    HeroBusinessAction::SetEnabledPositions(2),
-                    Some(&mut condition),
-                    &mut management,
-                    &mut wage,
-                    &mut sale,
-                    &mut procurement,
-                    &mut supply,
-                    &mut staffing,
-                    2
-                )
-                .is_err()
-            );
+            assert!(apply_owner_action(
+                HeroBusinessAction::SetEnabledPositions(2),
+                Some(&mut condition),
+                &mut management,
+                &mut wage,
+                &mut sale,
+                &mut procurement,
+                &mut supply,
+                &mut staffing,
+                2
+            )
+            .is_err());
             assert_eq!(condition.state, state);
             assert_eq!(staffing.enabled_positions, 0);
             assert!(management.autopilot);

@@ -1,28 +1,29 @@
 //! Selected-company ownership, governance and current accounting details.
+//!
+//! Everything here is spawned once per structural change and then bound in
+//! place: each volatile node carries a [`CompanyBound`] key and takes its
+//! text from [`CompanyView::value`]. A branch that decides whether a node
+//! exists must be mirrored in `binding::company_structure_key`.
 
+use super::binding::{
+    bound_text, ownership_class, CompanyBound, CompanyField, CompanyView, DayLedger,
+    OwnershipClass, PairField,
+};
 use super::controls::{CompanyBranchPolicyButton, CompanyManagementButton, NewTradeRouteButton};
-use super::model::{CompanyDirectory, CompanyPolicyFeedback, CompanyRecord, TradeRouteEditorState};
 use super::routes::spawn_route_card;
 use super::sites::{spawn_branch_card, spawn_site_card, spawn_site_ledger};
 use super::widgets::{
-    detail_button, detail_stat, key_value, signed_money, spawn_note, spawn_section_title,
+    bound_note, detail_button, detail_stat, key_value, spawn_note, spawn_section_title, Label,
 };
 use crate::ui::business_management::BusinessManagementSelection;
-use crate::ui::encyclopedia::person_links::spawn_person_link;
+use crate::ui::encyclopedia::person_links::spawn_person_link_with;
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT};
 use bevy::prelude::*;
-use shared::components::SettlementBuildingKind;
-use shared::economy::{CompanyDayLedger, format_money};
 use shared::protocol::HeroCompanyAction;
 
-pub(super) fn spawn_company_detail(
-    parent: &mut ChildSpawnerCommands<'_>,
-    company: &CompanyRecord,
-    directory: &CompanyDirectory,
-    feedback: &CompanyPolicyFeedback,
-    route_feedback: &TradeRouteEditorState,
-) {
+pub(super) fn spawn_company_detail(parent: &mut ChildSpawnerCommands<'_>, view: &CompanyView<'_>) {
+    let company = view.company;
     parent
         .spawn(Node {
             justify_content: JustifyContent::SpaceBetween,
@@ -44,21 +45,20 @@ pub(super) fn spawn_company_detail(
                     ..default()
                 })
                 .with_children(|copy| {
-                    copy.spawn((
-                        Text::new(company.name.clone()),
+                    bound_text(
+                        copy,
+                        view,
+                        CompanyBound::Company(CompanyField::Name),
                         crate::ui::typography::heading(30.0),
-                        TextColor(INK),
-                    ));
-                    copy.spawn((
-                        Text::new(format!(
-                            "Company #{} · Founded Day {} · {}",
-                            company.id.0,
-                            company.founded_day,
-                            company.status(),
-                        )),
+                        INK,
+                    );
+                    bound_text(
+                        copy,
+                        view,
+                        CompanyBound::Company(CompanyField::Status),
                         crate::ui::ledger::reading(12.5),
-                        TextColor(EMBER),
-                    ));
+                        EMBER,
+                    );
                 });
             header
                 .spawn(Node {
@@ -72,10 +72,13 @@ pub(super) fn spawn_company_detail(
                 .with_children(|actions| {
                     detail_button(
                         actions,
-                        crate::ui::history::CompanyHistoryButton {
-                            company: company.id,
-                            name: company.name.clone(),
-                        },
+                        (
+                            crate::ui::history::CompanyHistoryButton {
+                                company: company.id,
+                                name: company.name.clone(),
+                            },
+                            CompanyBound::Company(CompanyField::HistoryName),
+                        ),
                         "FULL LEDGER",
                     );
                     detail_button(
@@ -89,39 +92,16 @@ pub(super) fn spawn_company_detail(
                 });
         });
 
-    if feedback.company == Some(company.id) && !feedback.message.is_empty() {
-        spawn_note(
-            parent,
-            &format!(
-                "{}: {}",
-                if feedback.success {
-                    "UPDATED"
-                } else {
-                    "NOT CHANGED"
-                },
-                feedback.message
-            ),
-        );
-    }
-    if !route_feedback.message.is_empty() {
-        spawn_note(
-            parent,
-            &format!(
-                "{}: {}",
-                if route_feedback.success {
-                    "ROUTE UPDATED"
-                } else {
-                    "ROUTE NOT CHANGED"
-                },
-                route_feedback.message
-            ),
-        );
-    }
+    // Both notes always exist; an empty message hides its node. A result
+    // receipt therefore binds instead of respawning the pane under the
+    // button that was just pressed.
+    bound_note(
+        parent,
+        view,
+        CompanyBound::Company(CompanyField::NoteFeedback),
+    );
+    bound_note(parent, view, CompanyBound::Company(CompanyField::NoteRoute));
 
-    let liabilities = company
-        .account
-        .wage_arrears
-        .saturating_add(company.account.tax_arrears);
     parent
         .spawn(Node {
             flex_wrap: FlexWrap::Wrap,
@@ -130,39 +110,16 @@ pub(super) fn spawn_company_detail(
             ..default()
         })
         .with_children(|stats| {
-            detail_stat(
-                stats,
-                "COMPANY CASH",
-                format!("{} coin", format_money(company.account.cash)),
-            );
-            detail_stat(
-                stats,
-                "TODAY'S REVENUE",
-                format!(
-                    "{} coin",
-                    format_money(company.account.current_day.external_revenue)
-                ),
-            );
-            detail_stat(
-                stats,
-                "TODAY'S PROFIT",
-                signed_money(company.account.current_day.profit()),
-            );
-            detail_stat(
-                stats,
-                "LIABILITIES",
-                format!("{} coin", format_money(liabilities)),
-            );
-            detail_stat(
-                stats,
-                "CAPITAL ASSETS",
-                format!("{} coin", format_money(company.account.book_value)),
-            );
-            detail_stat(
-                stats,
-                "BOOK EQUITY",
-                format!("{} coin", format_money(company.accounting_equity())),
-            );
+            for (label, field) in [
+                ("COMPANY CASH", CompanyField::Cash),
+                ("TODAY'S REVENUE", CompanyField::Revenue),
+                ("TODAY'S PROFIT", CompanyField::Profit),
+                ("LIABILITIES", CompanyField::Liabilities),
+                ("CAPITAL ASSETS", CompanyField::Assets),
+                ("BOOK EQUITY", CompanyField::Equity),
+            ] {
+                detail_stat(stats, view, label, CompanyBound::Company(field));
+            }
         });
 
     parent.spawn(ledger::ornament_rule());
@@ -182,7 +139,7 @@ pub(super) fn spawn_company_detail(
                     row_gap: Val::Px(7.0),
                     ..default()
                 })
-                .with_children(|position| spawn_position(position, company, directory));
+                .with_children(|position| spawn_position(position, view));
             columns
                 .spawn((
                     Node {
@@ -197,7 +154,7 @@ pub(super) fn spawn_company_detail(
                     },
                     BorderColor::from(PLATE_RULE_SOFT),
                 ))
-                .with_children(|ledger| spawn_today_ledger(ledger, company.account.current_day));
+                .with_children(|ledger| spawn_today_ledger(ledger, view));
         });
 
     spawn_section_title(parent, "Operating Sites", "");
@@ -208,19 +165,14 @@ pub(super) fn spawn_company_detail(
         );
     } else {
         for site in &company.sites {
-            spawn_site_card(parent, company.id, site);
+            spawn_site_card(parent, view, site);
         }
     }
 
-    super::fleet::spawn_fleet(parent, company, directory);
+    super::fleet::spawn_fleet(parent, view);
 
     spawn_section_title(parent, "Trade Routes", "");
-    let can_manage_routes = directory.local_person == Some(company.master);
-    let ready_warehouse = company
-        .sites
-        .iter()
-        .any(|site| site.kind == SettlementBuildingKind::StorageHall && site.workers > 0);
-    if can_manage_routes {
+    if view.can_manage() {
         parent
             .spawn(Node {
                 justify_content: JustifyContent::SpaceBetween,
@@ -229,16 +181,14 @@ pub(super) fn spawn_company_detail(
                 ..default()
             })
             .with_children(|bar| {
-                bar.spawn((
-                    Text::new(if ready_warehouse {
-                        "Choose up to eight towns and tell the caravan what to do at each stop."
-                    } else {
-                        "A staffed Storage Hall is required before this company can open a route."
-                    }),
+                bound_text(
+                    bar,
+                    view,
+                    CompanyBound::Company(CompanyField::RoutesHint),
                     crate::ui::ledger::reading(12.0),
-                    TextColor(INK_MUTED),
-                ));
-                if ready_warehouse && directory.settlements.len() >= 2 {
+                    INK_MUTED,
+                );
+                if view.ready_warehouse() && view.directory.settlements.len() >= 2 {
                     detail_button(bar, NewTradeRouteButton(company.id), "NEW CARAVAN ROUTE");
                 }
             });
@@ -250,7 +200,7 @@ pub(super) fn spawn_company_detail(
         );
     } else {
         for route in &company.routes {
-            spawn_route_card(parent, company.id, route, can_manage_routes);
+            spawn_route_card(parent, view, route);
         }
     }
 
@@ -259,19 +209,16 @@ pub(super) fn spawn_company_detail(
         "CONSOLIDATED LEDGER",
         "wages post to the completed shift at dawn; internal transfers are memorandum only",
     );
-    spawn_day_ledger(parent, "TODAY", company.account.current_day);
+    spawn_day_ledger(parent, view, DayLedger::Today);
     if company.account.previous_day.day != u32::MAX {
-        spawn_day_ledger(parent, "PREVIOUS DAY", company.account.previous_day);
+        spawn_day_ledger(parent, view, DayLedger::Previous);
     }
     key_value(
         parent,
-        "LIFETIME CAPITAL",
-        format!(
-            "{} contributed  /  {} capital spending  /  {} distributed",
-            format_money(company.account.contributed_capital),
-            format_money(company.account.capital_expenditures),
-            format_money(company.account.owner_withdrawals),
-        ),
+        view,
+        None,
+        Label::Fixed("LIFETIME CAPITAL"),
+        CompanyBound::Company(CompanyField::LifetimeCapital),
     );
 
     spawn_section_title(
@@ -282,9 +229,8 @@ pub(super) fn spawn_company_detail(
     if company.branches.is_empty() {
         spawn_note(parent, "No local branch stock is currently observed.");
     } else {
-        let can_manage = directory.local_person == Some(company.master);
         for branch in &company.branches {
-            spawn_branch_card(parent, company.id, branch, can_manage);
+            spawn_branch_card(parent, view, branch);
         }
     }
 
@@ -295,26 +241,30 @@ pub(super) fn spawn_company_detail(
             "Production, supply, staffing and current liabilities",
         );
         for site in &company.sites {
-            spawn_site_ledger(parent, company.id, site);
+            spawn_site_ledger(parent, view, site);
         }
     }
 
     spawn_section_title(parent, "OWNERSHIP", "1,000 ordinary shares in total");
-    for holder in &company.holders {
-        spawn_person_link(
+    // Holders are slots in display order: a share sale re-sorts the cap
+    // table, and the slots rebind their link, name and detail in place.
+    for (index, holder) in company.holders.iter().enumerate() {
+        let slot = index as u8;
+        let detail = view
+            .value(CompanyBound::Holder(
+                slot,
+                super::binding::HolderField::Detail,
+            ))
+            .and_then(|value| value.text)
+            .unwrap_or_default();
+        spawn_person_link_with(
             parent,
             holder.person,
             &holder.name,
-            &format!(
-                "{} shares · {:.1}%{}",
-                holder.shares,
-                f32::from(holder.shares) / 10.0,
-                if holder.person == company.master {
-                    " · Company master"
-                } else {
-                    ""
-                }
-            ),
+            &detail,
+            CompanyBound::Holder(slot, super::binding::HolderField::Link),
+            CompanyBound::Holder(slot, super::binding::HolderField::Name),
+            CompanyBound::Holder(slot, super::binding::HolderField::Detail),
         );
     }
 
@@ -326,17 +276,14 @@ pub(super) fn spawn_company_detail(
     if company.offers.is_empty() {
         spawn_note(parent, "No shares are currently offered.");
     } else {
-        for offer in &company.offers {
+        for index in 0..company.offers.len() {
+            let slot = index as u8;
             key_value(
                 parent,
-                &offer.seller_name.to_uppercase(),
-                format!(
-                    "{} shares at {} coin each  /  listed day {}  /  total {} coin",
-                    offer.shares,
-                    format_money(offer.unit_price),
-                    offer.listed_day,
-                    format_money(offer.unit_price.saturating_mul(u64::from(offer.shares))),
-                ),
+                view,
+                None,
+                Label::Bound(CompanyBound::Offer(slot, PairField::Label)),
+                CompanyBound::Offer(slot, PairField::Value),
             );
         }
     }
@@ -346,37 +293,36 @@ pub(super) fn spawn_company_detail(
         "GOVERNANCE",
         "company-wide policy set by the Company Master",
     );
-    spawn_person_link(
+    spawn_person_link_with(
         parent,
         company.master,
         &company.master_name,
-        "Company master",
+        "Company master  ›",
+        (),
+        CompanyBound::Company(CompanyField::MasterName),
+        (),
     );
     key_value(
         parent,
-        "OPERATING POLICY",
-        format!(
-            "{}  /  {}  /  {} payroll reserve days",
-            company.policy.strategy.label(),
-            if company.policy.autopilot {
-                "autopilot"
-            } else {
-                "manual"
-            },
-            company.policy.payroll_reserve_days,
-        ),
+        view,
+        None,
+        Label::Fixed("OPERATING POLICY"),
+        CompanyBound::Company(CompanyField::OperatingPolicy),
     );
     key_value(
         parent,
-        "DIVIDENDS",
-        if company.policy.automatic_dividends {
-            format!(
-                "automatic after reserves  /  up to {} coin per day",
-                format_money(company.policy.max_daily_dividend)
-            )
-        } else {
-            "retained until the Company Master distributes available profit".to_string()
-        },
+        view,
+        None,
+        Label::Fixed("DIVIDENDS"),
+        CompanyBound::Company(CompanyField::Dividends),
+    );
+    // The replicated headroom snapshot; the amount picker is in COMPANY SETTINGS.
+    key_value(
+        parent,
+        view,
+        None,
+        Label::Fixed("DISTRIBUTABLE"),
+        CompanyBound::Company(CompanyField::DividendCapacity),
     );
 
     spawn_section_title(
@@ -387,110 +333,83 @@ pub(super) fn spawn_company_detail(
     if company.decisions.is_empty() {
         spawn_note(parent, "No strategy change has been recorded yet.");
     } else {
-        for decision in company.decisions.iter().rev().take(8) {
+        for index in 0..company.decisions.len().min(8) {
+            let slot = index as u8;
             key_value(
                 parent,
-                &format!("DAY {}", decision.day),
-                format!(
-                    "{} -> {}  /  {}",
-                    decision.from.label(),
-                    decision.to.label(),
-                    decision.reason.label(),
-                ),
+                view,
+                None,
+                Label::Bound(CompanyBound::Decision(slot, PairField::Label)),
+                CompanyBound::Decision(slot, PairField::Value),
             );
         }
     }
 }
 
+/// One consolidated day line plus its always-present, display-bound memo row.
 pub(super) fn spawn_day_ledger(
     parent: &mut ChildSpawnerCommands<'_>,
-    label: &str,
-    day: CompanyDayLedger,
+    view: &CompanyView<'_>,
+    which: DayLedger,
 ) {
-    if day.day == u32::MAX {
-        key_value(parent, label, "No completed trading record".to_string());
-        return;
-    }
     key_value(
         parent,
-        &format!("{label} / DAY {}", day.day),
-        format!(
-            "revenue {}  -  wages {}  -  outside inputs {}  -  market/delivery {}  -  tax {}  =  {}  /  dividends {}  /  capex {}",
-            format_money(day.external_revenue),
-            format_money(day.wage_expense),
-            format_money(day.external_input_expense),
-            format_money(day.market_fees.saturating_add(day.delivery_fees)),
-            format_money(day.profit_taxes),
-            signed_money(day.profit()),
-            format_money(day.owner_withdrawals),
-            format_money(day.capital_expenditures),
-        ),
+        view,
+        None,
+        Label::Bound(CompanyBound::Company(CompanyField::DayLabel(which))),
+        CompanyBound::Company(CompanyField::DayLine(which)),
     );
-    if day.internal_revenue > 0 || day.internal_input_expense > 0 {
-        key_value(
-            parent,
-            "INTERNAL FLOW MEMO",
-            format!(
-                "{} supplier credits / {} buyer charges; eliminated from company profit",
-                format_money(day.internal_revenue),
-                format_money(day.internal_input_expense),
-            ),
-        );
-    }
+    key_value(
+        parent,
+        view,
+        Some(CompanyBound::Company(CompanyField::DayMemoRow(which))),
+        Label::Fixed("INTERNAL FLOW MEMO"),
+        CompanyBound::Company(CompanyField::DayMemo(which)),
+    );
 }
 
 /// Keep personal ownership distinct from the company treasury and profit.
-fn spawn_position(
-    parent: &mut ChildSpawnerCommands<'_>,
-    company: &CompanyRecord,
-    directory: &CompanyDirectory,
-) {
+/// The ownership class is structural; the numbers inside each class bind.
+fn spawn_position(parent: &mut ChildSpawnerCommands<'_>, view: &CompanyView<'_>) {
+    let company = view.company;
     spawn_section_title(parent, "Your Position", "");
-    let Some(person) = directory.local_person else {
-        spawn_note(
+    let class = ownership_class(company, view.directory);
+    if matches!(class, OwnershipClass::NoHero | OwnershipClass::NoShares) {
+        bound_note(
             parent,
-            "Spawn or select your Hero to resolve personal holdings.",
-        );
-        return;
-    };
-    let shares = company.shares_owned_by(person);
-    if shares == 0 {
-        spawn_note(
-            parent,
-            if company.offers.is_empty() {
-                "You own no shares. No shareholder is currently offering stock."
-            } else {
-                "You own no shares. Public offers are listed below; open COMPANY SETTINGS to trade."
-            },
+            view,
+            CompanyBound::Company(CompanyField::PositionNote),
         );
         return;
     }
-    parent.spawn(ledger::body_strong(
-        format!(
-            "{} / 1,000 shares · {:.1}%",
-            shares,
-            f32::from(shares) / 10.0
-        ),
-        21.0,
-    ));
-    spawn_note(
+    bound_text(
         parent,
-        &format!(
-            "Estimated book interest: {} coin",
-            format_money(company.holding_book_interest(shares))
-        ),
+        view,
+        CompanyBound::Company(CompanyField::PositionShares),
+        ledger::reading_strong(21.0),
+        INK,
+    )
+    .insert(Pickable::IGNORE);
+    bound_note(
+        parent,
+        view,
+        CompanyBound::Company(CompanyField::PositionInterest),
     );
-    parent.spawn(ledger::body(
-        if company.master == person {
-            "You are Company Master and control operating decisions."
-        } else if shares > shared::components::COMPANY_TOTAL_SHARES / 2 {
-            "Majority holder; you may appoint the Company Master."
-        } else {
-            "Shareholder; economic ownership without executive authority."
-        },
-        15.0,
-    ));
-    if company.master == person && shares == shared::components::COMPANY_TOTAL_SHARES {
+    bound_text(
+        parent,
+        view,
+        CompanyBound::Company(CompanyField::PositionRole),
+        ledger::reading(15.0),
+        INK,
+    )
+    .insert(Pickable::IGNORE);
+    // Always spawned; hidden until the server publishes a dividend snapshot.
+    bound_note(
+        parent,
+        view,
+        CompanyBound::Company(CompanyField::PositionDividend),
+    );
+    if class == OwnershipClass::SoleMaster {
         parent
             .spawn(Node {
                 flex_wrap: FlexWrap::Wrap,
@@ -513,29 +432,26 @@ fn spawn_position(
                     );
                 }
             });
-        spawn_note(
+        bound_note(
             parent,
-            "Personal coin becomes company capital, not revenue or profit.",
+            view,
+            CompanyBound::Company(CompanyField::PositionNote),
         );
     }
 }
 
-fn spawn_today_ledger(parent: &mut ChildSpawnerCommands<'_>, day: CompanyDayLedger) {
+fn spawn_today_ledger(parent: &mut ChildSpawnerCommands<'_>, view: &CompanyView<'_>) {
     spawn_section_title(parent, "Today's Ledger", "");
-    if day.day == u32::MAX {
+    if view.company.account.current_day.day == u32::MAX {
         spawn_note(parent, "No trading record yet.");
         return;
     }
-    for (label, amount, expense) in [
-        ("Revenue", day.external_revenue, false),
-        ("Wages", day.wage_expense, true),
-        ("Outside inputs", day.external_input_expense, true),
-        (
-            "Market & delivery fees",
-            day.market_fees.saturating_add(day.delivery_fees),
-            true,
-        ),
-        ("Profit tax", day.profit_taxes, true),
+    for (label, field) in [
+        ("Revenue", CompanyField::TodayRevenue),
+        ("Wages", CompanyField::TodayWages),
+        ("Outside inputs", CompanyField::TodayInputs),
+        ("Market & delivery fees", CompanyField::TodayFees),
+        ("Profit tax", CompanyField::TodayTax),
     ] {
         parent
             .spawn(Node {
@@ -545,14 +461,14 @@ fn spawn_today_ledger(parent: &mut ChildSpawnerCommands<'_>, day: CompanyDayLedg
             })
             .with_children(|row| {
                 row.spawn(ledger::body(label, 15.0));
-                row.spawn(ledger::body_strong(
-                    format!(
-                        "{}{} coin",
-                        if expense { "−" } else { "" },
-                        format_money(amount)
-                    ),
-                    15.0,
-                ));
+                bound_text(
+                    row,
+                    view,
+                    CompanyBound::Company(field),
+                    ledger::reading_strong(15.0),
+                    INK,
+                )
+                .insert(Pickable::IGNORE);
             });
     }
     parent.spawn(ledger::ornament_rule());
@@ -563,14 +479,12 @@ fn spawn_today_ledger(parent: &mut ChildSpawnerCommands<'_>, day: CompanyDayLedg
         })
         .with_children(|row| {
             row.spawn(ledger::body_strong("Profit", 17.0));
-            row.spawn((
-                Text::new(signed_money(day.profit())),
+            bound_text(
+                row,
+                view,
+                CompanyBound::Company(CompanyField::TodayProfit),
                 ledger::reading_strong(17.0),
-                TextColor(if day.profit() >= 0 {
-                    Color::srgb(0.19, 0.36, 0.16)
-                } else {
-                    EMBER
-                }),
-            ));
+                INK,
+            );
         });
 }

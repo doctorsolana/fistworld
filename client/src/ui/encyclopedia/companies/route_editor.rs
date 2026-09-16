@@ -1,16 +1,20 @@
 //! Trade-route editor layout using the current local draft.
+//!
+//! The editor's structure is the draft's shape -- route or new, ship or
+//! caravan, how many stops, whether more than one home Storage Hall exists.
+//! Every stepped value (cargo, prices, stop towns and orders, the SAVE label,
+//! validation notes) binds under [`CompanyBound::Editor`] /
+//! [`CompanyBound::EditorStop`], so a `+1` press updates the number under the
+//! pointer instead of respawning the stepper that was just pressed.
 
+use super::binding::{bound_text, CompanyBound, CompanyView, EditorField, EditorStopField};
 use super::controls::TradeRouteEditorButton;
-use super::model::{
-    CompanyDirectory, CompanyRecord, TradeRouteDraft, TradeRouteEditorAction, TradeRouteEditorState,
-};
-use super::widgets::{detail_button, spawn_note, spawn_section_title};
+use super::model::{TradeRouteDraft, TradeRouteEditorAction};
+use super::widgets::{bound_note, detail_button, spawn_note, spawn_section_title};
+use crate::ui::foundation::UiButtonLabel;
 use crate::ui::styles::{BUTTON_NORMAL, EMBER, INK, INK_MUTED, PLATE_RULE_SOFT, RADIUS};
 use bevy::prelude::*;
-use shared::components::{
-    MAX_TRADE_ROUTE_STOPS, SettlementBuildingKind, SettlementId, TradeRouteStopAction,
-};
-use shared::economy::format_money;
+use shared::components::MAX_TRADE_ROUTE_STOPS;
 
 pub(super) fn editor_button(
     parent: &mut ChildSpawnerCommands<'_>,
@@ -20,33 +24,46 @@ pub(super) fn editor_button(
     detail_button(parent, TradeRouteEditorButton(action), label);
 }
 
+/// An editor button whose label binds (SAVE ROUTE / SAVING..., REPEAT / ONE-CIRCUIT).
+fn bound_editor_button(
+    parent: &mut ChildSpawnerCommands<'_>,
+    view: &CompanyView<'_>,
+    action: TradeRouteEditorAction,
+    key: CompanyBound,
+) {
+    parent
+        .spawn((
+            Button,
+            TradeRouteEditorButton(action),
+            Node {
+                min_height: Val::Px(31.0),
+                flex_shrink: 0.0,
+                padding: UiRect::axes(Val::Px(11.0), Val::Px(5.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            crate::ui::foundation::button_chrome(crate::ui::foundation::UiButtonVariant::Secondary),
+        ))
+        .with_children(|button| {
+            bound_text(
+                button,
+                view,
+                key,
+                crate::ui::ledger::reading_strong(12.0),
+                INK,
+            )
+            .insert((UiButtonLabel, Pickable::IGNORE));
+        });
+}
+
 pub(super) fn spawn_trade_route_editor(
     parent: &mut ChildSpawnerCommands<'_>,
-    company: &CompanyRecord,
-    directory: &CompanyDirectory,
+    view: &CompanyView<'_>,
     draft: &TradeRouteDraft,
-    editor: &TradeRouteEditorState,
 ) {
-    let warehouses: Vec<_> = company
-        .sites
-        .iter()
-        .filter(|site| site.kind == SettlementBuildingKind::StorageHall && site.workers > 0)
-        .collect();
-    let warehouse = warehouses
-        .iter()
-        .find(|site| site.id == draft.warehouse)
-        .copied();
-    let settlement_name = |id: SettlementId| {
-        directory
-            .settlements
-            .iter()
-            .find(|settlement| settlement.id == id)
-            .map_or_else(
-                || format!("Settlement #{}", id.0),
-                |settlement| settlement.name.clone(),
-            )
-    };
-
+    let warehouses = view.warehouses().count();
     parent
         .spawn(Node {
             justify_content: JustifyContent::SpaceBetween,
@@ -62,38 +79,20 @@ pub(super) fn spawn_trade_route_editor(
                     ..default()
                 })
                 .with_children(|copy| {
-                    copy.spawn((
-                        Text::new(if let Some(route) = draft.route {
-                            format!(
-                                "EDIT {} ROUTE #{}",
-                                if draft.ship.is_some() {
-                                    "SHIP"
-                                } else {
-                                    "CARAVAN"
-                                },
-                                route.0
-                            )
-                        } else {
-                            format!(
-                                "NEW {} ROUTE",
-                                if draft.ship.is_some() {
-                                    "SHIP"
-                                } else {
-                                    "CARAVAN"
-                                }
-                            )
-                        }),
+                    bound_text(
+                        copy,
+                        view,
+                        CompanyBound::Editor(EditorField::Title),
                         crate::ui::typography::heading(24.0),
-                        TextColor(INK),
-                    ));
-                    copy.spawn((
-                        Text::new(format!(
-                            "{}  /  ORDERED MERCHANT TIMETABLE",
-                            company.name.to_uppercase()
-                        )),
+                        INK,
+                    );
+                    bound_text(
+                        copy,
+                        view,
+                        CompanyBound::Editor(EditorField::Subtitle),
                         crate::ui::ledger::reading(12.0),
-                        TextColor(EMBER),
-                    ));
+                        EMBER,
+                    );
                 });
             header
                 .spawn(Node {
@@ -103,14 +102,11 @@ pub(super) fn spawn_trade_route_editor(
                 })
                 .with_children(|actions| {
                     editor_button(actions, TradeRouteEditorAction::Cancel, "BACK");
-                    editor_button(
+                    bound_editor_button(
                         actions,
+                        view,
                         TradeRouteEditorAction::Save,
-                        if draft.pending {
-                            "SAVING..."
-                        } else {
-                            "SAVE ROUTE"
-                        },
+                        CompanyBound::Editor(EditorField::SaveLabel),
                     );
                 });
         });
@@ -122,9 +118,7 @@ pub(super) fn spawn_trade_route_editor(
             "The caravan follows these stops from left to right, then loops back to stop one. Buy/Sell use public markets and real company cash. Load/Unload move owned stock through company Storage Halls without a sale."
         },
     );
-    if !editor.message.is_empty() {
-        spawn_note(parent, &editor.message);
-    }
+    bound_note(parent, view, CompanyBound::Editor(EditorField::Message));
 
     spawn_section_title(
         parent,
@@ -174,35 +168,14 @@ pub(super) fn spawn_trade_route_editor(
                         crate::ui::ledger::reading(11.5),
                         TextColor(INK_MUTED),
                     ));
-                    card.spawn((
-                        Text::new(if let Some((ship, kind)) = draft.ship {
-                            format!(
-                                "{} #{} / {}",
-                                kind.label(),
-                                ship.0,
-                                draft.stops.first().map_or_else(
-                                    || "Port unavailable".into(),
-                                    |stop| settlement_name(stop.settlement)
-                                )
-                            )
-                        } else {
-                            warehouse.map_or_else(
-                                || format!("Storage Hall #{}", draft.warehouse.0),
-                                |site| {
-                                    format!(
-                                        "Storage Hall #{} / {} / {} porter{}",
-                                        site.id.0,
-                                        site.settlement,
-                                        site.workers,
-                                        if site.workers == 1 { "" } else { "s" }
-                                    )
-                                },
-                            )
-                        }),
+                    bound_text(
+                        card,
+                        view,
+                        CompanyBound::Editor(EditorField::Home),
                         crate::ui::ledger::reading(13.5),
-                        TextColor(INK),
-                    ));
-                    if draft.route.is_none() && draft.ship.is_none() && warehouses.len() > 1 {
+                        INK,
+                    );
+                    if draft.route.is_none() && draft.ship.is_none() && warehouses > 1 {
                         card.spawn(Node {
                             column_gap: Val::Px(5.0),
                             ..default()
@@ -234,29 +207,20 @@ pub(super) fn spawn_trade_route_editor(
                     BorderColor::from(PLATE_RULE_SOFT),
                 ))
                 .with_children(|card| {
-                    card.spawn((
-                        Text::new(format!(
-                            "CARGO  {}  /  TARGET {} UNIT{}",
-                            draft.good.label().to_uppercase(),
-                            draft.cargo_target,
-                            if draft.cargo_target == 1 { "" } else { "S" }
-                        )),
+                    bound_text(
+                        card,
+                        view,
+                        CompanyBound::Editor(EditorField::Cargo),
                         crate::ui::ledger::reading(13.5),
-                        TextColor(INK),
-                    ));
-                    card.spawn((
-                        Text::new(format!(
-                            "Capacity: {} units of {} ({} bulk)",
-                            draft.cargo_capacity(),
-                            draft.good.label(),
-                            draft
-                                .ship
-                                .map_or(shared::economy::capacity::PORTER, |(_, kind)| kind
-                                    .capacity())
-                        )),
+                        INK,
+                    );
+                    bound_text(
+                        card,
+                        view,
+                        CompanyBound::Editor(EditorField::Capacity),
                         crate::ui::ledger::reading(12.),
-                        TextColor(INK_MUTED),
-                    ));
+                        INK_MUTED,
+                    );
                     card.spawn(Node {
                         flex_wrap: FlexWrap::Wrap,
                         column_gap: Val::Px(5.0),
@@ -292,20 +256,13 @@ pub(super) fn spawn_trade_route_editor(
             BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|prices| {
-            prices.spawn((
-                Text::new(format!(
-                    "BUY CEILING  {} COIN  /  SALE FLOOR  {} COIN  /  {}",
-                    format_money(draft.maximum_purchase_price),
-                    format_money(draft.minimum_destination_price),
-                    if draft.automatic {
-                        "REPEAT CONTINUOUSLY"
-                    } else {
-                        "ONE CIRCUIT ON COMMAND"
-                    }
-                )),
+            bound_text(
+                prices,
+                view,
+                CompanyBound::Editor(EditorField::Prices),
                 crate::ui::ledger::reading(13.0),
-                TextColor(INK),
-            ));
+                INK,
+            );
             prices
                 .spawn(Node {
                     flex_wrap: FlexWrap::Wrap,
@@ -330,14 +287,11 @@ pub(super) fn spawn_trade_route_editor(
                         TradeRouteEditorAction::SellPriceUp(25),
                         "SELL +0.25",
                     );
-                    editor_button(
+                    bound_editor_button(
                         buttons,
+                        view,
                         TradeRouteEditorAction::ToggleAutomatic,
-                        if draft.automatic {
-                            "MAKE ONE-CIRCUIT"
-                        } else {
-                            "REPEAT ROUTE"
-                        },
+                        CompanyBound::Editor(EditorField::ToggleLabel),
                     );
                 });
         });
@@ -345,8 +299,11 @@ pub(super) fn spawn_trade_route_editor(
     spawn_section_title(
         parent,
         "ORDERED STOPS",
-        if draft.ship.is_some() { "the highlighted instruction runs when the ship reaches that port" }
-        else { "the highlighted instruction runs when the wagon reaches that town" },
+        if draft.ship.is_some() {
+            "the highlighted instruction runs when the ship reaches that port"
+        } else {
+            "the highlighted instruction runs when the wagon reaches that town"
+        },
     );
     parent
         .spawn(Node {
@@ -358,7 +315,8 @@ pub(super) fn spawn_trade_route_editor(
             ..default()
         })
         .with_children(|lane| {
-            for (index, stop) in draft.stops.iter().enumerate() {
+            for index in 0..draft.stops.len() {
+                let slot = index as u8;
                 if index > 0 {
                     lane.spawn((
                         Text::new(">"),
@@ -389,25 +347,20 @@ pub(super) fn spawn_trade_route_editor(
                         crate::ui::ledger::reading(11.0),
                         TextColor(EMBER),
                     ));
-                    stop_card.spawn((
-                        Text::new(settlement_name(stop.settlement).to_uppercase()),
+                    bound_text(
+                        stop_card,
+                        view,
+                        CompanyBound::EditorStop(slot, EditorStopField::Name),
                         crate::ui::ledger::reading(13.5),
-                        TextColor(INK),
-                    ));
-                    let has_marketplace = directory.settlements.iter().any(|settlement| {
-                        settlement.id == stop.settlement && draft.accepts_settlement(settlement)
-                    });
-                    if !has_marketplace {
-                        stop_card.spawn((
-                            Text::new(if draft.ship.is_some() {
-                                "COMPLETED MARKET & SUITABLE PORT REQUIRED"
-                            } else {
-                                "LOCAL MOOT — BUILD A MARKETPLACE"
-                            }),
-                            crate::ui::ledger::reading(11.0),
-                            TextColor(EMBER),
-                        ));
-                    }
+                        INK,
+                    );
+                    bound_text(
+                        stop_card,
+                        view,
+                        CompanyBound::EditorStop(slot, EditorStopField::Warning),
+                        crate::ui::ledger::reading(11.0),
+                        EMBER,
+                    );
                     if index > 0 {
                         stop_card
                             .spawn(Node {
@@ -429,11 +382,13 @@ pub(super) fn spawn_trade_route_editor(
                                 );
                             });
                     }
-                    stop_card.spawn((
-                        Text::new(stop.action.label().to_uppercase()),
+                    bound_text(
+                        stop_card,
+                        view,
+                        CompanyBound::EditorStop(slot, EditorStopField::Action),
                         crate::ui::ledger::reading(11.5),
-                        TextColor(INK_MUTED),
-                    ));
+                        INK_MUTED,
+                    );
                     stop_card
                         .spawn(Node {
                             flex_wrap: FlexWrap::Wrap,
@@ -481,30 +436,5 @@ pub(super) fn spawn_trade_route_editor(
             }
         });
 
-    let storage_settlements: Vec<_> = company
-        .sites
-        .iter()
-        .filter(|site| site.kind == SettlementBuildingKind::StorageHall)
-        .map(|site| site.settlement_id)
-        .collect();
-    let has_invalid_private_stop = draft.stops.iter().any(|stop| {
-        matches!(
-            stop.action,
-            TradeRouteStopAction::Load | TradeRouteStopAction::Unload
-        ) && !storage_settlements.contains(&stop.settlement)
-    });
-    let repeats_town = draft
-        .stops
-        .windows(2)
-        .any(|pair| pair[0].settlement == pair[1].settlement);
-    if has_invalid_private_stop || repeats_town {
-        spawn_note(
-            parent,
-            if has_invalid_private_stop {
-                "Load and Unload require this company to own a Storage Hall in that town. Use Buy or Sell for a public market stop."
-            } else {
-                "The same town cannot appear in two consecutive stops. Returning to the home town as the final stop is allowed."
-            },
-        );
-    }
+    bound_note(parent, view, CompanyBound::Editor(EditorField::Warning));
 }

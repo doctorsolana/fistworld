@@ -1,0 +1,49 @@
+// COMPANY SETTINGS, COMPANY tab, scrolled to TREASURY & DIVIDENDS: the
+// replicated headroom line, the dividend amount picker with a stepped draft,
+// the clamped DISTRIBUTE control, the per-share preview and a staged deferred
+// server reply in the feedback line. Offline fixture: the numbers come from
+// `stage_capture_companies`, not from a finance pass.
+(
+    version: 1,
+    name: "ui-company-dividends",
+    map: "village_lab",
+    output_dir: "logs/captures/ui-company-dividends",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: window,
+    show_window: false,
+    warmup_frames: 300,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_SETTLEMENT": "village",
+        "FISTFORCE_CAPTURE_HERO": "default",
+        "FISTFORCE_CAPTURE_ENCYCLOPEDIA": "business",
+        "FISTFORCE_CAPTURE_BUSINESS_PAGE": "company",
+        "FISTFORCE_CAPTURE_BUSINESS_SCROLL": "480",
+        "FISTFORCE_CAPTURE_DIVIDEND_DRAFT": "15000",
+        "FISTFORCE_CAPTURE_BUSINESS_FEEDBACK": "ok:Paid 150.00 coin to 2 shareholders: 1.50 coin per 10 shares; your 720 shares received 108.00 coin. Held back: 18.50 coin reserves, 462.00 coin not yet earned.",
+    },
+    diagnostics: (
+        performance_overlay: false,
+        gizmos: false,
+        render_timings: false,
+    ),
+    shots: [
+        (
+            name: "dividend-picker-and-preview",
+            focus: (0.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 220.0,
+            time_of_day: 0.5,
+            assertions: [
+                settlements_at_least(count: 1),
+                villagers_at_least(count: 1),
+            ],
+        ),
+    ],
+)

@@ -1,13 +1,16 @@
 //! Company fleet and shipyard controls use public town-market ports. Physical
 //! vessels and their transactions stay authoritative even when off camera.
+//! Ship status and order progress bind in place; the EDIT / ASSIGN / CANCEL /
+//! ORDER controls exist per the gating bits in `binding::company_structure_key`.
 use super::{
+    binding::{bound_text, CompanyBound, CompanyView, OrderField},
     model::*,
     widgets::{detail_button, spawn_note, spawn_section_title},
 };
 use crate::ui::{
     encyclopedia::ClickGuard,
     ledger,
-    styles::{INK_MUTED, PLATE_RULE_SOFT},
+    styles::{INK, INK_MUTED, PLATE_RULE_SOFT},
 };
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
@@ -92,12 +95,10 @@ fn button(
     detail_button(parent, FleetButton { company, action }, label);
 }
 
-pub(super) fn spawn_fleet(
-    parent: &mut ChildSpawnerCommands<'_>,
-    company: &CompanyRecord,
-    directory: &CompanyDirectory,
-) {
-    let manager = directory.local_person == Some(company.master);
+pub(super) fn spawn_fleet(parent: &mut ChildSpawnerCommands<'_>, view: &CompanyView<'_>) {
+    let company = view.company;
+    let directory = view.directory;
+    let manager = view.can_manage();
     spawn_section_title(
         parent,
         "Fleet",
@@ -123,19 +124,13 @@ pub(super) fn spawn_fleet(
                     format!("{} #{}", ship.kind.label(), id.0),
                     15.,
                 ));
-                copy.spawn((
-                    Text::new(format!(
-                        "{}  ·  {} bulk  ·  {}",
-                        ship.status.label(),
-                        ship.kind.capacity(),
-                        ship.assigned_route.map_or_else(
-                            || "No route assigned".into(),
-                            |route| format!("Route #{}", route.0)
-                        )
-                    )),
+                bound_text(
+                    copy,
+                    view,
+                    CompanyBound::Ship(*id),
                     ledger::reading(12.),
-                    TextColor(INK_MUTED),
-                ));
+                    INK_MUTED,
+                );
             });
             if manager {
                 if let Some(route) = ship.assigned_route {
@@ -238,14 +233,6 @@ pub(super) fn spawn_fleet(
         ) {
             continue;
         }
-        let port_name = directory
-            .settlements
-            .iter()
-            .find(|town| town.port.is_some_and(|port| port.port == order.port))
-            .map_or_else(
-                || format!("Port #{}", order.port.0),
-                |town| town.name.clone(),
-            );
         row(parent, |row| {
             row.spawn(Node {
                 min_width: Val::Px(210.),
@@ -255,28 +242,21 @@ pub(super) fn spawn_fleet(
                 ..default()
             })
             .with_children(|copy| {
-                copy.spawn(ledger::body_strong(
-                    format!(
-                        "{} at {}  ·  {}%",
-                        order.kind.label(),
-                        port_name,
-                        order.progress.min(1000) / 10
-                    ),
-                    14.,
-                ));
-                let delivered = order
-                    .kind
-                    .materials()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (good, n))| format!("{}/{} {}", order.delivered[i], n, good.label()))
-                    .collect::<Vec<_>>()
-                    .join("  ·  ");
-                copy.spawn((
-                    Text::new(format!("{}\n{delivered}", order.status.label())),
+                bound_text(
+                    copy,
+                    view,
+                    CompanyBound::Order(*id, OrderField::Title),
+                    ledger::reading_strong(14.),
+                    INK,
+                )
+                .insert(Pickable::IGNORE);
+                bound_text(
+                    copy,
+                    view,
+                    CompanyBound::Order(*id, OrderField::Status),
                     ledger::reading(12.),
-                    TextColor(INK_MUTED),
-                ));
+                    INK_MUTED,
+                );
             });
             if manager {
                 button(row, company.id, FleetAction::Cancel(*id), "CANCEL ORDER");

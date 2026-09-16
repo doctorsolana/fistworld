@@ -72,14 +72,12 @@ fn regional_survey_refines_a_narrow_gate_beyond_both_endpoint_aprons() {
         !path.is_empty(),
         "the existing bounded search must find the actual gate"
     );
-    assert!(
-        path.windows(2)
-            .all(|p| survey.line_clear(p[0], p[1], &mut scratch))
-    );
-    assert!(
-        path.iter()
-            .any(|p| (p.x - 1700.0).abs() <= 1.5 && (p.y - 3.0).abs() < 1.0)
-    );
+    assert!(path
+        .windows(2)
+        .all(|p| survey.line_clear(p[0], p[1], &mut scratch)));
+    assert!(path
+        .iter()
+        .any(|p| (p.x - 1700.0).abs() <= 1.5 && (p.y - 3.0).abs() < 1.0));
 }
 
 #[test]
@@ -120,10 +118,9 @@ fn founding_corridor_reserves_dense_checks_for_the_chosen_route() {
         measured.metrics.line_checks,
         reference.metrics.line_checks
     );
-    assert!(
-        path.windows(2)
-            .all(|edge| survey.line_clear(edge[0], edge[1], &mut measured))
-    );
+    assert!(path
+        .windows(2)
+        .all(|edge| survey.line_clear(edge[0], edge[1], &mut measured)));
 }
 
 #[test]
@@ -166,10 +163,9 @@ fn optimistic_corridor_never_certifies_a_missed_thin_obstruction() {
         if half_length < 24.0 {
             assert_eq!(path.first(), Some(&survey.start));
             assert_eq!(path.last(), Some(&survey.goal));
-            assert!(
-                path.windows(2)
-                    .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch))
-            );
+            assert!(path
+                .windows(2)
+                .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
         } else {
             assert!(
                 path.is_empty(),
@@ -420,10 +416,9 @@ fn trade_lab_carrier_can_leave_stone_housing_for_meadow_market() {
         };
         assert_eq!(path.first(), Some(&start));
         assert_eq!(path.last(), Some(&goal));
-        assert!(
-            path.windows(2)
-                .all(|pair| survey.line_clear(pair[0], pair[1], &mut scratch))
-        );
+        assert!(path
+            .windows(2)
+            .all(|pair| survey.line_clear(pair[0], pair[1], &mut scratch)));
     }
 }
 
@@ -477,14 +472,12 @@ fn regional_journey_can_round_a_seeded_river_head() {
     );
     assert_eq!(path.first(), Some(&start));
     assert_eq!(path.last(), Some(&goal));
-    assert!(
-        path.iter()
-            .any(|p| p.y > start.y + INTERSETTLEMENT_SURVEY_PADDING)
-    );
-    assert!(
-        path.windows(2)
-            .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch))
-    );
+    assert!(path
+        .iter()
+        .any(|p| p.y > start.y + INTERSETTLEMENT_SURVEY_PADDING));
+    assert!(path
+        .windows(2)
+        .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
 }
 
 #[test]
@@ -528,10 +521,9 @@ fn regional_survey_reaches_a_distant_goal_within_its_node_budget() {
     );
     assert_eq!(path.first(), Some(&survey.start));
     assert_eq!(path.last(), Some(&survey.goal));
-    assert!(
-        path.windows(2)
-            .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch))
-    );
+    assert!(path
+        .windows(2)
+        .all(|edge| survey.line_clear(edge[0], edge[1], &mut scratch)));
 }
 
 fn road_test_app() -> App {
@@ -574,15 +566,13 @@ fn permit_access_reuse_preserves_network_and_hall_endpoints() {
         ),
         Some(vec![approach, hall_approach]),
     );
-    assert!(
-        construction::planned_access_survey_points(
-            &[door, approach, network],
-            door,
-            network + Vec2::X,
-            None,
-        )
-        .is_none()
-    );
+    assert!(construction::planned_access_survey_points(
+        &[door, approach, network],
+        door,
+        network + Vec2::X,
+        None,
+    )
+    .is_none());
 }
 
 fn one_static_prop(
@@ -830,11 +820,9 @@ fn a_burst_of_reasserted_failed_routes_sleeps_until_real_time_backoff() {
             .count(),
         40
     );
-    assert!(
-        movers
-            .iter()
-            .all(|mover| app.world().get::<NavigationRouteBackoff>(*mover).is_none())
-    );
+    assert!(movers
+        .iter()
+        .all(|mover| app.world().get::<NavigationRouteBackoff>(*mover).is_none()));
 }
 
 #[test]
@@ -1303,11 +1291,9 @@ fn farmer_can_walk_from_front_door_around_farmstead_to_rear_field() {
         route.len() >= 2,
         "a farmer released outside the front door must route around the Farmstead to field 2"
     );
-    assert!(
-        route
-            .windows(2)
-            .all(|edge| !live.segment_blocked(edge[0], edge[1]))
-    );
+    assert!(route
+        .windows(2)
+        .all(|edge| !live.segment_blocked(edge[0], edge[1])));
 }
 
 #[test]
@@ -1733,11 +1719,9 @@ fn embodied_route_rejection_discards_stale_tactical_answers() {
 
     assert!(graph.tactical_route(start, goal).is_none());
     assert!(graph.tactical_route(goal, start).is_none());
-    assert!(
-        graph
-            .tactical_route(unrelated_start, unrelated_goal)
-            .is_some()
-    );
+    assert!(graph
+        .tactical_route(unrelated_start, unrelated_goal)
+        .is_some());
 }
 
 #[test]
@@ -1949,11 +1933,10 @@ fn villager_route_uses_the_road_and_never_crosses_a_building() {
         route.waypoints.iter().any(|waypoint| waypoint.on_road),
         "the safe precomputed road should beat a fresh direct detour"
     );
-    assert!(
-        !app.world()
-            .entity(villager)
-            .contains::<NavigationRoutePending>()
-    );
+    assert!(!app
+        .world()
+        .entity(villager)
+        .contains::<NavigationRoutePending>());
 
     let footprint = building_type.definition().footprint;
     let blocker = BuildingBlocker {
@@ -2484,6 +2467,284 @@ fn a_building_beside_the_network_still_gets_its_own_short_road() {
     assert!(app.world().get::<RoadBuilderRoutine>(builder).is_some());
 }
 
+/// One Hamlet whose Hall door already owns a short completed Lane street, with
+/// a house east of it whose door approach is dry and clear. Returns
+/// (settlement, hall_door, street_end, house_door, house_position).
+fn spawn_house_beside_a_short_hall_street(app: &mut App) -> (Entity, Vec2, Vec2, Vec3, Vec3) {
+    let hall_position = Vec3::new(1700.0, 0.0, 0.0);
+    let settlement = app
+        .world_mut()
+        .spawn((
+            shared::components::SettlementId(1),
+            Settlement {
+                name: "Oakmead".into(),
+                tier: SettlementTier::Hamlet,
+                residents: 1,
+                treasury: 0,
+            },
+            PlayerPosition(hall_position),
+            PlayerRotation(0.0),
+        ))
+        .id();
+    let (hall_door, _) = doorway_approach(SettlementBuildingKind::Hall, hall_position, 0.0);
+    let street_end = hall_door + Vec2::X * 8.0;
+    app.world_mut().spawn((
+        VillageRoad {
+            settlement: "Oakmead".into(),
+            builder: "EarlierBuilder".into(),
+            points: vec![hall_door, street_end],
+            built_through: 2,
+            width: VILLAGE_ROAD_WIDTH,
+            reserved_width: RoadClass::Lane.initial_reserved_width(),
+            surface: RoadSurface::Dirt,
+            class: RoadClass::Lane,
+            stone_committed: 0,
+        },
+        shared::components::RoadOf(shared::components::SettlementId(1)),
+    ));
+    let house_position = Vec3::new(1740.0, 0.0, 0.0);
+    let house_door = SettlementBuildingKind::House.entrance_position(house_position, 0.0);
+    (
+        settlement,
+        hall_door,
+        street_end,
+        house_door,
+        house_position,
+    )
+}
+
+fn spawn_requesting_house(
+    app: &mut App,
+    settlement: Entity,
+    builder_name: &str,
+    house_position: Vec3,
+    house_door: Vec3,
+    planned_access: Option<PlannedRoadAccess>,
+) -> (Entity, Entity) {
+    let builder = app
+        .world_mut()
+        .spawn((
+            CharacterName(builder_name.into()),
+            CharacterKind::Villager,
+            CharacterActivity::Idle,
+            PlayerPosition(house_door),
+            VillagerIntent::Building {
+                settlement,
+                site: Entity::PLACEHOLDER,
+            },
+        ))
+        .id();
+    let mut house = app.world_mut().spawn((
+        shared::components::BuildingOf(shared::components::SettlementId(1)),
+        SettlementBuilding {
+            kind: SettlementBuildingKind::House,
+            settlement: "Oakmead".into(),
+            owner: Some(builder_name.into()),
+            quality: 0.7,
+            workers: Vec::new(),
+        },
+        PlayerPosition(house_position),
+        PlayerRotation(0.0),
+        PlacedBuilding {
+            building_type: BuildingType::LogCabin,
+            rotation: 0.0,
+        },
+        BuildingPosition(house_position),
+        RoadRequest {
+            builder,
+            settlement,
+            completed_site: Entity::PLACEHOLDER,
+            attempt: 0,
+        },
+    ));
+    if let Some(planned_access) = planned_access {
+        house.insert(planned_access);
+    }
+    let house = house.id();
+    (builder, house)
+}
+
+fn plan_until_connector_exists(app: &mut App, house: Entity) {
+    for _ in 0..40 {
+        app.update();
+        if app.world().get::<RoadRequest>(house).is_none() {
+            break;
+        }
+    }
+}
+
+#[test]
+fn a_reused_permit_reservation_is_resampled_to_short_construction_segments() {
+    let mut app = road_test_app();
+    app.insert_resource(WorldTerrain::default());
+    app.add_systems(Update, plan_requested_roads);
+    let (settlement, _hall_door, street_end, house_door, house_position) =
+        spawn_house_beside_a_short_hall_street(&mut app);
+    let (door, approach) = doorway_approach(SettlementBuildingKind::House, house_position, 0.0);
+    // A permit-time reservation with a deliberate bend: the fresh survey would
+    // run straight, so the bend proves that the reservation itself was adopted.
+    let bend = approach.lerp(street_end, 0.5) + Vec2::new(0.0, -3.0);
+    let reservation = PlannedRoadAccess {
+        settlement_id: shared::components::SettlementId(1),
+        points: vec![door, approach, bend, street_end],
+        half_width: RoadClass::Lane.initial_reserved_width() * 0.5,
+    };
+    let (_builder, house) = spawn_requesting_house(
+        &mut app,
+        settlement,
+        "ReservedBuilder",
+        house_position,
+        house_door,
+        Some(reservation),
+    );
+
+    plan_until_connector_exists(&mut app, house);
+
+    let connector = app
+        .world_mut()
+        .query::<&VillageRoad>()
+        .iter(app.world())
+        .find(|road| road.builder == "ReservedBuilder")
+        .expect("the house must receive its connector road")
+        .clone();
+    assert!(connector.points[0].distance(door) < 0.01);
+    assert!(
+        connector.points.last().unwrap().distance(street_end) < 0.01,
+        "the connector must still end on the reserved network join: {:?}",
+        connector.points
+    );
+    assert!(
+        connector
+            .points
+            .iter()
+            .any(|point| point.distance(bend) < 0.05),
+        "the clear permit reservation was not adopted: {:?}",
+        connector.points
+    );
+    assert!(
+        connector.points.len() > 4
+            && connector
+                .points
+                .windows(2)
+                .all(|segment| segment[0].distance(segment[1]) <= 3.0),
+        "a reused reservation became giant straight construction segments: {:?}",
+        connector.points
+    );
+}
+
+#[test]
+fn a_house_completing_while_its_neighbours_connector_is_unfinished_joins_the_complete_network() {
+    let mut app = road_test_app();
+    app.insert_resource(WorldTerrain::default());
+    app.add_systems(Update, plan_requested_roads);
+    let (settlement, hall_door, street_end, house_door, house_position) =
+        spawn_house_beside_a_short_hall_street(&mut app);
+    let (_, approach) = doorway_approach(SettlementBuildingKind::House, house_position, 0.0);
+    // The neighbour's connector passes right in front of this house but has
+    // only laid its first point. By design it is not public network yet.
+    let neighbour_position = Vec3::new(1730.0, 0.0, 0.0);
+    let (neighbour_door, neighbour_approach) =
+        doorway_approach(SettlementBuildingKind::House, neighbour_position, 0.0);
+    let passing = vec![
+        approach + Vec2::new(0.0, -1.75),
+        approach + Vec2::new(-20.0, -1.75),
+    ];
+    app.world_mut().spawn((
+        VillageRoad {
+            settlement: "Oakmead".into(),
+            builder: "Neighbour".into(),
+            points: vec![
+                neighbour_door,
+                neighbour_approach,
+                passing[0],
+                passing[1],
+                street_end,
+            ],
+            built_through: 1,
+            width: VILLAGE_ROAD_WIDTH,
+            reserved_width: RoadClass::Lane.initial_reserved_width(),
+            surface: RoadSurface::Dirt,
+            class: RoadClass::Lane,
+            stone_committed: 0,
+        },
+        shared::components::RoadOf(shared::components::SettlementId(1)),
+    ));
+    let (_builder, house) = spawn_requesting_house(
+        &mut app,
+        settlement,
+        "LateBuilder",
+        house_position,
+        house_door,
+        None,
+    );
+
+    plan_until_connector_exists(&mut app, house);
+
+    let connector = app
+        .world_mut()
+        .query::<&VillageRoad>()
+        .iter(app.world())
+        .find(|road| road.builder == "LateBuilder")
+        .expect("the house must receive its connector road")
+        .clone();
+    let goal = *connector.points.last().unwrap();
+    assert!(
+        goal.distance(street_end) < 0.01 || goal.distance(hall_door) < 0.01,
+        "the connector must join the completed Hall network, not the unfinished neighbour: {:?}",
+        connector.points
+    );
+    assert!(
+        passing.iter().all(|point| goal.distance(*point) > 1.0),
+        "an unfinished road became a network anchor: {:?}",
+        connector.points
+    );
+    assert!(
+        connector.total_length() > 20.0,
+        "this fixture documents the deliberate far join past a half-built neighbour: {:?}",
+        connector.points
+    );
+}
+
+#[test]
+fn a_connector_ending_mid_segment_is_detached_until_the_street_is_split() {
+    let hall_door = Vec2::new(1_700.0, -3.0);
+    let far_end = hall_door + Vec2::X * 40.0;
+    let mid = hall_door.lerp(far_end, 0.5);
+    let door = mid + Vec2::new(0.0, -6.0);
+    let street = VillageRoad {
+        settlement: "Oakmead".into(),
+        builder: "First".into(),
+        points: vec![hall_door, far_end],
+        built_through: 2,
+        width: VILLAGE_ROAD_WIDTH,
+        reserved_width: RoadClass::Lane.initial_reserved_width(),
+        surface: RoadSurface::Dirt,
+        class: RoadClass::Lane,
+        stone_committed: 0,
+    };
+    let connector = VillageRoad {
+        settlement: "Oakmead".into(),
+        builder: "Second".into(),
+        points: vec![door, mid],
+        built_through: 2,
+        ..street.clone()
+    };
+
+    // Connectivity is keyed by nodes only. A point on a segment's interior is
+    // not a junction, so a spur ending there forms a detached island.
+    let network = hall_road_network(hall_door, &[&street, &connector]);
+    assert_eq!(network.disconnected_components, 1);
+    assert!(!network.connected_keys.contains(&graph_key(mid)));
+
+    let mut split = street.clone();
+    split.points.insert(1, mid);
+    split.built_through = 3;
+    let network = hall_road_network(hall_door, &[&split, &connector]);
+    assert_eq!(network.disconnected_components, 0);
+    assert!(network.connected_keys.contains(&graph_key(mid)));
+    assert!(network.connected_keys.contains(&graph_key(door)));
+}
+
 #[test]
 fn detached_and_unfinished_roads_are_not_public_network_anchors() {
     let hall_door = Vec2::new(1_700.0, -3.0);
@@ -2526,21 +2787,15 @@ fn detached_and_unfinished_roads_are_not_public_network_anchors() {
 
     assert_eq!(network.disconnected_components, 1);
     assert!(network.connected_keys.contains(&graph_key(hall_door)));
-    assert!(
-        network
-            .connected_keys
-            .contains(&graph_key(hall_door + Vec2::X * 8.0))
-    );
-    assert!(
-        !network
-            .connected_keys
-            .contains(&graph_key(detached.points[0]))
-    );
-    assert!(
-        !network
-            .connected_keys
-            .contains(&graph_key(unfinished.points[0]))
-    );
+    assert!(network
+        .connected_keys
+        .contains(&graph_key(hall_door + Vec2::X * 8.0)));
+    assert!(!network
+        .connected_keys
+        .contains(&graph_key(detached.points[0])));
+    assert!(!network
+        .connected_keys
+        .contains(&graph_key(unfinished.points[0])));
 }
 
 #[test]
@@ -3442,13 +3697,12 @@ fn active_road_builder_is_not_hired_for_a_production_job() {
 
     app.update();
 
-    assert!(
-        app.world()
-            .get::<SettlementBuilding>(farm)
-            .unwrap()
-            .workers
-            .is_empty()
-    );
+    assert!(app
+        .world()
+        .get::<SettlementBuilding>(farm)
+        .unwrap()
+        .workers
+        .is_empty());
     assert_eq!(
         *app.world().get::<WorkStatus>(worker).unwrap(),
         WorkStatus::LookingForWork
@@ -3504,13 +3758,12 @@ fn moot_steward_cannot_also_be_hired_as_a_farmer() {
 
     app.update();
 
-    assert!(
-        app.world()
-            .get::<SettlementBuilding>(farm)
-            .unwrap()
-            .workers
-            .is_empty()
-    );
+    assert!(app
+        .world()
+        .get::<SettlementBuilding>(farm)
+        .unwrap()
+        .workers
+        .is_empty());
     assert_eq!(
         app.world().get::<Occupation>(steward).unwrap().0.as_deref(),
         Some("Moot Steward")
@@ -4169,15 +4422,13 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
         complete: false,
     };
     let mut cache = NavigationBuildingCache::default();
-    assert!(
-        cache
-            .rebuild(
-                std::iter::empty(),
-                std::iter::once(&wall),
-                std::iter::empty()
-            )
-            .is_empty()
-    );
+    assert!(cache
+        .rebuild(
+            std::iter::empty(),
+            std::iter::once(&wall),
+            std::iter::empty()
+        )
+        .is_empty());
     wall.complete = true;
     assert_eq!(
         cache
@@ -4189,24 +4440,20 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
             .len(),
         1
     );
-    assert!(
-        cache
-            .spatial
-            .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.))
-    );
+    assert!(cache
+        .spatial
+        .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.)));
     assert!(
         cache.buildings.is_empty(),
         "a wall must not invent a house doorway for obstacle escape"
     );
-    assert!(
-        cache
-            .rebuild(
-                std::iter::empty(),
-                std::iter::once(&wall),
-                std::iter::empty()
-            )
-            .is_empty()
-    );
+    assert!(cache
+        .rebuild(
+            std::iter::empty(),
+            std::iter::once(&wall),
+            std::iter::empty()
+        )
+        .is_empty());
     wall.kind = FortificationKind::Gate;
     assert_eq!(
         cache
@@ -4218,11 +4465,9 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
             .len(),
         3
     );
-    assert!(
-        !cache
-            .spatial
-            .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.))
-    );
+    assert!(!cache
+        .spatial
+        .segment_blocked(Vec2::new(0., -4.), Vec2::new(0., 4.)));
     for post in wall.gate_post_centers() {
         assert!(cache.spatial.point_blocked(post.xz()));
     }
@@ -4233,11 +4478,9 @@ fn completed_defenses_enter_route_cache_without_becoming_building_doorways() {
             .len(),
         2
     );
-    assert!(
-        !cache
-            .spatial
-            .point_blocked(wall.gate_post_centers()[0].xz())
-    );
+    assert!(!cache
+        .spatial
+        .point_blocked(wall.gate_post_centers()[0].xz()));
 }
 
 #[test]
@@ -4257,58 +4500,48 @@ fn household_yard_changes_invalidate_routes_without_inventing_a_doorway() {
     let origin = PlayerPosition(Vec3::ZERO);
     let yaw = PlayerRotation(0.0);
     let mut cache = NavigationBuildingCache::default();
-    assert!(
-        !cache
-            .rebuild(
-                std::iter::empty(),
-                std::iter::empty(),
-                std::iter::once((&yard, &origin, &yaw))
-            )
-            .is_empty()
-    );
+    assert!(!cache
+        .rebuild(
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::once((&yard, &origin, &yaw))
+        )
+        .is_empty());
     assert!(cache.spatial.point_blocked(Vec2::new(7., 0.)));
-    assert!(
-        !cache
-            .spatial
-            .segment_blocked(Vec2::new(4., 0.), Vec2::new(6., 0.))
-    );
+    assert!(!cache
+        .spatial
+        .segment_blocked(Vec2::new(4., 0.), Vec2::new(6., 0.)));
     assert!(
         cache.buildings.is_empty(),
         "a fence is never a doorway escape exemption"
     );
-    assert!(
-        cache
-            .rebuild(
-                std::iter::empty(),
-                std::iter::empty(),
-                std::iter::once((&yard, &origin, &yaw))
-            )
-            .is_empty()
-    );
+    assert!(cache
+        .rebuild(
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::once((&yard, &origin, &yaw))
+        )
+        .is_empty());
 
     let moved = PlayerPosition(Vec3::new(30., 0., 0.));
-    assert!(
-        !cache
-            .rebuild(
-                std::iter::empty(),
-                std::iter::empty(),
-                std::iter::once((&yard, &moved, &yaw))
-            )
-            .is_empty()
-    );
+    assert!(!cache
+        .rebuild(
+            std::iter::empty(),
+            std::iter::empty(),
+            std::iter::once((&yard, &moved, &yaw))
+        )
+        .is_empty());
     assert!(!cache.spatial.point_blocked(Vec2::new(7., 0.)));
     assert!(cache.spatial.point_blocked(Vec2::new(37., 0.)));
-    assert!(
-        !cache
-            .rebuild(std::iter::empty(), std::iter::empty(), std::iter::empty())
-            .is_empty()
-    );
+    assert!(!cache
+        .rebuild(std::iter::empty(), std::iter::empty(), std::iter::empty())
+        .is_empty());
     assert!(!cache.spatial.point_blocked(Vec2::new(37., 0.)));
 }
 
 #[test]
 fn residents_can_route_out_of_yards_beside_rotated_upgraded_houses() {
-    use shared::components::{HouseAppearance, YardSide, YardUse, fit_household_yard};
+    use shared::components::{fit_household_yard, HouseAppearance, YardSide, YardUse};
     let base = Vec3::new(1700.0, 80.0, 0.0);
     let mut terrain = WorldTerrain::default();
     terrain.apply_flatten_rect(base, Vec2::splat(55.0), 0.0, 4.0);
@@ -4508,11 +4741,9 @@ fn residents_can_route_through_road_shaped_yards_at_rotated_homes() {
                         !route.is_empty(),
                         "road-shaped {art:?}/{side:?} trapped a resident, yaw={yaw}, offset={offset:?}"
                     );
-                    assert!(
-                        route
-                            .windows(2)
-                            .all(|leg| !cache.spatial.segment_blocked(leg[0], leg[1]))
-                    );
+                    assert!(route
+                        .windows(2)
+                        .all(|leg| !cache.spatial.segment_blocked(leg[0], leg[1])));
                 }
             }
         }

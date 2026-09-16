@@ -52,9 +52,12 @@ CLASSES = {
     # to read from the RTS camera, but remain accent geometry with no collider or shadow.
     "fern":    {"lod0": (60, 180),   "lod1": (24, 70),   "ratio": (0.20, 0.60), "bbox": 0.40},
     "rock":    {"lod0": (12, 90),    "lod1": (8, 40),    "ratio": (0.30, 0.70), "bbox": 0.35},
-    # A flower is a stem and a head. There is no second level of detail to author, so LOD1 may
-    # equal LOD0 -- the alternative is a mesh too degenerate to read as anything.
-    "flower":  {"lod0": (8, 60),     "lod1": (8, 60),    "ratio": (0.50, 1.01), "bbox": 0.40},
+    # A flower is a PATCH ~2.5 m across (build_scatter.py `flower_patch`): a leaf mound with 9-17
+    # blossoms on 0.45-0.55 m stems, so it clears the short grass it replaces in the ground-cover
+    # stream. LOD1 keeps the mound and swaps the blossoms for a few flat petal-colour discs, so it
+    # is a real reduction (not the old 14/14 sprig) and the silhouette tolerance is loose: discs
+    # are wider than petals on purpose, to hold the colour mass at 72 m+.
+    "flower":  {"lod0": (120, 520),  "lod1": (12, 90),   "ratio": (0.04, 0.40), "bbox": 0.35},
     # Grass is the one family that MAY carry a texture and MAY be alpha-masked: a blade is 3 mm
     # wide and its shape can only come from the alpha channel. Everything else stays opaque.
     "grass":   {"lod0": (12, 80),    "lod1": (6, 40),    "ratio": (0.20, 0.60), "bbox": 0.50,

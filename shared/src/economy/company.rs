@@ -2,6 +2,7 @@
 
 use super::money::signed_difference;
 use super::{BusinessStrategy, Good, PENNIES_PER_COIN};
+use crate::components::{CompanyOwnership, PersonId, COMPANY_TOTAL_SHARES};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -133,6 +134,60 @@ impl CompanyAccount {
         if let Some(completed_ledger) = completed_ledger {
             self.previous_day = completed_ledger;
         }
+    }
+}
+
+/// Replicated dividend headroom of one company, published by the server's
+/// finance pass once per world day and after every manual distribution, never
+/// per tick. `distributable` is what a distribution could pay right now:
+/// consolidated retained profit capped by treasury cash above every site's
+/// payroll, input, tax and operating reserves. `day` is the world day of that
+/// snapshot (`u32::MAX` until the first pass); `last_paid_day`/`last_paid`
+/// record the most recent automatic or manual payout (`u32::MAX` = never).
+/// Cash moves between passes, so this is a snapshot for display and drafting;
+/// the server clamps every request against the live figure when it pays.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyDividendCapacity {
+    pub day: u32,
+    pub distributable: u64,
+    pub protected_reserves: u64,
+    pub retained_profit: u64,
+    pub last_paid_day: u32,
+    pub last_paid: u64,
+}
+
+impl Default for CompanyDividendCapacity {
+    /// Hand-written so that "never paid" and "not yet reviewed" are
+    /// `u32::MAX`, not world day 0.
+    fn default() -> Self {
+        Self {
+            day: u32::MAX,
+            distributable: 0,
+            protected_reserves: 0,
+            retained_profit: 0,
+            last_paid_day: u32::MAX,
+            last_paid: 0,
+        }
+    }
+}
+
+/// Divide a distribution over the exact 1,000-share cap table. Every holder
+/// receives the wide-integer floor of their share; the whole-penny remainder
+/// goes to the first cap-table entry (sorted by `PersonId`), so the sum always
+/// equals `pennies`. The server pays and the client previews with this one
+/// function so both agree penny for penny. `out` is cleared and refilled in
+/// cap-table order.
+pub fn pro_rata_split(pennies: u64, ownership: &CompanyOwnership, out: &mut Vec<(PersonId, u64)>) {
+    out.clear();
+    let mut allocated = 0u64;
+    for holding in ownership.shares() {
+        let amount = (u128::from(pennies) * u128::from(holding.shares)
+            / u128::from(COMPANY_TOTAL_SHARES)) as u64;
+        allocated += amount;
+        out.push((holding.shareholder, amount));
+    }
+    if let Some((_, first)) = out.first_mut() {
+        *first += pennies - allocated;
     }
 }
 

@@ -459,11 +459,33 @@ rows or optional sections:
 
 - Company controls (`business_management.rs`): the replicated policies fold into a pure
   `ControlsModel` — sections, rows, controls and meters, each with a stable id (`wage`,
-  `cover.Wheat.3`, `input.Wheat`). `structure_key()` is the id sequence; only a change in it
-  respawns the tree. `bind_panel` then writes every value by id into `BoundText` nodes,
-  `BoundButton`s (label, `UiButtonStyle.selected`, and the `Action` order the button will send)
-  and `MeterFill` lanes. Selected choices are filled buttons, not a "SELECTED:" prefix.
-  The unit tests pin the contract: a wage or position change keeps the key; ids are unique.
+  `cover.Wheat.3`, `input.Wheat`). `structure_key()` is a `u64` hash of the id sequence; only
+  a change in it respawns the tree. `bind_panel` then writes every value by id into
+  `BoundText` nodes, `BoundButton`s (label, `UiButtonStyle.selected`, visibility, and the
+  payload the button carries — the `Action` order, a worker chip's `PersonLink`, a
+  `ShareDraftAction` step or a `DividendDraftAction` step of the dividend amount picker) and
+  `MeterFill` lanes. The dividend rows are the model for a control whose payload embeds an
+  absolute value: the replicated `CompanyDividendCapacity` and the client `DividendDraft` are
+  values, the picker steps and the `DISTRIBUTE X COIN` confirm control are always present for a
+  manager (a headroom of zero binds `pennies: 0`, it never removes the slot), and the
+  IF DISTRIBUTED NOW preview row binds its text from the shared `pro_rata_split`. Ids that
+  would leak volatile identity are
+  *fixed slots*: `worker.{i}` for `i in 0..kind.positions()` (observed employees deduped and
+  sorted by `PersonId`, so interest-scoped replication churn only rebinds chips) and
+  `buy.{seller}.{k}` for `k in 0..3` (BUY 1 / BUY 10 / BUY ALL per public offer, so a partial
+  purchase only rewrites labels and payloads). A vacant slot keeps its entity as
+  `Display::None` with an empty label and no person or order behind it. The system keeps one
+  `PersonId -> Entity` index and the observed-worker list in `Local` scratch and refreshes them
+  only when replication reports an added person, a renamed person, an employment change or a
+  removal (or the selected site changes), never per frame; the model pre-hashes every row,
+  control and meter id into a `BoundId` when it is built, and the structure key and the bind
+  pass compare those `u64`s, so the bind pass allocates nothing and hashes no strings (the
+  model's `format!`-built ids and labels are still rebuilt per frame). Selected choices are
+  filled buttons, not a "SELECTED:" prefix. The unit
+  tests pin the contract: a wage or position change, worker churn, a duplicate body for one
+  person, a partial share purchase and a company cash tick all keep the key and the entities;
+  ids are unique; `PersonLink`s rebind by slot. `FISTFORCE_OPEN_BUSINESS=company[:<id>]`
+  opens the page without a mouse for `ClientPerfUi ensure_business_panel=Nc/1r` runs.
 - The compact settlement card (`settlement_panel.rs`): `CompactModel` is a title, a handful of
   key tiles, a few vital rows and the action buttons; `CompactBound` slots (`Tile(i)`, `Row(i)`)
   bind values, and the card only respawns when the selection or the tile/row *labels* change.
@@ -473,12 +495,45 @@ rows or optional sections:
   best offer, today's demand, hero cargo, prices and disabled reasons bind in place. Its only
   structure key is the settlement entity, so even a 100x economy tick never replaces the BUY,
   POST or HISTORY controls under the pointer.
+- The company directory and detail page (`encyclopedia/companies/`): `binding.rs` owns a typed
+  `CompanyBound` marker enum keyed by ids (`Site(BuildingId, SiteField)`,
+  `Route(TradeRouteId, RouteField)`, `Resource(SettlementId, Good, ResourceField)`, holder /
+  offer / decision slots, portfolio and route-editor fields) and one pure `CompanyView::value`
+  used both at spawn and at bind. `company_structure_key` hashes only ids and gating bits (route
+  at-home / automatic / ship, order status, built ports, ownership class, ledger-day presence,
+  card and slot counts); a 0.5 s books snapshot, a policy receipt or a stepper press runs the
+  bind pass, which also rewrites button PAYLOADS (`CompanyBranchPolicyButton` absolute
+  `SetRetainUnits` values, `CompanyManagementButton`'s replicated site `Entity`,
+  `CompanyHistoryButton.name`, holder `PersonLink`s) and value-driven colours, meter widths and
+  `Display` toggles on always-spawned note rows. Only a structural change to the same record is
+  deferred while a control is hovered; the portfolio strip is spawned once per hero presence, and
+  list rows keep their entities while `CompanyRowLedger` / `CompanyRowStatus` rewrite. The
+  worker roster fill (`person_links::roster_systems`) runs after `rebuild_company_view` so a
+  respawned site card carries its WORKERS rows on the same frame, and after
+  `business_management::ensure_panel` so a worker chip filled this frame gains or loses
+  `InteractionDisabled` in the same frame. The page stops binding, and the directory stops
+  snapshotting, while a page (settings, ledger, founding, market) covers the Companies tab
+  body; both read the page resources through `encyclopedia::page_is_open` /
+  `companies_body_visible`, not the `TabBody` display that `sync_tab_visuals` and
+  `sync_page_host` rewrite during the frame, so the gate cannot flap.
+
+Structure keys are hashes of ids and existence bits, never `format!("{:?}")` dumps of whole
+records: a `Debug` dump turns every cash tick into a "structural" change. Prefer a typed marker
+enum per panel (property board, army, market, companies) over string ids: the bind pass is then a
+`match` with no per-frame `String` allocation or string hashing; `business_management.rs`'s
+string ids are the older shape and stay private to that panel (each id is hashed once into a
+`BoundId` when the model is built; the spawned markers, the structure key and the bind pass
+all reuse that `u64`, never a `String`).
 
 Why: the signature-rebuild pattern (format the whole input into a string, despawn and respawn
 on any difference, defer while hovered) produced every UI-feel bug we hit — a +1 press that
-showed two seconds later, rows that could not be clicked, scroll positions jumping. Rebuilding on
-a float drift also costs real frame time at scale. Panels that still rebuild on change
-(history ledgers) do so because their inputs genuinely change only on an event.
+showed two seconds later, rows that could not be clicked, scroll positions jumping, and the
+company page respawning its whole detail pane (and re-filling site rosters a frame late) on
+every 0.5 s books snapshot. The route editor's steppers now bind their values under
+`CompanyBound::Editor`, so a cargo or price step updates the number under the pointer without
+respawning the stepper. Rebuilding on a float drift also costs real frame time at scale. Panels
+that still rebuild on change (history ledgers) do so because their inputs genuinely change only
+on an event.
 
 Measure it: `FISTFORCE_CLIENT_PERF=1` logs `ClientPerfUi <system>=calls/rebuilds/ms`; a bound
 panel shows `1r` per open, never `Nr` while you hover or while the world ticks.
@@ -602,7 +657,11 @@ FISTFORCE_CAPTURE_HERO_OFFSET=0,0 FISTFORCE_CAPTURE_SETTLEMENT=village
 FISTFORCE_CAPTURE_SELECT=hall|building` photographs the card on a hall or on the first operating
 business. `FISTFORCE_CAPTURE_ENCYCLOPEDIA=business` (same hero variables) opens the site-controls
 page for the staged windmill; add `FISTFORCE_CAPTURE_BUSINESS_SCROLL=900` (pixels) for its lower
-sections. With `FISTFORCE_CLIENT_PERF=1 FISTFORCE_CLIENT_PERF_INTERVAL_SECS=1` the log should show
+sections. `FISTFORCE_CAPTURE_BUSINESS_PAGE=company` opens the COMPANY tab instead,
+`FISTFORCE_CAPTURE_DIVIDEND_DRAFT=<pennies>` presets the dividend amount picker and
+`FISTFORCE_CAPTURE_BUSINESS_FEEDBACK=ok:<text>|fail:<text>` stages a server reply in the feedback
+line (`capture/scenarios/ui-company-dividends.ron` combines them). With
+`FISTFORCE_CLIENT_PERF=1 FISTFORCE_CLIENT_PERF_INTERVAL_SECS=1` the log should show
 `sync_compact_panel=…/1r` and `ensure_business_panel=…/2r` once, then `0r` every second.
 
 The real J menu and its locked-access state are deterministic visual targets too:

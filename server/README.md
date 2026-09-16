@@ -9,7 +9,7 @@ top-level modules and calls `app::run()`; runtime rules belong to their domain.
 |---|---|
 | `app` | Bootstrap, resources and ordered fixed-update wiring |
 | `net` | Connections, peer identity, client-message ingress and personal-possession recipient filters |
-| `player` | Commander views, hero/boat lifecycle, rosters, battalions and formation orders, melee, nearby Hall trading, permit/company funding and placement, physical hero construction, Company Master policies, shares and caravan timetable orders |
+| `player` | Commander views, hero/boat lifecycle, rosters, battalions and formation orders, melee, nearby Hall trading, permit/company funding and placement, physical hero construction, Company Master policies, shares, deferred dividend replies (`player/business/dividend_reports.rs`) and caravan timetable orders |
 | `collision` | Baked/derived building colliders, spatial indexes, raycasts and streamed static collision |
 | `world` | Time, identity, regions, settlements, village simulation, roads, development and lab fixtures |
 | `persistence` | In-memory session account/commander snapshots; the live server deliberately starts fresh |
@@ -80,7 +80,8 @@ keeps no history and never logs message bodies.
     insolvency, physical stock liquidation and property takeover
   - `companies`: existing-site migration, 1,000-share cap tables, appointed Company Masters,
     one authoritative company treasury, current/completed-day site cost-centre consolidation,
-    dividends, executive review and company-permit fee recovery
+    automatic and amount-selected manual dividends with the published
+    `CompanyDividendCapacity` snapshot, executive review and company-permit fee recovery
   - `civic`: municipal hiring budgets, unified payroll/arrears, profit levies, staffing posture,
     growth subsidies and bounded policy review
   - `settlement_economy`: Moot transactions, food security, prosperity and the daily
@@ -105,7 +106,14 @@ keeps no history and never logs message bodies.
     identity, civic, economy, construction, activity and directory timing sets
 - `village_roads.rs`: local-road public state and survey facade. Implementation under
   `world/village_roads/` owns connector construction, cached routing, geometry and the Moot
-  Steward's road-repair duty.
+  Steward's road-repair duty. Road connectivity (`construction::hall_road_network`) is keyed
+  by nodes, so `village_roads::resample_path` is the one two-metre node spacing shared by
+  fresh surveys, permit reservations adopted in `construction::plan_requested_roads`, and
+  founding roads built in `new_world/layout.rs`. Any new path that spawns a completed local
+  `VillageRoad` with `RoadOf` should go through it, or later connectors join it far from
+  their frontage. Regional Dirt sections (`regional_roads/projects.rs`, `RegionalRoadSection`)
+  deliberately keep their caravan-trace samples because step tracking identifies them by
+  `points.len()`.
 - `village_lab.rs` and `village_lab_scenario.rs`: deterministic integration harness and
   rendered fixture setup. They must use the shared village schedule, never a copied list.
 
@@ -154,6 +162,14 @@ The important dependencies are:
 4. Run bounded road/route planning and actor movement.
 5. Apply network interest visibility and update observer counts; do not change simulation.
 6. Refresh reconnectable session state and close telemetry brackets.
+
+Client orders are handled in `ServerSet::NetIngress`, after the world tick. An order whose
+effect belongs to the simulation (a manual dividend) is only enqueued there; the village
+finance pass in the next world tick pays it and records a `DividendOutcome` (a request
+whose company left the finance query in between is answered with `CompanyUnavailable`), and
+`player::business::report_dividend_outcomes`, chained directly after
+`handle_hero_company_orders`, sends the one honest `HeroCompanyResult` to the requesting
+link (dropping it if that link has gone). Do not answer such an order synchronously.
 
 Add a village rule to its existing shared set. Do not multiply Bevy `Time` by `TimeWarp`
 inside the new system, and do not add lab-only ordering to make a test pass.

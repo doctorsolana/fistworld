@@ -1,19 +1,26 @@
 //! Current route status, stops and trip-history cards.
+//!
+//! A card is keyed by `TradeRouteId`. Cargo, status, caravaner, trip rows and
+//! the current-stop highlight bind in place; only the gating bits hashed in
+//! `binding::company_structure_key` (mode, at-home, automatic, ship, stop and
+//! trip counts) decide which controls exist.
 
+use super::binding::{bound_text, CompanyBound, CompanyView, RouteField, StopField};
 use super::controls::{EditTradeRouteButton, TradeRouteQuickActionButton};
 use super::model::{CompanyRouteRecord, TradeRouteQuickAction};
 use super::widgets::detail_button;
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT, RADIUS};
 use bevy::prelude::*;
-use shared::components::{CompanyId, TradeRouteMode, TradeRouteStatus};
-use shared::economy::format_money;
+use shared::components::{TradeRouteMode, TradeRouteStatus};
 
 pub(super) fn spawn_route_card(
     parent: &mut ChildSpawnerCommands<'_>,
-    company: CompanyId,
+    view: &CompanyView<'_>,
     route: &CompanyRouteRecord,
-    can_manage: bool,
 ) {
+    let company = view.company.id;
+    let can_manage = view.can_manage();
+    let key = |field| CompanyBound::Route(route.id, field);
     parent
         .spawn((
             Node {
@@ -43,35 +50,28 @@ pub(super) fn spawn_route_card(
                         ..default()
                     })
                     .with_children(|copy| {
-                        copy.spawn((
-                            Text::new(format!(
-                                "{} ROUTE #{}  /  {}",
-                                if route.ship.is_some(){"SHIP"}else{"CARAVAN"},
-                                route.id.0,
-                                route.good.label().to_uppercase()
-                            )),
+                        bound_text(
+                            copy,
+                            view,
+                            key(RouteField::Title),
                             crate::ui::ledger::reading(15.0),
-                            TextColor(INK),
-                        ));
-                        copy.spawn((
-                            Text::new(format!(
-                                "{}  /  HOME {}",
-                                route.ship.map_or_else(||route.mode.label().to_uppercase(),|(id,kind)|format!("{} #{}",kind.label().to_uppercase(),id.0)),
-                                route.warehouse_name.to_uppercase()
-                            )),
+                            INK,
+                        );
+                        bound_text(
+                            copy,
+                            view,
+                            key(RouteField::Subtitle),
                             crate::ui::ledger::reading(11.5),
-                            TextColor(INK_MUTED),
-                        ));
+                            INK_MUTED,
+                        );
                     });
-                header.spawn((
-                    Text::new(if route.ship.is_some() && route.status==TradeRouteStatus::WaitingForPorter{"WAITING FOR SAILOR".into()}else if route.ship.is_some() && route.status==TradeRouteStatus::Returning{"RETURNING TO HOME PORT".into()}else{route.status.label().to_uppercase()}),
+                bound_text(
+                    header,
+                    view,
+                    key(RouteField::Status),
                     crate::ui::ledger::reading(12.0),
-                    TextColor(if route.status == TradeRouteStatus::Mothballed {
-                        EMBER
-                    } else {
-                        INK_MUTED
-                    }),
-                ));
+                    INK_MUTED,
+                );
             });
 
             card.spawn(Node {
@@ -83,7 +83,8 @@ pub(super) fn spawn_route_card(
                 ..default()
             })
             .with_children(|timeline| {
-                for (index, stop) in route.stops.iter().enumerate() {
+                for index in 0..route.stops.len() {
+                    let slot = index as u8;
                     if index > 0 {
                         timeline.spawn((
                             Text::new(">"),
@@ -91,8 +92,14 @@ pub(super) fn spawn_route_card(
                             TextColor(INK_MUTED),
                         ));
                     }
+                    let card_key = CompanyBound::RouteStop(route.id, slot, StopField::Card);
+                    let (background, border) = view
+                        .value(card_key)
+                        .and_then(|value| value.highlight)
+                        .unwrap_or((Color::srgba(0.96, 0.95, 0.91, 0.70), PLATE_RULE_SOFT));
                     timeline
                         .spawn((
+                            card_key,
                             Node {
                                 min_width: Val::Px(112.0),
                                 flex_direction: FlexDirection::Column,
@@ -102,36 +109,24 @@ pub(super) fn spawn_route_card(
                                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                                 ..default()
                             },
-                            BackgroundColor(if usize::from(route.current_stop) == index
-                                && route.assigned_caravaner.is_some()
-                            {
-                                Color::srgba(0.78, 0.42, 0.22, 0.14)
-                            } else {
-                                Color::srgba(0.96, 0.95, 0.91, 0.70)
-                            }),
-                            BorderColor::from(if usize::from(route.current_stop) == index
-                                && route.assigned_caravaner.is_some()
-                            {
-                                EMBER
-                            } else {
-                                PLATE_RULE_SOFT
-                            }),
+                            BackgroundColor(background),
+                            BorderColor::all(border),
                         ))
                         .with_children(|stop_card| {
-                            stop_card.spawn((
-                                Text::new(format!(
-                                    "STOP {}  /  {}",
-                                    index + 1,
-                                    stop.settlement_name.to_uppercase()
-                                )),
+                            bound_text(
+                                stop_card,
+                                view,
+                                CompanyBound::RouteStop(route.id, slot, StopField::Name),
                                 crate::ui::ledger::reading(11.5),
-                                TextColor(INK),
-                            ));
-                            stop_card.spawn((
-                                Text::new(stop.action.label().to_uppercase()),
+                                INK,
+                            );
+                            bound_text(
+                                stop_card,
+                                view,
+                                CompanyBound::RouteStop(route.id, slot, StopField::Action),
                                 crate::ui::ledger::reading(11.0),
-                                TextColor(EMBER),
-                            ));
+                                EMBER,
+                            );
                         });
                 }
             });
@@ -144,69 +139,30 @@ pub(super) fn spawn_route_card(
                 ..default()
             })
             .with_children(|facts| {
-                for text in [
-                    format!("CARGO  {} / {}", route.cargo_onboard, route.cargo_target),
-                    format!(
-                        "{}  {}",
-                        if route.ship.is_some(){"SAILOR"}else{"CARAVANER"},
-                        route
-                            .assigned_caravaner
-                            .as_deref()
-                            .unwrap_or("not assigned")
-                    ),
-                    format!("TRIPS  {}", route.completed_trips),
-                    format!("UNITS MOVED  {}", route.lifetime_units),
-                    if route.autonomous_management {
-                        "SERVICE  MASTER-REVIEWED TRIAL".to_string()
-                    } else if route.automatic {
-                        "SERVICE  REPEAT".to_string()
-                    } else {
-                        "SERVICE  ONE CIRCUIT".to_string()
-                    },
+                for field in [
+                    RouteField::Cargo,
+                    RouteField::Caravaner,
+                    RouteField::Trips,
+                    RouteField::Units,
+                    RouteField::Service,
                 ] {
-                    facts.spawn((
-                        Text::new(text),
+                    bound_text(
+                        facts,
+                        view,
+                        key(field),
                         crate::ui::ledger::reading(11.5),
-                        TextColor(INK_MUTED),
-                    ));
+                        INK_MUTED,
+                    );
                 }
             });
 
-            match route.mode {
-                TradeRouteMode::ContractCarrier => card.spawn((
-                    Text::new(format!(
-                        "Buyer-funded cargo  /  {} coin freight earned  /  purchase ceiling {} coin. Stops are fixed by the public contract.",
-                        format_money(route.lifetime_delivery_revenue),
-                        format_money(route.maximum_purchase_price),
-                    )),
-                    crate::ui::ledger::reading(12.0),
-                    TextColor(INK_MUTED),
-                )),
-                TradeRouteMode::Merchant => card.spawn((
-                    Text::new(format!(
-                        "Buy at or below {} coin  /  list sales at or above {} coin  /  {} coin spent  /  {} coin consigned at asking value.{} Consignment becomes revenue only when a real buyer purchases it.",
-                        format_money(route.maximum_purchase_price),
-                        format_money(route.minimum_destination_price),
-                        format_money(route.lifetime_purchase_cost),
-                        format_money(route.lifetime_consigned_value),
-                        if route.autonomous_management {
-                            format!(
-                                " Company Master forecast: {} coin/trip at {}% confidence; the route pauses when cargo repeatedly remains unsold.",
-                                if route.expected_trip_profit >= 0 {
-                                    format_money(route.expected_trip_profit as u64)
-                                } else {
-                                    format!("-{}", format_money(route.expected_trip_profit.unsigned_abs()))
-                                },
-                                route.decision_confidence,
-                            )
-                        } else {
-                            String::new()
-                        },
-                    )),
-                    crate::ui::ledger::reading(12.0),
-                    TextColor(INK_MUTED),
-                )),
-            };
+            bound_text(
+                card,
+                view,
+                key(RouteField::Summary),
+                crate::ui::ledger::reading(12.0),
+                INK_MUTED,
+            );
 
             if route.trips.is_empty() {
                 card.spawn((
@@ -215,21 +171,14 @@ pub(super) fn spawn_route_card(
                     TextColor(INK_MUTED),
                 ));
             } else {
-                for trip in route.trips.iter().rev().take(3) {
-                    card.spawn((
-                        Text::new(format!(
-                            "DAY {}  /  {} stops  /  {} units  /  bought {}  /  freight {}  /  consigned {}  /  {:.1} world min",
-                            trip.completed_day,
-                            trip.stops_visited,
-                            trip.units,
-                            format_money(trip.source_purchase_cost),
-                            format_money(trip.delivery_revenue),
-                            format_money(trip.consigned_value),
-                            trip.travel_world_seconds as f32 / 60.0,
-                        )),
+                for slot in 0..route.trips.len().min(3) {
+                    bound_text(
+                        card,
+                        view,
+                        CompanyBound::RouteTrip(route.id, slot as u8),
                         crate::ui::ledger::reading(11.0),
-                        TextColor(INK_MUTED),
-                    ));
+                        INK_MUTED,
+                    );
                 }
             }
 
@@ -278,8 +227,16 @@ pub(super) fn spawn_route_card(
                             },
                             "MOTHBALL",
                         );
-                    } else if route.ship.is_some() && route.status!=TradeRouteStatus::Mothballed {
-                        detail_button(actions,TradeRouteQuickActionButton{company,route:route.id,action:TradeRouteQuickAction::Mothball},"STOP AFTER VOYAGE");
+                    } else if route.ship.is_some() && route.status != TradeRouteStatus::Mothballed {
+                        detail_button(
+                            actions,
+                            TradeRouteQuickActionButton {
+                                company,
+                                route: route.id,
+                                action: TradeRouteQuickAction::Mothball,
+                            },
+                            "STOP AFTER VOYAGE",
+                        );
                     } else if route.status == TradeRouteStatus::Mothballed {
                         detail_button(
                             actions,

@@ -57,15 +57,23 @@ no external image files accompany these runtime GLBs.
 | `BoulderA/B` | 36 / 16 | `BigRock_01/02` | 68–78 | 0 |
 | `BushA/B/C` | 84 / 26 | `Bush_01..04` | 60–104 | 869 |
 | `FernPatchA/B` | 108–132 / 42 | new forest-floor layer | — | sparse long-range colonies plus 12% of existing close forest-cover slots |
-| `FlowerA..D` | **14 / 14** | `Flower_*`, `Spring_Flower_*` | **212–806** | 4,166 |
+| `FlowerA..D` (patches, Sept 2026) | 204–344 / 34–48 | `Flower_*`, `Spring_Flower_*` | 212–806 | 4,166 (legacy baked map); now drift replacements in the close ground-cover stream plus the sparse Meadows scatter |
 | `OakA`, `ChestnutA`, `BirchA/B`, `BroadleafLargeA`, `BroadleafTallA` | 386–604 / 81–103 | new species, no counterpart | — | — |
 | `GrassShortA` (short) | **36 / 12** | `Env_Grass_Tall_04` | 738, **never drawn** | 38,578 |
 | `GrassTallA` (tall, bright) | **36 / 12** | — | — | — |
 
-The flowers are the largest single ratio: **806 → 14 triangles**, ×4,166 placed.
+The flowers went through two rebuilds. The first shrank the bought 212–806-triangle sprigs to a
+14 / 14-triangle stem-and-head — the right budget for the wrong object: a 20 cm sprig is sub-pixel at
+every playable zoom and sits inside the 0.6–1.0 m grass canopy, so the meadows read as
+flowerless. The current `FlowerA..D` are **patches** (`build_scatter.py --kind flower`): a leaf
+mound with 9–17 blossoms on 0.45–0.55 m stems, ~2–2.4 m across, and a real LOD1 of flat
+petal-colour squares. Petal colour per variant: A white, B red, C orange, D yellow. They are
+placed two ways: the client-only ground-cover stream turns grass cells inside flower drifts into
+patches (`shared::props::FlowerDrift`, GPU-instanced, no entities) and the sparse Meadows prop
+scatter still rolls its lone hits, now one swap-mesh entity each. See §11.
 
 Validate with the class that matches the family — the classes carry their own budgets and
-tolerances, because a rule written for a tree says nothing useful about a 14-triangle flower:
+tolerances, because a rule written for a tree says nothing useful about a 300-triangle patch:
 
     python3 asset_creation/vegetation/inspect_vegetation_glb.py --class <tree|conifer|bare|rock|bush|fern|flower|grass> <file>
 
@@ -226,8 +234,10 @@ The map compatibility aliases in §2 are why their removal is safe.
   shatter.
 - **Grass is live through its own bounded streaming layer** — see §10. Its remaining risk is
   entity count at increased density/radius, not a disabled spawn filter.
-- **Flower LOD1 equals LOD0** (14 tris both). There is no second level of detail to author for a
-  stem and a head; the `flower` class permits it.
+- **Flower patches are stylised, not botanical**: five flat petals on a tetrahedron stem, a
+  convex-hull leaf mound. At the 2.6 m ground-cover spacing that is what reads; a closer camera
+  than zoom 35 shows the facets. LOD1 squares are wider than the petals on purpose (colour mass at
+  72 m+), which is why the `flower` class silhouette tolerance is 35%.
 - **`PineYoungB` LOD1** shows a speck of trunk through the crown — small trees keep the same LOD1
   voxel as large ones, so their thinner tiers get erased by the remesh.
 
@@ -288,3 +298,26 @@ entity/visibility cost even though each mesh is cheap.
 
 Built by `asset_creation/vegetation/build_grass.py`, which generates the texture procedurally; there is no
 source image to keep in sync.
+
+## 11. Flower drifts — the ground-cover stream's second replacement
+
+`shared::props::generate_chunk_grass_at_density` is **presentation-only**: its one caller is
+`client/src/props/ground_cover_chunked.rs` and the server never asks for it, so what grows in
+it is not part of the world recipe and needs no `WORLDGEN_VERSION` bump. Ferns already used
+that freedom (12% of forest cells). Flowers now do the same: inside a drift of the shared
+`FlowerDrift` field (the mask the sparse Meadows scatter already used, band `0.55..0.72` chosen
+from the measured raw histogram — see `flower_drift_distribution`), up to 45% of accepted cells
+become `FlowerA..D` patches and the grass around them thins ~44% (tall tufts first) so the
+0.55 m heads stand clear of the canopy. Every flower decision rolls its own rng stream, so the
+grass and fern cells that remain are bit-identical to the pre-flower generator
+(`adding_flowers_keeps_existing_grass_and_fern_positions`, golden hash).
+
+Where they grow: Meadows everywhere; Forest only where the glade mask opens the canopy;
+Highland moor (slope ≤ 0.62); the Snowlands' warm fringe (snow < 0.75); never Desert,
+Mountains, cliffs or water. A drift is mostly one colour (per ~40 m species cell, 72%
+dominant) so it reads as a place rather than confetti. The client keeps world flowers out of
+the 11 m tended road verge (roadside dressing owns that band) and out of yards, fields and
+build zones like the rest of the cover. Render path: one GPU instance buffer per variant per
+sector, `instanced_grass.wgsl` with `wind_extra.x = 1` so the dryness straw tint leaves the
+petal colours alone; no height jitter (authored colony, like ferns). Check with
+`capture/scenarios/meadow-flowers.ron`.

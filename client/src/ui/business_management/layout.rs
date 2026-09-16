@@ -6,7 +6,7 @@ pub(super) fn spawn_panel(
     commands: &mut Commands,
     host: Entity,
     target: BusinessManagementSelection,
-    structure: String,
+    structure: u64,
     model: &ControlsModel,
     scroll: [Vec2; 2],
 ) {
@@ -43,13 +43,13 @@ pub(super) fn spawn_panel(
             ))
             .with_children(|header| {
                 header.spawn((
-                    BoundText("title".into()),
+                    BoundText(BoundId::of("title")),
                     Text::new(model.title.clone()),
                     crate::ui::typography::heading(T_TITLE),
                     TextColor(INK),
                 ));
                 header.spawn((
-                    BoundText("subtitle".into()),
+                    BoundText(BoundId::of("subtitle")),
                     Text::new(model.subtitle.clone()),
                     crate::ui::ledger::reading(T_LABEL),
                     TextColor(INK_MUTED),
@@ -145,7 +145,7 @@ pub(super) fn spawn_panel(
             .as_ref()
             .map_or(("", true), |(m, ok)| (m.as_str(), *ok));
         panel.spawn((
-            BoundText("feedback".into()),
+            BoundText(BoundId::of("feedback")),
             Text::new(message),
             crate::ui::ledger::reading(T_BODY),
             TextColor(if ok { FEEDBACK_OK } else { FEEDBACK_FAIL }),
@@ -218,7 +218,7 @@ fn spawn_row(parent: &mut ChildSpawnerCommands<'_>, row: &RowModel, page: Busine
                 TextColor(INK_MUTED),
             ));
             card.spawn((
-                BoundText(row.id.clone()),
+                BoundText(row.bound),
                 Text::new(row.value.clone()),
                 crate::ui::ledger::reading(T_VALUE),
                 TextColor(INK),
@@ -248,10 +248,11 @@ fn spawn_control(
     page: BusinessManagementPage,
 ) {
     let mut button = parent.spawn((
-        BoundButton(control.id.clone()),
+        BoundButton(control.bound),
         ControlPage(page),
         Button,
         Node {
+            display: control_display(control),
             min_width: Val::Px(44.0),
             height: Val::Px(34.0),
             padding: UiRect::horizontal(Val::Px(12.0)),
@@ -263,25 +264,51 @@ fn spawn_control(
         },
         selected_button_chrome(UiButtonVariant::Secondary, control.selected),
     ));
+    // The payload component is decided by the slot kind, never by the current
+    // occupant: `bind_panel` rewrites it in place and cannot add or remove it.
     match control.press {
-        ControlPress::Order(_) | ControlPress::Company(..) => {
+        ControlPress::Order(_)
+        | ControlPress::Company(..)
+        | ControlPress::Vacant(VacantSlot::Action) => {
             button.insert(Action(control.press));
         }
         ControlPress::Draft(step) => {
             button.insert(step);
         }
-        ControlPress::Person(person) => {
-            button.insert(crate::ui::encyclopedia::person_links::PersonLink(person));
+        ControlPress::DividendDraft(step) => {
+            button.insert(step);
+        }
+        ControlPress::Person(_) | ControlPress::Vacant(VacantSlot::Person) => {
+            button.insert(crate::ui::encyclopedia::person_links::PersonLink(
+                control_person(control),
+            ));
         }
     }
     button.with_child((
-        BoundText(control.id.clone()),
+        BoundText(control.bound),
         Text::new(control.label.clone()),
         UiButtonLabel,
         crate::ui::ledger::reading(T_BUTTON),
         TextColor(INK),
         Pickable::IGNORE,
     ));
+}
+
+/// Vacant fixed slots keep their entity but take no space.
+pub(super) fn control_display(control: &ControlModel) -> Display {
+    if control.visible() {
+        Display::Flex
+    } else {
+        Display::None
+    }
+}
+
+/// The `PersonLink` a worker slot carries; a vacant slot links nobody.
+pub(super) fn control_person(control: &ControlModel) -> PersonId {
+    match control.press {
+        ControlPress::Person(person) => person,
+        _ => PersonId::UNASSIGNED,
+    }
 }
 
 fn spawn_meter(parent: &mut ChildSpawnerCommands<'_>, meter: &MeterModel) {
@@ -306,7 +333,7 @@ fn spawn_meter(parent: &mut ChildSpawnerCommands<'_>, meter: &MeterModel) {
                 TextColor(INK_MUTED),
             ));
             card.spawn((
-                BoundText(meter.id.clone()),
+                BoundText(meter.bound),
                 Text::new(meter.summary.clone()),
                 crate::ui::ledger::reading(T_BODY),
                 TextColor(INK),
@@ -331,7 +358,7 @@ fn spawn_meter(parent: &mut ChildSpawnerCommands<'_>, meter: &MeterModel) {
                 {
                     track.spawn((
                         MeterFill {
-                            id: meter.id.clone(),
+                            id: meter.bound,
                             lane,
                         },
                         Node {

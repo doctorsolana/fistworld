@@ -46,9 +46,9 @@ pub use civic::{
     PROFIT_TAX_REVIEW_STEP_BPS,
 };
 pub use company::{
-    company_expansion_cash, CompanyAccount, CompanyBranchPolicies, CompanyBranchPolicy,
-    CompanyDayLedger, CompanyDecisionHistory, CompanyDecisionReason, CompanyDecisionRecord,
-    CompanyManagementPolicy, CompanyResourcePolicy,
+    company_expansion_cash, pro_rata_split, CompanyAccount, CompanyBranchPolicies,
+    CompanyBranchPolicy, CompanyDayLedger, CompanyDecisionHistory, CompanyDecisionReason,
+    CompanyDecisionRecord, CompanyDividendCapacity, CompanyManagementPolicy, CompanyResourcePolicy,
 };
 pub use demand::FundedDemandCurve;
 pub use goods::{Good, MarketTradeTier};

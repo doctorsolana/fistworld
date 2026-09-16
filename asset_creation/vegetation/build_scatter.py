@@ -1,23 +1,29 @@
-"""Build the small scatter props — rocks, bushes, flowers — to the vegetation contract.
+"""Build the small scatter props — rocks, bushes, flower patches — to the vegetation contract.
 
     blender --background --factory-startup --python asset_creation/vegetation/build_scatter.py -- \
         --kind flower --seed 1 --name FlowerA
 
-Measured from what ships today (see the table below), which is what set the budgets:
+Measured from what shipped before this file existed, which is what set the rock/bush budgets:
 
     rocks      34-86 tris,  0.4-0.6 m,  7,857 placed   -- already lean
     bushes     60-104 tris, 0.4-0.7 m,    869 placed   -- already lean
-    flowers   212-806 tris, 0.15-0.39 m, 4,166 placed  -- ABSURD
+    flowers   212-806 tris, 0.15-0.39 m, 4,166 placed  -- one 806-triangle sprig per hit
 
-The flowers are the reason this file exists. Spring_Flower_06 spends 806 triangles on a 37 cm
-object, more than the oak spends on a whole tree, and there are a thousand of them. Nothing that
-small can show 800 triangles of detail at any zoom this game has: a stem and a head is the entire
-readable content, and that is about twenty triangles.
+Flowers are a PATCH, not a sprig. The first rebuild here shrank the bought 806-triangle flower to a
+14-triangle stem-and-head, which was the right budget for the wrong object: a 20 cm sprig is
+sub-pixel at every playable zoom and sits inside the 0.6-1.0 m grass canopy, so the meadows read
+as flowerless. What the RTS camera can see is a CLUMP of colour ~2.5 m across standing just above
+the short grass. So `--kind flower` now builds `FlowerX_LOD0`, a leaf mound with 9-17 blossoms on
+stems 0.45-0.55 m tall (~300-450 tris, one per ground-cover cell inside a drift), and
+`FlowerX_LOD1`, a mound plus a handful of flat petal-colour discs (~50 tris) that reads as the same
+colour blob from 72 m out. Petal colour per variant: A white, B red, C orange, D yellow — the same
+`SEED % len(colours)` mapping the old sprigs used, so `flower_a` stays the white one.
 
 Rocks are convex hulls, which is exactly what a rock is -- an outer surface with no interior,
 lumpy, and free of the overlap problems that dog foliage.
 
 Everything ships COLOR_0 vertex colour and no textures, one material, one primitive per LOD.
+Validate with `inspect_vegetation_glb.py --class flower` (rocks: `rock`, bushes: `bush`).
 """
 
 import math
@@ -75,8 +81,11 @@ KINDS = {
     "bush": dict(shape="clump", size=(0.42, 0.72), squash=(0.62, 0.85), points=(11, 7),
                  lobes=3, crown_tris=(84, 26), voxel=(0.055, 0.10),
                  colours=[C_LEAF_BRIGHT, C_LEAF_OLIVE]),
-    # A stem and a head. That is all there is to see at 0.2 m.
-    "flower": dict(shape="flower", size=(0.16, 0.26), head=(0.045, 0.075),
+    # A flower PATCH: a low leaf mound and 9-17 blossoms on stems that clear the short grass.
+    # `radius` is the patch footprint radius, `height` the stem height band, `head` the petal
+    # radius. LOD1 keeps the mound and replaces the blossoms with a few flat colour discs.
+    "flower": dict(shape="flower_patch", radius=(1.05, 1.35), height=(0.42, 0.53),
+                   head=(0.13, 0.17), heads=(9, 17),
                    colours=[C_PETAL_GOLD, C_PETAL_WHITE, C_PETAL_RED, C_PETAL_ORANGE]),
 }
 
@@ -137,29 +146,141 @@ def hull(bm, centre, radius, squash, n_points, jitter):
     tmp.free()
 
 
-def flower(bm, height, head_r, jitter):
-    """A stem and a head — the entire readable content of a 20 cm object.
+C_LEAF_SHADE = srgb_to_linear("4F7A2E")    # mound underside, a step darker than the olive
+C_CENTRE_DARK = srgb_to_linear("5B3A10")   # blossom centre on coloured petals
+C_CENTRE_GOLD = srgb_to_linear("E2A93A")   # blossom centre on white petals
 
-    The stem LEANS. A vertical strip has almost no projected area under a top-down camera and
-    simply vanishes; the wheat field learned the same lesson the expensive way (PROP_PIPELINE §11).
+
+def face_up(bm, points, colours, rgb):
+    """One open face wound so its normal points +Z (Newell), recorded with its colour.
+
+    Petals are loose faces, and `recalc_face_normals` only knows what "outside" means for a
+    closed shell, so open geometry has to be wound by hand or half the petals face the soil.
     """
-    lean = Vector((jitter.uniform(-0.25, 0.25), jitter.uniform(-0.25, 0.25), 0.0)) * height
-    w = height * 0.028
-    steps = 3
-    prev = None
-    for s in range(steps + 1):
-        t = s / steps
-        centre = Vector((0, 0, height * t)) + lean * (t ** 1.6)
-        a = jitter.uniform(0, math.tau) if s == 0 else 0.0
-        ring = [bm.verts.new(centre + Vector((math.cos(a) * w, math.sin(a) * w, 0))),
-                bm.verts.new(centre + Vector((-math.cos(a) * w, -math.sin(a) * w, 0)))]
-        if prev:
-            bm.faces.new((prev[0], prev[1], ring[1], ring[0]))
-        prev = ring
-    top = Vector((0, 0, height)) + lean
-    head_start = len(bm.faces)
-    hull(bm, top, head_r, jitter.uniform(0.55, 0.85), 6, jitter)
-    return head_start
+    nz = 0.0
+    for i, p in enumerate(points):
+        q = points[(i + 1) % len(points)]
+        nz += (p.x - q.x) * (p.y + q.y)
+    verts = [bm.verts.new(p) for p in (points if nz > 0.0 else list(reversed(points)))]
+    bm.faces.new(verts)
+    colours.append(rgb)
+
+
+def closed_shell(bm, points, faces, colours, rgb):
+    """A small closed solid (stem, blossom centre) from explicit corner indices."""
+    verts = [bm.verts.new(p) for p in points]
+    made = []
+    for corners in faces:
+        made.append(bm.faces.new([verts[i] for i in corners]))
+        colours.append(rgb)
+    bmesh.ops.recalc_face_normals(bm, faces=made)
+
+
+def patch_specs(p, rng):
+    """Head positions and heights, drawn once so both LODs describe the SAME patch."""
+    radius = rng.uniform(*p["radius"])
+    count = rng.randint(*p["heads"])
+    heads = []
+    golden = 2.39996
+    for i in range(count):
+        # Sunflower spiral: even spread with no rows, thinned toward the rim so the
+        # outline is ragged rather than a coin.
+        r = radius * 0.80 * math.sqrt((i + 0.5) / count) * rng.uniform(0.86, 1.06)
+        a = i * golden + rng.uniform(-0.35, 0.35)
+        heads.append(dict(
+            base=Vector((math.cos(a) * r, math.sin(a) * r, 0.0)),
+            height=rng.uniform(*p["height"]),
+            lean=Vector((rng.uniform(-0.09, 0.09), rng.uniform(-0.09, 0.09), 0.0)),
+            petal=rng.uniform(*p["head"]),
+            yaw=rng.uniform(0.0, math.tau),
+        ))
+    return radius, heads
+
+
+def leaf_mound(bm, radius, n_points, colours, rng):
+    """The low leaf rosette that stands in for the grass cell the patch replaces."""
+    height = radius * 0.13
+    before = len(bm.faces)
+    hull(bm, Vector((0.0, 0.0, height)), radius, height / radius, n_points, rng)
+    bm.faces.ensure_lookup_table()
+    for i in range(before, len(bm.faces)):
+        z = sum(v.co.z for v in bm.faces[i].verts) / len(bm.faces[i].verts)
+        t = min(1.0, max(0.0, z / (2.0 * height)))
+        colours.append(tuple(C_LEAF_SHADE[c] * (1.0 - t) + C_LEAF_OLIVE[c] * t for c in range(3)))
+
+
+def blossom(bm, head, petal_r, yaw, tilt, colours, petal_rgb, centre_rgb):
+    """Five petals fanned around a small raised centre, the top face toward the camera."""
+    for k in range(5):
+        a = yaw + k * math.tau / 5.0
+        out = Vector((math.cos(a), math.sin(a), 0.0))
+        side = Vector((-out.y, out.x, 0.0))
+        # A gentle cup: the petal tip rises so the blossom keeps some silhouette side-on.
+        face_up(bm, [
+            head + out * petal_r * 0.10 + tilt * 0.10,
+            head + out * petal_r * 0.58 + side * petal_r * 0.40 + tilt * 0.58,
+            head + out * petal_r + Vector((0, 0, 0.012)) + tilt,
+            head + out * petal_r * 0.58 - side * petal_r * 0.40 + tilt * 0.58,
+        ], colours, petal_rgb)
+    c = petal_r * 0.26
+    closed_shell(bm, [
+        head + Vector((c, 0, 0.006)), head + Vector((-c * 0.5, c * 0.87, 0.006)),
+        head + Vector((-c * 0.5, -c * 0.87, 0.006)), head + Vector((0, 0, 0.03)),
+    ], [(0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)], colours, centre_rgb)
+
+
+def flower_patch(bm, p, level, rng, petal_rgb):
+    """A leaf mound with blossoms on stems (LOD0) or flat colour discs (LOD1).
+
+    Returns one colour per face in creation order. Stems LEAN a little: a vertical strip has
+    almost no projected area under a top-down camera (PROP_PIPELINE §11), and the blossoms are
+    what carry the read anyway, so the stems only have to be plausible from the side.
+    """
+    colours = []
+    radius, heads = patch_specs(p, rng)
+    centre_rgb = C_CENTRE_GOLD if petal_rgb == C_PETAL_WHITE else C_CENTRE_DARK
+    leaf_mound(bm, radius * 0.72, 14 if level == 0 else 8, colours, random.Random(SEED * 977))
+
+    if level == 0:
+        for h in heads:
+            top = h["base"] + h["lean"] * h["height"] + Vector((0, 0, h["height"]))
+            s = 0.016
+            closed_shell(bm, [
+                h["base"] + Vector((s, 0, 0)), h["base"] + Vector((-s * 0.5, s * 0.87, 0)),
+                h["base"] + Vector((-s * 0.5, -s * 0.87, 0)), top,
+            ], [(0, 2, 1), (0, 1, 3), (1, 2, 3), (2, 0, 3)], colours, C_STEM)
+            # One folded leaf half way up, pointing outward from the patch centre.
+            out = h["base"].normalized() if h["base"].length > 1e-3 else Vector((1, 0, 0))
+            knee = h["base"] + Vector((0, 0, h["height"] * 0.42))
+            face_up(bm, [
+                knee,
+                knee + out * 0.16 + Vector((-out.y, out.x, 0)) * 0.035 + Vector((0, 0, 0.05)),
+                knee + out * 0.24 + Vector((0, 0, 0.10)),
+                knee + out * 0.16 - Vector((-out.y, out.x, 0)) * 0.035 + Vector((0, 0, 0.05)),
+            ], colours, C_LEAF_OLIVE)
+            tilt = h["lean"] * 0.25
+            blossom(bm, top, h["petal"], h["yaw"], tilt, colours, petal_rgb, centre_rgb)
+    else:
+        # One flat square per blossom at head height: from 72 m out the patch is a colour blob
+        # and this is the cheapest geometry that occupies the same colour AREA as the petals
+        # (a first cut used six big hexagons and read as a brighter, larger object than LOD0).
+        # A touch darker than the petals, standing in for the centre and self-shadowing.
+        disc_rgb = tuple(c * 0.90 for c in petal_rgb)
+        for h in heads:
+            top = h["base"] + h["lean"] * h["height"] + Vector((0, 0, h["height"] * 0.97))
+            r = h["petal"] * 0.92
+            face_up(bm, [top + Vector((math.cos(a) * r, math.sin(a) * r, 0.0))
+                         for a in (k * math.tau / 4.0 + h["yaw"] for k in range(4))],
+                    colours, disc_rgb)
+        # A single central stem-coloured spike keeps the LOD1 height honest without the LOD0
+        # bounding box changing at the swap.
+        tallest = max(heads, key=lambda h: h["height"])
+        top = tallest["base"] + tallest["lean"] * tallest["height"] + Vector((0, 0, tallest["height"]))
+        closed_shell(bm, [
+            tallest["base"] + Vector((0.02, 0, 0)), tallest["base"] + Vector((-0.01, 0.017, 0)),
+            tallest["base"] + Vector((-0.01, -0.017, 0)), top + Vector((0, 0, 0.03)),
+        ], [(0, 2, 1), (0, 1, 3), (1, 2, 3), (2, 0, 3)], colours, C_STEM)
+    return colours
 
 
 def bed_to_ground(objs, sink):
@@ -190,31 +311,36 @@ def main():
     sc = work_scene()
     os.makedirs(OUT, exist_ok=True)
 
-    mat = bpy.data.materials.get("vegetation_opaque") or bpy.data.materials.new("vegetation_opaque")
+    # The kinds.rs registry test reads the GLB's default scene name and expects the file stem.
+    sc.name = NAME
+    mat_name = f"{NAME}Material"
+    mat = bpy.data.materials.get(mat_name) or bpy.data.materials.new(mat_name)
     mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
+    bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     bsdf.inputs["Metallic"].default_value = 0.0
     bsdf.inputs["Roughness"].default_value = 0.9
     if not any(n.type == "VERTEX_COLOR" for n in mat.node_tree.nodes):
         vc = mat.node_tree.nodes.new("ShaderNodeVertexColor")
         vc.layer_name = "Color"
         mat.node_tree.links.new(vc.outputs["Color"], bsdf.inputs["Base Color"])
-    mat.use_backface_culling = True
+    # Petals are single open faces, so the flower material is double-sided (like the fern
+    # ribbons); rocks and bushes are closed shells and stay single-sided.
+    mat.use_backface_culling = PROFILE["shape"] != "flower_patch"
 
     p = PROFILE
+    body = p["colours"][SEED % len(p["colours"])]
     built = []
     for level in (0, 1):
         rng.seed(SEED)                                  # both LODs are the SAME prop
         bm = bmesh.new()
-        head_start = None
+        face_colours = None
 
         if p["shape"] == "hull":
             size = rng.uniform(*p["size"])
             hull(bm, Vector((0, 0, size * rng.uniform(*p["squash"]) * 0.9)), size,
                  rng.uniform(*p["squash"]), p["points"][level], random.Random(SEED * 977))
-        elif p["shape"] == "flower":
-            head_start = flower(bm, rng.uniform(*p["size"]),
-                                rng.uniform(*p["head"]), random.Random(SEED * 977))
+        elif p["shape"] == "flower_patch":
+            face_colours = flower_patch(bm, p, level, random.Random(SEED * 4099), body)
         else:                                            # clump: a crown with no trunk
             size = rng.uniform(*p["size"])
             for k in range(p["lobes"]):
@@ -225,7 +351,10 @@ def main():
                      r, rng.uniform(*p["squash"]), p["points"][level],
                      random.Random(SEED * 977 + k))
 
-        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        if face_colours is None:
+            # Closed shells only: the flower patch has already wound its open petals by
+            # hand and recalculated each closed piece on its own.
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         me = bpy.data.meshes.new(f"{NAME}_LOD{level}")
         bm.to_mesh(me)
         bm.free()
@@ -264,14 +393,15 @@ def main():
         wind = me.uv_layers.get("Wind") or me.uv_layers.new(name="Wind")
         assert me.uv_layers.find("Wind") == 1, "Wind must be uv layer 1 -> TEXCOORD_1"
 
-        body = p["colours"][SEED % len(p["colours"])]
+        if face_colours is not None:
+            assert len(face_colours) == len(me.polygons), (
+                f"{len(face_colours)} face colours for {len(me.polygons)} faces")
         top = max((v.co.z for v in me.vertices), default=1.0)
         for poly in me.polygons:
-            petal = head_start is not None and poly.index >= head_start
             for li in poly.loop_indices:
                 z = me.vertices[me.loops[li].vertex_index].co.z
-                if head_start is not None:
-                    rgb = body if petal else C_STEM
+                if face_colours is not None:
+                    rgb = face_colours[poly.index]
                 else:
                     shade = 0.85 + 0.15 * min(1.0, max(0.0, z) / max(top, 1e-6))
                     rgb = tuple(min(1.0, c * shade) for c in body)

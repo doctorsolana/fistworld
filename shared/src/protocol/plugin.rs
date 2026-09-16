@@ -22,9 +22,9 @@ use crate::economy::{
     BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
     BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
     BusinessStaffingPolicy, BusinessSupplyPolicy, BusinessWagePolicy, CarriedLoad, CivicAccount,
-    CompanyAccount, CompanyBranchPolicies, CompanyDecisionHistory, CompanyManagementPolicy,
-    GoodsInventory, HouseholdEconomy, MootMarket, PorterCartState, SettlementEconomy,
-    TavernService, Wallet, WorkforceRequirements,
+    CompanyAccount, CompanyBranchPolicies, CompanyDecisionHistory, CompanyDividendCapacity,
+    CompanyManagementPolicy, GoodsInventory, HouseholdEconomy, MootMarket, PorterCartState,
+    SettlementEconomy, TavernService, Wallet, WorkforceRequirements,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -83,13 +83,20 @@ impl Plugin for ProtocolPlugin {
         app.component::<TradeRouteSchedule>().replicate();
         app.component::<TradeRouteHistory>().replicate();
         app.component::<crate::components::ShipId>().replicate();
-        app.component::<crate::components::ShipOrderId>().replicate();
-        app.component::<crate::components::SettlementPort>().replicate();
-        app.component::<crate::components::CompanyShip>().replicate();
-        app.component::<crate::components::CompanyFleet>().replicate();
-        app.component::<crate::components::SettlementPortSummary>().replicate();
-        app.component::<crate::components::ShipConstructionOrder>().replicate();
-        app.component::<crate::components::MaritimeTradeRoute>().replicate();
+        app.component::<crate::components::ShipOrderId>()
+            .replicate();
+        app.component::<crate::components::SettlementPort>()
+            .replicate();
+        app.component::<crate::components::CompanyShip>()
+            .replicate();
+        app.component::<crate::components::CompanyFleet>()
+            .replicate();
+        app.component::<crate::components::SettlementPortSummary>()
+            .replicate();
+        app.component::<crate::components::ShipConstructionOrder>()
+            .replicate();
+        app.component::<crate::components::MaritimeTradeRoute>()
+            .replicate();
         app.component::<crate::components::AboardShip>().replicate();
         app.component::<ResidentOf>().replicate();
         app.component::<BuildingOf>().replicate();
@@ -211,6 +218,11 @@ impl Plugin for ProtocolPlugin {
 
         // === TERRAIN DELTA CHUNKS ===
         app.component::<TerrainDeltaChunk>().replicate();
+
+        // === LATE ADDITIONS ===
+        // Registered after every pre-existing replicated component so none of
+        // their net-ids moved. Append further components below this line.
+        app.component::<CompanyDividendCapacity>().replicate();
 
         // === MESSAGES ===
         // Client -> Server

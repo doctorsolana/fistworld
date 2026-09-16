@@ -64,7 +64,14 @@ one persistent, always-simulating multiplayer world.
    import food (the north exports timber/stone; the desert south is the
    future home of exotics — glass, spice, salt): geography itself creates
    the trade gradients that caravans (§3) exist to arbitrage. The same function tints terrain, trees, far mesh, and minimap,
-   so what you see IS the rule. Weather rides on top as ONE deterministic
+   so what you see IS the rule. Vegetation follows the biomes the same way:
+   pines are the Forest, broadleaf copses the Meadows, skeleton trees the
+   Desert, and wild flower drifts grow wherever grass does — Meadows
+   everywhere, Forest glades, the highland moor, the snowlands' warm fringe,
+   never Desert, Mountains, cliffs or water (`shared::props::FlowerDrift`).
+   Those drifts are presentation only: they ride the client's ground-cover
+   stream, which the server never samples, so they are not part of the
+   recipe a server sends. Weather rides on top as ONE deterministic
    storm system: a concentrated ~2km squall (dark, near-opaque cloud disc,
    rain-dimmed ground beneath) whose center drifts with the wind and
    reflects off the map bounds, so a storm is always somewhere on the
@@ -996,6 +1003,16 @@ with a player who does nothing but found the hall and put people on the map.
     pave only inside it, so established plots never have to move. Roads loaded
     from an older save conservatively reserve only their existing width; they
     cannot retroactively claim ground that may already be occupied.
+
+    Every local road, whether surveyed by a builder, adopted from a permit
+    reservation or founded with the settlement, is built as nodes at most two
+    metres apart. A new connector joins the Hall network at one of those nodes,
+    so a house beside an existing street meets it close to its own frontage
+    (within a few metres in the village lab) rather than at a distant endpoint.
+    Regional road sections keep their sparser caravan-trace samples and are
+    not connector hosts. Unfinished and detached roads are never join
+    targets: a house completed while its neighbour's connector is still being
+    laid deliberately runs to the nearest completed street instead.
 24. Stone is now a real founding extraction trade rather than a future map label. A
     Stone Quarry permit is legal at Hamlet tier but autonomous investors strongly prefer
     high-quality rocky ground and respond to a pending Town Hall shortage. Two Quarriers

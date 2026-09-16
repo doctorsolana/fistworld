@@ -1,13 +1,16 @@
 //! Shared native text and hairline rules for company pages in the ledger.
-use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
+use super::binding::{bound_text, CompanyBound, CompanyView};
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
 use crate::ui::ledger;
 use crate::ui::styles::{INK, INK_MUTED, PLATE_RULE_SOFT};
 use bevy::prelude::*;
 use shared::economy::format_money;
 
-pub(super) fn detail_button<M: Component>(
+/// `marker` is the button's payload component, optionally paired with the
+/// [`CompanyBound`] key that rebinds that payload each snapshot.
+pub(super) fn detail_button(
     parent: &mut ChildSpawnerCommands<'_>,
-    marker: M,
+    marker: impl Bundle,
     label: &str,
 ) {
     parent
@@ -28,7 +31,13 @@ pub(super) fn detail_button<M: Component>(
         .with_child((UiButtonLabel, ledger::body_strong(label, 12.0)));
 }
 
-pub(super) fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) {
+/// A stat card whose value binds in place under `key`.
+pub(super) fn detail_stat(
+    parent: &mut ChildSpawnerCommands<'_>,
+    view: &CompanyView<'_>,
+    label: &str,
+    key: CompanyBound,
+) {
     parent
         .spawn((
             Node {
@@ -49,7 +58,7 @@ pub(super) fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, va
                 ledger::reading_strong(12.0),
                 TextColor(INK_MUTED),
             ));
-            stat.spawn(ledger::body_strong(value, 17.0));
+            bound_text(stat, view, key, ledger::reading_strong(17.0), INK).insert(Pickable::IGNORE);
         });
 }
 
@@ -75,7 +84,7 @@ pub(super) fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: 
                     ..default()
                 })
                 .with_children(|heading| {
-                    use crate::ui::hud::chrome::{HudIcon, icon};
+                    use crate::ui::hud::chrome::{icon, HudIcon};
                     let symbol = match title {
                         "Your Position" => HudIcon::Person,
                         "Today's Ledger" => HudIcon::Book,
@@ -95,46 +104,82 @@ pub(super) fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: 
         });
 }
 
-pub(super) fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) {
-    parent
-        .spawn((
+/// The label column of a [`key_value`] row: fixed copy or a bound key.
+#[derive(Clone, Copy)]
+pub(super) enum Label<'a> {
+    Fixed(&'a str),
+    Bound(CompanyBound),
+}
+
+/// A label / value row. `row_key` may bind the row's own `Display` so an
+/// optional row (INTERNAL FLOW MEMO) is always spawned and merely hidden.
+pub(super) fn key_value(
+    parent: &mut ChildSpawnerCommands<'_>,
+    view: &CompanyView<'_>,
+    row_key: Option<CompanyBound>,
+    label: Label<'_>,
+    value: CompanyBound,
+) {
+    let display = row_key
+        .and_then(|key| view.value(key))
+        .and_then(|value| value.display)
+        .unwrap_or_default();
+    let mut row = parent.spawn((
+        Node {
+            display,
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::FlexStart,
+            column_gap: Val::Px(14.0),
+            padding: UiRect::vertical(Val::Px(6.0)),
+            border: UiRect::bottom(Val::Px(1.0)),
+            ..default()
+        },
+        BorderColor::from(PLATE_RULE_SOFT),
+    ));
+    if let Some(key) = row_key {
+        row.insert(key);
+    }
+    row.with_children(|row| {
+        let label_node = Node {
+            width: Val::Px(112.0),
+            flex_shrink: 0.0,
+            ..default()
+        };
+        match label {
+            Label::Fixed(text) => {
+                row.spawn((
+                    Text::new(text),
+                    ledger::reading(14.0),
+                    TextColor(INK),
+                    label_node,
+                ));
+            }
+            Label::Bound(key) => {
+                bound_text(row, view, key, ledger::reading(14.0), INK).insert(label_node);
+            }
+        }
+        bound_text(row, view, value, ledger::reading_strong(14.0), INK).insert((
+            TextLayout::justify(Justify::Right),
             Node {
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::FlexStart,
-                column_gap: Val::Px(14.0),
-                padding: UiRect::vertical(Val::Px(6.0)),
-                border: UiRect::bottom(Val::Px(1.0)),
+                min_width: Val::Px(0.0),
+                flex_grow: 1.0,
                 ..default()
             },
-            BorderColor::from(PLATE_RULE_SOFT),
-        ))
-        .with_children(|row| {
-            row.spawn((
-                Text::new(label),
-                ledger::reading(14.0),
-                TextColor(INK),
-                Node {
-                    width: Val::Px(112.0),
-                    flex_shrink: 0.0,
-                    ..default()
-                },
-            ));
-            row.spawn((
-                Text::new(value),
-                ledger::reading_strong(14.0),
-                TextColor(INK),
-                TextLayout::justify(Justify::Right),
-                Node {
-                    min_width: Val::Px(0.0),
-                    flex_grow: 1.0,
-                    ..default()
-                },
-            ));
-        });
+        ));
+    });
 }
 
 pub(super) fn spawn_note(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
     parent.spawn((Text::new(text), ledger::reading(13.0), TextColor(INK_MUTED)));
+}
+
+/// A note whose text and visibility bind under `key` (empty text hides it).
+pub(super) fn bound_note(
+    parent: &mut ChildSpawnerCommands<'_>,
+    view: &CompanyView<'_>,
+    key: CompanyBound,
+) {
+    bound_text(parent, view, key, ledger::reading(13.0), INK_MUTED);
 }
 
 pub(super) fn spawn_empty(parent: &mut ChildSpawnerCommands<'_>, text: &str) {

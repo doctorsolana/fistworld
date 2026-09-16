@@ -158,6 +158,16 @@ pub(super) fn stage_capture_companies(commands: &mut Commands) {
             strategy: shared::economy::BusinessStrategy::Aggressive,
             ..default()
         },
+        // The finance pass's headroom snapshot: 315.00 coin distributable on
+        // day 12 after 18.50 coin of reserves; 250.00 coin was paid on day 11.
+        shared::economy::CompanyDividendCapacity {
+            day: 12,
+            distributable: 31_500,
+            protected_reserves: 1_850,
+            retained_profit: 46_200,
+            last_paid_day: 11,
+            last_paid: 25_000,
+        },
         first_branches,
         decisions,
     ));
@@ -197,6 +207,15 @@ pub(super) fn stage_capture_companies(commands: &mut Commands) {
             ..default()
         },
         CompanyManagementPolicy::default(),
+        // Reviewed, but wage arrears and reserves leave nothing distributable.
+        shared::economy::CompanyDividendCapacity {
+            day: 12,
+            distributable: 0,
+            protected_reserves: 2_450,
+            retained_profit: 0,
+            last_paid_day: u32::MAX,
+            last_paid: 0,
+        },
         CompanyBranchPolicies::default(),
         CompanyDecisionHistory::default(),
     ));
@@ -358,15 +377,28 @@ pub(super) fn stage_capture_companies(commands: &mut Commands) {
 
 /// Open the actual site-controls page over the staged company directory.
 /// This is a rendering fixture only; it does not invent a second UI model.
+///
+/// `FISTFORCE_CAPTURE_BUSINESS_PAGE=company` opens the COMPANY tab instead of
+/// the site tab; `FISTFORCE_CAPTURE_DIVIDEND_DRAFT=<pennies>` presets the
+/// dividend amount picker and `FISTFORCE_CAPTURE_BUSINESS_FEEDBACK=ok:<text>`
+/// (or `fail:<text>`) stages a server reply in the feedback line, so the
+/// deferred `HeroCompanyResult` presentation can be photographed offline.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn open_capture_business_management(
     heroes: Query<(&shared::components::Hero, &shared::components::PersonId)>,
     sites: Query<(Entity, &shared::components::BuildingId)>,
     mut target: ResMut<crate::ui::business_management::BusinessManagementTarget>,
     mut return_to: ResMut<crate::ui::business_management::BusinessManagementReturn>,
+    mut page: ResMut<crate::ui::business_management::BusinessManagementPage>,
+    mut dividend_draft: ResMut<crate::ui::business_management::DividendDraft>,
+    mut feedback: ResMut<crate::ui::business_management::BusinessFeedback>,
     mut encyclopedia: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
     mut opened: Local<bool>,
     mut commands: Commands,
 ) {
+    use crate::ui::business_management::{
+        BusinessFeedback, BusinessManagementPage, BusinessManagementSelection, DividendDraft,
+    };
     if *opened
         || !std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA").is_ok_and(|mode| mode == "business")
     {
@@ -381,8 +413,30 @@ pub(super) fn open_capture_business_management(
     commands.insert_resource(crate::camera_rts::LocalPeerId(
         shared::player::peer_id_to_u64(hero.owner),
     ));
-    target.0 = Some(crate::ui::business_management::BusinessManagementSelection::Site(site));
+    let selection = BusinessManagementSelection::Site(site);
+    target.0 = Some(selection);
     return_to.0 = Some(shared::components::CompanyId(501));
+    if std::env::var("FISTFORCE_CAPTURE_BUSINESS_PAGE").is_ok_and(|mode| mode == "company") {
+        *page = BusinessManagementPage::Company;
+    }
+    if let Some(pennies) = std::env::var("FISTFORCE_CAPTURE_DIVIDEND_DRAFT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+    {
+        *dividend_draft = DividendDraft {
+            company: Some(shared::components::CompanyId(501)),
+            pennies,
+            edited: true,
+        };
+    }
+    if let Ok(reply) = std::env::var("FISTFORCE_CAPTURE_BUSINESS_FEEDBACK") {
+        let (success, message) = match reply.split_once(':') {
+            Some(("fail", message)) => (false, message),
+            Some(("ok", message)) => (true, message),
+            _ => (true, reply.as_str()),
+        };
+        *feedback = BusinessFeedback::attributed(selection, *page, message, success);
+    }
     // The controls are an encyclopedia page: keep the window open so the page
     // host exists (closing it would clear the target again).
     encyclopedia.0 = true;

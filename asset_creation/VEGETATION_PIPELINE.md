@@ -202,12 +202,16 @@ bindless `StandardMaterial`, because bindless is device-dependent and shared han
 |---|---|---|---|
 | Trees, bushes, dead trees, stumps | opaque shaped geometry, 2 LODs | shared `vegetation_opaque` | one entity per plant, chunk-streamed |
 | Fern patches | opaque shaped ribbons, 2 LODs | shared `vegetation_opaque` | sparse props plus GPU-instanced close cover, no collider or shadow |
-| Grass, flowers and reeds | small clustered **patch** meshes | shared cutout material only where the silhouette genuinely requires it | one entity per **patch**, never per blade |
+| Flower patches | opaque leaf mound + 9–17 blossoms, 2 LODs (`build_scatter.py --kind flower`) | vertex colour, double-sided | GPU-instanced drift replacements in the close cover plus sparse Meadows props; no collider or shadow |
+| Grass and reeds | small clustered **patch** meshes | shared cutout material only where the silhouette genuinely requires it | one entity per **patch**, never per blade |
 
-The third family is where alpha is allowed and where the existing `AlphaMode::Mask(0.5)` cutout
+The last family is where alpha is allowed and where the existing `AlphaMode::Mask(0.5)` cutout
 path applies. The hard rule is the patch: an entity per blade is what made `Env_Grass_Tall_04`
 appear 38 578 times in the map, and the client's answer was to classify it `GroundDetail` and never
-spawn it at all. Patches make grass affordable enough to actually draw.
+spawn it at all. Patches make grass affordable enough to actually draw. Flowers obey the same
+rule from the other side: one 14-triangle sprig per hit was cheap and invisible; a ~300-triangle
+patch per ground-cover cell inside a drift is what the camera can actually see (see
+`VEGETATION_HANDOVER.md` §11 and `build_scatter.py`).
 
 `PropVisualRole` (`Landmark` / `Accent` / `GroundDetail`) already exists and already gates spawning.
 New vegetation must be classified deliberately when it is registered, not left to the default.
@@ -313,4 +317,6 @@ These are decisions the assets cannot make for themselves:
 - **Grass uses its own LOD and streaming layer.** It is generated only in a four-chunk ring,
   spawned under a per-frame budget, cleared around buildings/roads and culled at 240 m.
   Further range/density changes are placement and entity-budget decisions, not an asset
-  registration task.
+  registration task. Fern colonies and flower drifts ride that same GPU-instanced stream as
+  cell replacements (`shared::props::generate_chunk_grass_at_density`, client-only), so they
+  share its 256 m build radius and 700 m cutoff; only the sparse prop scatter reaches further.

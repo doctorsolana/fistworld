@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use noise::NoiseFn;
 
-use crate::terrain::{CHUNK_SIZE, ChunkCoord, TerrainGenerator};
+use crate::terrain::{ChunkCoord, TerrainGenerator, CHUNK_SIZE};
 
 use crate::props::{PropKind, PropRenderTuning};
 
@@ -286,7 +286,7 @@ struct ScatterHit {
 /// hand-authored maps (no recipe): scattering into a map somebody placed by
 /// hand would be vandalism, same rule as ground cover.
 fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<ScatterHit> {
-    use crate::worldgen::{SEA_LEVEL, WorldBiome, climate_at_with_phase, fbm, rand01, splitmix64};
+    use crate::worldgen::{climate_at_with_phase, fbm, rand01, splitmix64, WorldBiome, SEA_LEVEL};
 
     let map = terrain.loaded_map();
     let (Some(field), Some(generated)) =
@@ -308,10 +308,10 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
     let glade_mask = fbm(splitmix64(seed ^ 0x61A_DE) as u32, 2, 1.0 / 150.0);
     let copse_mask = fbm(splitmix64(seed ^ 0xC0F_5E) as u32, 2, 1.0 / 230.0);
     let species_mask = fbm(splitmix64(seed ^ 0xC010_7EED) as u32, 2, 1.0 / 85.0);
-    // Flowers gather in ~25 m drifts instead of a uniform sprinkle: dense
-    // inside a drift, rare outside - clustering is what makes them read as
-    // a PLACE (a flower patch you could walk to) rather than confetti.
-    let flower_mask = fbm(splitmix64(seed ^ 0xF7_0F) as u32, 2, 1.0 / 26.0);
+    // Flowers gather in ~25 m drifts instead of a uniform sprinkle; the same
+    // field drives the close ground-cover flower patches, so the lone
+    // long-range sprigs stand inside the drifts the player sees up close.
+    let flower_mask = FlowerDrift::new(seed);
 
     let pick =
         |pool: &[PropKind], r: f32| pool[((r * pool.len() as f32) as usize).min(pool.len() - 1)];
@@ -448,9 +448,7 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
                     WorldBiome::Meadows => {
                         // Open grass, flowers, trees gathered into copses.
                         let density = 0.02 + copse * 0.62;
-                        let flower_drift = (flower_mask.get([x as f64, z as f64]) as f32 * 0.5
-                            + 0.5)
-                            .clamp(0.0, 1.0);
+                        let flower_drift = flower_mask.sample(x, z);
                         let flower_chance = 0.02 + feature(flower_drift, 0.56, 0.78) * 0.30;
                         if roll < flower_chance {
                             (
@@ -671,6 +669,127 @@ impl MeadowDryness {
     }
 }
 
+/// The flower-drift field: the ONE shared truth for where wild flowers
+/// gather. The sparse prop scatter rolls its lone Meadows flower hits from it
+/// and the close ground-cover stream turns grass cells into flower patches
+/// inside the same drifts, so the two layers agree about where a drift is.
+///
+/// ~26 m features: dense inside a drift, rare outside. Clustering is what
+/// makes flowers read as a PLACE (a patch you could walk to) rather than
+/// confetti.
+pub struct FlowerDrift {
+    field: noise::Fbm<noise::Perlin>,
+    species_salt: u64,
+}
+
+/// Window of the raw drift value that counts as "inside a drift".
+///
+/// Measured on the shipped Showcase/91 world (`flower_drift_distribution`
+/// diagnostic, 24 m grid over dry land): the raw two-octave fbm huddles
+/// around 0.475 — 92% of land lies between 0.25 and 0.75 — so the old
+/// `0.56..0.78` band touched 36% of land but reached FULL strength on only
+/// 4%. `0.55..0.72` still leaves ~62% of land flower-free (the quiet ground
+/// between drifts) while ~9% of land sits in a full-strength drift.
+const FLOWER_DRIFT_BAND: (f32, f32) = (0.55, 0.72);
+/// Drift species are decided per ~40 m cell so a drift reads as mostly one
+/// colour with a few strays, rather than four-colour confetti.
+const FLOWER_SPECIES_CELL: f32 = 40.0;
+const FLOWER_DOMINANT_SHARE: f32 = 0.72;
+
+impl FlowerDrift {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            field: crate::worldgen::fbm(
+                crate::worldgen::splitmix64(seed ^ 0xF7_0F) as u32,
+                2,
+                1.0 / 26.0,
+            ),
+            species_salt: crate::worldgen::splitmix64(seed ^ 0xF10E_5EED),
+        }
+    }
+
+    /// Raw drift value, 0..1. A two-octave fbm huddles around 0.5, so
+    /// callers window it with [`Self::strength`] rather than using it as a
+    /// probability directly.
+    pub fn sample(&self, x: f32, z: f32) -> f32 {
+        use noise::NoiseFn;
+        (self.field.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0)
+    }
+
+    /// 0 outside a drift, 1 at its heart, smooth in between
+    /// ([`FLOWER_DRIFT_BAND`]).
+    pub fn strength(&self, x: f32, z: f32) -> f32 {
+        let (lo, hi) = FLOWER_DRIFT_BAND;
+        let t = ((self.sample(x, z) - lo) / (hi - lo)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    /// The flower variant for a patch at `(x, z)` given a 0..1 roll: the
+    /// drift's dominant colour most of the time, one of the others otherwise.
+    pub fn kind(&self, x: f32, z: f32, roll: f32) -> PropKind {
+        let cx = (x / FLOWER_SPECIES_CELL).floor() as i64;
+        let cz = (z / FLOWER_SPECIES_CELL).floor() as i64;
+        let key = ((cz as u32 as u64) << 32) | (cx as u32 as u64);
+        let count = SCATTER_FLOWERS.len();
+        let dominant =
+            (crate::worldgen::splitmix64(key ^ self.species_salt) % count as u64) as usize;
+        let index = if roll < FLOWER_DOMINANT_SHARE {
+            dominant
+        } else {
+            let stray = ((roll - FLOWER_DOMINANT_SHARE) / (1.0 - FLOWER_DOMINANT_SHARE)
+                * (count - 1) as f32) as usize;
+            (dominant + 1 + stray.min(count - 2)) % count
+        };
+        SCATTER_FLOWERS[index]
+    }
+}
+
+/// Share of accepted ground-cover cells that become flower patches: this
+/// much everywhere flowers may grow (a lone patch here and there) plus this
+/// much more at the heart of a drift. At the measured ~220 accepted cells per
+/// temperate chunk a full drift carries ~100 patches, roughly 11% of the
+/// ground under colour — a flower meadow, not a lawn.
+const FLOWER_SHARE_OUTSIDE: f32 = 0.02;
+const FLOWER_SHARE_DRIFT: f32 = 0.43;
+/// Grass inside a drift steps back so the 0.55 m patches are not buried in
+/// the 0.6-1.0 m canopy: with one tuft in three tall this removes ~44% of the
+/// grass at a drift's heart, the tall tufts first.
+const FLOWER_THIN_SHORT: f32 = 0.30;
+const FLOWER_THIN_TALL: f32 = 0.70;
+/// Own rng stream for every flower decision, so adding or retuning flowers
+/// never moves a blade of grass or a fern (`adding_flowers_keeps_existing_grass_and_fern_positions`).
+const FLOWER_STREAM_SALT: u64 = 0xF10E_D21F_7000_0001;
+
+/// How much of a biome's accepted ground cover may carry flowers, 0..1.
+///
+/// Meadows always; forests only in their glades (the glade mask is the same
+/// one the tree scatter clears, so flowers stand where the pines do not);
+/// highland moor but not the steep highland faces; the snowlands' warm
+/// fringe only. Never desert, mountains, cliffs or water — the caller has
+/// already excluded water and slopes above [`GRASS_MAX_SLOPE`].
+fn flower_biome_gate(
+    biome: crate::worldgen::WorldBiome,
+    slope: f32,
+    glade: impl FnOnce() -> f32,
+    snow: impl FnOnce() -> f32,
+) -> f32 {
+    use crate::worldgen::WorldBiome;
+    match biome {
+        WorldBiome::Meadows => 1.0,
+        WorldBiome::Forest => {
+            let glade = glade();
+            if glade > 0.10 {
+                0.5 + 0.5 * glade
+            } else {
+                0.0
+            }
+        }
+        WorldBiome::Highlands if slope <= 0.62 => 0.7,
+        WorldBiome::Snowlands if snow() < 0.75 => 0.4,
+        _ => 0.0,
+    }
+}
+
 pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<PropSpawn> {
     generate_chunk_grass_at_density(terrain, chunk, 1.0)
 }
@@ -681,10 +800,35 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
 /// the authored 1x appearance. The client capture/performance harness can use
 /// this variant to stress the renderer without committing an artificially
 /// dense world or changing any simulation data.
+///
+/// **Presentation-only.** The one caller of this generator is the client's
+/// GPU-instanced ground-cover renderer (`client/src/props/ground_cover_chunked.rs`);
+/// the server never calls it, so nothing here is part of the world recipe:
+/// changing what grows in this stream — grass, ferns, the flower drifts —
+/// alters no survey, collider or replicated state and needs no
+/// `WORLDGEN_VERSION` bump. The sparse prop scatter above IS recipe.
 pub fn generate_chunk_grass_at_density(
     terrain: &TerrainGenerator,
     chunk: ChunkCoord,
     multiplier: f32,
+) -> Vec<PropSpawn> {
+    let drifts = terrain
+        .loaded_map()
+        .definition
+        .generated
+        .as_ref()
+        .map(|generated| FlowerDrift::new(generated.seed));
+    ground_cover_cells(terrain, chunk, multiplier, drifts.as_ref())
+}
+
+/// The ground-cover cells of one chunk. With `drifts`, accepted cells inside
+/// flower drifts become flower patches and the grass around them thins; the
+/// grass and fern cells that remain are exactly the ones generated without.
+fn ground_cover_cells(
+    terrain: &TerrainGenerator,
+    chunk: ChunkCoord,
+    multiplier: f32,
+    drifts: Option<&FlowerDrift>,
 ) -> Vec<PropSpawn> {
     let mut out = Vec::new();
     let map = terrain.loaded_map();
@@ -721,6 +865,23 @@ pub fn generate_chunk_grass_at_density(
     let fern_b_path = PropKind::FernPatchB.scene_path().to_string();
 
     let dryness = MeadowDryness::new(seed);
+    // Flower gating reads the same glade mask the tree scatter clears and the
+    // same climate the biome classifier used; both are sampled only for the
+    // biomes whose gate depends on them.
+    let glade_mask = crate::worldgen::fbm(
+        crate::worldgen::splitmix64(seed ^ 0x61A_DE) as u32,
+        2,
+        1.0 / 150.0,
+    );
+    let half_extent = generated.half_extent;
+    let climate_phase = crate::worldgen::climate_phase(seed);
+    let flower_tuning = default_render_tuning(PropKind::FlowerA);
+    let flower_paths: [String; 4] = [
+        PropKind::FlowerA.scene_path().to_string(),
+        PropKind::FlowerB.scene_path().to_string(),
+        PropKind::FlowerC.scene_path().to_string(),
+        PropKind::FlowerD.scene_path().to_string(),
+    ];
 
     // Grass is cleared only to the waterline, not to the prop clearance: a
     // riverbank with grass running down to the water is the point, and a bald
@@ -780,6 +941,67 @@ pub fn generate_chunk_grass_at_density(
             }
 
             let biome = field.biome(x, z, height, slope);
+
+            // Flower drifts. Every decision here rolls its OWN stream, so the
+            // grass and fern draws below are exactly what they were before
+            // flowers existed: a cell either becomes a flower patch, is
+            // thinned away, or is left precisely as the base generator made it.
+            let mut flower_rng = None;
+            let mut drift_strength = 0.0;
+            let mut flower_gate = 0.0;
+            if let Some(drifts) = drifts {
+                flower_gate = flower_biome_gate(
+                    biome,
+                    slope,
+                    || {
+                        use noise::NoiseFn;
+                        let raw = (glade_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5)
+                            .clamp(0.0, 1.0);
+                        let t = ((raw - 0.60) / 0.26).clamp(0.0, 1.0);
+                        t * t * (3.0 - 2.0 * t)
+                    },
+                    || {
+                        crate::worldgen::climate_at_with_phase(
+                            climate_phase,
+                            x,
+                            z,
+                            height,
+                            half_extent,
+                        )
+                        .snow
+                    },
+                );
+                if flower_gate > 0.0 {
+                    let mut stream = crate::worldgen::splitmix64(
+                        crate::worldgen::splitmix64(key ^ FLOWER_STREAM_SALT) ^ seed,
+                    );
+                    drift_strength = drifts.strength(x, z);
+                    let share =
+                        flower_gate * (FLOWER_SHARE_OUTSIDE + drift_strength * FLOWER_SHARE_DRIFT);
+                    if crate::worldgen::rand01(&mut stream) < share {
+                        let kind = drifts.kind(x, z, crate::worldgen::rand01(&mut stream));
+                        let path = &flower_paths[SCATTER_FLOWERS
+                            .iter()
+                            .position(|candidate| *candidate == kind)
+                            .unwrap_or(0)];
+                        out.push(PropSpawn {
+                            kind: Some(kind),
+                            scene_path: path.clone(),
+                            chunk,
+                            position: Vec3::new(x, height, z),
+                            rotation: Quat::from_rotation_y(
+                                crate::worldgen::rand01(&mut stream) * std::f32::consts::TAU,
+                            ),
+                            scale: 0.9 + crate::worldgen::rand01(&mut stream) * 0.4,
+                            render_tuning: flower_tuning,
+                        });
+                        grown += 1;
+                        continue;
+                    }
+                    flower_rng = Some(stream);
+                }
+            }
+
             // A close forest view needs actual understorey, but this stream is
             // already the expensive dense layer. Replace about one grass
             // patch in eight instead of adding another entity. The sparse prop
@@ -789,6 +1011,19 @@ pub fn generate_chunk_grass_at_density(
             let fern = biome == crate::worldgen::WorldBiome::Forest
                 && crate::worldgen::rand01(&mut rng) < 0.12;
             let tall = !fern && crate::worldgen::rand01(&mut rng) < 0.34;
+
+            // Inside a drift the grass steps back (tall tufts first) so the
+            // patches stand clear of the canopy instead of hiding in it.
+            if let Some(stream) = flower_rng.as_mut() {
+                let thin = if tall {
+                    FLOWER_THIN_TALL
+                } else {
+                    FLOWER_THIN_SHORT
+                };
+                if !fern && crate::worldgen::rand01(stream) < flower_gate * drift_strength * thin {
+                    continue;
+                }
+            }
             let (kind, path, tuning, scale) = if fern {
                 let kind = if crate::worldgen::rand01(&mut rng) < 0.5 {
                     PropKind::FernPatchA
@@ -1067,10 +1302,10 @@ mod tests {
         let terrain = WorldTerrain::default();
         let map = terrain.generator.loaded_map();
         let field = map.biome_field.as_deref().expect("generated map");
-        let mut want = vec!["Forest", "Meadows", "Highlands"];
+        let mut want = vec!["Forest", "Meadows", "Highlands", "Snowlands"];
         let mut x = -3000.0f32;
         while x < 3000.0 && !want.is_empty() {
-            let mut z = -1500.0f32;
+            let mut z = -3200.0f32;
             while z < 1500.0 && !want.is_empty() {
                 let h = terrain.get_height(x, z);
                 if h > 3.0 {
@@ -1101,6 +1336,128 @@ mod tests {
         }
         if !want.is_empty() {
             println!("not found: {want:?}");
+        }
+    }
+
+    /// Where the flower-drift mask actually sits, and how much of each biome
+    /// the flower gates admit.
+    ///
+    /// The drift band is a `feature(raw, lo, hi)` window over a two-octave
+    /// fbm remapped to 0..1, and such a field huddles around 0.5 (see
+    /// [`MeadowDryness`]). Before choosing a band or a replacement share this
+    /// prints the raw histogram over dry land, the fraction of land inside the
+    /// current and candidate bands, and the land share each biome contributes
+    /// after the slope / glade / snow gates the drift generator applies.
+    #[test]
+    #[ignore = "diagnostic: cargo test -p shared -- --ignored --nocapture flower_drift_distribution"]
+    fn flower_drift_distribution() {
+        use crate::worldgen::{climate_at_with_phase, fbm, splitmix64, WorldBiome};
+        use noise::NoiseFn;
+        use std::collections::HashMap;
+        let terrain = WorldTerrain::default();
+        let map = terrain.generator.loaded_map();
+        let field = map.biome_field.as_deref().expect("generated map");
+        let generated = map.definition.generated.as_ref().expect("recipe");
+        let seed = generated.seed;
+        let half = generated.half_extent;
+        let phase = crate::worldgen::climate_phase(seed);
+        let drift = FlowerDrift::new(seed);
+        let glade_mask = fbm(splitmix64(seed ^ 0x61A_DE) as u32, 2, 1.0 / 150.0);
+        let feature = |value: f32, lo: f32, hi: f32| {
+            let t = ((value - lo) / (hi - lo)).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+
+        let mut histogram = [0u32; 20];
+        let mut land = 0u32;
+        let mut in_band = HashMap::<&str, u32>::new();
+        let mut biome_land = HashMap::<WorldBiome, u32>::new();
+        let mut biome_open = HashMap::<WorldBiome, u32>::new();
+        let mut chance_sum = 0.0f64;
+        const STEP: f32 = 24.0;
+        let mut z = -half + STEP;
+        while z < half - STEP {
+            let mut x = -half + STEP;
+            while x < half - STEP {
+                let h = terrain.get_height(x, z);
+                if h > crate::worldgen::SEA_LEVEL + 1.1 {
+                    const SLOPE_STEP: f32 = 2.0;
+                    let dx = terrain.get_height(x + SLOPE_STEP, z) - h;
+                    let dz = terrain.get_height(x, z + SLOPE_STEP) - h;
+                    let slope = dx.abs().max(dz.abs()) / SLOPE_STEP;
+                    let biome = field.biome(x, z, h, slope);
+                    let raw = drift.sample(x, z);
+                    land += 1;
+                    histogram[((raw * 20.0) as usize).min(19)] += 1;
+                    for (label, lo, hi) in [
+                        ("0.56..0.78 (old)", 0.56, 0.78),
+                        ("0.50..0.70", 0.50, 0.70),
+                        ("0.52..0.68", 0.52, 0.68),
+                        ("0.55..0.70", 0.55, 0.70),
+                    ] {
+                        let f = feature(raw, lo, hi);
+                        if f > 0.0 {
+                            *in_band.entry(label).or_default() += 1;
+                        }
+                        if f >= 1.0 {
+                            *in_band
+                                .entry(Box::leak(format!("{label} =1").into_boxed_str()))
+                                .or_default() += 1;
+                        }
+                    }
+                    chance_sum += (0.02 + feature(raw, 0.56, 0.78) * 0.30) as f64;
+                    *biome_land.entry(biome).or_default() += 1;
+                    let climate = climate_at_with_phase(phase, x, z, h, half);
+                    let glade_raw =
+                        (glade_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+                    let open = match biome {
+                        WorldBiome::Meadows => true,
+                        WorldBiome::Forest => feature(glade_raw, 0.60, 0.86) > 0.25,
+                        WorldBiome::Highlands => slope <= 0.62,
+                        WorldBiome::Snowlands => climate.snow < 0.75,
+                        _ => false,
+                    };
+                    if open && slope <= GRASS_MAX_SLOPE {
+                        *biome_open.entry(biome).or_default() += 1;
+                    }
+                }
+                x += STEP;
+            }
+            z += STEP;
+        }
+        println!("\nflower_drift raw histogram over {land} land samples ({STEP} m grid):");
+        for (i, count) in histogram.iter().enumerate() {
+            println!(
+                "  {:.2}..{:.2} {:>6.2}% {}",
+                i as f32 / 20.0,
+                (i + 1) as f32 / 20.0,
+                *count as f32 / land as f32 * 100.0,
+                "#".repeat((*count as f32 / land as f32 * 200.0) as usize)
+            );
+        }
+        let mut bands: Vec<_> = in_band.iter().collect();
+        bands.sort();
+        for (label, count) in bands {
+            println!(
+                "  band {label:<22} {:>6.2}% of land",
+                *count as f32 / land as f32 * 100.0
+            );
+        }
+        println!(
+            "  mean old Meadows flower_chance over land: {:.4} (1 hit per {:.0} m2 at 7 m cells x0.8 keep)",
+            chance_sum / land as f64,
+            49.0 / (chance_sum / land as f64 * 0.8)
+        );
+        let mut biomes: Vec<_> = biome_land.iter().collect();
+        biomes.sort_by_key(|(b, _)| format!("{b:?}"));
+        for (biome, count) in biomes {
+            let open = *biome_open.get(biome).unwrap_or(&0);
+            println!(
+                "  {:<10} {:>6.2}% of land, flower-gated open ground {:>6.2}% of land",
+                format!("{biome:?}"),
+                *count as f32 / land as f32 * 100.0,
+                open as f32 / land as f32 * 100.0
+            );
         }
     }
 
@@ -1305,6 +1662,221 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert!(stressed.len() > normal.len() * 2);
+    }
+
+    /// Chunks around the measured biome probes (`find_biome_spots`), bounded:
+    /// a 5x5 ring per probe rather than the 8 km grid.
+    fn probe_chunks(centre: Vec3, radius: i32) -> Vec<ChunkCoord> {
+        let centre = ChunkCoord::from_world_pos(centre);
+        (-radius..=radius)
+            .flat_map(|dz| {
+                (-radius..=radius).map(move |dx| ChunkCoord::new(centre.x + dx, centre.z + dz))
+            })
+            .collect()
+    }
+
+    fn is_flower(kind: Option<PropKind>) -> bool {
+        kind.is_some_and(|kind| SCATTER_FLOWERS.contains(&kind))
+    }
+
+    /// Exact identity of a ground-cover cell as the renderer sees it.
+    fn cover_identity(spawn: &PropSpawn) -> (Option<PropKind>, u32, u32, u32, [u32; 4]) {
+        (
+            spawn.kind,
+            spawn.position.x.to_bits(),
+            spawn.position.z.to_bits(),
+            spawn.scale.to_bits(),
+            spawn.rotation.to_array().map(f32::to_bits),
+        )
+    }
+
+    /// Flowers ride the grass stream as REPLACEMENTS: every grass and fern
+    /// cell that survives is bit-identical to the cell the base generator
+    /// made before flowers existed, and the base generator itself is pinned
+    /// by a golden hash so a retune of the flower share can never quietly
+    /// move the meadow underneath it.
+    #[test]
+    fn adding_flowers_keeps_existing_grass_and_fern_positions() {
+        use std::collections::HashSet;
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let terrain = WorldTerrain::default();
+        let mut chunks = probe_chunks(Vec3::new(-2920.0, 0.0, -680.0), 2);
+        chunks.extend(probe_chunks(Vec3::new(-3000.0, 0.0, -240.0), 1));
+        chunks.extend(probe_chunks(Vec3::new(-2880.0, 0.0, -840.0), 1));
+
+        let mut hasher = DefaultHasher::new();
+        let mut base = HashSet::new();
+        let mut with_flowers = Vec::new();
+        for chunk in &chunks {
+            for spawn in ground_cover_cells(&terrain.generator, *chunk, 1.0, None) {
+                assert!(
+                    !is_flower(spawn.kind),
+                    "the base stream never grows flowers"
+                );
+                let identity = cover_identity(&spawn);
+                identity.hash(&mut hasher);
+                base.insert(identity);
+            }
+            with_flowers.extend(generate_chunk_grass(&terrain.generator, *chunk));
+        }
+        // Grass/fern cells of the 43 probe chunks as generated before flower
+        // drifts were added (Showcase/91). Regenerate ONLY for a deliberate
+        // change to the grass generator itself, never for a flower retune.
+        const GOLDEN_BASE_COVER: u64 = 0x9de0_b5e0_75ef_f6b8;
+        assert_eq!(
+            hasher.finish(),
+            GOLDEN_BASE_COVER,
+            "the base grass/fern generator changed (new hash {:#x})",
+            hasher.finish()
+        );
+
+        let flowers = with_flowers
+            .iter()
+            .filter(|spawn| is_flower(spawn.kind))
+            .count();
+        assert!(
+            flowers > 100,
+            "expected flower patches in the meadow probe, got {flowers}"
+        );
+        assert!(
+            with_flowers.len() < base.len(),
+            "flowers replace cells, they never add"
+        );
+        for spawn in with_flowers.iter().filter(|spawn| !is_flower(spawn.kind)) {
+            assert!(
+                base.contains(&cover_identity(spawn)),
+                "{:?} at {:?} is not a cell the base generator made",
+                spawn.kind,
+                spawn.position
+            );
+        }
+    }
+
+    /// Flower patches appear inside drifts in every grassy biome and nowhere
+    /// they must not: never desert, mountains, water or steep ground, and
+    /// dense at a drift's heart while the quiet ground between drifts stays
+    /// nearly bare of them.
+    #[test]
+    fn flower_patches_replace_grass_inside_drifts_in_every_grassy_biome() {
+        use crate::worldgen::WorldBiome;
+        use std::collections::HashMap;
+        let terrain = WorldTerrain::default();
+        let map = terrain.generator.loaded_map();
+        let field = map.biome_field.as_deref().expect("generated map");
+        let generated = map.definition.generated.as_ref().expect("recipe");
+        let drifts = FlowerDrift::new(generated.seed);
+
+        let mut chunks = Vec::new();
+        for (probe, radius) in [
+            (Vec3::new(-2920.0, 0.0, -680.0), 2),
+            (Vec3::new(-3000.0, 0.0, -240.0), 3),
+            (Vec3::new(-2880.0, 0.0, -840.0), 2),
+            (Vec3::new(-1600.0, 0.0, -2720.0), 2),
+        ] {
+            chunks.extend(probe_chunks(probe, radius));
+        }
+        // Desert chunks are rare and far south: pick them by chunk centre, as
+        // tree_species_follow_the_biome does.
+        let mut desert = 0;
+        'rows: for cz in (36..64).step_by(2) {
+            for cx in (-64..64).step_by(3) {
+                let (x, z) = (
+                    (cx as f32 + 0.5) * CHUNK_SIZE,
+                    (cz as f32 + 0.5) * CHUNK_SIZE,
+                );
+                let h = terrain.get_height(x, z);
+                if h > 3.0 && field.biome(x, z, h, 0.0) == WorldBiome::Desert {
+                    chunks.push(ChunkCoord::new(cx, cz));
+                    desert += 1;
+                    if desert >= 12 {
+                        break 'rows;
+                    }
+                }
+            }
+        }
+        assert!(desert >= 6, "could not find desert chunks to sample");
+
+        let mut cover: HashMap<WorldBiome, (usize, usize)> = HashMap::new();
+        let mut meadow_heart = (0usize, 0usize);
+        let mut meadow_quiet = (0usize, 0usize);
+        for chunk in chunks {
+            for spawn in generate_chunk_grass(&terrain.generator, chunk) {
+                let (x, z) = (spawn.position.x, spawn.position.z);
+                let h = terrain.get_height(x, z);
+                // Re-derive the biome EXACTLY as the generator did (same
+                // forward-difference slope) so border cells cannot
+                // cross-classify.
+                const STEP: f32 = 2.0;
+                let dx = terrain.get_height(x + STEP, z) - h;
+                let dz = terrain.get_height(x, z + STEP) - h;
+                let slope = dx.abs().max(dz.abs()) / STEP;
+                let biome = field.biome(x, z, h, slope);
+                let flower = is_flower(spawn.kind);
+                let entry = cover.entry(biome).or_default();
+                entry.0 += 1;
+                if flower {
+                    entry.1 += 1;
+                    assert!(
+                        !matches!(
+                            biome,
+                            WorldBiome::Desert | WorldBiome::Mountains | WorldBiome::Ocean
+                        ),
+                        "flower patch in {biome:?} at ({x:.1}, {z:.1})"
+                    );
+                    assert!(slope <= 0.62, "flower patch on a {slope:.2} slope");
+                    assert!((0.9..=1.3).contains(&spawn.scale));
+                }
+                if biome == WorldBiome::Meadows {
+                    let strength = drifts.strength(x, z);
+                    if strength >= 0.9 {
+                        meadow_heart.0 += 1;
+                        meadow_heart.1 += flower as usize;
+                    } else if strength == 0.0 {
+                        meadow_quiet.0 += 1;
+                        meadow_quiet.1 += flower as usize;
+                    }
+                }
+            }
+        }
+        let share = |biome: WorldBiome| {
+            let (total, flowers) = cover.get(&biome).copied().unwrap_or((0, 0));
+            (total, flowers, flowers as f32 / total.max(1) as f32)
+        };
+        for biome in [
+            WorldBiome::Meadows,
+            WorldBiome::Forest,
+            WorldBiome::Highlands,
+            WorldBiome::Snowlands,
+        ] {
+            let (total, flowers, _) = share(biome);
+            assert!(total > 100, "{biome:?} probe grew almost no cover: {total}");
+            assert!(flowers > 0, "{biome:?} has no flower patches: {cover:?}");
+        }
+        let (_, _, meadow) = share(WorldBiome::Meadows);
+        assert!(
+            (0.04..0.25).contains(&meadow),
+            "meadow flower share {meadow:.3}: {cover:?}"
+        );
+        let (_, desert_flowers, _) = share(WorldBiome::Desert);
+        assert_eq!(desert_flowers, 0);
+        // Drift structure: dense at the heart, near-bare between drifts. The
+        // heart share reads BELOW the nominal replacement share because the
+        // grass around each patch is thinned too, and thinned cells are not
+        // counted here.
+        assert!(
+            meadow_heart.0 > 50,
+            "no drift hearts sampled: {meadow_heart:?}"
+        );
+        let heart = meadow_heart.1 as f32 / meadow_heart.0 as f32;
+        let quiet = meadow_quiet.1 as f32 / meadow_quiet.0.max(1) as f32;
+        assert!(
+            heart > 0.35,
+            "drift hearts are thin: {heart:.3} ({meadow_heart:?})"
+        );
+        assert!(
+            quiet < 0.05,
+            "quiet ground is not quiet: {quiet:.3} ({meadow_quiet:?})"
+        );
     }
 
     #[test]

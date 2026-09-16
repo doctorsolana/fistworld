@@ -71,7 +71,15 @@ impl Plugin for EncyclopediaPlugin {
         app.init_resource::<companies::TradeRouteEditorState>();
         app.init_resource::<companies::MaritimeRequests>();
         app.init_resource::<companies::TradeRouteRequests>();
-        app.add_systems(Update,(companies::receive_maritime_results,companies::receive_trade_route_results).chain().run_if(in_state(GameState::Playing)));
+        app.add_systems(
+            Update,
+            (
+                companies::receive_maritime_results,
+                companies::receive_trade_route_results,
+            )
+                .chain()
+                .run_if(in_state(GameState::Playing)),
+        );
         app.init_resource::<ClickGuard>();
         app.add_systems(
             Update,
@@ -112,6 +120,9 @@ impl Plugin for EncyclopediaPlugin {
             companies::refresh_company_directory
                 .run_if(encyclopedia_open)
                 .run_if(companies::company_tab_active)
+                // A page over the tab hides everything the snapshot feeds;
+                // the throttle makes the first visible frame snapshot again.
+                .run_if(companies_body_visible)
                 .run_if(in_state(GameState::Playing)),
         );
         app.add_systems(
@@ -229,13 +240,35 @@ pub struct EncyclopediaPageBack;
 #[derive(Component)]
 pub struct EncyclopediaPageBackLabel;
 
-fn page_is_open(
-    history: &crate::ui::history::HistoryPanelTarget,
-    business: &crate::ui::business_management::BusinessManagementTarget,
-    founding: &crate::ui::company_founding::FoundingPageOpen,
-    market: &crate::ui::market::MarketPageTarget,
+/// True while a page (ledger, company/site settings, founding, market)
+/// covers the tab bodies. This resource state is the authority; the
+/// `TabBody` display it drives is written later in the frame.
+pub(super) fn page_is_open(
+    history: Option<&crate::ui::history::HistoryPanelTarget>,
+    business: Option<&crate::ui::business_management::BusinessManagementTarget>,
+    founding: Option<&crate::ui::company_founding::FoundingPageOpen>,
+    market: Option<&crate::ui::market::MarketPageTarget>,
 ) -> bool {
-    history.0.is_some() || business.0.is_some() || founding.0 || market.0.is_some()
+    history.is_some_and(|history| history.0.is_some())
+        || business.is_some_and(|business| business.0.is_some())
+        || founding.is_some_and(|founding| founding.0)
+        || market.is_some_and(|market| market.0.is_some())
+}
+
+/// Run condition: the Companies tab body is not covered by a page, so its
+/// snapshot and bind work can be seen.
+pub(super) fn companies_body_visible(
+    history: Option<Res<crate::ui::history::HistoryPanelTarget>>,
+    business: Option<Res<crate::ui::business_management::BusinessManagementTarget>>,
+    founding: Option<Res<crate::ui::company_founding::FoundingPageOpen>>,
+    market: Option<Res<crate::ui::market::MarketPageTarget>>,
+) -> bool {
+    !page_is_open(
+        history.as_deref(),
+        business.as_deref(),
+        founding.as_deref(),
+        market.as_deref(),
+    )
 }
 
 /// Show the page host (and hide every tab body) while a page is open, and
@@ -252,7 +285,12 @@ fn sync_page_host(
     mut bodies: Query<(&TabBody, &mut Node), Without<EncyclopediaPageHost>>,
     mut labels: Query<&mut Text, With<EncyclopediaPageBackLabel>>,
 ) {
-    let open = page_is_open(&history, &business, &founding, &market);
+    let open = page_is_open(
+        Some(&history),
+        Some(&business),
+        Some(&founding),
+        Some(&market),
+    );
     for mut node in hosts.iter_mut() {
         let display = if open { Display::Flex } else { Display::None };
         if node.display != display {
@@ -835,18 +873,14 @@ mod page_tests {
         world.insert_resource(EncyclopediaTab::Places);
 
         world.run_system_once(handle_page_back).unwrap();
-        assert!(
-            world
-                .resource::<crate::ui::history::HistoryPanelTarget>()
-                .0
-                .is_none()
-        );
-        assert!(
-            world
-                .resource::<crate::ui::market::MarketPageTarget>()
-                .0
-                .is_some()
-        );
+        assert!(world
+            .resource::<crate::ui::history::HistoryPanelTarget>()
+            .0
+            .is_none());
+        assert!(world
+            .resource::<crate::ui::market::MarketPageTarget>()
+            .0
+            .is_some());
 
         world.resource_mut::<ButtonInput<KeyCode>>().clear();
         world
@@ -855,11 +889,9 @@ mod page_tests {
         world.resource_mut::<ClickGuard>().0 = true;
         world.spawn((EncyclopediaPageBack, Interaction::Pressed));
         world.run_system_once(handle_page_back).unwrap();
-        assert!(
-            world
-                .resource::<crate::ui::market::MarketPageTarget>()
-                .0
-                .is_none()
-        );
+        assert!(world
+            .resource::<crate::ui::market::MarketPageTarget>()
+            .0
+            .is_none());
     }
 }

@@ -7,11 +7,12 @@ pub(super) fn append_company_controls(
     company: &CompanyView<'_>,
     local_person: &Option<PersonId>,
     share_draft: &ShareOrderDraft,
+    dividend_draft: &DividendDraft,
     name_of: &dyn Fn(PersonId) -> String,
     can_manage: bool,
 ) {
     blocks.push(Block::Scope(BusinessManagementPage::Company));
-    blocks.push(Block::Section("COMPANY DIRECTION".into()));
+    blocks.push(Block::Section("COMPANY DIRECTION"));
     blocks.push(row(
     "company.scope", "APPLIES ACROSS THE COMPANY",
     format!("{} sets the company strategy. Automatic sites follow it; manual site overrides remain in place.", CompanyLeadership::TITLE), vec![],
@@ -55,7 +56,7 @@ pub(super) fn append_company_controls(
                 .collect(),
         ));
     }
-    blocks.push(Block::Section("TREASURY & DIVIDENDS".into()));
+    blocks.push(Block::Section("TREASURY & DIVIDENDS"));
     blocks.push(row(
         "company.today",
         "COMPANY RESULT TODAY",
@@ -90,13 +91,8 @@ pub(super) fn append_company_controls(
             vec![]
         },
     ));
-    blocks.push(dividend_row(
-        "company.dividends",
-        "SHAREHOLDER DIVIDENDS",
-        company,
-        can_manage,
-    ));
-    blocks.push(Block::Section("OWNERSHIP & GOVERNANCE".into()));
+    push_dividend_rows(blocks, company, *local_person, dividend_draft, can_manage);
+    blocks.push(Block::Section("OWNERSHIP & GOVERNANCE"));
     let cap_table = company
         .ownership
         .shares()
@@ -167,30 +163,26 @@ pub(super) fn append_company_controls(
     );
     let mut controls = Vec::new();
     if own_shares > 0 {
-        controls.push(ControlModel {
-            id: "draft.shares.down".into(),
-            label: "SHARES -10".into(),
-            press: ControlPress::Draft(ShareDraftAction::SharesDown),
-            selected: false,
-        });
-        controls.push(ControlModel {
-            id: "draft.shares.up".into(),
-            label: "SHARES +10".into(),
-            press: ControlPress::Draft(ShareDraftAction::SharesUp),
-            selected: false,
-        });
-        controls.push(ControlModel {
-            id: "draft.price.down".into(),
-            label: "PRICE -0.25".into(),
-            press: ControlPress::Draft(ShareDraftAction::PriceDown),
-            selected: false,
-        });
-        controls.push(ControlModel {
-            id: "draft.price.up".into(),
-            label: "PRICE +0.25".into(),
-            press: ControlPress::Draft(ShareDraftAction::PriceUp),
-            selected: false,
-        });
+        controls.push(ControlModel::new(
+            "draft.shares.down",
+            "SHARES -10",
+            ControlPress::Draft(ShareDraftAction::SharesDown),
+        ));
+        controls.push(ControlModel::new(
+            "draft.shares.up",
+            "SHARES +10",
+            ControlPress::Draft(ShareDraftAction::SharesUp),
+        ));
+        controls.push(ControlModel::new(
+            "draft.price.down",
+            "PRICE -0.25",
+            ControlPress::Draft(ShareDraftAction::PriceDown),
+        ));
+        controls.push(ControlModel::new(
+            "draft.price.up",
+            "PRICE +0.25",
+            ControlPress::Draft(ShareDraftAction::PriceUp),
+        ));
         controls.push(company_order(
             company.id,
             "share.post",
@@ -236,20 +228,27 @@ pub(super) fn append_company_controls(
     let mut buys = Vec::new();
     if let Some(person) = local_person {
         for offer in offers.iter().filter(|offer| offer.seller != *person) {
-            let mut quantities = vec![1, 10, offer.shares];
+            // Fixed slots per seller (`buy.{seller}.{k}`): the offered quantity
+            // is a bound label and payload, so a partial purchase never
+            // changes the structure key. Duplicate quantities leave a slot
+            // vacant instead of shifting the buttons that follow.
+            let mut quantities: [u16; BUY_SLOTS_PER_OFFER] = [1, 10, offer.shares];
             quantities
                 .iter_mut()
                 .for_each(|q| *q = (*q).min(offer.shares));
-            quantities.retain(|q| *q > 0);
-            quantities.dedup();
-            for quantity in quantities {
+            let seller_name = name_of(offer.seller).to_uppercase();
+            let mut previous = 0;
+            for (slot, quantity) in quantities.into_iter().enumerate() {
+                let id = format!("buy.{}.{slot}", offer.seller.0);
+                if quantity == 0 || quantity == previous {
+                    buys.push(ControlModel::vacant(id, VacantSlot::Action));
+                    continue;
+                }
+                previous = quantity;
                 buys.push(company_order(
                     company.id,
-                    format!("buy.{}.{quantity}", offer.seller.0),
-                    format!(
-                        "BUY {quantity} FROM {}",
-                        name_of(offer.seller).to_uppercase()
-                    ),
+                    id,
+                    format!("BUY {quantity} FROM {seller_name}"),
                     HeroCompanyAction::BuyCompanyShares {
                         seller: offer.seller,
                         shares: quantity,

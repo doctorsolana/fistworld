@@ -307,6 +307,11 @@ impl Planner<'_> {
                 .extend(village::road_access_blockers_for_new_plot(
                     kind, position, rotation,
                 ));
+            // Founding roads spawn complete and are the first streets later
+            // connectors join by node. Give them the same two-metre node
+            // spacing as a surveyed road so a house beside a long founding
+            // street meets it at its own frontage rather than a far endpoint.
+            let points = village_roads::resample_path(&approval.road_access, 2.0);
             self.plots.push(Plot {
                 kind,
                 position,
@@ -315,12 +320,8 @@ impl Planner<'_> {
                 road: VillageRoad {
                     settlement: String::new(),
                     builder: String::new(),
-                    built_through: approval
-                        .road_access
-                        .len()
-                        .try_into()
-                        .expect("bounded founding road"),
-                    points: approval.road_access,
+                    built_through: points.len().try_into().expect("bounded founding road"),
+                    points,
                     width: 2.0,
                     reserved_width: RoadClass::Lane.initial_reserved_width(),
                     surface: RoadSurface::Dirt,
@@ -435,4 +436,64 @@ pub(super) fn plan(
         });
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Founding roads are spawned already complete and become the first hosts
+    /// that later connectors join by node. They must carry the same two-metre
+    /// node spacing as a surveyed road, or a house beside a long founding
+    /// street would be joined to its distant endpoint.
+    #[test]
+    fn founding_roads_are_resampled_to_two_metre_segments() {
+        let terrain = crate::world::new_world::tests::authored_test_terrain(200.0, |_, _| 2.0);
+        let site = Site {
+            hall: Vec3::new(0.0, 2.0, 0.0),
+            resources: shared::worldgen::ResourceProfile {
+                farmland: 0.6,
+                wood: 0.6,
+                stone: 0.4,
+                iron: 0.2,
+            },
+            potential_population: 12,
+            rank: 0.6,
+            salt: 17,
+        };
+        let colliders = StaticColliders::default();
+        let library = DerivedColliderLibrary {
+            by_kind: Default::default(),
+        };
+        let layout = plan(&terrain, &site, &colliders, &library)
+            .expect("a flat, dry, neutral-quality site founds a hamlet");
+        assert!(
+            layout.plots.iter().any(|plot| plot.kind == Kind::House),
+            "the founding layout must contain the houses whose roads it certifies: {:?}",
+            layout
+                .plots
+                .iter()
+                .map(|plot| plot.kind)
+                .collect::<Vec<_>>()
+        );
+        for plot in &layout.plots {
+            assert!(plot.road.is_complete());
+            assert!(plot.road.points.len() >= 2);
+            assert!(
+                plot.road.total_length() > 4.0,
+                "a founding {:?} road is too short to prove node spacing: {:?}",
+                plot.kind,
+                plot.road.points
+            );
+            assert!(
+                plot.road
+                    .points
+                    .windows(2)
+                    .all(|segment| segment[0].distance(segment[1]) <= 3.0),
+                "a founding {:?} road kept a long straight segment: {:?}",
+                plot.kind,
+                plot.road.points
+            );
+        }
+    }
 }

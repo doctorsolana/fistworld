@@ -1,5 +1,10 @@
 //! Small, retained staff lists address people through replicated employment IDs.
 //! Unknown/offline identities are never guessed from a potentially duplicated name.
+//!
+//! Hosts are spawned hidden and unbound by the page builders; `sync_rosters`
+//! runs AFTER `companies::rebuild_company_view` in the same frame (see
+//! `person_links::roster_systems`) so a freshly spawned site card already
+//! carries its WORKERS rows when the frame lays out -- no one-frame pop-in.
 
 use super::*;
 use bevy::platform::collections::{HashMap, HashSet};
@@ -48,11 +53,13 @@ pub(super) fn sync_rosters(
     people: Res<KnownPeople>,
     god: Res<crate::ui::hud::GodCapability>,
     time: Res<Time>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
     mut last_scan: Local<Option<f64>>,
 ) {
     if hosts.is_empty() {
         return;
     }
+    let mut _ui_scope = ui_perf.scope("sync_rosters");
     let now = time.elapsed_secs_f64();
     if last_scan.is_some_and(|last| now - last < 0.5)
         && !selected.is_changed()
@@ -109,6 +116,7 @@ pub(super) fn sync_rosters(
         if previous == Some(&next) {
             continue;
         }
+        _ui_scope.rebuilt();
         node.display = if next.people.is_empty() {
             Display::None
         } else {

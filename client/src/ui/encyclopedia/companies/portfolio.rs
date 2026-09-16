@@ -1,8 +1,14 @@
 //! Player ownership totals, company list rows and their live ledger text.
+//!
+//! The portfolio strip is spawned once per `local_person` presence and its
+//! four values bind under [`CompanyBound::Portfolio`]. A list row is keyed by
+//! `CompanyId`; its ledger and status lines rewrite in place so a profit-sign
+//! flip or a share purchase never tears the row down under the pointer.
 
+use super::binding::{portfolio_value, CompanyBound, PortfolioField};
 use super::controls::CompanyRow;
 use super::model::{CompanyDirectory, CompanyRecord};
-use crate::ui::foundation::{UiButtonVariant, button_chrome};
+use crate::ui::foundation::{button_chrome, UiButtonVariant};
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT};
 use bevy::prelude::*;
@@ -10,7 +16,7 @@ use shared::components::{CompanyId, PersonId};
 use shared::economy::format_money;
 
 pub(super) fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: &CompanyDirectory) {
-    let Some(person) = directory.local_person else {
+    if directory.local_person.is_none() {
         parent.spawn((
             Text::new(
                 "PORTFOLIO UNAVAILABLE  /  Spawn or select your Hero to identify personal holdings. The company directory remains usable.",
@@ -19,60 +25,38 @@ pub(super) fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: 
             TextColor(INK_MUTED),
         ));
         return;
-    };
-    let holdings: Vec<_> = directory
-        .records
-        .iter()
-        .filter_map(|company| {
-            let shares = company.shares_owned_by(person);
-            (shares > 0).then_some((company, shares))
-        })
-        .collect();
-    let estimated_interest = holdings.iter().fold(0u64, |total, (company, shares)| {
-        total.saturating_add(company.holding_book_interest(*shares))
-    });
-    let mastered = directory
-        .records
-        .iter()
-        .filter(|company| company.master == person)
-        .count();
-    portfolio_card(
-        parent,
-        "Hero wallet",
-        directory.local_wallet.map_or_else(
-            || "Not in range".to_string(),
-            |wallet| format!("{} coin", format_money(wallet)),
+    }
+    for (label, field, note) in [
+        (
+            "Hero wallet",
+            PortfolioField::Wallet,
+            "Spendable by your Hero",
         ),
-        "Spendable by your Hero",
-    );
-    portfolio_card(
-        parent,
-        "Holdings",
-        format!(
-            "{} firm{}",
-            holdings.len(),
-            if holdings.len() == 1 { "" } else { "s" }
+        (
+            "Holdings",
+            PortfolioField::Holdings,
+            "Direct share positions",
         ),
-        "Direct share positions",
-    );
-    portfolio_card(
-        parent,
-        "Book interest",
-        format!("{} coin", format_money(estimated_interest)),
-        "Accounting estimate, not cash",
-    );
-    portfolio_card(
-        parent,
-        "Company Master",
-        format!("{} firm{}", mastered, if mastered == 1 { "" } else { "s" }),
-        "Executive authority",
-    );
+        (
+            "Book interest",
+            PortfolioField::Interest,
+            "Accounting estimate, not cash",
+        ),
+        (
+            "Company Master",
+            PortfolioField::Master,
+            "Executive authority",
+        ),
+    ] {
+        portfolio_card(parent, directory, label, field, note);
+    }
 }
 
-pub(super) fn portfolio_card(
+fn portfolio_card(
     parent: &mut ChildSpawnerCommands<'_>,
+    directory: &CompanyDirectory,
     label: &str,
-    value: String,
+    field: PortfolioField,
     note: &str,
 ) {
     parent
@@ -96,7 +80,8 @@ pub(super) fn portfolio_card(
                 TextColor(INK_MUTED),
             ));
             card.spawn((
-                Text::new(value),
+                CompanyBound::Portfolio(field),
+                Text::new(portfolio_value(directory, field).text.unwrap_or_default()),
                 ledger::reading_strong(17.0),
                 TextColor(INK),
             ));
@@ -113,6 +98,11 @@ pub(super) fn portfolio_card(
 /// is covered by [`company_rows_signature`].
 #[derive(Component)]
 pub(in crate::ui::encyclopedia) struct CompanyRowLedger(pub(super) CompanyId);
+
+/// The status / shares / Master line of a row, also rewritten in place, so a
+/// PROFITABLE <-> TRADING flip never respawns the row.
+#[derive(Component)]
+pub(in crate::ui::encyclopedia) struct CompanyRowStatus(pub(super) CompanyId);
 
 pub(super) fn company_ledger_line(company: &CompanyRecord) -> String {
     format!(
@@ -131,12 +121,32 @@ pub(super) fn company_ledger_line(company: &CompanyRecord) -> String {
     )
 }
 
+pub(super) fn company_status_line(
+    company: &CompanyRecord,
+    local_person: Option<PersonId>,
+) -> String {
+    let shares = local_person.map_or(0, |person| company.shares_owned_by(person));
+    if shares > 0 {
+        format!(
+            "{:.1}% yours · {}{}",
+            f32::from(shares) / 10.0,
+            company.status(),
+            if local_person == Some(company.master) {
+                " · Master"
+            } else {
+                ""
+            }
+        )
+    } else {
+        company.status().into()
+    }
+}
+
 pub(super) fn spawn_company_row(
     parent: &mut ChildSpawnerCommands<'_>,
     company: &CompanyRecord,
     local_person: Option<PersonId>,
 ) {
-    let shares = local_person.map_or(0, |person| company.shares_owned_by(person));
     parent
         .spawn((
             Button,
@@ -173,20 +183,8 @@ pub(super) fn spawn_company_row(
                     TextColor(INK_MUTED),
                 ));
                 copy.spawn((
-                    Text::new(if shares > 0 {
-                        format!(
-                            "{:.1}% yours · {}{}",
-                            f32::from(shares) / 10.0,
-                            company.status(),
-                            if local_person == Some(company.master) {
-                                " · Master"
-                            } else {
-                                ""
-                            }
-                        )
-                    } else {
-                        company.status().into()
-                    }),
+                    CompanyRowStatus(company.id),
+                    Text::new(company_status_line(company, local_person)),
                     ledger::reading_strong(12.0),
                     TextColor(EMBER),
                 ));

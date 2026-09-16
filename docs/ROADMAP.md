@@ -589,7 +589,17 @@ sell it dear. The M&B opening hour.
 - [x] Player business controls for strategy/autopilot, asking prices, adaptive or fixed wages,
       enabled positions, Hall collection, processor coverage/bid/sourcing rules, branch-level
       retained/sale stock and retained/automatic company dividends. The server proves Company
-      Master authority and mutates the same policies consumed by NPC autopilot.
+      Master authority and mutates the same policies consumed by NPC autopilot. Manual
+      dividends carry a chosen amount, are clamped to the live reserve-aware figure, and are
+      answered one tick later with the coin actually paid, the rate per 10 shares, the
+      requester's own take and the held-back reserves, or a concrete refusal; the replicated
+      `CompanyDividendCapacity` snapshot exposes distributable/reserves/last paid.
+- [x] Client amount picker and per-share preview for dividends: COMPANY SETTINGS binds the
+      replicated headroom (available now, reserves, last paid), steps a drafted amount
+      (`-1 COIN`/`+1 COIN`/`25%`/`50%`/`ALL`), confirms `DISTRIBUTE X COIN` with the clamped
+      payload and previews the per-10-share rate and the local holder's exact `pro_rata_split`
+      take; the Companies encyclopedia page shows the snapshot read-only (DISTRIBUTABLE line and
+      a Your Position note). The deferred server reply appears in the panel feedback line.
 - [x] Company layer above operating sites: stable `CompanyId`, exactly 1,000 whole ordinary
       shares, a separately appointed Company Master, one authoritative treasury and consolidated liabilities,
       tax and pro-rata dividends. Shareholders can post and fill bounded public offers without

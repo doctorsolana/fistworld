@@ -3200,6 +3200,202 @@ fn print_structure_report(world: &mut World) {
     }
 }
 
+/// Join geometry of every completed door connector. A connector should meet
+/// its host street near the perpendicular foot of its own approach; a large
+/// lateral offset means it ran along the street to a distant node. The summary
+/// always prints; `FISTWORLD_LAB_CONNECTOR_DETAIL=1` adds one row per connector.
+fn print_connector_join_report(world: &mut World) {
+    fn nearest_foot(point: Vec2, road: &VillageRoad) -> Option<Vec2> {
+        road.points
+            .windows(2)
+            .map(|pair| {
+                let segment = pair[1] - pair[0];
+                let length_squared = segment.length_squared();
+                if length_squared <= 1e-6 {
+                    pair[0]
+                } else {
+                    let t = ((point - pair[0]).dot(segment) / length_squared).clamp(0.0, 1.0);
+                    pair[0] + segment * t
+                }
+            })
+            .min_by(|a, b| {
+                a.distance_squared(point)
+                    .total_cmp(&b.distance_squared(point))
+            })
+    }
+    fn percentile_f32(values: &[f32], fraction: f32) -> f32 {
+        if values.is_empty() {
+            return 0.0;
+        }
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f32::total_cmp);
+        sorted[(((sorted.len() - 1) as f32) * fraction).ceil() as usize]
+    }
+    let detail = std::env::var("FISTWORLD_LAB_CONNECTOR_DETAIL").is_ok_and(|value| value == "1");
+    let roads: Vec<(Entity, VillageRoad, SettlementId, bool, bool)> = world
+        .query::<(
+            Entity,
+            &VillageRoad,
+            &shared::components::RoadOf,
+            Has<RoadConnectorFor>,
+            Has<crate::world::regional_roads::RegionalRoadSection>,
+        )>()
+        .iter(world)
+        .map(|(entity, road, road_of, connector, regional)| {
+            (entity, road.clone(), road_of.0, connector, regional)
+        })
+        .collect();
+    let halls: HashMap<SettlementId, (String, Vec2)> = world
+        .query::<(
+            &SettlementId,
+            &Settlement,
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+        )>()
+        .iter(world)
+        .map(|(id, settlement, position, rotation)| {
+            let (door, _) = village_roads::doorway_approach(
+                SettlementBuildingKind::Hall,
+                position.0,
+                rotation.map_or(0.0, |rotation| rotation.0),
+            );
+            (*id, (settlement.name.clone(), door))
+        })
+        .collect();
+    let mut ids: Vec<_> = halls.keys().copied().collect();
+    ids.sort_by_key(|id| id.0);
+    for id in ids {
+        let (name, hall_door) = &halls[&id];
+        let mut connectors = 0usize;
+        let mut incomplete = 0usize;
+        let mut hall_joins = 0usize;
+        let mut sparse_hosts = 0usize;
+        let mut regional_hosts = 0usize;
+        let mut nearer_other_road = 0usize;
+        let mut offsets = Vec::new();
+        let mut lengths = Vec::new();
+        let mut buckets = [0usize; 4];
+        for (entity, road, _, _, _) in roads
+            .iter()
+            .filter(|(_, _, road_of, connector, _)| *road_of == id && *connector)
+        {
+            connectors += 1;
+            if !road.is_complete() {
+                incomplete += 1;
+                continue;
+            }
+            let Some((&door, &goal)) = road.points.first().zip(road.points.last()) else {
+                continue;
+            };
+            let approach = road.points.get(1).copied().unwrap_or(door);
+            let length = road.total_length();
+            lengths.push(length);
+            let hall_join = goal.distance_squared(*hall_door) <= 0.5_f32.powi(2);
+            let others = roads.iter().filter(|(other, other_road, road_of, _, _)| {
+                *other != *entity && *road_of == id && other_road.is_complete()
+            });
+            let host = (!hall_join)
+                .then(|| {
+                    others
+                        .clone()
+                        .filter(|(_, other_road, ..)| {
+                            other_road
+                                .points
+                                .iter()
+                                .any(|point| point.distance_squared(goal) <= 0.05_f32.powi(2))
+                        })
+                        .filter_map(|(other, other_road, _, _, regional)| {
+                            nearest_foot(approach, other_road)
+                                .map(|foot| (*other, other_road, *regional, foot))
+                        })
+                        .min_by(|a, b| {
+                            a.3.distance_squared(approach)
+                                .total_cmp(&b.3.distance_squared(approach))
+                        })
+                })
+                .flatten();
+            // The nearest frontage on a road OTHER than the joined host, so a
+            // lateral offset along the host itself (a sparse-host symptom)
+            // does not count as "a nearer frontage elsewhere".
+            let nearest_any = others
+                .clone()
+                .filter(|(other, ..)| host.is_none_or(|(host, ..)| host != *other))
+                .filter_map(|(_, other_road, ..)| nearest_foot(approach, other_road))
+                .min_by(|a, b| {
+                    a.distance_squared(approach)
+                        .total_cmp(&b.distance_squared(approach))
+                });
+            let d_goal = approach.distance(goal);
+            let d_any = nearest_any.map_or(d_goal, |foot| approach.distance(foot));
+            if d_any + 3.0 < d_goal {
+                nearer_other_road += 1;
+            }
+            let mut host_label = String::from("hall");
+            let mut offset = 0.0;
+            if hall_join {
+                hall_joins += 1;
+            } else if let Some((_, host_road, regional, foot)) = host {
+                offset = goal.distance(foot);
+                offsets.push(offset);
+                let bucket = if offset <= 1.0 {
+                    0
+                } else if offset <= 3.0 {
+                    1
+                } else if offset <= 10.0 {
+                    2
+                } else {
+                    3
+                };
+                buckets[bucket] += 1;
+                let segments = host_road.points.len().saturating_sub(1).max(1) as f32;
+                let mean_segment = host_road.total_length() / segments;
+                if mean_segment > 3.0 {
+                    sparse_hosts += 1;
+                }
+                if regional {
+                    regional_hosts += 1;
+                }
+                host_label = format!(
+                    "'{}' nodes={} mean_segment={:.1}m{}",
+                    host_road.builder,
+                    host_road.points.len(),
+                    mean_segment,
+                    if regional { " regional" } else { "" },
+                );
+            } else {
+                host_label = String::from("none (detached)");
+            }
+            if detail {
+                println!(
+                    "LAB connector '{}' builder='{}' length={:.1}m d_goal={:.1}m offset_on_host={:.1}m nearest_frontage_any={:.1}m host={}",
+                    name, road.builder, length, d_goal, offset, d_any, host_label,
+                );
+            }
+        }
+        println!(
+            "LAB connector-joins '{}' connectors={} incomplete={} hall_joins={} node_joins={} offset_buckets[<=1m:{} 1-3m:{} 3-10m:{} >10m:{}] offset_p50={:.1}m offset_p90={:.1}m offset_max={:.1}m length_p50={:.1}m length_p90={:.1}m length_max={:.1}m sparse_hosts={} regional_hosts={} nearer_frontage_elsewhere={}",
+            name,
+            connectors,
+            incomplete,
+            hall_joins,
+            offsets.len(),
+            buckets[0],
+            buckets[1],
+            buckets[2],
+            buckets[3],
+            percentile_f32(&offsets, 0.5),
+            percentile_f32(&offsets, 0.9),
+            percentile_f32(&offsets, 1.0),
+            percentile_f32(&lengths, 0.5),
+            percentile_f32(&lengths, 0.9),
+            percentile_f32(&lengths, 1.0),
+            sparse_hosts,
+            regional_hosts,
+            nearer_other_road,
+        );
+    }
+}
+
 fn goods_totals(world: &mut World) -> (u32, u32, u32, u32, u32, u32, u32) {
     let transit_wood = world
         .get_resource::<crate::world::house_upgrades::HouseUpgradeProjects>()
@@ -5457,6 +5653,7 @@ fn village_simulation_lab() {
 
     print_report(app.world_mut(), sim_seconds, !scenario.is_crowd_stress());
     print_structure_report(app.world_mut());
+    print_connector_join_report(app.world_mut());
     print_civic_report(app.world_mut());
     print_business_report(app.world_mut());
     print_resource_flow_report(app.world_mut());

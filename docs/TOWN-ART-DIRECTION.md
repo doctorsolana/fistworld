@@ -82,6 +82,14 @@ placed on the terrain. Avoid a visible brown canopy or a hard elevated soil slab
 White/yellow flowers and leafy bushes need to read at normal play distance, not only
 in a close-up. Maintain quiet grass and space around these clusters.
 
+Two flower layers now exist and they are deliberately different. The **roadside and yard
+clusters** (`client/src/settlement/roadside/`, `settlement/yards/`) are bounded town dressing:
+built into chunk meshes, planted only 8–20 m beside built roads and inside accepted yards.
+The **wild drifts** (`shared::props::FlowerDrift`, rendered by the GPU-instanced ground-cover
+stream) cover the open country in every grassy biome — white/red/orange/yellow patches ~2.4 m
+across, gathered into ~26 m drifts that are mostly one colour, with quiet ground between them
+— and stay out of the 11 m tended road verge so the town's own dressing owns the street edge.
+
 The user reiterated that the reference's **brighter pathway surface** is a priority:
 readable pale angular grit, broad natural curves, irregular worn shoulders and
 occasional roadside stones/bushes must work together. A uniformly tan ribbon with

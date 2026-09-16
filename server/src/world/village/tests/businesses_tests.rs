@@ -131,6 +131,7 @@ fn insolvent_business_liquidates_stock_then_becomes_for_sale_without_rehiring() 
 fn player_owner_receives_only_profit_above_protected_working_capital() {
     let mut app = village_test_app();
     app.init_resource::<CompanyDividendQueue>();
+    app.init_resource::<CompanyDividendOutcomes>();
     app.add_systems(Update, review_company_finance);
     let mut clock = WorldTime::new_default();
     clock.day = 4;

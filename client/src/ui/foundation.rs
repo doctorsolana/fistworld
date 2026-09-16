@@ -5,8 +5,8 @@
 //! typography, button states, and rebuild safety for live simulation panels.
 
 use bevy::input_focus::{
-    InputFocus,
     tab_navigation::{TabIndex, TabNavigationPlugin},
+    InputFocus,
 };
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
@@ -370,24 +370,35 @@ fn audit_button_contract(
 /// True while any interactive descendant is hovered or pressed. Live economy
 /// panels use this to defer structural refreshes, preserving the entity under
 /// the pointer and preventing hover flicker or accidental repeat actions.
+///
+/// Panels poll this every frame while a refresh is deferred, so the traversal
+/// stack is a reused thread-local scratch buffer rather than a fresh `Vec`.
 pub fn subtree_is_interacting(
     root: Entity,
     children: &Query<&Children>,
     interactions: &Query<(&Interaction, Has<UiRefreshExempt>)>,
 ) -> bool {
-    let mut pending = vec![root];
-    while let Some(entity) = pending.pop() {
-        if interactions
-            .get(entity)
-            .is_ok_and(|(interaction, exempt)| !exempt && *interaction != Interaction::None)
-        {
-            return true;
-        }
-        if let Ok(descendants) = children.get(entity) {
-            pending.extend(descendants.iter());
-        }
+    thread_local! {
+        static SCRATCH: std::cell::RefCell<Vec<Entity>> = const { std::cell::RefCell::new(Vec::new()) };
     }
-    false
+    SCRATCH.with(|scratch| {
+        let mut pending = scratch.borrow_mut();
+        pending.clear();
+        pending.push(root);
+        while let Some(entity) = pending.pop() {
+            if interactions
+                .get(entity)
+                .is_ok_and(|(interaction, exempt)| !exempt && *interaction != Interaction::None)
+            {
+                pending.clear();
+                return true;
+            }
+            if let Ok(descendants) = children.get(entity) {
+                pending.extend(descendants.iter());
+            }
+        }
+        false
+    })
 }
 
 /// Preserve a viewport only while refreshing the same logical record. Moving
@@ -758,6 +769,60 @@ mod tests {
         world.commands().entity(root).add_child(backdrop);
         world.flush();
         assert!(!world.run_system_once(check).unwrap());
+    }
+
+    /// The traversal reuses one scratch stack. An early `true` return leaves
+    /// siblings unvisited on that stack; the next call must start clean or a
+    /// quiet panel would inherit the previous panel's pending entities.
+    #[test]
+    fn interaction_scan_reuses_its_scratch_without_leaking_between_calls() {
+        #[derive(Component)]
+        struct Root(u8);
+
+        fn check(
+            root: In<u8>,
+            roots: Query<(Entity, &Root)>,
+            children: Query<&Children>,
+            interactions: Query<(&Interaction, Has<UiRefreshExempt>)>,
+        ) -> bool {
+            let entity = roots
+                .iter()
+                .find(|(_, marker)| marker.0 == root.0)
+                .map(|(entity, _)| entity)
+                .unwrap();
+            subtree_is_interacting(entity, &children, &interactions)
+        }
+
+        let mut world = World::new();
+        // Busy tree: children are pushed in order and popped LIFO, so the
+        // hovered LAST child is found first while the pressed FIRST child and
+        // eight quiet siblings are still queued. Without the clears, that
+        // pressed child would be popped by the next (quiet) scan and flip it.
+        let pressed = world.spawn(Interaction::Pressed).id();
+        let mut busy_children = vec![pressed];
+        for _ in 0..8 {
+            busy_children.push(world.spawn(Interaction::None).id());
+        }
+        busy_children.push(world.spawn(Interaction::Hovered).id());
+        let busy = world.spawn(Root(0)).id();
+        world.commands().entity(busy).add_children(&busy_children);
+        // Quiet tree: nested but nothing interacting.
+        let leaf = world.spawn(Interaction::None).id();
+        let branch = world.spawn(Interaction::None).id();
+        world.commands().entity(branch).add_child(leaf);
+        let quiet = world.spawn(Root(1)).id();
+        world.commands().entity(quiet).add_child(branch);
+        world.flush();
+
+        for _ in 0..3 {
+            assert!(world.run_system_once_with(check, 0).unwrap());
+            assert!(
+                !world.run_system_once_with(check, 1).unwrap(),
+                "entities left over from the busy scan must not leak into the quiet scan"
+            );
+        }
+        world.entity_mut(leaf).insert(Interaction::Pressed);
+        assert!(world.run_system_once_with(check, 1).unwrap());
     }
 
     #[test]

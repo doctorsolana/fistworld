@@ -231,11 +231,16 @@ impl GeneratedWorld {
 /// weighting, never exclusive — every biome has some of everything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WorldBiome {
-    /// Open grassland: the farmland biome. Lone trees, flowers.
+    /// Open grassland: the farmland biome. Lone trees, copses, and the
+    /// richest wild flower drifts (see `props::spawn::FlowerDrift`: flowers
+    /// grow wherever grass does, so Meadows everywhere, Forest only in its
+    /// glades, Highlands on the moor below the 0.62 slope, Snowlands on the
+    /// warm fringe; never Desert, Mountains, cliffs or water).
     Meadows,
-    /// Dense woodland: the wood biome.
+    /// Dense woodland: the wood biome. Ferns on the floor, flowers in glades.
     Forest,
-    /// Rocky hills and moors: the stone biome, iron-bearing.
+    /// Rocky hills and moors: the stone biome, iron-bearing. Flower drifts
+    /// on the grassy moor, none on the steep faces.
     Highlands,
     /// High peaks: stone everywhere, the richest iron.
     Mountains,
@@ -249,9 +254,12 @@ pub enum WorldBiome {
     Ocean,
     /// The frozen north: snow-covered ground, sparse taiga pines, no farming.
     /// Assigned from the climate field, so the biome edge IS the snowline.
+    /// A few flower patches survive on the warm fringe (snow < 0.75), none
+    /// deeper in.
     Snowlands,
     /// The scorched south: dunes, dead wood and scrub, almost no farming.
     /// Assigned from the climate field, so the biome edge IS the dry band.
+    /// No flowers.
     Desert,
 }
 

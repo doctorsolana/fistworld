@@ -161,7 +161,11 @@ art comparison, not the default world or a replacement for connected testing.
 ## Remaining art work
 
 The reference's fuller combinations of flowers, shrubs and ground detail are
-still richer than the game's separate patches. Surveyed short road segments can
+still richer than the game's separate patches. Outside town the open country now
+carries wild flower drifts (`capture/scenarios/meadow-flowers.ron`, September 2026):
+those are world ground cover, not the bounded roadside/yard clusters this document
+verified, and they are excluded from the tended road verge so both can coexist
+without doubling up at the street edge. Surveyed short road segments can
 still make junctions more angular than the painting. Far grain is more visibly
 row-like and denser-looking than close stalks. Cloth is posed, without cloth
 simulation; crop seasons and harvested appearance remain future gameplay work.

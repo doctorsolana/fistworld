@@ -5,7 +5,7 @@ use crate::ui::business_management::{
     BusinessManagementPage, BusinessManagementReturn, BusinessManagementSelection,
     BusinessManagementTarget,
 };
-use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
 use crate::ui::ledger;
 use crate::ui::styles::INK_MUTED;
 use bevy::ecs::system::SystemParam;
@@ -45,20 +45,37 @@ impl Plugin for PersonLinksPlugin {
         app.init_resource::<PersonLinkReturn>().add_systems(
             Update,
             (
-                handle_links,
-                handle_return,
-                workplaces::sync_rosters,
-                sync_links,
+                (handle_links, handle_return)
+                    .chain()
+                    .after(shell::spawn_encyclopedia)
+                    .before(state_sync::rebuild_people_list)
+                    .before(companies::rebuild_company_view),
+                roster_systems()
+                    .after(handle_return)
+                    .before(state_sync::rebuild_people_list),
             )
-                .chain()
-                .after(shell::spawn_encyclopedia)
-                .before(state_sync::rebuild_people_list)
-                .before(companies::rebuild_company_view)
                 .run_if(encyclopedia_open)
                 .run_if(in_state(GameState::Playing)),
         );
         app.add_systems(Update, clear_return.run_if(encyclopedia_closed));
     }
+}
+
+/// Roster hosts are spawned hidden and unbound by the company page builder.
+/// Running the fill AFTER `rebuild_company_view` (Bevy applies the builder's
+/// commands between the two ordered systems) puts the WORKERS rows on the
+/// card in the same frame it appears, so a structural rebuild never shows a
+/// short card that grows a frame later. Tests register the same config.
+pub(super) fn roster_systems(
+) -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    (workplaces::sync_rosters, sync_links)
+        .chain()
+        .after(companies::rebuild_company_view)
+        // Management worker chips are `PersonLink` slots bound in place by
+        // `ensure_panel`; running after it lets a chip that fills this frame
+        // gain or lose `InteractionDisabled` in the same frame it appears.
+        .after(crate::ui::business_management::EnsureBusinessPanel)
+        .into_configs()
 }
 
 pub(crate) fn spawn_person_link(
@@ -67,10 +84,31 @@ pub(crate) fn spawn_person_link(
     name: &str,
     detail: &str,
 ) {
+    let detail = if detail.is_empty() {
+        "›".to_string()
+    } else {
+        format!("{detail}  ›")
+    };
+    spawn_person_link_with(parent, person, name, &detail, (), (), ());
+}
+
+/// A person link whose row, name and detail text carry bind markers, so a
+/// retained page can rewrite who the row points at without respawning it.
+/// `detail` is the finished trailing text, caret included.
+pub(crate) fn spawn_person_link_with(
+    parent: &mut ChildSpawnerCommands<'_>,
+    person: PersonId,
+    name: &str,
+    detail: &str,
+    link_marker: impl Bundle,
+    name_marker: impl Bundle,
+    detail_marker: impl Bundle,
+) {
     parent
         .spawn((
             Name::new(format!("Person record: {}", person.0)),
             PersonLink(person),
+            link_marker,
             Button,
             Node {
                 min_height: Val::Px(34.0),
@@ -85,16 +123,13 @@ pub(crate) fn spawn_person_link(
             button_chrome(UiButtonVariant::Row),
         ))
         .with_children(|row| {
-            row.spawn((UiButtonLabel, ledger::body_strong(name, 14.0)));
+            row.spawn((UiButtonLabel, ledger::body_strong(name, 14.0), name_marker));
             row.spawn((
-                Text::new(if detail.is_empty() {
-                    "›".into()
-                } else {
-                    format!("{detail}  ›")
-                }),
+                Text::new(detail),
                 ledger::reading(12.0),
                 TextColor(INK_MUTED),
                 Pickable::IGNORE,
+                detail_marker,
             ));
         });
 }

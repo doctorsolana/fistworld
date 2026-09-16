@@ -18,20 +18,20 @@ mod steward;
 
 pub(crate) use construction::hall_connected_road_keys;
 use construction::{
-    BuildingRoadStatus, absolute_world_seconds, building_road_status, hall_road_network,
+    absolute_world_seconds, building_road_status, hall_road_network, BuildingRoadStatus,
 };
 pub use construction::{build_village_roads, plan_requested_roads};
 use routing::graph_key;
 pub use routing::{
-    NavigationLoad, VillageRoadGraph, plan_villager_travel_routes, queue_villager_travel_routes,
-    rebuild_village_road_graph, retry_failed_routes_after_obstacle_change,
+    plan_villager_travel_routes, queue_villager_travel_routes, rebuild_village_road_graph,
+    retry_failed_routes_after_obstacle_change, NavigationLoad, VillageRoadGraph,
 };
 
 pub(crate) fn road_point_key(point: Vec2) -> (i32, i32) {
     graph_key(point)
 }
 #[cfg(test)]
-use routing::{RoadGraphNode, reverse_route_clears_goal_prop_exemption};
+use routing::{reverse_route_clears_goal_prop_exemption, RoadGraphNode};
 #[cfg(test)]
 pub use steward::staff_moot_stewards as staff_and_pay_moot_stewards;
 pub use steward::{
@@ -52,7 +52,7 @@ use shared::components::{
 #[cfg(test)]
 use shared::economy::Wallet;
 use shared::spatial::SpatialObstacleGrid;
-use shared::terrain::{CHUNK_SIZE, ChunkCoord, WorldTerrain};
+use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::{Duration, Instant};
@@ -61,9 +61,9 @@ use crate::player::hero::MoveTarget;
 use crate::world::bridges::BridgeDecks;
 use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_PROP_RADIUS};
 use crate::world::village::{
-    FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine, InternalDeliveryRoutine,
-    LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket, MootSteward, PierTraversal,
-    TradeRouteRoutine, UnderConstruction, VillagerIntent, ambient::AmbientRoutine,
+    ambient::AmbientRoutine, FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine,
+    InternalDeliveryRoutine, LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket,
+    MootSteward, PierTraversal, TradeRouteRoutine, UnderConstruction, VillagerIntent,
 };
 use crate::{
     collision::library::{DerivedColliderLibrary, StaticColliders},
@@ -1500,7 +1500,15 @@ fn round_corners(
     }
 }
 
-fn resample_path(points: &[Vec2], spacing: f32) -> Vec<Vec2> {
+/// Subdivide a certified polyline into construction segments no longer than
+/// `spacing`, keeping every original vertex exactly.
+///
+/// Road connectivity is keyed by nodes, so every completed road must carry
+/// this node density: a house beside a long two-node street would otherwise
+/// be joined to that street's distant endpoint instead of its own frontage.
+/// Surveyed connectors, reused permit reservations and founding roads all
+/// pass through here.
+pub(crate) fn resample_path(points: &[Vec2], spacing: f32) -> Vec<Vec2> {
     let Some(&first) = points.first() else {
         return Vec::new();
     };
@@ -1516,9 +1524,12 @@ fn resample_path(points: &[Vec2], spacing: f32) -> Vec<Vec2> {
         // corner omitted the corner itself, and the resulting chord could cut
         // back through the obstacle the original two segments wrapped around.
         let divisions = (length / spacing).ceil().max(1.0) as usize;
-        for step in 1..=divisions {
+        for step in 1..divisions {
             result.push(start.lerp(end, step as f32 / divisions as f32));
         }
+        // The original vertex itself, not a lerp that may differ in the last
+        // bit: network joins and reservation endpoints compare exactly.
+        result.push(end);
     }
     result
 }

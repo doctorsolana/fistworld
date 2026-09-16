@@ -78,7 +78,56 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
             lod1_label: Some("Mesh1/Primitive0"),
             material_label: "Material0",
         }),
+        // Flower patches: the sparse Accent scatter used to spawn each one as
+        // a WorldAssetRoot scene (root + LOD0 child + LOD1 child, three
+        // entities) because two-node GLBs fail the simple-mesh path; the
+        // swap-mesh path makes them one entity with a real LOD1 beyond 72 m.
+        // The GPU-instanced ground-cover drifts also need this entry:
+        // `material_for_kind` reads the LOD0 mesh and material from it.
+        FlowerA | FlowerB | FlowerC | FlowerD => Some(TreeMeshLabels {
+            lod0_label: "Mesh0/Primitive0",
+            lod1_label: Some("Mesh1/Primitive0"),
+            material_label: "Material0",
+        }),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared::props::PropKind;
+
+    /// The swap-mesh table and `uses_swap_mesh_lod` must name the same kinds:
+    /// a kind in one but not the other either loses LOD swapping or gets a
+    /// `VisibilityRange` fighting the swap system on the same root.
+    #[test]
+    fn swap_mesh_kinds_and_mesh_labels_agree() {
+        for kind in shared::props::ALL_PROP_KINDS.iter().copied() {
+            assert_eq!(
+                tree_mesh_labels(kind).is_some(),
+                super::super::uses_swap_mesh_lod(kind),
+                "{kind:?}: tree_mesh_labels and uses_swap_mesh_lod disagree"
+            );
+        }
+    }
+
+    /// Flower patches ship two nodes (`FlowerX_LOD0`, `FlowerX_LOD1`) and
+    /// resolve through the single-entity swap-mesh path with a far mesh.
+    #[test]
+    fn flower_patches_take_the_single_entity_swap_mesh_path() {
+        for kind in [
+            PropKind::FlowerA,
+            PropKind::FlowerB,
+            PropKind::FlowerC,
+            PropKind::FlowerD,
+        ] {
+            let labels = tree_mesh_labels(kind).expect("flowers use the swap-mesh path");
+            assert_eq!(labels.lod0_label, "Mesh0/Primitive0");
+            assert_eq!(labels.lod1_label, Some("Mesh1/Primitive0"));
+            assert_eq!(labels.material_label, "Material0");
+            assert!(super::super::uses_swap_mesh_lod(kind));
+        }
     }
 }
 

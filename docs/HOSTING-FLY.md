@@ -4,8 +4,14 @@ The repository ships a Dockerfile and `fly.toml` for one authoritative, always-o
 playtest server in Fly.io's Amsterdam region. The public game protocol is UDP 5000;
 it is not an HTTP service.
 
-`CITYSIM_MAP_ID=world` selects the ordinary server-seeded inhabited world. The old
-`big_world` setting selects an authored map and bypasses the current founding pass.
+`CITYSIM_MAP_ID=world` selects the ordinary server-seeded world. The deployed
+`FISTWORLD_WORLD_CONFIG=/app/config/worlds/small-frontier-10.ron` selects a fresh
+Frontier opening: 20% of the original map area, four bare Moot Halls, and ten
+registered, unhoused founders per Hall. Each Hall keeps the small-frontier stock
+of 20 bread, 6 wheat and 12 wood. The Docker image includes `config/worlds/` at
+`/app/config/worlds/`. There is no fixed seed override: each new process chooses
+a random seed and starts at normal 1× speed. The old `big_world` setting selects
+an authored map and bypasses the current founding pass.
 
 ## Cost and lifecycle
 
@@ -83,10 +89,12 @@ Natural immigration is enabled on ordinary hosted worlds. New people enter from 
 real map-edge coast in one-use Dinghies, choose among existing settlements using
 food, homes, jobs, prosperity, unrest, personal preference and a bounded distance
 bias, sail to dry land and then walk through the ordinary Moot immigration queue.
-The default base cadence is three immigrants per world day, modified by season
-and settlement attractiveness. Natural arrivals pause when the total villager
+The checked-in preset and `FISTWORLD_IMMIGRANTS_PER_DAY=3` select a fixed global
+cadence of three world entries per game day, with no per-town quota. Immigrants
+choose their destination and complete the physical Hall registration and departure
+before participating as residents. Natural arrivals pause when the total villager
 population reaches 5,000 and resume after it falls below that ceiling. The checked-in
-`fly.toml` sets both defaults explicitly. Operational overrides are:
+`fly.toml` sets the rate and population ceiling explicitly. Operational overrides are:
 
 ```bash
 fly secrets set FISTWORLD_NATURAL_IMMIGRATION=0      # disable it

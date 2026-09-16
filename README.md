@@ -512,6 +512,7 @@ The full lab is intentionally ignored by ordinary `cargo test` runs.
 | `FISTFORCE_AUTOCONNECT=<name>` | Skip local login/name entry |
 | `FISTFORCE_CLIENT_PERF=1` | Emit rolling client frame-time diagnostics (`ClientPerf`) plus per-panel UI work counts (`ClientPerfUi`: calls / rebuilds / ms per panel system) |
 | `FISTFORCE_OPEN_ENCYCLOPEDIA=people\|places\|retinue\|companies` | Diagnostics: open the encyclopedia on that tab a few seconds into gameplay, for perf runs without input automation |
+| `FISTFORCE_OPEN_BUSINESS=company[:<id>]` | Diagnostics: open COMPANY SETTINGS for the lowest-id (or the named) replicated company a few seconds into gameplay, so `ClientPerfUi ensure_business_panel` can be measured without a mouse |
 | `FISTFORCE_SERVER_PERF=1` | Emit server tick and phase diagnostics |
 | `FISTFORCE_GRASS_STRESS_DENSITY=<1..32>` | Capture/profiling-only grass density multiplier; normal gameplay remains 1x |
 | `FISTFORCE_DISPLAY_MODE=windowed\|borderless\|exclusive` | Override the saved display mode for this run (`fullscreen` remains an alias for exclusive) |

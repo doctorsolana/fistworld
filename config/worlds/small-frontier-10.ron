@@ -1,0 +1,13 @@
+// 20% AREA: 3.664 km square. Four bare Halls, ten unhoused founders each.
+// Provisions and money are granted once; normal work must sustain each town.
+(
+    world_area_scale: 0.20,
+    opening: Frontier,
+    settlement_count: 4,
+    founders_per_settlement: 10,
+    immigrants_per_day: Some(3.0), // Total world-wide arrivals, not per town.
+    world_npc_cap: 5000,
+    seed: None,
+    hall_stock: Some((bread: 20, wheat: 6, wood: 12)),
+    hall_treasury_pennies: None,
+)

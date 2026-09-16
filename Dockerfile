@@ -65,6 +65,7 @@ RUN mkdir -p /app/server /app/client/assets
 COPY client/assets/colliders.bin /app/client/assets/colliders.bin
 COPY client/assets/maps /app/client/assets/maps
 COPY client/assets/game_assets /app/client/assets/game_assets
+COPY config/worlds /app/config/worlds
 
 WORKDIR /app/server
 

@@ -55,14 +55,14 @@ mod workplace_access;
 #[cfg(test)]
 use worker_activity::doors::WorkplaceDoorPhase;
 pub(crate) use worker_activity::doors::{
-    WorkplaceDoorDirection, WorkplaceInterior, begin_workplace_entry, begin_workplace_exit,
-    begin_workplace_interior_exit, run_workplace_service_handoffs,
+    begin_workplace_entry, begin_workplace_exit, begin_workplace_interior_exit,
+    run_workplace_service_handoffs, WorkplaceDoorDirection, WorkplaceInterior,
 };
 pub use worker_activity::doors::{
-    WorkplaceDoorTransit, run_workplace_door_transits, sync_building_door_demands,
+    run_workplace_door_transits, sync_building_door_demands, WorkplaceDoorTransit,
 };
 
-pub use businesses::{BusinessEventQueue, apply_business_events, review_business_management};
+pub use businesses::{apply_business_events, review_business_management, BusinessEventQueue};
 pub use civic::{
     collect_business_profit_taxes, ensure_civic_accounts, review_civic_policies, run_civic_payroll,
     sync_civic_market_policy,
@@ -74,10 +74,13 @@ pub use commerce::{
     sync_porter_cargo_capacity,
 };
 pub(crate) use companies::new_company_bundle;
+#[cfg(test)]
+pub use companies::DividendRequest;
 pub use companies::{
-    CompanyDividendQueue, CompanyEscrowRefundQueue, cleanup_empty_companies, ensure_companies,
-    ensure_company_branches, post_site_capital_to_company, refresh_company_accounts,
-    refund_company_escrows, review_company_finance, review_company_strategies,
+    cleanup_empty_companies, ensure_companies, ensure_company_branches,
+    post_site_capital_to_company, refresh_company_accounts, refund_company_escrows,
+    review_company_finance, review_company_strategies, CompanyDividendOutcomes,
+    CompanyDividendQueue, CompanyEscrowRefundQueue, DividendOutcome, DividendRefusal,
 };
 pub(crate) use construction::ensure_market_ground_is_level;
 pub use construction::{advance_construction, run_construction_material_logistics};
@@ -96,80 +99,79 @@ pub use households::{
 #[cfg(test)]
 pub(crate) use moot_services::PermitPickupRoutine;
 pub(crate) use moot_services::{
-    MootMealRoutine, MootQueueClock, MootQueueTicket, MootQueueTransit, MootServiceKind,
     advance_moot_service_queues, complete_moot_permit_pickups, enqueue_moot_service,
-    run_moot_meal_collections,
+    run_moot_meal_collections, MootMealRoutine, MootQueueClock, MootQueueTicket, MootQueueTransit,
+    MootServiceKind,
 };
 pub use mortality::{
-    MortalityLedger, acquire_businesses_for_sale, advance_nutrition_health,
-    apply_nutrition_condition, ensure_character_vitals, process_character_deaths,
-    recover_orphaned_construction,
+    acquire_businesses_for_sale, advance_nutrition_health, apply_nutrition_condition,
+    ensure_character_vitals, process_character_deaths, recover_orphaned_construction,
+    MortalityLedger,
 };
 pub(crate) use movement::ensure_move_target;
 use movement::stable_name_hash;
 pub use objectives::sync_character_objectives;
 #[cfg(test)]
-pub(crate) use planning::SettlementUrbanPlan;
-#[cfg(test)]
 pub(crate) use planning::find_site;
+#[cfg(test)]
+pub(crate) use planning::SettlementUrbanPlan;
 pub use planning::{
-    FREEBOARD, PermitPlanningDiagnostics, consider_permits, ensure_civic_squares, find_fishing_site,
-};
-pub(crate) use planning::{
-    ManualPlotApproval, RoadAccessBlocker, nearby_defense_reservations,
-    road_access_blockers_for_new_plot, road_access_blockers_for_plot, site_quality,
-    validate_manual_plot,
+    consider_permits, ensure_civic_squares, find_fishing_site, PermitPlanningDiagnostics, FREEBOARD,
 };
 #[cfg(test)]
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
+pub(crate) use planning::{
+    nearby_defense_reservations, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
+    site_quality, validate_manual_plot, ManualPlotApproval, RoadAccessBlocker,
+};
 pub use population::{
     advance_immigration_departures, arrive_at_settlement, recount_residents, seek_settlement,
     tag_villager_intent,
 };
 pub use processing::{
-    ProcessingRoutine, assign_processing_routines, run_processing_routines,
-    sync_workplace_operations,
+    assign_processing_routines, run_processing_routines, sync_workplace_operations,
+    ProcessingRoutine,
 };
 pub use production::sync_business_stock_targets;
 pub(crate) use production::{
-    BusinessStaffingForecast, ProcessingRecipe, SELF_SUPPLY_TREE_YIELD,
     automatic_opening_positions, estimated_staffed_unit_cost, farmer_seconds_per_wheat,
     fisher_seconds_per_food, livestock_seconds_per_meat, lumber_seconds_per_tree,
     lumber_tree_yield, maximum_viable_input_unit_price, process_available_cycles,
     processing_recipe, produce_livestock_cycles, quarry_seconds_per_stone, rated_daily_production,
-    viable_processing_input_purchase,
+    viable_processing_input_purchase, BusinessStaffingForecast, ProcessingRecipe,
+    SELF_SUPPLY_TREE_YIELD,
 };
 pub use property_market::{publish_property_boards, remove_abandoned_businesses};
-pub use quarry::{QuarryRoutine, assign_quarry_routines, run_quarry_routines};
-pub use settlement_economy::{
-    SettlementEconomyRuntime, ensure_settlement_economies, ensure_village_finances,
-    sync_public_market_storage, update_moot_market_targets, update_settlement_economies,
-};
+pub use quarry::{assign_quarry_routines, run_quarry_routines, QuarryRoutine};
 use settlement_economy::{buy_from_moot, sell_carried_to_moot};
+pub use settlement_economy::{
+    ensure_settlement_economies, ensure_village_finances, sync_public_market_storage,
+    update_moot_market_targets, update_settlement_economies, SettlementEconomyRuntime,
+};
 pub(crate) use tavern::stage_tavern_review;
 pub use tavern::{
-    TavernVisitRoutine, TavernWorkerRoutine, assign_tavern_routines, ensure_tavern_services,
-    refresh_character_day_plans, review_tavern_businesses, run_tavern_routines,
+    assign_tavern_routines, ensure_tavern_services, refresh_character_day_plans,
+    review_tavern_businesses, run_tavern_routines, TavernVisitRoutine, TavernWorkerRoutine,
 };
 pub use trade_routes::{
-    RegionalTradeIntelligence, TradeRouteRoutine, manage_company_trade_routes,
-    post_civic_import_contracts, review_autonomous_merchant_trade, run_company_trade_routes,
-    run_merchant_trade_routes,
+    manage_company_trade_routes, post_civic_import_contracts, review_autonomous_merchant_trade,
+    run_company_trade_routes, run_merchant_trade_routes, RegionalTradeIntelligence,
+    TradeRouteRoutine,
 };
 pub(crate) use trades::lumber_plot_has_reachable_tree;
 #[cfg(test)]
 use trades::{
-    TREE_APPROACH_ANGLES, advance_failed_tree_candidate, fishing_deck_points, tree_approach_start,
-};
-use trades::{
-    TreeCandidateLookup, TreeWorkCandidateCache, build_clip_facing,
-    exterior_door_clearance_position, find_nearby_tree_for_cycle_cached, ground_distance,
-    postpone_construction_store_route, postpone_construction_tree_search,
+    advance_failed_tree_candidate, fishing_deck_points, tree_approach_start, TREE_APPROACH_ANGLES,
 };
 pub use trades::{
     assign_farmer_routines, assign_fishing_routines, assign_lumberjack_routines,
     ensure_farm_fields, ensure_fishing_piers, ensure_livestock_pastures, run_farmer_routines,
     run_fishing_routines, run_lumberjack_routines, sync_carried_load, sync_porter_cart_state,
+};
+use trades::{
+    build_clip_facing, exterior_door_clearance_position, find_nearby_tree_for_cycle_cached,
+    ground_distance, postpone_construction_store_route, postpone_construction_tree_search,
+    TreeCandidateLookup, TreeWorkCandidateCache,
 };
 
 use bevy::ecs::system::SystemParam;
@@ -186,14 +188,14 @@ use shared::components::{
     WorldTime,
 };
 use shared::economy::{
-    BASIS_POINTS, BusinessAccount, BusinessCondition, BusinessForSale, BusinessInputRule,
-    BusinessLiquidation, BusinessManagementPolicy, BusinessPrivateInputRule,
+    permit_price_with_subsidy, BusinessAccount, BusinessCondition, BusinessForSale,
+    BusinessInputRule, BusinessLiquidation, BusinessManagementPolicy, BusinessPrivateInputRule,
     BusinessProcurementPolicy, BusinessSalePolicy, BusinessSourcingMode, BusinessStaffingPolicy,
-    BusinessState, BusinessSupplyPolicy, BusinessWagePolicy, CarriedLoad,
-    FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE, Good, GoodsInventory, HouseholdEconomy,
-    MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, MarketSeller, MootMarket,
-    PENNIES_PER_COIN, PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY, SettlementEconomy,
-    TavernService, Wallet, WorkforceRequirements, permit_price_with_subsidy,
+    BusinessState, BusinessSupplyPolicy, BusinessWagePolicy, CarriedLoad, Good, GoodsInventory,
+    HouseholdEconomy, MarketSeller, MootMarket, SettlementEconomy, TavernService, Wallet,
+    WorkforceRequirements, BASIS_POINTS, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
+    MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
+    PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY,
 };
 use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;

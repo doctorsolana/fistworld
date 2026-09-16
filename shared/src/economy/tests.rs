@@ -714,12 +714,10 @@ fn estate_transfer_preserves_the_goods_price_and_future_proceeds() {
     assert_eq!(market.seller_listed_units(treasury, Good::Flour), 7);
     let purchase = market.purchase(Good::Flour, 7, u64::MAX, None, None);
     assert_eq!(purchase.trade.pennies, 7 * 61);
-    assert!(
-        purchase
-            .fills
-            .iter()
-            .all(|fill| fill.seller == treasury && fill.unit_price == 61)
-    );
+    assert!(purchase
+        .fills
+        .iter()
+        .all(|fill| fill.seller == treasury && fill.unit_price == 61));
 }
 
 #[test]
@@ -891,4 +889,90 @@ fn household_consignment_owner_roundtrips_without_changing_existing_seller_tags(
     market.consign(seller, Good::Bread, 3, 17);
     let decoded: MootMarket = bincode::deserialize(&bincode::serialize(&market).unwrap()).unwrap();
     assert_eq!(decoded.seller_listed_units(seller, Good::Bread), 3);
+}
+
+#[test]
+fn company_dividend_capacity_roundtrips_on_the_wire() {
+    let never = CompanyDividendCapacity::default();
+    assert_eq!(
+        never.day,
+        u32::MAX,
+        "unreviewed must not read as world day 0"
+    );
+    assert_eq!(
+        never.last_paid_day,
+        u32::MAX,
+        "never paid must not read as day 0"
+    );
+    for capacity in [
+        never,
+        CompanyDividendCapacity {
+            day: 12,
+            distributable: 700,
+            protected_reserves: 1_000,
+            retained_profit: 700,
+            last_paid_day: 12,
+            last_paid: 300,
+        },
+        CompanyDividendCapacity {
+            day: u32::MAX - 1,
+            distributable: u64::MAX,
+            protected_reserves: u64::MAX,
+            retained_profit: u64::MAX,
+            last_paid_day: 0,
+            last_paid: u64::MAX,
+        },
+    ] {
+        let bytes = bincode::serialize(&capacity).unwrap();
+        assert_eq!(
+            bincode::deserialize::<CompanyDividendCapacity>(&bytes).unwrap(),
+            capacity
+        );
+    }
+}
+
+#[test]
+fn pro_rata_split_is_exact_and_gives_only_the_penny_remainder_to_the_first_holder() {
+    use crate::components::{CompanyOwnership, PersonId};
+    let founder = PersonId(9);
+    let partner = PersonId(4);
+    let mut ownership = CompanyOwnership::sole(founder);
+    assert!(ownership.transfer(founder, partner, 400));
+    // The cap table is sorted by PersonId, so the partner is the stable first entry.
+    assert_eq!(ownership.shares()[0].shareholder, partner);
+    let mut out = Vec::new();
+
+    pro_rata_split(1_000, &ownership, &mut out);
+    assert_eq!(out, vec![(partner, 400), (founder, 600)]);
+
+    pro_rata_split(1_001, &ownership, &mut out);
+    assert_eq!(
+        out,
+        vec![(partner, 401), (founder, 600)],
+        "400.4 + 600.6 floors to 400 + 600; the one remaining penny goes to the first entry"
+    );
+
+    for pennies in [0, 1, 7, 999, 12_345, u64::MAX / 2, u64::MAX] {
+        pro_rata_split(pennies, &ownership, &mut out);
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            out.iter()
+                .map(|(_, amount)| u128::from(*amount))
+                .sum::<u128>(),
+            u128::from(pennies)
+        );
+        let floor = |shares: u16| (u128::from(pennies) * u128::from(shares) / 1_000) as u64;
+        assert_eq!(
+            out[1].1,
+            floor(600),
+            "non-first holders receive the exact floor"
+        );
+        assert!(
+            out[0].1 - floor(400) < 2,
+            "the remainder is never more than the holder count"
+        );
+    }
+
+    pro_rata_split(555, &CompanyOwnership::sole(founder), &mut out);
+    assert_eq!(out, vec![(founder, 555)]);
 }

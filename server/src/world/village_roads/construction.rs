@@ -753,7 +753,16 @@ pub fn plan_requested_roads(
                     return None;
                 };
                 let mut surveyed = if reserved_is_clear {
-                    reserved_survey.expect("a clear reserved survey exists")
+                    // The permit reservation is certified as a polyline, so it
+                    // may be a bare two-point corridor. Build it at the same
+                    // node spacing as a fresh survey: later houses beside this
+                    // road join by node and need frontage every two metres.
+                    // Interior samples are collinear, so every certification
+                    // above still holds.
+                    resample_path(
+                        &reserved_survey.expect("a clear reserved survey exists"),
+                        2.0,
+                    )
                 } else {
                     survey_village_road(
                         &terrain,

@@ -26,7 +26,7 @@ use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessProcurementPolicy,
     BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, CivicAccount, CompanyAccount,
     CompanyDecisionHistory, CompanyManagementPolicy, Good, GoodsInventory, HouseholdEconomy,
-    MootMarket, PENNIES_PER_COIN, STARTING_TREASURY_MONEY, SettlementEconomy, Wallet,
+    MootMarket, SettlementEconomy, Wallet, PENNIES_PER_COIN, STARTING_TREASURY_MONEY,
 };
 use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
@@ -34,10 +34,8 @@ use shared::terrain::WorldTerrain;
 
 use super::ambient::{self, AmbientClock, AmbientRoutine, AmbientSpotCache};
 use super::collect_business_profit_taxes;
-use super::history::{SettlementHistoryRuntime, capture_settlement_history};
-use super::{BusinessEventQueue, CompanyDividendQueue, apply_business_events};
+use super::history::{capture_settlement_history, SettlementHistoryRuntime};
 use super::{
-    FarmerPhase, FarmerRoutine, HomeAssignment, SettlementEconomyRuntime, VillagerIntent,
     advance_nutrition_health, apply_nutrition_condition, assign_farmer_routines, assign_households,
     ensure_farm_fields, fill_vacancies, post_site_capital_to_company, reconcile_work_statuses,
     recount_residents, refresh_company_accounts, review_business_management, review_civic_policies,
@@ -45,15 +43,19 @@ use super::{
     run_civic_payroll, run_farmer_routines, run_household_schedules, run_workplace_door_transits,
     sync_building_door_demands, sync_carried_load, sync_civic_market_policy,
     sync_public_market_storage, update_household_budgets_and_pantries, update_moot_market_targets,
-    update_settlement_economies,
+    update_settlement_economies, FarmerPhase, FarmerRoutine, HomeAssignment,
+    SettlementEconomyRuntime, VillagerIntent,
+};
+use super::{
+    apply_business_events, BusinessEventQueue, CompanyDividendOutcomes, CompanyDividendQueue,
 };
 use crate::collision::library::StaticColliders;
-use crate::player::hero::{MoveTarget, step_units};
+use crate::player::hero::{step_units, MoveTarget};
 use crate::world::pathfinding::PathfindingBudgetSettings;
 use crate::world::regions::RegionRegistry;
 use crate::world::village_roads::{
-    NavigationRoutePending, VillageRoadGraph, plan_villager_travel_routes,
-    queue_villager_travel_routes,
+    plan_villager_travel_routes, queue_villager_travel_routes, NavigationRoutePending,
+    VillageRoadGraph,
 };
 
 const DEFAULT_NPCS: usize = 5_000;
@@ -348,6 +350,7 @@ fn configure_app(towns: usize, npcs: usize) -> App {
     app.init_resource::<SettlementHistoryRuntime>();
     app.init_resource::<BusinessEventQueue>();
     app.init_resource::<CompanyDividendQueue>();
+    app.init_resource::<CompanyDividendOutcomes>();
     app.init_resource::<crate::world::identity::WorldIdAllocator>();
     app.init_resource::<crate::world::identity::WorldIdentityIndex>();
     app.init_resource::<AmbientClock>();

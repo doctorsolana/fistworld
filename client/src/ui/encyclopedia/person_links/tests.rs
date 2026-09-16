@@ -98,12 +98,10 @@ fn identity_permissions_keep_names_distinct_and_allow_own_record() {
     assert!(can_open(people, PersonId(4), false));
     assert!(!can_open(people, PersonId(0), true));
     assert!(!can_open(people, PersonId(99), true));
-    assert!(
-        people
-            .visible(PeopleFilter::All, false)
-            .iter()
-            .any(|person| person.id == PersonId(4))
-    );
+    assert!(people
+        .visible(PeopleFilter::All, false)
+        .iter()
+        .any(|person| person.id == PersonId(4)));
 }
 
 #[test]
@@ -218,6 +216,7 @@ fn workplace_roster_uses_employment_ids_deduplicates_replication_and_reuses_unch
     let mut world = world();
     world.init_resource::<places::KnownPlaces>();
     world.init_resource::<Time>();
+    world.init_resource::<crate::ui::perf::UiPerf>();
     world
         .run_system_once(|mut commands: Commands| {
             commands
@@ -274,4 +273,145 @@ fn workplace_roster_uses_employment_ids_deduplicates_replication_and_reuses_unch
         .collect();
     after.sort_by_key(|row| row.0);
     assert_eq!(rows, after);
+}
+
+/// A company site card must carry its WORKERS rows on the frame it is
+/// spawned. `roster_systems` is ordered after `rebuild_company_view` so the
+/// roster fill sees the new host in the same frame; with the old ordering the
+/// card appeared one frame short and grew a frame later, twice a second.
+#[test]
+fn site_card_roster_is_present_on_the_same_frame_as_the_card() {
+    use companies::{
+        CompanyDetailContent, CompanyDetailViewport, CompanyDirectory, CompanyFilter,
+        CompanyHolderRecord, CompanyListContent, CompanyPolicyFeedback, CompanyPortfolioContent,
+        CompanyRecord, CompanySiteRecord, SelectedCompany, TradeRouteEditorState,
+    };
+    use shared::components::SettlementBuildingKind;
+    use shared::economy::{BusinessState, CompanyAccount, CompanyManagementPolicy, Good};
+
+    let owner = PersonId(4);
+    let site = CompanySiteRecord {
+        entity: Entity::from_bits(111),
+        id: BuildingId(11),
+        settlement: "Oakfell".into(),
+        settlement_id: SettlementId(1),
+        kind: SettlementBuildingKind::Windmill,
+        workers: 1,
+        positions: 2,
+        enabled_positions: 2,
+        state: BusinessState::Operating,
+        wage_arrears: 0,
+        tax_arrears: 0,
+        current_day: default(),
+        previous_day: default(),
+        output: Some(Good::Flour),
+        output_stock: 0,
+        asking_price: Some(100),
+        input: Some(Good::Wheat),
+        input_stock: 0,
+        input_target: 0,
+        input_coverage_days: 1,
+        sourcing: None,
+        preferred_supplier: None,
+        goods: Vec::new(),
+        used_bulk: 0,
+        bulk_capacity: 0,
+    };
+    let company = CompanyRecord {
+        id: CompanyId(7),
+        name: "Mill & Co".into(),
+        founded_day: 1,
+        master: owner,
+        master_name: "Hero".into(),
+        account: CompanyAccount::default(),
+        policy: CompanyManagementPolicy::default(),
+        capacity: None,
+        ownership: shared::components::CompanyOwnership::sole(owner),
+        holders: vec![CompanyHolderRecord {
+            person: owner,
+            name: "Hero".into(),
+            shares: 1_000,
+        }],
+        offers: Vec::new(),
+        decisions: Vec::new(),
+        sites: vec![site],
+        branches: Vec::new(),
+        routes: Vec::new(),
+        fleet: default(),
+    };
+
+    let mut app = App::new();
+    app.insert_resource(CompanyDirectory {
+        records: vec![company],
+        settlements: Vec::new(),
+        local_person: Some(owner),
+        local_wallet: Some(10),
+    })
+    .init_resource::<CompanyFilter>()
+    .insert_resource(SelectedCompany(Some(CompanyId(7))))
+    .init_resource::<CompanyPolicyFeedback>()
+    .init_resource::<TradeRouteEditorState>()
+    .init_resource::<crate::ui::perf::UiPerf>()
+    .init_resource::<places::KnownPlaces>()
+    .init_resource::<places::SelectedPlace>()
+    .init_resource::<places::SelectedPlaceEntry>()
+    .init_resource::<crate::ui::hud::GodCapability>()
+    .init_resource::<PersonLinkReturn>()
+    .init_resource::<Time>()
+    .insert_resource(KnownPeople {
+        records: vec![
+            person(1, "Ada", true, false),
+            person(4, "Hero", false, true),
+        ],
+        requested: false,
+    });
+    app.add_systems(Update, (companies::rebuild_company_view, roster_systems()));
+    app.world_mut()
+        .spawn((CompanyPortfolioContent, Node::default()));
+    app.world_mut().spawn((CompanyListContent, Node::default()));
+    let viewport = app
+        .world_mut()
+        .spawn((
+            CompanyDetailViewport,
+            Node::default(),
+            ScrollPosition::default(),
+        ))
+        .id();
+    let detail = app
+        .world_mut()
+        .spawn((CompanyDetailContent, Node::default(), ChildOf(viewport)))
+        .id();
+    app.world_mut().spawn((
+        PersonId(1),
+        CharacterName("Ada".into()),
+        EmployedAt(BuildingId(11)),
+    ));
+
+    // ONE frame: the card and its roster must both exist afterwards.
+    app.update();
+    let world = app.world_mut();
+    let (link, host_display) = {
+        let mut links = world.query::<(Entity, &PersonLink, &ChildOf)>();
+        let (link, _, parent) = links
+            .iter(world)
+            .find(|(_, link, _)| link.0 == PersonId(1))
+            .expect("the worker row is spawned in the same frame as the site card");
+        let host = parent.parent();
+        (link, world.get::<Node>(host).unwrap().display)
+    };
+    assert_eq!(
+        host_display,
+        Display::Flex,
+        "the roster host is shown, not hidden"
+    );
+    let mut cursor = link;
+    let mut under_detail = false;
+    while let Some(parent) = world.get::<ChildOf>(cursor) {
+        cursor = parent.parent();
+        if cursor == detail {
+            under_detail = true;
+            break;
+        }
+    }
+    assert!(under_detail, "the roster row lives inside the detail pane");
 }

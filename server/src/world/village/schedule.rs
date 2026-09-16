@@ -68,6 +68,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
     app.init_resource::<super::BusinessEventQueue>();
     app.init_resource::<super::development_evidence::SettlementDevelopmentSamples>();
     app.init_resource::<super::CompanyDividendQueue>();
+    app.init_resource::<super::CompanyDividendOutcomes>();
     app.init_resource::<super::CompanyEscrowRefundQueue>();
     app.init_resource::<super::MootQueueClock>();
     app.init_resource::<super::civic_labor::CivicLaborMarket>();

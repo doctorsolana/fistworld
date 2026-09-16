@@ -2,15 +2,15 @@
 //! A workplace is never an authorization gateway for a legal company.
 
 use bevy::{ecs::system::SystemParam, prelude::*};
-use lightyear::prelude::{MessageReceiver, MessageSender, RemoteId, server::ClientOf};
+use lightyear::prelude::{server::ClientOf, MessageReceiver, MessageSender, RemoteId};
 use shared::{
     components::{
-        BuildingOf, COMPANY_TOTAL_SHARES, CompanyId, CompanyLeadership, CompanyOwnership,
-        CompanyShareMarket, Hero, OperatedBy, PersonId, SettlementId, WorldTime,
+        BuildingOf, CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket, Hero,
+        OperatedBy, PersonId, SettlementId, WorldTime, COMPANY_TOTAL_SHARES,
     },
     economy::{
-        CompanyAccount, CompanyBranchPolicies, CompanyManagementPolicy, GoodsInventory, Wallet,
-        format_money,
+        format_money, CompanyAccount, CompanyBranchPolicies, CompanyDividendCapacity,
+        CompanyManagementPolicy, GoodsInventory, Wallet,
     },
     protocol::{HeroCompanyAction, HeroCompanyOrder, HeroCompanyResult, ReliableChannel},
 };
@@ -113,6 +113,7 @@ pub(crate) struct CompanyOrders<'w, 's> {
             &'static mut CompanyBranchPolicies,
             &'static mut CompanyManagementPolicy,
             &'static mut CompanyShareMarket,
+            Option<&'static CompanyDividendCapacity>,
         ),
     >,
     wallets: Query<'w, 's, (Entity, &'static PersonId, &'static mut Wallet)>,
@@ -130,13 +131,18 @@ pub(crate) struct CompanyOrders<'w, 's> {
 }
 
 impl CompanyOrders<'_, '_> {
+    /// `Ok(None)` means the order was accepted but its result is deferred:
+    /// the finance pass pays on the next world tick and
+    /// `report_dividend_outcomes` sends the one honest reply, so no immediate
+    /// `HeroCompanyResult` may be sent for it.
     fn execute(
         &mut self,
         person: PersonId,
         hero: Entity,
+        link: Entity,
         order: HeroCompanyOrder,
         day: u32,
-    ) -> Result<String, &'static str> {
+    ) -> Result<Option<String>, &'static str> {
         let Some((
             _,
             mut leadership,
@@ -145,6 +151,7 @@ impl CompanyOrders<'_, '_> {
             mut branches,
             mut management,
             mut market,
+            capacity,
         )) = self
             .companies
             .iter_mut()
@@ -153,7 +160,23 @@ impl CompanyOrders<'_, '_> {
             return Err("That company is unavailable.");
         };
         authorize(order.action, person, &leadership, &ownership)?;
-        match order.action {
+        if let HeroCompanyAction::DistributeDividend { pennies } = order.action {
+            if pennies == 0 {
+                return Err(
+                    if capacity.is_some_and(|capacity| capacity.distributable == 0) {
+                        "Nothing is distributable right now; choose a positive dividend once retained profit exceeds the company's reserves."
+                    } else {
+                        "Choose a positive dividend amount."
+                    },
+                );
+            }
+            // Amount validation happens against live reserves in the finance
+            // pass, which clamps and reports; the replicated snapshot is stale
+            // within a day and must not reject a request spuriously.
+            self.dividends.request(order.company, pennies, person, link);
+            return Ok(None);
+        }
+        let message: Result<String, &'static str> = match order.action {
             HeroCompanyAction::AppointCompanyMaster(candidate) => {
                 if ownership.share_count(candidate) == 0 {
                     return Err("The Company Master must be a current shareholder.");
@@ -228,9 +251,8 @@ impl CompanyOrders<'_, '_> {
                     _ => "Company dividend policy updated.",
                 }.into())
             }
-            HeroCompanyAction::DistributeAvailableProfit => {
-                self.dividends.request(order.company);
-                Ok("Requested the maximum dividend available after company-wide liabilities and working-capital reserves. It will be distributed to all shareholders by share count.".into())
+            HeroCompanyAction::DistributeDividend { .. } => {
+                unreachable!("dividend requests are deferred above")
             }
             HeroCompanyAction::ContributeCapital { amount } => {
                 if ownership.share_count(person) != COMPANY_TOTAL_SHARES {
@@ -311,7 +333,8 @@ impl CompanyOrders<'_, '_> {
                     if enabled { "enabled" } else { "paused" }
                 ))
             }
-        }
+        };
+        message.map(Some)
     }
 }
 
@@ -319,6 +342,7 @@ impl CompanyOrders<'_, '_> {
 pub fn handle_hero_company_orders(
     mut links: Query<
         (
+            Entity,
             &RemoteId,
             &mut MessageReceiver<HeroCompanyOrder>,
             &mut MessageSender<HeroCompanyResult>,
@@ -330,18 +354,21 @@ pub fn handle_hero_company_orders(
     clocks: Query<&WorldTime>,
 ) {
     let day = clocks.iter().next().map_or(0, |clock| clock.day);
-    for (remote, mut receiver, mut sender) in links.iter_mut() {
+    for (link, remote, mut receiver, mut sender) in links.iter_mut() {
         for order in receiver.receive() {
             let company = order.company;
             let response = if let Some((hero, _, person)) =
                 heroes.iter().find(|(_, hero, _)| hero.owner == remote.0)
             {
-                orders.execute(*person, hero, order, day)
+                orders.execute(*person, hero, link, order, day)
             } else {
                 Err("Create your hero before managing a company.")
             };
             let (success, message) = match response {
-                Ok(message) => (true, message),
+                // Deferred: the finance pass answers through
+                // `report_dividend_outcomes` one tick later.
+                Ok(None) => continue,
+                Ok(Some(message)) => (true, message),
                 Err(message) => (false, message.into()),
             };
             sender.send::<ReliableChannel>(HeroCompanyResult {

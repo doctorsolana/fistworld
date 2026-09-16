@@ -334,7 +334,13 @@ pub enum HeroCompanyAction {
     SetStrategy(crate::economy::BusinessStrategy),
     SetAutopilot(bool),
     SetAutomaticDividends(bool),
-    DistributeAvailableProfit,
+    /// Distribute up to `pennies` of retained profit pro rata over the cap
+    /// table (`u64::MAX` = everything distributable). The server clamps the
+    /// amount against live reserves when the finance pass pays and answers
+    /// with one deferred `HeroCompanyResult` naming what was actually paid.
+    DistributeDividend {
+        pennies: u64,
+    },
     /// Move personal money into a sole-owned company. This is an explicit
     /// capital contribution, never revenue and never an implicit permit top-up.
     ContributeCapital {
@@ -1089,7 +1095,8 @@ mod tests {
             HeroCompanyAction::SetStrategy(BusinessStrategy::Conservative),
             HeroCompanyAction::SetAutopilot(false),
             HeroCompanyAction::SetAutomaticDividends(false),
-            HeroCompanyAction::DistributeAvailableProfit,
+            HeroCompanyAction::DistributeDividend { pennies: 1 },
+            HeroCompanyAction::DistributeDividend { pennies: u64::MAX },
             HeroCompanyAction::ContributeCapital { amount: 1_275 },
         ] {
             let order = HeroCompanyOrder {

@@ -19,13 +19,17 @@ pub(super) fn is_grass_kind(kind: shared::props::PropKind) -> bool {
     matches!(kind, GrassShortA | GrassTallA)
 }
 
-/// Kinds that get wind sway (trunk-rooted plants; flowers and ground clutter
-/// are too small to read).
+/// Kinds that get wind sway: trunk-rooted plants, plus the flower patches
+/// now that they are 2.5 m clumps with heads on 0.5 m stems rather than a
+/// single 20 cm sprig too small to read.
 fn is_swayable(kind: shared::props::PropKind) -> bool {
     use shared::props::PropKind::*;
     is_tree_kind(kind)
         || is_grass_kind(kind)
-        || matches!(kind, BushA | BushB | BushC | FernPatchA | FernPatchB)
+        || matches!(
+            kind,
+            BushA | BushB | BushC | FernPatchA | FernPatchB | FlowerA | FlowerB | FlowerC | FlowerD
+        )
 }
 
 /// Per-kind sway: amplitude in metres at the tip, and FLUTTER rate.
@@ -45,6 +49,9 @@ fn sway_strength(kind: shared::props::PropKind) -> (f32, f32) {
     match kind {
         BushA | BushB | BushC => (0.030, 1.25),
         FernPatchA | FernPatchB => (0.055, 1.35),
+        // Blossom heads nod a few centimetres; the same figures drive the
+        // instanced ground-cover drifts (ground_cover_chunked::material_for_kind).
+        FlowerA | FlowerB | FlowerC | FlowerD => (0.06, 1.3),
         // Trees. The first number is METRES AT THE TIP, so 0.055 was 5.5 cm on
         // a canopy 6-8 m up -- physically defensible and visually nothing,
         // especially from an RTS camera where that is a fraction of a pixel.

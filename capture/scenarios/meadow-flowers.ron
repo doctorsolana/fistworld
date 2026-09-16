@@ -1,0 +1,103 @@
+(
+    version: 1,
+    name: "meadow-flowers",
+    map: "big_world",
+    output_dir: "logs/captures/meadow-flowers",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: scene,
+    show_window: false,
+    warmup_frames: 240,
+    // Ground cover streams one chunk per frame over a 9x9 ring, so give each
+    // shot time for the whole flower-drift ring to build before judging it.
+    readiness: (
+        minimum_frames: 150,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 64,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: { "FISTFORCE_CAPTURE_CLOUDS": "clear" },
+    diagnostics: (
+        performance_overlay: false,
+        gizmos: false,
+        render_timings: false,
+    ),
+    // Probes come from `cargo test -p shared -- --ignored --nocapture find_biome_spots`
+    // on the shipped Showcase/91 world: Meadows -2920,-680; Forest -3000,-240;
+    // Highlands -2880,-840; Snowlands -1600,-2720.
+    shots: [
+        (
+            name: "01-meadow-close-35",
+            // Player-scale inspection: blossoms, leaf mound, grass thinned around each patch.
+            focus: (-2920.0, 0.0, -560.0),
+            yaw: -0.45,
+            zoom: 35.0,
+            time_of_day: 0.5,
+            assertions: [
+                loaded_chunks_at_least(count: 64),
+                entities_at_least(count: 100),
+                grass_batches_at_least(count: 1),
+            ],
+        ),
+        (
+            name: "02-meadow-play-120",
+            // Normal RTS zoom: drifts must read as clusters of colour with quiet ground between.
+            focus: (-2920.0, 0.0, -560.0),
+            yaw: -0.45,
+            zoom: 120.0,
+            time_of_day: 0.5,
+            assertions: [
+                loaded_chunks_at_least(count: 64),
+                grass_batches_at_least(count: 1),
+            ],
+        ),
+        (
+            name: "03-meadow-overview-220",
+            // Far play zoom: drifts as colour texture out to the 256 m ground-cover ring.
+            focus: (-2920.0, 0.0, -560.0),
+            yaw: -0.45,
+            zoom: 220.0,
+            time_of_day: 0.5,
+            assertions: [
+                loaded_chunks_at_least(count: 64),
+                grass_batches_at_least(count: 1),
+            ],
+        ),
+        (
+            name: "04-meadow-night-60",
+            // Flowers are lit like grass: dark at night, never emissive.
+            focus: (-2920.0, 0.0, -560.0),
+            yaw: -0.45,
+            zoom: 60.0,
+            time_of_day: 0.02,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+        (
+            name: "05-forest-glade-120",
+            // Forest: flowers only where the glade mask opens the canopy.
+            focus: (-3000.0, 0.0, -240.0),
+            yaw: -0.45,
+            zoom: 120.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+        (
+            name: "06-highlands-120",
+            // Highland moor: flowers on the grassy slopes, none on rock faces.
+            focus: (-2880.0, 0.0, -840.0),
+            yaw: -0.45,
+            zoom: 120.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+        (
+            name: "07-snowlands-120",
+            // Taiga fringe: a few patches where snow cover is light, none deeper in.
+            focus: (-1600.0, 0.0, -2720.0),
+            yaw: -0.45,
+            zoom: 120.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+    ],
+)

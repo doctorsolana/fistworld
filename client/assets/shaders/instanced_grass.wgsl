@@ -93,12 +93,19 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     // Per-tuft dryness tint (instance .w lane): lush tufts sit a touch
     // deeper green, dry tufts go warm straw. Value-and-warmth only - the
     // same discipline as the terrain mottle - so the meadow yellows rather
-    // than turning teal or orange.
+    // than turning teal or orange. wind_extra.x = 1 (flower patches) keeps
+    // the authored petal colours: a straw tint would turn white petals
+    // yellow and muddy the red.
     let dryness = clamp(vertex.instance_rotation_scale.w, 0.0, 1.0);
+    let keep_authored = clamp(wind_extra.x, 0.0, 1.0);
     let dry_tint = mix(
-        vec3<f32>(0.90, 1.02, 0.88),
-        vec3<f32>(1.18, 1.06, 0.74),
-        dryness,
+        mix(
+            vec3<f32>(0.90, 1.02, 0.88),
+            vec3<f32>(1.18, 1.06, 0.74),
+            dryness,
+        ),
+        vec3<f32>(1.0, 1.0, 1.0),
+        keep_authored,
     );
     out.color = vec4<f32>(
         vertex.color.rgb * dry_tint * (1.0 + gust * 0.30 * h),

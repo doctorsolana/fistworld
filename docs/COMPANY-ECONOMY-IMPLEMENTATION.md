@@ -63,12 +63,29 @@ There are only four person/company cash boundaries:
    explicit shareholder loans or primary share issuance are implemented.
 2. **Wage:** the company pays a worker for one site's position. It is a company
    expense attributed to that site and ordinary personal income for the worker.
-3. **Dividend:** the Company Master may distribute drawable retained profit.
-   The payment is divided pro rata over the current 1,000-share cap table. It is
-   not a wage or operating cost. Wide integer arithmetic preserves share ratios;
-   only whole-penny rounding goes to the stable first shareholder. Every receiving
-   wallet is checked before any treasury debit. If one cannot accept its payment,
-   the whole distribution and its profit entitlement remain with the company.
+3. **Dividend:** the Company Master may distribute drawable retained profit, and
+   may choose the amount (`DistributeDividend { pennies }`, `u64::MAX` = everything
+   distributable). The finance pass clamps the request to what is distributable at
+   that moment (consolidated retained profit, i.e. every site's revenue less every
+   site's expenses and prior withdrawals summed before clamping at zero so a
+   loss-making site offsets a profitable sibling, capped by treasury cash above every
+   site's payroll, input, tax and operating reserves) and reports the clamped
+   figure instead of refusing on a stale snapshot. `CompanyDividendCapacity` is
+   published once per company per world day, after each manual request, and once
+   on the tick after a company is founded mid-day (its default `day == u32::MAX`
+   marks it never reviewed), so a new company's headroom is visible the same day. Manual payouts are bounded only
+   by those reserves: they ignore `max_daily_dividend` and the automatic
+   one-per-day cadence and never touch `last_dividend_day`. The payment is divided
+   pro rata over the current 1,000-share cap table with the shared
+   `pro_rata_split` (wide integer floor; only whole-penny rounding goes to the
+   stable first shareholder), so a client preview and the server payout agree
+   penny for penny. It is not a wage or operating cost. Every receiving wallet is
+   checked before any treasury debit. If one cannot accept its payment, the whole
+   distribution and its profit entitlement remain with the company. The site memo
+   (`owner_withdrawals`) is attributed against each site's own retained profit in
+   stable building order, so a site leaving the company takes its revenue and its
+   paid-out share together and already-distributed profit never becomes
+   distributable again.
 4. **Share sale:** a buyer pays the selling shareholder and receives already
    issued shares. This moves no money into or out of the company unless a later
    primary-issuance mechanic is deliberately introduced.
@@ -252,6 +269,13 @@ or long-lived estate creditors. The claim scan occurs only when there are deaths
 - Finance: `CompanyAccount`, company liabilities and current/completed
   `CompanyDayLedger` snapshots. The open day's wage line may legitimately remain zero until
   dawn; completed payroll must remain visible in `previous_day` after consolidation.
+- Dividend capacity: `CompanyDividendCapacity` (`day`, `distributable`, `protected_reserves`,
+  `retained_profit`, `last_paid_day`, `last_paid`; `u32::MAX` = never) is published by
+  `review_company_finance` after its payouts, once per company per world day and again for
+  the requested company after each manual request, through an off-component copy and
+  `set_if_neq`, so an unchanged figure never advances the replication tick and nothing is
+  written per tick. It is a display/drafting snapshot; the pass re-derives the live figure
+  when it pays.
 - Site accounting: `BusinessAccount` and its bounded ledgers; per-building history remains the place for production, local costs and settings, never a second wallet.
 - Supply policy: every enabled processor input has a player-facing stock-coverage target of 0–7 days, a sourcing mode and an optional preferred supplier `BuildingId`. The server converts days into bounded unit targets from the recipe, current staffing and storage capacity; its lower reorder threshold is internal hysteresis rather than another owner setting.
 - Branch stock policy: `CompanyBranchPolicies` stores absolute retain units plus the public-sale toggle per local good. This is separate from processor input cover and uses stable `SettlementId`, so identical company operations in two towns cannot leak policy or inventory into each other.
@@ -300,8 +324,9 @@ are preserved without blocking release. These contracts are implemented in
   routes use their own port, crew and class-certified water path instead of this land gate.
 - Company sites link into their settlement/building records; shareholder and observed worker names link to durable People records, with a return action. Each site exposes `View Details` and `Site Settings`. Both drill-down paths provide `Back to Company`, and repeated management clicks preserve scroll position. `Company Settings` opens by `CompanyId`, without choosing an arbitrary site or requiring one to be observed or operating.
 - Company direction, executive autopilot, dividends, Master appointments and share offers use `HeroCompanyOrder`; site wages, positions, asking prices, procurement and local strategy use `HeroBusinessOrder`. The server resolves the actual company or site and authenticates the player again. Company replies include the company identity; site replies include their mapped site entity, so late results stay with their originating control context.
+- Dividend controls live in COMPANY SETTINGS, TREASURY & DIVIDENDS (`client/src/ui/business_management`). The SHAREHOLDER DIVIDENDS row binds the replicated `CompanyDividendCapacity` as `Available now X coin (day d) · reserves R coin · last paid P coin on day d` (or `never paid` / `awaiting the first finance review`) above the policy line. The Company Master drafts an amount with `-1 COIN`, `+1 COIN`, `25%`, `50%` and `ALL` (a client-side `DividendDraft`, seeded at everything distributable and following the published headroom until the player steps it, so a company opened before its snapshot arrives does not stay pinned at zero; every step clamps to `0..=distributable`) and confirms with `DISTRIBUTE X COIN`, whose payload is `DistributeDividend { pennies: min(draft, distributable) }`. The confirm control always exists; with nothing distributable it reads `DISTRIBUTE 0.00 COIN` and sends `pennies: 0`, which the server refuses with a plain message, so the row never respawns when the headroom crosses zero. The IF DISTRIBUTED NOW row previews `X coin · X/100 coin per 10 shares · your S shares receive Z coin`, with `Z` taken from the shared `pro_rata_split` of the exact replicated cap table (holders without authority preview a full distribution). The deferred `HeroCompanyResult` lands one tick later in the panel's feedback line and in the Companies page's receipt note through the unchanged `receive_company_policy_results` path; nothing on the client assumes an immediate reply. The Companies encyclopedia page shows the same snapshot read-only as the DISTRIBUTABLE line under GOVERNANCE and, for shareholders, a Your Position note with the exact take of a full distribution; the amount picker exists only in the management panel.
 - Choosing a company strategy pauses automatic executive strategy changes and reaches only sites still following company policy. A local strategy choice pauses that site's management and leaves company defaults and siblings untouched. Re-enabling site autopilot immediately adopts the current company default; re-enabling company autopilot resumes executive review without erasing manual site overrides. Separate manual wage and asking-price switches remain authoritative.
-- Company finance/governance remains available when its only site is closed or absent. Physical branch-stock controls still require an owned site in the named settlement. Operating decisions require the appointed Master; appointing a Master requires more than 500 shares and a shareholder candidate. Shareholders can list only their own interest, and purchases settle the exact cap table against real wallets. Sole-owner capital contributions reject insufficient funds or receiving-ledger overflow before any debit. Dividends remain requests to the existing liability/reserve-aware finance pass, never an immediate site withdrawal.
+- Company finance/governance remains available when its only site is closed or absent. Physical branch-stock controls still require an owned site in the named settlement. Operating decisions require the appointed Master; appointing a Master requires more than 500 shares and a shareholder candidate. Shareholders can list only their own interest, and purchases settle the exact cap table against real wallets. Sole-owner capital contributions reject insufficient funds or receiving-ledger overflow before any debit. Dividends remain requests to the existing liability/reserve-aware finance pass, never an immediate site withdrawal: the order handler checks only authority and a positive amount, enqueues the request with the requester's `PersonId` and link, and sends no immediate reply. The finance pass pays or refuses on the next world tick and records a `DividendOutcome` on every path, including a request whose company entity vanished in between (`CompanyUnavailable`); `report_dividend_outcomes` (NetIngress, right after the order handler) then sends exactly one `HeroCompanyResult` per request naming the coin paid, the rate per 10 shares, the requester's own take for their share count and the reserves/not-yet-earned cash held back, or the concrete refusal (no operating site, unreachable shareholder, nothing distributable, full wallet, failed debit, company gone). A refused request never marks the replicated `CompanyAccount` changed: wallet capacity and the zero-amount case are validated before the treasury is borrowed mutably. Contributed capital is never distributable and is reported as "not yet earned".
 - **Full Ledger** pulls up to 365 completed days on demand by stable `CompanyId`. It consolidates sites across every settlement, eliminates internal supplier credits/buyer charges from profit, and retains those equal amounts as an audit memo. Charts cover P&L, cash/debt/assets, dividends/capital spending and internal flow; tables retain per-site contribution and recent daily records.
 
 ## Company ships and the public market

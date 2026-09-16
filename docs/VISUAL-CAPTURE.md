@@ -536,6 +536,10 @@ villager simulation; use the client/server lab for NPC journeys.
 Other checked-in references include
 `world-survey.ron` for zoom-band scene rendering, `river-banks.ron` for the detailed-river/far-
 river handoff and inland ground paint, `forest-floor.ron` for forest accents at morning and noon,
+`meadow-flowers.ron` for the wild flower drifts (Meadows at zoom 35/120/220 and a night shot,
+then a forest glade, a highland moor and the snowlands fringe at zoom 120; the biome probes come
+from `find_biome_spots`, and its readiness waits 150 frames so the 9×9 ground-cover ring finishes
+building before each shot — `grass_batches_at_least` guards that the instanced cover exists),
 `isolated-fern.ron` for a single shipped fern with all surrounding props suppressed,
 `lighting-readability.ron` for people/buildings across three daylight angles, and
 `ui-company.ron` / `ui-companies.ron` for real retained-UI fixtures. Character maintenance
@@ -884,6 +888,18 @@ shot and the observer writes matching JSON metadata. Live metadata reads the rep
 world day, population, routes and loaded terrain at the request. It also records the commander
 controller and actual root camera position/rotation, including cinematic overrides.
 `fixed_delta_seconds: 0` identifies a live run rather than a deterministic offline timestep.
+
+Offline captures select their world with `map:` / `CITYSIM_MAP_ID`. The generated `world` map
+needs `FISTWORLD_WORLD_SEED` and always builds `new_world_recipe(seed)` at the full 4096 m
+`SESSION_HALF_EXTENT` (`shared/src/terrain/generator/map_access.rs`); the server-side
+`FISTWORLD_WORLD_CONFIG` (e.g. `config/worlds/small-frontier-10.ron`, `world_area_scale`) is
+**not** honoured by the capture binary. To photograph a scaled world offline, write a scratch
+map directory `maps/<id>/map.ron` with the recipe (`style: Showcase`, the seed, the scaled
+`half_extent`, matching `bounds`, `generator_version` = current `WORLDGEN_VERSION`, empty
+`objects`/`blockers`) and point `FISTFORCE_ASSET_PATH` at that directory's parent — it is the
+first asset root the map loader searches — then run with `CITYSIM_MAP_ID=<id>`. Biome zone
+noise is absolute (1/1100 m), so a small world contains only a few biome patches; a spot that
+is Meadows on `big_world` is not necessarily Meadows there.
 
 When launching the binaries directly, set the same `CITYSIM_MAP_ID` for both client and server;
 `run.sh` normally does this for you. Live capture rejects differing map IDs or content hashes
@@ -1373,6 +1389,19 @@ BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
   --scenario capture/scenarios/ui-business-strategies.ron \
   --out logs/captures/ui-business-strategies
 ```
+
+[`ui-company-dividends.ron`](../capture/scenarios/ui-company-dividends.ron) photographs the
+same page on its COMPANY tab, scrolled to TREASURY & DIVIDENDS
+(`FISTFORCE_CAPTURE_BUSINESS_PAGE=company`, `FISTFORCE_CAPTURE_BUSINESS_SCROLL=480`). The
+staged company carries a `CompanyDividendCapacity` (315.00 coin distributable on day 12,
+18.50 coin reserves, 250.00 coin last paid on day 11), the draft is preset to 150.00 coin
+(`FISTFORCE_CAPTURE_DIVIDEND_DRAFT=15000`) and a deferred server reply is staged in the
+feedback line (`FISTFORCE_CAPTURE_BUSINESS_FEEDBACK=ok:...`). The inspected shot shows the
+`Available now … · reserves … · last paid …` line, the `-1 COIN / +1 COIN / 25% / 50% / ALL`
+picker, `DISTRIBUTE 150.00 COIN`, the IF DISTRIBUTED NOW preview (`1.50 coin` per 10
+shares, the 720-share holder's `108.00 coin`) and the reply text. The numbers are fixture
+values, not a finance-pass result; the two scene assertions check populated settlements and
+villagers only.
 
 `capture/scenarios/ui-music.ron` tests the actual Escape-menu music switch and
 Bevy audio sinks at 1280×720. Its seven shots cover background playback, off,

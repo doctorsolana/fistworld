@@ -2,13 +2,13 @@
 
 use bevy::prelude::*;
 use shared::components::{
-    BuildingId, CompanyFleet, CompanyId, PersonId, SettlementBuildingKind, SettlementId,
-    SettlementPortSummary, ShipId, ShipKind, TradeRouteId, TradeRouteMode, TradeRouteStatus,
-    TradeRouteStop, TradeRouteStopAction, TradeRouteTrip,
+    BuildingId, CompanyFleet, CompanyId, CompanyOwnership, PersonId, SettlementBuildingKind,
+    SettlementId, SettlementPortSummary, ShipId, ShipKind, TradeRouteId, TradeRouteMode,
+    TradeRouteStatus, TradeRouteStop, TradeRouteStopAction, TradeRouteTrip,
 };
 use shared::economy::{
     BusinessSourcingMode, BusinessState, CompanyAccount, CompanyDecisionRecord,
-    CompanyManagementPolicy, CompanyResourcePolicy, Good,
+    CompanyDividendCapacity, CompanyManagementPolicy, CompanyResourcePolicy, Good,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,6 +122,13 @@ pub struct CompanyRecord {
     pub master_name: String,
     pub account: CompanyAccount,
     pub policy: CompanyManagementPolicy,
+    /// The server's dividend headroom snapshot; `None` until the finance
+    /// pass has published one (hand-spawned fixtures never do).
+    pub capacity: Option<CompanyDividendCapacity>,
+    /// The replicated cap table in server order, so dividend previews use
+    /// the same `pro_rata_split` input as the payout. `holders` is the same
+    /// table sorted for display.
+    pub ownership: CompanyOwnership,
     pub holders: Vec<CompanyHolderRecord>,
     pub offers: Vec<CompanyOfferRecord>,
     pub decisions: Vec<CompanyDecisionRecord>,
@@ -178,7 +185,7 @@ impl CompanyRecord {
     }
 }
 
-#[derive(Resource, Default, Debug, PartialEq, Eq)]
+#[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
 pub struct CompanyDirectory {
     pub records: Vec<CompanyRecord>,
     pub settlements: Vec<CompanySettlementRecord>,

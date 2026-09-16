@@ -2,6 +2,38 @@ use super::*;
 use bevy::ecs::system::RunSystemOnce;
 use shared::components::*;
 
+/// A square hand-authored heightfield at one-metre resolution with no rivers,
+/// deltas or biome field, so founding validators see neutral 0.5 site quality.
+/// It never changes the process-global map bounds, so parallel tests are safe.
+pub(super) fn authored_test_terrain(
+    half_extent: f32,
+    height: impl Fn(f32, f32) -> f32,
+) -> WorldTerrain {
+    use shared::map::{HeightmapData, MapBounds};
+    use shared::terrain::TerrainGenerator;
+    let mut terrain = WorldTerrain::default();
+    let mut map = terrain.generator.loaded_map().clone();
+    let bounds = MapBounds {
+        min: [-half_extent; 2],
+        max: [half_extent; 2],
+    };
+    let samples = (half_extent * 2.0).round() as u32 + 1;
+    let mut heights = Vec::with_capacity((samples * samples) as usize);
+    for z in 0..samples {
+        for x in 0..samples {
+            heights.push(height(x as f32 - half_extent, z as f32 - half_extent));
+        }
+    }
+    map.definition.bounds = bounds;
+    map.definition.generated = None;
+    map.heightmap = HeightmapData::new(bounds, samples, samples, heights, Some(0.0));
+    map.rivers = default();
+    map.river_segments_by_chunk.clear();
+    map.terrain_deltas_by_chunk.clear();
+    terrain.generator = TerrainGenerator::from_loaded_map(map);
+    terrain
+}
+
 #[test]
 fn founding_names_are_unique_and_seeded() {
     for seed in [0, 1, 91, 12345, u64::MAX] {
@@ -50,11 +82,9 @@ fn small_frontier_founds_exactly_four_bare_halls_and_twenty_four_people() {
     assert_eq!(halls.len(), 4);
     for (index, (id, residents, position)) in halls.iter().enumerate() {
         assert_eq!(*residents, 6);
-        assert!(
-            halls[..index]
-                .iter()
-                .all(|(_, _, other)| other.xz().distance(position.xz()) >= MIN_SETTLEMENT_DISTANCE)
-        );
+        assert!(halls[..index]
+            .iter()
+            .all(|(_, _, other)| other.xz().distance(position.xz()) >= MIN_SETTLEMENT_DISTANCE));
         let actual = world
             .query::<(&PersonId, &ResidentOf, Option<&LivesAt>)>()
             .iter(&world)

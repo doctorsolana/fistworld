@@ -16,7 +16,8 @@ use shared::components::{
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessProcurementPolicy, BusinessStaffingPolicy,
     BusinessSupplyPolicy, CompanyAccount, CompanyBranchPolicies, CompanyDecisionHistory,
-    CompanyManagementPolicy, CompanyResourcePolicy, Good, GoodsInventory, Wallet,
+    CompanyDividendCapacity, CompanyManagementPolicy, CompanyResourcePolicy, Good, GoodsInventory,
+    Wallet,
 };
 
 pub(in crate::ui::encyclopedia) fn company_tab_active(tab: Res<EncyclopediaTab>) -> bool {
@@ -36,6 +37,7 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
         &CompanyDecisionHistory,
         &CompanyShareMarket,
         Option<&CompanyFleet>,
+        Option<&CompanyDividendCapacity>,
     )>,
     sites: Query<(
         Entity,
@@ -66,6 +68,7 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
     ui_perf: Res<crate::ui::perf::UiPerf>,
     time: Res<Time>,
     mut last_run: Local<Option<f32>>,
+    mut names: Local<HashMap<PersonId, String>>,
 ) {
     let mut _ui_scope = ui_perf.scope("refresh_company_directory");
     // A snapshot clones every company's books. Twice a second is plenty for
@@ -75,14 +78,30 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
         return;
     }
     *last_run = Some(now);
-    let mut names: HashMap<PersonId, String> = known_people
+    // Last-known names. Replicated people and the roster refresh the cache;
+    // a holder or caravaner who walks out of interest keeps the name the
+    // page last saw instead of flipping to a `Person #N` placeholder.
+    for record in known_people
         .records
         .iter()
         .filter(|record| record.id.is_assigned())
-        .map(|record| (record.id, record.name.clone()))
-        .collect();
+    {
+        match names.get_mut(&record.id) {
+            Some(name) if *name == record.name => {}
+            Some(name) => name.clone_from(&record.name),
+            None => {
+                names.insert(record.id, record.name.clone());
+            }
+        }
+    }
     for (id, name, _) in people.iter() {
-        names.insert(*id, name.0.clone());
+        match names.get_mut(id) {
+            Some(known) if *known == name.0 => {}
+            Some(known) => known.clone_from(&name.0),
+            None => {
+                names.insert(*id, name.0.clone());
+            }
+        }
     }
     let person_name = |person: PersonId| {
         names
@@ -284,6 +303,7 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
         decisions,
         share_market,
         fleet,
+        capacity,
     ) in companies.iter()
     {
         let mut holders: Vec<_> = ownership
@@ -363,7 +383,11 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
                 .find(|(_, ship)| ship.assigned_route == Some(route.id))
                 .map(|(id, ship)| (*id, ship.kind));
             if let Some((id, _)) = route.ship {
-                route.cargo_onboard = fleet.cargo.iter().find(|(ship, good, _)| *ship == id && *good == route.good).map_or(0, |(_, _, units)| *units);
+                route.cargo_onboard = fleet
+                    .cargo
+                    .iter()
+                    .find(|(ship, good, _)| *ship == id && *good == route.good)
+                    .map_or(0, |(_, _, units)| *units);
             }
         }
         records.push(CompanyRecord {
@@ -374,6 +398,8 @@ pub(in crate::ui::encyclopedia) fn refresh_company_directory(
             master_name: person_name(leadership.master),
             account: *account,
             policy: *policy,
+            capacity: capacity.copied(),
+            ownership: ownership.clone(),
             holders,
             offers,
             decisions: decisions.entries().to_vec(),

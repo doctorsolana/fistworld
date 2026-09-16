@@ -102,6 +102,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
             player::companies::handle_hero_company_founding,
             player::business::handle_hero_business_orders,
             player::business::handle_hero_company_orders,
+            player::business::report_dividend_outcomes,
             (
                 player::trade_routes::handle_hero_trade_route_orders,
                 player::maritime::handle_hero_maritime_orders,

@@ -87,35 +87,10 @@ mod tests {
     use crate::world::new_world::Community;
     use crate::world::start_config::WorldStartConfig;
     use bevy::ecs::system::RunSystemOnce;
-    use shared::{
-        components::*,
-        economy::*,
-        map::{HeightmapData, MapBounds},
-        terrain::TerrainGenerator,
-    };
+    use shared::{components::*, economy::*};
 
     fn terrain(height: impl Fn(f32, f32) -> f32) -> WorldTerrain {
-        let mut terrain = WorldTerrain::default();
-        let mut map = terrain.generator.loaded_map().clone();
-        let bounds = MapBounds {
-            min: [-96.0; 2],
-            max: [96.0; 2],
-        };
-        let mut heights = Vec::new();
-        for z in 0..193 {
-            for x in 0..193 {
-                heights.push(height(x as f32 - 96.0, z as f32 - 96.0));
-            }
-        }
-        map.definition.bounds = bounds;
-        map.definition.generated = None;
-        map.heightmap = HeightmapData::new(bounds, 193, 193, heights, Some(0.0));
-        map.rivers = default();
-        map.river_segments_by_chunk.clear();
-        map.terrain_deltas_by_chunk.clear();
-        // Do not change process-global map bounds in parallel unit tests.
-        terrain.generator = TerrainGenerator::from_loaded_map(map);
-        terrain
+        crate::world::new_world::tests::authored_test_terrain(96.0, height)
     }
 
     fn site() -> Site {

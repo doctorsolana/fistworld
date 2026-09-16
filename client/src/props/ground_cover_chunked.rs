@@ -9,15 +9,15 @@ use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use shared::building::{BuildZoneEntry, point_in_any_build_zone_entries};
-use shared::components::{VillageRoad, distance_squared_to_segment};
+use shared::building::{point_in_any_build_zone_entries, BuildZoneEntry};
+use shared::components::{distance_squared_to_segment, VillageRoad};
 use shared::props::{PropKind, PropSpawn};
-use shared::terrain::{CHUNK_SIZE, ChunkCoord, WorldTerrain};
+use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
 use crate::streaming::{
-    AnchorCamera, AnchorPlayer, camera_view_distance, chunk_stream_priority, streaming_anchor,
-    streaming_view_priority,
+    camera_view_distance, chunk_stream_priority, streaming_anchor, streaming_view_priority,
+    AnchorCamera, AnchorPlayer,
 };
 use crate::terrain::{LoadedChunks, TerrainChunk};
 
@@ -79,6 +79,7 @@ struct ChunkGrassInstances {
     tall: Vec<GrassInstance>,
     fern_a: Vec<GrassInstance>,
     fern_b: Vec<GrassInstance>,
+    flowers: [Vec<GrassInstance>; 4],
 }
 
 impl ChunkGrassInstances {
@@ -88,9 +89,43 @@ impl ChunkGrassInstances {
             PropKind::GrassTallA => &self.tall,
             PropKind::FernPatchA => &self.fern_a,
             PropKind::FernPatchB => &self.fern_b,
+            PropKind::FlowerA => &self.flowers[0],
+            PropKind::FlowerB => &self.flowers[1],
+            PropKind::FlowerC => &self.flowers[2],
+            PropKind::FlowerD => &self.flowers[3],
             _ => &[],
         }
     }
+
+    fn for_kind_mut(&mut self, kind: PropKind) -> Option<&mut Vec<GrassInstance>> {
+        match kind {
+            PropKind::GrassShortA => Some(&mut self.short),
+            PropKind::GrassTallA => Some(&mut self.tall),
+            PropKind::FernPatchA => Some(&mut self.fern_a),
+            PropKind::FernPatchB => Some(&mut self.fern_b),
+            PropKind::FlowerA => Some(&mut self.flowers[0]),
+            PropKind::FlowerB => Some(&mut self.flowers[1]),
+            PropKind::FlowerC => Some(&mut self.flowers[2]),
+            PropKind::FlowerD => Some(&mut self.flowers[3]),
+            _ => None,
+        }
+    }
+
+    fn instance_count(&self) -> usize {
+        ground_cover_kinds()
+            .iter()
+            .map(|kind| self.for_kind(*kind).len())
+            .sum()
+    }
+}
+
+/// Flower patches are authored colonies like ferns: no per-tuft height
+/// stretch, no dryness tint, a gentle nod instead of the grass sway.
+fn is_flower_patch(kind: PropKind) -> bool {
+    matches!(
+        kind,
+        PropKind::FlowerA | PropKind::FlowerB | PropKind::FlowerC | PropKind::FlowerD
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -124,12 +159,19 @@ fn in_radius(coord: ChunkCoord, anchor: ChunkCoord, radius: i32) -> bool {
     (coord.x - anchor.x).abs() <= radius && (coord.z - anchor.z).abs() <= radius
 }
 
-fn ground_cover_kinds() -> [PropKind; 4] {
+/// Every kind the ground-cover generator can emit, each with its own instance
+/// buffer per render sector. All of them need a `tree_mesh_labels` entry
+/// (`material_for_kind` reads the LOD0 mesh and material from it).
+fn ground_cover_kinds() -> [PropKind; 8] {
     [
         PropKind::GrassShortA,
         PropKind::GrassTallA,
         PropKind::FernPatchA,
         PropKind::FernPatchB,
+        PropKind::FlowerA,
+        PropKind::FlowerB,
+        PropKind::FlowerC,
+        PropKind::FlowerD,
     ]
 }
 
@@ -217,20 +259,24 @@ fn instance_for(
         let value = (spawn.position.x * 419.3 + spawn.position.z * 173.7).sin() * 43_758.547;
         value - value.floor()
     };
-    let dry = (dryness.sample(spawn.position.x, spawn.position.z) + (jitter - 0.5) * 0.35)
-        .clamp(0.0, 1.0);
+    let authored_colony = spawn.kind.is_some_and(|kind| {
+        matches!(kind, PropKind::FernPatchA | PropKind::FernPatchB) || is_flower_patch(kind)
+    });
+    let dry = if authored_colony {
+        0.0
+    } else {
+        (dryness.sample(spawn.position.x, spawn.position.z) + (jitter - 0.5) * 0.35).clamp(0.0, 1.0)
+    };
     GrassInstance {
         position_height: [
             spawn.position.x,
             terrain.get_height(spawn.position.x, spawn.position.z),
             spawn.position.z,
-            // Grass benefits from per-tuft height noise. A fern asset is an
-            // authored colony with a deliberate arched silhouette; stretching
-            // only its vertical axis turns it into a spiky grass tuft again.
-            if spawn
-                .kind
-                .is_some_and(|kind| matches!(kind, PropKind::FernPatchA | PropKind::FernPatchB))
-            {
+            // Grass benefits from per-tuft height noise. A fern or flower
+            // asset is an authored colony with a deliberate silhouette;
+            // stretching only its vertical axis turns it into a spiky grass
+            // tuft again (or lifts the blossoms off their stems).
+            if authored_colony {
                 1.0
             } else {
                 stable_height(spawn.position)
@@ -271,14 +317,20 @@ fn material_for_kind(
     let (sway_strength, flutter_rate) =
         if matches!(kind, PropKind::FernPatchA | PropKind::FernPatchB) {
             (0.055, 1.35)
+        } else if is_flower_patch(kind) {
+            (0.06, 1.3)
         } else {
             (0.22, 1.4)
         };
+    // extra.x = 1 tells instanced_grass.wgsl to keep the authored vertex
+    // colours instead of applying the per-tuft dryness tint (white petals
+    // would otherwise go straw-yellow on dry ground).
+    let keep_authored_colour = if is_flower_patch(kind) { 1.0 } else { 0.0 };
     let handle = materials.add(ExtendedMaterial {
         base,
         extension: InstancedGrassExtension {
             params: wind_params_for_mesh(source, sway_strength, flutter_rate),
-            extra: Vec4::new(0.0, 1.0, climate_half, climate_phase),
+            extra: Vec4::new(keep_authored_colour, 1.0, climate_half, climate_phase),
         },
     });
     state.materials.insert(kind, handle.clone());
@@ -337,32 +389,47 @@ fn filtered_spawns(
         {
             return false;
         }
-        if !matches!(
-            spawn.kind,
-            Some(PropKind::GrassShortA | PropKind::GrassTallA)
-        ) {
-            return true;
-        }
-        if road_edge_distance < TENDED_ROAD_VERGE {
-            let retention = tended_grass_retention(
-                point,
-                seed,
-                road_edge_distance,
-                spawn.kind == Some(PropKind::GrassTallA),
-            );
-            let roll = meadow_hash(point.x.to_bits(), point.y.to_bits(), seed ^ 0x7D32_84E9);
-            if roll >= retention {
-                return false;
-            }
-            spawn.scale *= if road_edge_distance <= 3.0 {
-                0.62
-            } else {
-                0.82
-            };
-        }
-        true
+        verge_keeps(spawn, road_edge_distance, seed)
     });
     spawns
+}
+
+/// The per-spawn verge rule once a spawn is known to be clear of roads,
+/// yards, fields and build zones: false drops it, and a grass tuft kept
+/// inside the tended verge is shrunk as well.
+fn verge_keeps(spawn: &mut PropSpawn, road_edge_distance: f32, seed: u64) -> bool {
+    let point = spawn.position.xz();
+    // The tended verge is trampled, cut ground: no wild flower drifts
+    // there. The roadside dressing plants its own bounded meadow clusters
+    // 8-20 m out (settlement/roadside/placement.rs), so the two layers
+    // overlap only in the 11-20 m band beyond the verge, by design.
+    if spawn.kind.is_some_and(is_flower_patch) {
+        return road_edge_distance >= TENDED_ROAD_VERGE;
+    }
+    if !matches!(
+        spawn.kind,
+        Some(PropKind::GrassShortA | PropKind::GrassTallA)
+    ) {
+        return true;
+    }
+    if road_edge_distance < TENDED_ROAD_VERGE {
+        let retention = tended_grass_retention(
+            point,
+            seed,
+            road_edge_distance,
+            spawn.kind == Some(PropKind::GrassTallA),
+        );
+        let roll = meadow_hash(point.x.to_bits(), point.y.to_bits(), seed ^ 0x7D32_84E9);
+        if roll >= retention {
+            return false;
+        }
+        spawn.scale *= if road_edge_distance <= 3.0 {
+            0.62
+        } else {
+            0.82
+        };
+    }
+    true
 }
 
 fn clear_render_entities(commands: &mut Commands, state: &mut ChunkedGroundCoverState) {
@@ -398,12 +465,8 @@ fn build_chunk(
         ..default()
     };
     for spawn in &spawns {
-        match spawn.kind {
-            Some(PropKind::GrassShortA) => data.short.push(instance_for(spawn, terrain, &dryness)),
-            Some(PropKind::GrassTallA) => data.tall.push(instance_for(spawn, terrain, &dryness)),
-            Some(PropKind::FernPatchA) => data.fern_a.push(instance_for(spawn, terrain, &dryness)),
-            Some(PropKind::FernPatchB) => data.fern_b.push(instance_for(spawn, terrain, &dryness)),
-            _ => {}
+        if let Some(buffer) = spawn.kind.and_then(|kind| data.for_kind_mut(kind)) {
+            buffer.push(instance_for(spawn, terrain, &dryness));
         }
     }
     state.chunks.insert(coord, data);
@@ -709,14 +772,18 @@ pub(super) fn stream_chunked_ground_cover(
         let instances = state
             .chunks
             .values()
-            .map(|chunk| {
-                chunk.short.len() + chunk.tall.len() + chunk.fern_a.len() + chunk.fern_b.len()
-            })
+            .map(ChunkGrassInstances::instance_count)
+            .sum::<usize>();
+        let flowers = state
+            .chunks
+            .values()
+            .map(|chunk| chunk.flowers.iter().map(Vec::len).sum::<usize>())
             .sum::<usize>();
         info!(
-            "GPU-instanced 3D ground cover ready: {} chunks, {} instances, {} render entities at {:.1}x stress density",
+            "GPU-instanced 3D ground cover ready: {} chunks, {} instances ({} flower patches), {} render entities at {:.1}x stress density",
             state.chunks.len(),
             instances,
+            flowers,
             state.render_entities.len(),
             stress_density.0,
         );
@@ -932,12 +999,11 @@ mod tests {
             .entity_mut(building)
             .insert(BuildingPosition(Vec3::new(32.0, 1.0, 32.0)));
         app.update();
-        assert!(
-            app.world()
-                .resource::<ChunkedGroundCoverState>()
-                .dirty
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
 
         app.world_mut()
             .get_mut::<PlacedBuilding>(building)
@@ -998,12 +1064,11 @@ mod tests {
             .unwrap()
             .market_rotation = 0.7;
         app.update();
-        assert!(
-            app.world()
-                .resource::<ChunkedGroundCoverState>()
-                .dirty
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
         app.world_mut()
             .get_mut::<SettlementCivicSquare>(square)
             .unwrap()
@@ -1059,23 +1124,21 @@ mod tests {
             ))
             .id();
         app.update();
-        assert!(
-            app.world()
-                .resource::<ChunkedGroundCoverState>()
-                .dirty
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
         app.world_mut()
             .get_mut::<Mesh3d>(chunk)
             .unwrap()
             .set_changed();
         app.update();
-        assert!(
-            app.world()
-                .resource::<ChunkedGroundCoverState>()
-                .dirty
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
 
         app.world_mut()
             .entity_mut(chunk)
@@ -1103,12 +1166,11 @@ mod tests {
             Mesh3d(handles[1].clone()),
         ));
         app.update();
-        assert!(
-            app.world()
-                .resource::<ChunkedGroundCoverState>()
-                .dirty
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<ChunkedGroundCoverState>()
+            .dirty
+            .is_empty());
 
         // Terrain currently replaces entities, but both lifetime forms work.
         app.world_mut().despawn(chunk);
@@ -1257,12 +1319,10 @@ mod tests {
         world.clear_trackers();
         world.clear_trackers();
         world.run_system_once(clear_chunked_ground_cover).unwrap();
-        assert!(
-            world
-                .resource::<ChunkedGroundCoverState>()
-                .road_bounds
-                .is_empty()
-        );
+        assert!(world
+            .resource::<ChunkedGroundCoverState>()
+            .road_bounds
+            .is_empty());
         assert!(
             !world
                 .resource::<ChunkedGroundCoverState>()
@@ -1301,7 +1361,128 @@ mod tests {
         };
         assert_eq!(data.for_kind(PropKind::FernPatchA).len(), 1);
         assert_eq!(data.for_kind(PropKind::FernPatchB).len(), 1);
-        assert_eq!(ground_cover_kinds().len(), 4);
+        assert_eq!(ground_cover_kinds().len(), 8);
+    }
+
+    /// Flower drifts ride the instanced ground-cover path: one buffer per
+    /// variant, and every ground-cover kind resolves through the swap-mesh
+    /// table `material_for_kind` reads its mesh and material from.
+    #[test]
+    fn ground_cover_batches_carry_every_flower_variant_through_the_swap_mesh_table() {
+        let flowers = [
+            PropKind::FlowerA,
+            PropKind::FlowerB,
+            PropKind::FlowerC,
+            PropKind::FlowerD,
+        ];
+        let mut data = ChunkGrassInstances::default();
+        for (index, kind) in flowers.iter().enumerate() {
+            let buffer = data.for_kind_mut(*kind).expect("flower buffer");
+            buffer.extend(std::iter::repeat_n(
+                GrassInstance {
+                    position_height: [0.0, 0.0, 0.0, 1.0],
+                    rotation_scale: [0.0, 1.0, 1.0, 0.0],
+                },
+                index + 1,
+            ));
+        }
+        for (index, kind) in flowers.iter().enumerate() {
+            assert!(
+                ground_cover_kinds().contains(kind),
+                "{kind:?} missing from ground_cover_kinds"
+            );
+            assert_eq!(
+                data.for_kind(*kind).len(),
+                index + 1,
+                "{kind:?} shares a buffer"
+            );
+        }
+        assert_eq!(data.instance_count(), 10);
+        for kind in ground_cover_kinds() {
+            assert!(
+                crate::props::uses_swap_mesh_lod(kind),
+                "{kind:?} has no swap-mesh entry, so material_for_kind can never resolve it"
+            );
+        }
+        assert!(ground_cover_kinds().iter().all(|kind| {
+            let flower = is_flower_patch(*kind);
+            flower == flowers.contains(kind)
+        }));
+    }
+
+    /// Wild flowers stay out of the tended road verge; the roadside dressing
+    /// owns that band. Grass keeps its thinning rule and ferns pass through.
+    #[test]
+    fn flower_patches_are_kept_off_the_tended_verge() {
+        let spawn = |kind: PropKind, x: f32| PropSpawn {
+            kind: Some(kind),
+            scene_path: String::new(),
+            chunk: ChunkCoord { x: 0, z: 0 },
+            position: Vec3::new(x, 0.0, 7.5),
+            rotation: Quat::IDENTITY,
+            scale: 1.0,
+            render_tuning: shared::props::PropRenderTuning {
+                casts_shadows: false,
+                visible_end_distance: None,
+            },
+        };
+        let seed = 91;
+        let inside = TENDED_ROAD_VERGE - 1.0;
+        let outside = TENDED_ROAD_VERGE + 1.0;
+        for kind in [
+            PropKind::FlowerA,
+            PropKind::FlowerB,
+            PropKind::FlowerC,
+            PropKind::FlowerD,
+        ] {
+            assert!(is_flower_patch(kind));
+            let mut patch = spawn(kind, 3.0);
+            assert!(
+                !verge_keeps(&mut patch, inside, seed),
+                "{kind:?} inside the tended verge must be dropped"
+            );
+            let mut patch = spawn(kind, 3.0);
+            assert!(
+                verge_keeps(&mut patch, outside, seed),
+                "{kind:?} beyond the verge is kept"
+            );
+            assert_eq!(patch.scale, 1.0, "flowers are never shrunk by the verge");
+            let mut patch = spawn(kind, 3.0);
+            assert!(!verge_keeps(&mut patch, 0.5, seed));
+        }
+        // Ferns are not verge-tended at all.
+        let mut fern = spawn(PropKind::FernPatchA, 3.0);
+        assert!(!is_flower_patch(PropKind::FernPatchA));
+        assert!(verge_keeps(&mut fern, 1.0, seed));
+        assert_eq!(fern.scale, 1.0);
+        // Grass follows `tended_grass_retention` inside the verge and is
+        // shrunk when kept (0.62 within 3 m of the edge); outside the verge
+        // it is untouched.
+        assert!(!is_flower_patch(PropKind::GrassShortA));
+        let deep = 2.0;
+        let mut kept = 0;
+        for x in 0..64 {
+            let mut tuft = spawn(PropKind::GrassShortA, x as f32 * 0.37);
+            let point = tuft.position.xz();
+            let retention = tended_grass_retention(point, seed, deep, false);
+            let roll = meadow_hash(point.x.to_bits(), point.y.to_bits(), seed ^ 0x7D32_84E9);
+            let expected = roll < retention;
+            assert_eq!(verge_keeps(&mut tuft, deep, seed), expected);
+            if expected {
+                kept += 1;
+                assert!(
+                    (tuft.scale - 0.62).abs() < 1e-6,
+                    "kept verge grass is shrunk"
+                );
+            }
+        }
+        assert!(
+            kept > 0 && kept < 64,
+            "verge grass is thinned, not removed or untouched"
+        );
+        let mut far = spawn(PropKind::GrassShortA, 3.0);
+        assert!(verge_keeps(&mut far, outside, seed));
+        assert_eq!(far.scale, 1.0);
     }
 
     #[test]

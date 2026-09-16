@@ -1,23 +1,27 @@
 //! Settlement branch policies and individual business-site cards.
+//!
+//! Cards are keyed by `BuildingId` / `SettlementId`; their numbers, states
+//! and the absolute values baked into stepper payloads bind in place.
 
+use super::binding::{bound_text, CompanyBound, CompanyView, ResourceField, RetainStep, SiteField};
 use super::controls::{CompanyBranchPolicyButton, CompanyManagementButton, CompanySiteButton};
 use super::model::{CompanyBranchRecord, CompanySiteRecord};
-use super::widgets::{detail_button, signed_money};
+use super::widgets::detail_button;
 use crate::ui::business_management::BusinessManagementSelection;
-use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
 use crate::ui::ledger::{self, LedgerIllustration};
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE_SOFT, RADIUS};
 use bevy::prelude::*;
-use shared::components::CompanyId;
-use shared::economy::{BusinessSourcingMode, format_money};
 use shared::protocol::HeroCompanyAction;
 
 pub(super) fn spawn_branch_card(
     parent: &mut ChildSpawnerCommands<'_>,
-    company: CompanyId,
+    view: &CompanyView<'_>,
     branch: &CompanyBranchRecord,
-    can_manage: bool,
 ) {
+    let company = view.company.id;
+    let settlement = branch.settlement_id;
+    let can_manage = view.can_manage();
     parent
         .spawn((
             Node {
@@ -33,22 +37,16 @@ pub(super) fn spawn_branch_card(
             BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|card| {
-            card.spawn((
-                Text::new(format!(
-                    "{}  /  {} SITE{}  /  {} STORAGE HALL{}  /  {} OF {} BULK USED",
-                    branch.settlement.to_uppercase(),
-                    branch.sites,
-                    if branch.sites == 1 { "" } else { "S" },
-                    branch.storage_halls,
-                    if branch.storage_halls == 1 { "" } else { "S" },
-                    branch.used_bulk,
-                    branch.bulk_capacity,
-                )),
+            bound_text(
+                card,
+                view,
+                CompanyBound::Branch(settlement),
                 crate::ui::ledger::reading(13.0),
-                TextColor(EMBER),
-            ));
-            for (good, held, policy) in &branch.resources {
-                let unit_capacity = branch.bulk_capacity / good.bulk_per_unit().max(1);
+                EMBER,
+            );
+            for (good, _, _) in &branch.resources {
+                let good = *good;
+                let key = |field| CompanyBound::Resource(settlement, good, field);
                 card.spawn(Node {
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(4.0),
@@ -63,33 +61,26 @@ pub(super) fn spawn_branch_card(
                         ..default()
                     })
                     .with_children(|line| {
-                        line.spawn((
-                            Text::new(format!(
-                                "{}  /  {} HELD  /  RETAIN {}",
-                                good.label().to_uppercase(),
-                                held,
-                                policy.retain_units,
-                            )),
+                        bound_text(
+                            line,
+                            view,
+                            key(ResourceField::Line),
                             crate::ui::ledger::reading(12.5),
-                            TextColor(INK),
-                        ));
-                        line.spawn((
-                            Text::new(if policy.sell_excess {
-                                "SELL EXCESS"
-                            } else {
-                                "HOLD ALL"
-                            }),
+                            INK,
+                        );
+                        bound_text(
+                            line,
+                            view,
+                            key(ResourceField::Policy),
                             crate::ui::ledger::reading(11.5),
-                            TextColor(INK_MUTED),
-                        ));
+                            INK_MUTED,
+                        );
                     });
                     if can_manage {
-                        let retained_percent = if unit_capacity == 0 {
-                            0.0
-                        } else {
-                            policy.retain_units.min(unit_capacity) as f32 * 100.0
-                                / unit_capacity as f32
-                        };
+                        let retained_percent = view
+                            .value(key(ResourceField::Meter))
+                            .and_then(|value| value.fill)
+                            .unwrap_or(0.0);
                         row.spawn((
                             Node {
                                 width: Val::Percent(100.0),
@@ -101,6 +92,7 @@ pub(super) fn spawn_branch_card(
                             BackgroundColor(Color::srgba(0.20, 0.18, 0.15, 0.12)),
                         ))
                         .with_child((
+                            key(ResourceField::Meter),
                             Node {
                                 width: Val::Percent(retained_percent),
                                 height: Val::Percent(100.0),
@@ -116,48 +108,44 @@ pub(super) fn spawn_branch_card(
                             ..default()
                         })
                         .with_children(|controls| {
-                            for (label, units) in [
-                                ("CLEAR", 0),
-                                ("-10", policy.retain_units.saturating_sub(10)),
-                                ("-1", policy.retain_units.saturating_sub(1)),
-                                (
-                                    "+1",
-                                    policy.retain_units.saturating_add(1).min(unit_capacity),
-                                ),
-                                (
-                                    "+10",
-                                    policy.retain_units.saturating_add(10).min(unit_capacity),
-                                ),
-                                ("MAX", unit_capacity),
-                            ] {
+                            // Step payloads are ABSOLUTE unit counts; the bind
+                            // pass rewrites them from the live policy so a
+                            // second press never sends a stale value.
+                            for step in RetainStep::ALL {
+                                let payload = key(ResourceField::Step(step));
+                                let action = view
+                                    .value(payload)
+                                    .and_then(|value| value.action)
+                                    .unwrap_or(HeroCompanyAction::SetRetainUnits {
+                                        settlement,
+                                        good,
+                                        units: 0,
+                                    });
                                 branch_policy_button(
                                     controls,
-                                    CompanyBranchPolicyButton {
-                                        company,
-                                        action: HeroCompanyAction::SetRetainUnits {
-                                            settlement: branch.settlement_id,
-                                            good: *good,
-                                            units,
-                                        },
-                                    },
-                                    label.to_string(),
+                                    (CompanyBranchPolicyButton { company, action }, payload),
+                                    step.label(),
+                                    (),
                                 );
                             }
+                            let toggle = key(ResourceField::Toggle);
+                            let action = view
+                                .value(toggle)
+                                .and_then(|value| value.action)
+                                .unwrap_or(HeroCompanyAction::SetSellExcess {
+                                    settlement,
+                                    good,
+                                    enabled: true,
+                                });
+                            let label = view
+                                .value(key(ResourceField::ToggleLabel))
+                                .and_then(|value| value.text)
+                                .unwrap_or_default();
                             branch_policy_button(
                                 controls,
-                                CompanyBranchPolicyButton {
-                                    company,
-                                    action: HeroCompanyAction::SetSellExcess {
-                                        settlement: branch.settlement_id,
-                                        good: *good,
-                                        enabled: !policy.sell_excess,
-                                    },
-                                },
-                                if policy.sell_excess {
-                                    "HOLD ALL".to_string()
-                                } else {
-                                    "SELL EXCESS".to_string()
-                                },
+                                (CompanyBranchPolicyButton { company, action }, toggle),
+                                &label,
+                                key(ResourceField::ToggleLabel),
                             );
                         });
                     }
@@ -168,8 +156,9 @@ pub(super) fn spawn_branch_card(
 
 pub(super) fn branch_policy_button(
     parent: &mut ChildSpawnerCommands<'_>,
-    marker: CompanyBranchPolicyButton,
-    label: String,
+    marker: impl Bundle,
+    label: &str,
+    label_marker: impl Bundle,
 ) {
     parent
         .spawn((
@@ -193,37 +182,16 @@ pub(super) fn branch_policy_button(
             crate::ui::ledger::reading(11.5),
             TextColor(INK),
             Pickable::IGNORE,
+            label_marker,
         ));
 }
 
 pub(super) fn spawn_site_ledger(
     parent: &mut ChildSpawnerCommands<'_>,
-    company: CompanyId,
+    view: &CompanyView<'_>,
     site: &CompanySiteRecord,
 ) {
-    let flow = match (site.input, site.output) {
-        (Some(input), Some(output)) => format!("{} -> {}", input.label(), output.label()),
-        (None, Some(output)) => format!("produces {}", output.label()),
-        _ => "service site".to_string(),
-    };
-    let source = site.sourcing.map_or_else(
-        || "public/local sourcing".to_string(),
-        |sourcing| {
-            let label = match sourcing {
-                BusinessSourcingMode::PreferOwned => "company first",
-                BusinessSourcingMode::CheapestAvailable => "best value",
-                BusinessSourcingMode::OwnedOnly => "company only",
-            };
-            format!(
-                "{}{}",
-                label,
-                site.preferred_supplier
-                    .map_or_else(String::new, |supplier| {
-                        format!(" from site #{}", supplier.0)
-                    })
-            )
-        },
-    );
+    let key = |field| CompanyBound::Site(site.id, field);
     parent
         .spawn((
             Node {
@@ -245,72 +213,48 @@ pub(super) fn spawn_site_ledger(
                 ..default()
             })
             .with_children(|line| {
-                line.spawn(ledger::illustration(LedgerIllustration::building(site.kind), Vec2::new(78.0, 58.0)));
-                line.spawn((
-                    Node { flex_grow: 1.0, min_width: Val::Px(0.0), margin: UiRect::horizontal(Val::Px(10.0)), ..default() },
-                    Text::new(format!(
-                        "{} #{}  ·  {}",
-                        site.kind.label().to_uppercase(),
-                        site.id.0,
-                        site.settlement.to_uppercase()
-                    )),
+                line.spawn(ledger::illustration(
+                    LedgerIllustration::building(site.kind),
+                    Vec2::new(78.0, 58.0),
+                ));
+                bound_text(
+                    line,
+                    view,
+                    key(SiteField::LedgerTitle),
                     crate::ui::ledger::reading(14.0),
-                    TextColor(INK),
+                    INK,
+                )
+                .insert((
+                    Node {
+                        flex_grow: 1.0,
+                        min_width: Val::Px(0.0),
+                        margin: UiRect::horizontal(Val::Px(10.0)),
+                        ..default()
+                    },
                     Pickable::IGNORE,
                 ));
-                line.spawn((
-                    Text::new(site.state.label().to_uppercase()),
+                bound_text(
+                    line,
+                    view,
+                    key(SiteField::LedgerState),
                     crate::ui::ledger::reading(11.5),
-                    TextColor(INK_MUTED),
-                    Pickable::IGNORE,
-                ));
+                    INK_MUTED,
+                )
+                .insert(Pickable::IGNORE);
             });
-            card.spawn((
-                Text::new(format!(
-                    "{} · {} · Staff {} / {} open / {} max · Today {}",
-                    flow,
-                    source,
-                    site.workers,
-                    site.enabled_positions,
-                    site.positions,
-                    signed_money(site.current_day.profit()),
-                )),
-                crate::ui::ledger::reading(12.0),
-                TextColor(INK_MUTED),
-                Pickable::IGNORE,
-            ));
-            if let (Some(output), Some(price)) = (site.output, site.asking_price) {
-                card.spawn((
-                    Text::new(format!(
-                        "{} site stock {} / ask {} coin  /  wage-tax debt {} coin; public excess is set for the whole local branch above",
-                        output.label(),
-                        site.output_stock,
-                        format_money(price),
-                        format_money(site.wage_arrears.saturating_add(site.tax_arrears)),
-                    )),
+            for field in [
+                SiteField::LedgerSummary,
+                SiteField::LedgerStock,
+                SiteField::LedgerInput,
+            ] {
+                bound_text(
+                    card,
+                    view,
+                    key(field),
                     crate::ui::ledger::reading(12.0),
-                    TextColor(INK_MUTED),
-                    Pickable::IGNORE,
-                ));
-            }
-            if let Some(input) = site.input {
-                card.spawn((
-                    Text::new(format!(
-                        "{} input / {} day{} cover / {} held / {} target",
-                        input.label(),
-                        site.input_coverage_days,
-                        if site.input_coverage_days == 1 {
-                            ""
-                        } else {
-                            "s"
-                        },
-                        site.input_stock,
-                        site.input_target,
-                    )),
-                    crate::ui::ledger::reading(12.0),
-                    TextColor(INK_MUTED),
-                    Pickable::IGNORE,
-                ));
+                    INK_MUTED,
+                )
+                .insert(Pickable::IGNORE);
             }
             card.spawn(Node {
                 justify_content: JustifyContent::FlexEnd,
@@ -318,25 +262,37 @@ pub(super) fn spawn_site_ledger(
                 margin: UiRect::top(Val::Px(4.0)),
                 ..default()
             })
-            .with_children(|actions| {
-                detail_button(actions, CompanySiteButton(site.id), "VIEW DETAILS");
-                detail_button(
-                    actions,
-                    CompanyManagementButton {
-                        target: BusinessManagementSelection::Site(site.entity),
-                        company,
-                    },
-                    "SITE SETTINGS",
-                );
-            });
+            .with_children(|actions| spawn_site_actions(actions, view, site));
         });
+}
+
+/// VIEW DETAILS is keyed by the durable `BuildingId`; SITE SETTINGS carries
+/// the replicated client `Entity`, which changes whenever the building leaves
+/// and re-enters interest, so that payload is rebound each snapshot.
+fn spawn_site_actions(
+    actions: &mut ChildSpawnerCommands<'_>,
+    view: &CompanyView<'_>,
+    site: &CompanySiteRecord,
+) {
+    detail_button(actions, CompanySiteButton(site.id), "VIEW DETAILS");
+    detail_button(
+        actions,
+        (
+            CompanyManagementButton {
+                target: BusinessManagementSelection::Site(site.entity),
+                company: view.company.id,
+            },
+            CompanyBound::Site(site.id, SiteField::Settings),
+        ),
+        "SITE SETTINGS",
+    );
 }
 
 /// The portfolio keeps its operating sites scannable; detailed flows remain below
 /// in the site ledgers and the existing Places / management destinations.
 pub(super) fn spawn_site_card(
     parent: &mut ChildSpawnerCommands<'_>,
-    company: CompanyId,
+    view: &CompanyView<'_>,
     site: &CompanySiteRecord,
 ) {
     parent
@@ -366,17 +322,23 @@ pub(super) fn spawn_site_card(
             })
             .with_children(|copy| {
                 copy.spawn(ledger::body(site.kind.label(), 16.0));
-                copy.spawn((
-                    Text::new(format!("{} · {}", site.settlement, site.state.label())),
+                bound_text(
+                    copy,
+                    view,
+                    CompanyBound::Site(site.id, SiteField::State),
                     ledger::reading(12.0),
-                    TextColor(INK_MUTED),
-                ));
+                    INK_MUTED,
+                );
                 crate::ui::encyclopedia::person_links::spawn_site_people(copy, site.id);
             });
-            row.spawn(ledger::body(
-                format!("Staff {} / {}", site.workers, site.enabled_positions),
-                14.0,
-            ));
+            bound_text(
+                row,
+                view,
+                CompanyBound::Site(site.id, SiteField::Staff),
+                ledger::reading(14.0),
+                INK,
+            )
+            .insert(Pickable::IGNORE);
             row.spawn(Node {
                 flex_wrap: FlexWrap::Wrap,
                 justify_content: JustifyContent::FlexEnd,
@@ -384,16 +346,6 @@ pub(super) fn spawn_site_card(
                 row_gap: Val::Px(5.0),
                 ..default()
             })
-            .with_children(|actions| {
-                detail_button(actions, CompanySiteButton(site.id), "VIEW DETAILS");
-                detail_button(
-                    actions,
-                    CompanyManagementButton {
-                        target: BusinessManagementSelection::Site(site.entity),
-                        company,
-                    },
-                    "SITE SETTINGS",
-                );
-            });
+            .with_children(|actions| spawn_site_actions(actions, view, site));
         });
 }

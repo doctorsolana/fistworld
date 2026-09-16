@@ -607,9 +607,30 @@ requires all of the following:
   the fertile Meadow advances to Village;
 - every completed building, including one already close to a road, finishes its own door connector;
 - detached road islands and unfinished paths are rejected as network anchors,
-  while the Moot Steward adopts roadless or disconnected buildings for repair;
+  while the Moot Steward adopts roadless or disconnected buildings for repair. A house
+  whose neighbour's connector is still unfinished therefore deliberately joins the nearest
+  completed street even when the unfinished path passes its door;
 - construction supply, chopping, building, farming, fishing, carrying, indoor use, door opening/closing and ambient sitting are all observed; and
 - no active route, road builder, worksite or inventory is left in an invalid end state.
+
+The end of every run prints one `LAB connector-joins '<settlement>'` summary per
+settlement. It is a measured diagnostic, not a pass requirement: nothing in the lab asserts
+node spacing or join offsets. It reports connector count, Hall joins versus node joins,
+lateral offset buckets between each connector's goal node and the perpendicular foot of its
+own approach on the host street (`<=1m`, `1-3m`, `3-10m`, `>10m`), offset and length
+percentiles, `sparse_hosts` (hosts whose mean segment exceeds three metres),
+`regional_hosts` and `nearer_frontage_elsewhere` (connectors whose end-state nearest
+frontage on a completed road other than the joined host was more than three metres closer
+than the joined node; an end-state upper bound on the by-design unfinished-neighbour rule
+above, since a road completed later also counts). `FISTWORLD_LAB_CONNECTOR_DETAIL=1` adds
+one `LAB connector` row per connector. Freshly surveyed connectors, adopted permit
+reservations and founding roads are built through `village_roads::resample_path(.., 2.0)`,
+so connectors join them close to their frontage; the 2026-09-16 `secure` run moved from
+`sparse_hosts=5`, `offset_p90=10.1m`, `offset_max=12.3m` and two joins beyond 10 m to
+`sparse_hosts=0`, `offset_p50=0.7m`, `offset_p90=2.3m`, `offset_max=5.0m` and none beyond
+10 m once reused reservations and founding roads were resampled. Regional Dirt sections
+(`RegionalRoadSection`) keep their caravan-trace samples (2-32 m apart) and are reported
+separately as `regional_hosts`.
 
 Recurring-arrival stress adds another contract. With three arrivals on each of twelve
 days, Lab Meadow must settle and house all 44 residents, keep every late civic and private

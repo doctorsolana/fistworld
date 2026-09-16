@@ -77,6 +77,7 @@ arithmetic remain distinct.
 | Household plot ownership, refitting and boundaries | `server/src/world/household_yards.rs` |
 | Employment and embodied work | `server/src/world/village/employment.rs`, `trades.rs`, `processing.rs` |
 | Company, site and civic accounting | `server/src/world/village/companies.rs`, `businesses/`, `civic.rs` |
+| Company Master orders, deferred dividend replies | `server/src/player/business.rs`, `business/company.rs`, `business/dividend_reports.rs` |
 | World-wide simulation and separate network interest | `server/src/world/village/schedule.rs`, `server/src/world/regions.rs`; see `docs/SIMULATION-PARITY.md` |
 | Roads, resumable routing and route caches | `server/src/world/village_roads.rs` and `village_roads/` |
 | Building index and navigation obstacles | `server/src/collision/building_index.rs`, `server/src/world/navgrid.rs` |
@@ -128,10 +129,14 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Company directory and management presentation | `client/src/ui/encyclopedia/companies.rs` and `companies/` |
 
 The company page keeps snapshots in `model.rs`/`directory.rs`, input handling in
-`controls.rs`/`route_actions.rs`, selective rebuilding in `view.rs`, and focused
-portfolio, detail, site and route views beside them. Preserve the entity under
-the pointer during live updates. Avoid marking unchanged UI state as changed.
-Use existing shared widgets before creating another screen-specific convention.
+`controls.rs`/`route_actions.rs`, the typed `CompanyBound` markers, value function
+and id-only structure key in `binding.rs`, the build-once/bind-in-place decision
+in `view.rs`, and focused portfolio, detail, site, route, fleet and route-editor
+views beside them. A books snapshot binds values (text, colours, meter widths,
+button payloads) into the retained tree rather than deferring a respawn; only a
+change of ids or gating bits respawns, and that alone waits for the pointer to
+leave. Avoid marking unchanged UI state as changed. Use existing shared widgets
+before creating another screen-specific convention.
 
 ## Verification and test ownership
 
