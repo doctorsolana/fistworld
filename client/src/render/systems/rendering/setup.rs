@@ -139,6 +139,12 @@ pub fn setup_rendering(
             _ => ShadowFilteringMethod::Temporal,
         },
     ));
+    // `FISTFORCE_FOG=0`: the DistanceFog component is the only thing that
+    // enables the per-view fog uniform and its shader path; removing it here is
+    // the honest off state (day_night_cycle simply finds no fog to write).
+    if !crate::profiling::env_enabled_by_default("FISTFORCE_FOG") {
+        camera.remove::<DistanceFog>();
+    }
     // SSAO is opt-in: a fullscreen AO pass plus a depth/normal prepass is a
     // heavy default on integrated GPUs.
     if settings.ssao_enabled {
@@ -146,8 +152,11 @@ pub fn setup_rendering(
     }
     // The temporal shadow filter is noise without TAA accumulating it; the
     // gaussian/hw ablation values run without TAA, as before.
+    // `FISTFORCE_TAA=0` removes TAA alone (FISTFORCE_SHADOW_FILTER=hw removes
+    // the temporal filter and TAA together, which conflates the two).
     let ablation = std::env::var("FISTFORCE_SHADOW_FILTER");
-    if !matches!(ablation.as_deref(), Ok("gaussian") | Ok("hw")) {
+    let taa_enabled = crate::profiling::env_enabled_by_default("FISTFORCE_TAA");
+    if taa_enabled && !matches!(ablation.as_deref(), Ok("gaussian") | Ok("hw")) {
         camera.insert(bevy::anti_alias::taa::TemporalAntiAliasing::default());
     }
     // Keep this out of the large tuple to avoid tuple-size bundle limits.

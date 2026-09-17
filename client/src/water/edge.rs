@@ -30,6 +30,9 @@ pub(super) fn ensure_ocean_edge_extension(
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
     existing: Query<(), With<OceanEdgeExtension>>,
 ) {
+    if !crate::profiling::env_enabled_by_default("FISTFORCE_WATER") {
+        return;
+    }
     if !existing.is_empty() || terrain.water_level().is_none() {
         return;
     }

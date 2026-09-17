@@ -492,6 +492,7 @@ impl GraphicsSettings {
         self.atmosphere_enabled = env_bool("FISTFORCE_ATMOSPHERE", self.atmosphere_enabled);
         self.clouds_enabled = env_bool("FISTFORCE_CLOUDS", self.clouds_enabled);
         self.props_enabled = env_bool("FISTFORCE_PROPS", self.props_enabled);
+        self.bloom_enabled = env_bool("FISTFORCE_BLOOM", self.bloom_enabled);
         self.vsync_enabled = env_bool("FISTFORCE_VSYNC", self.vsync_enabled);
         if let Some(cap) = std::env::var("FISTFORCE_FRAME_CAP")
             .ok()
@@ -562,6 +563,9 @@ impl GraphicsSettings {
         }
         if forced("FISTFORCE_CLOUDS") {
             self.clouds_enabled = baseline.clouds_enabled;
+        }
+        if forced("FISTFORCE_BLOOM") {
+            self.bloom_enabled = baseline.bloom_enabled;
         }
         if forced("FISTFORCE_PROPS") {
             self.props_enabled = baseline.props_enabled;

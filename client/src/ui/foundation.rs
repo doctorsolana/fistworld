@@ -411,6 +411,26 @@ pub fn retained_scroll(same_target: bool, current: Option<Vec2>) -> Vec2 {
     }
 }
 
+/// `FISTFORCE_UI=0`: take every UI root out of layout and rendering by setting
+/// `Display::None`. This is the honest "no UI" state for measuring UI layout
+/// and the native-resolution present pass; it also hides the scene blit node,
+/// so the window shows only the clear color in this arm by design.
+pub fn apply_ui_kill_switch(
+    mut roots: Query<&mut Node, (With<Node>, Without<ChildOf>)>,
+    mut disabled: Local<Option<bool>>,
+) {
+    let disabled = *disabled
+        .get_or_insert_with(|| !crate::profiling::env_enabled_by_default("FISTFORCE_UI"));
+    if !disabled {
+        return;
+    }
+    for mut node in roots.iter_mut() {
+        if node.display != Display::None {
+            node.display = Display::None;
+        }
+    }
+}
+
 pub struct UiFoundationPlugin;
 
 impl Plugin for UiFoundationPlugin {
@@ -432,6 +452,9 @@ impl Plugin for UiFoundationPlugin {
                 style_ui_button_labels,
                 audit_button_contract,
                 super::modal::sync_modal_state,
+                // Last, so nothing in this chain re-reveals a hidden root
+                // before layout runs.
+                apply_ui_kill_switch,
             )
                 .chain()
                 .before(bevy::ui::UiSystems::Layout),
