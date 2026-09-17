@@ -19,3 +19,10 @@ Same harness, dense-stress town, camera locked at `112,-158`, display on and unl
 - Tuning knobs: `ANIM_LOD_TIERS` / `ANIM_LOD_FAR_INTERVAL` in `hero/animation.rs`.
   Visual check of the 10 Hz far tier at RTS zoom is still to be done by eye.
 - Next lever: one skinned mesh per villager, see `CROWD-MESH-MERGE-PLAN.md`.
+
+## Follow-up: one-mesh-per-villager (Phase A) — implemented, measured, defaulted OFF
+
+Works (1,001 merged rigs, mesh entities 5.8k -> 2.8k, pixel-identical capture, tests
+pass) but measures 0-1.5 ms in back-to-back pairs, within noise. Left behind
+`FISTFORCE_MERGE_OUTFITS=1`. Details and the corrected reasoning in
+`CROWD-MESH-MERGE-PLAN.md`.

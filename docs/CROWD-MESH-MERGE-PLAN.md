@@ -120,3 +120,44 @@ Same harness as the audit (`logs/perf-audit-2026-09-17/run_one.sh`, dense-stress
 camera locked at `112,-158`, display on and unlocked). Compare against the branch's
 LOD+stash baseline, and read `ClientPerfMeshes total/visible` (expect ~1,000 / ~1,000)
 and the render-thread spans in a trace.
+
+---
+
+## Phase A result (implemented and measured 2026-09-17, same day)
+
+Implemented on `perf-crowd-lod`: `merge_outfit_mesh` (attribute normalisation, vertex
+colours, u32 indices, skinned bounds), the merged path in `dress_heroes` with a per
+outfit-key cache and a shared white vertex-coloured material, `HeroMerged`, and tests.
+Hair stays a separate entity (textured). Enable with `FISTFORCE_MERGE_OUTFITS=1`.
+
+Verified working: every one of 1,001 villagers reports a merged outfit
+(`FISTFORCE_RIG_VIS_DIAG=1`), the mesh census drops from ~5,800 to ~2,800 entities
+(`Outfit.Merged=1001` + hair), the armour-review capture is **pixel-identical** to the
+unmerged render (max diff 0 on every frame), no merge warnings, 35/35 hero tests.
+
+Measured, dense-stress town, camera locked, display on, back-to-back pairs on one
+binary (LOD + wardrobe stash on in both arms):
+
+| pair | merge off | merge on | note |
+|---|---:|---:|---|
+| 2 | 36.35 | 35.04 | both warm (build just before) |
+| 3 | 33.75 (flat) | 33.95 mean, 32.1-32.7 last half | clean, cool |
+
+**Outcome: 0 to ~1.5 ms, within run-to-run noise.** Halving the number of skinned
+mesh entities did not move the frame. The plan's premise - that the ~27 ms/frame of
+render-preparation CPU (spread across task-pool threads) is the wall-clock limiter -
+is wrong once animation LOD and the stash are in; that work parallelises and the frame
+is bounded elsewhere. A trace with the merge on would show what the render thread
+waits on now; not done today.
+
+Decision: **merge stays OFF by default.** Kept because it is correct, tested, and
+makes the closet free to grow, but it is not a performance win to ship on its own.
+Phases B (hair atlas) and C (mesh sharing) are moot for frame time until a trace
+shows a new limiter that they address.
+
+Environment note: every run after ~14:40 local (merged or not) carried far more
+hitch frames (p95 43-47 ms vs 35 ms at 13:48; `hitch_sum` ~2,000 vs ~230) with a
+cool CPU probe and no competing processes visible. Absolute levels from the
+afternoon are therefore ~5 ms above the 13:48 baseline; only within-pair deltas were
+used. One run of an intermediate binary (14:57) showed no merged entities at all
+while later builds merge every rig; not reproduced and not explained.

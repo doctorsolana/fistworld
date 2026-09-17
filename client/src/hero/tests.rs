@@ -5,8 +5,9 @@ use super::animation::{
     RigMeshParts, BODY_ANIMATION_FADE_SECONDS,
 };
 use super::appearance::{
-    apply_hero_skin, dress_heroes, matte_character_materials, HeroAssets, HeroDressed,
-    HeroFullRig, HeroManifest, HeroSceneRoot, HeroSkinApplied, WardrobeStash,
+    apply_hero_skin, dress_heroes, matte_character_materials, merge_outfit_mesh, HeroAssets,
+    ForceOutfitMerge, HeroDressed, HeroFullRig, HeroManifest, HeroMerged, HeroSceneRoot,
+    HeroSkinApplied, WardrobeStash,
 };
 use super::attachments::{carried_asset_spec, carried_bundle_transform, desired_tool, ToolKind};
 use super::carts::{advanced_cart_wheel_angle, PORTER_CART_WHEEL_RADIUS};
@@ -972,6 +973,7 @@ fn dressing_despawns_unworn_primitives_and_rebuilds_them_when_worn() {
     let mut world = World::new();
     world.init_resource::<Assets<Mesh>>();
     world.init_resource::<Assets<StandardMaterial>>();
+    world.init_resource::<HeroAssets>();
     let manifest = CharacterManifest::load().expect("shipped character manifest");
     assert!(manifest.slots[0].items.len() >= 2, "test needs a slot with two items");
     world.insert_resource(HeroManifest(manifest.clone()));
@@ -1041,4 +1043,205 @@ fn dressing_despawns_unworn_primitives_and_rebuilds_them_when_worn() {
     world.flush();
     let worn = world.get::<HeroOutfit>(hero).unwrap().clone();
     check(&world, &worn);
+}
+
+/// A three-vertex skinned triangle with the attribute mix the wardrobe ships:
+/// cloth has no uv and no colour, armour has baked colours and no uv, the
+/// body and hair have uvs and no colour.
+fn skinned_triangle(with_uv: bool, colour: Option<[f32; 4]>) -> Mesh {
+    use bevy::mesh::{Indices, VertexAttributeValues};
+    let mut mesh = Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 3]);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_JOINT_INDEX,
+        VertexAttributeValues::Uint16x4(vec![[0, 0, 0, 0]; 3]),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, vec![[1.0, 0.0, 0.0, 0.0]; 3]);
+    if with_uv {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.5, 0.5]; 3]);
+    }
+    if let Some(colour) = colour {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![colour; 3]);
+    }
+    mesh.insert_indices(Indices::U16(vec![0, 1, 2]));
+    mesh
+}
+
+/// Merging normalises every part to one attribute set so vertices stay
+/// aligned: missing uvs become zeros, missing colours become the material
+/// colour, baked colours are multiplied by it, and indices are offset.
+#[test]
+fn merge_outfit_mesh_normalises_attributes_and_fills_colours() {
+    use bevy::mesh::VertexAttributeValues;
+    let body = skinned_triangle(true, None);
+    let cloth = skinned_triangle(false, None);
+    let armour = skinned_triangle(false, Some([0.5, 0.5, 0.5, 1.0]));
+    let merged = merge_outfit_mesh(&[
+        (&body, [0.8, 0.3, 0.1, 1.0]),
+        (&cloth, [0.0, 0.0, 1.0, 1.0]),
+        (&armour, [1.0, 1.0, 1.0, 1.0]),
+    ])
+    .expect("merge");
+    assert_eq!(merged.count_vertices(), 9);
+    let Some(VertexAttributeValues::Float32x4(colours)) = merged.attribute(Mesh::ATTRIBUTE_COLOR)
+    else {
+        panic!("colour attribute");
+    };
+    assert_eq!(colours[0], [0.8, 0.3, 0.1, 1.0], "body takes the skin tone");
+    assert_eq!(colours[3], [0.0, 0.0, 1.0, 1.0], "cloth takes its material colour");
+    assert_eq!(colours[6], [0.5, 0.5, 0.5, 1.0], "armour keeps its baked colour");
+    let Some(VertexAttributeValues::Float32x2(uv)) = merged.attribute(Mesh::ATTRIBUTE_UV_0) else {
+        panic!("uv attribute");
+    };
+    assert_eq!(uv.len(), 9);
+    assert_eq!(uv[3], [0.0, 0.0], "cloth gets zero uvs");
+    let indices: Vec<usize> = merged.indices().unwrap().iter().collect();
+    assert_eq!(indices, (0..9).collect::<Vec<_>>());
+    assert!(merged.skinned_mesh_bounds().is_some(), "joint bounds for culling");
+    assert!(
+        merge_outfit_mesh(&[(&Mesh::new(
+            bevy::mesh::PrimitiveTopology::TriangleList,
+            bevy::asset::RenderAssetUsages::default()
+        ), [1.0; 4])])
+        .is_err(),
+        "an unskinned part is refused, not merged misaligned"
+    );
+}
+
+/// With real geometry the body and every worn untextured item collapse into
+/// one merged entity; textured items (hair) stay live; an outfit change
+/// replaces the merged entity.
+#[test]
+fn dressing_merges_body_and_untextured_items_into_one_entity() {
+    let mut world = World::new();
+    world.init_resource::<ForceOutfitMerge>();
+    world.init_resource::<Assets<Mesh>>();
+    world.init_resource::<Assets<StandardMaterial>>();
+    world.init_resource::<HeroAssets>();
+    let manifest = CharacterManifest::load().expect("shipped character manifest");
+    world.insert_resource(HeroManifest(manifest.clone()));
+    let mesh = world
+        .resource_mut::<Assets<Mesh>>()
+        .add(skinned_triangle(true, None));
+    let plain = world
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    let textured = world
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            base_color_texture: Some(Handle::default()),
+            ..default()
+        });
+    let skin = bevy::mesh::skinning::SkinnedMesh {
+        inverse_bindposes: Handle::default(),
+        joints: Vec::new(),
+    };
+
+    let hero = world
+        .spawn((
+            HeroVisual { speed: 0.0 },
+            HeroFullRig,
+            HeroOutfit::default(),
+            Visibility::default(),
+        ))
+        .id();
+    let scene = world
+        .spawn((HeroSceneRoot, Visibility::Hidden, ChildOf(hero)))
+        .id();
+    let body = world
+        .spawn((Name::new(manifest.body.clone()), Visibility::default(), ChildOf(scene)))
+        .id();
+    world.spawn((
+        Name::new(format!("{}.{}", manifest.body, manifest.skin.material)),
+        GltfMaterialName(manifest.skin.material.clone()),
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(plain.clone()),
+        skin.clone(),
+        Transform::default(),
+        Visibility::default(),
+        ChildOf(body),
+    ));
+    let mut nodes: Vec<(String, bool, Entity)> = Vec::new();
+    for slot in &manifest.slots {
+        let is_hair = slot.name == "hair";
+        for item in &slot.items {
+            let node = world
+                .spawn((Name::new(item.clone()), Visibility::default(), ChildOf(scene)))
+                .id();
+            world.spawn((
+                Name::new(format!("{item}.Mat")),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(if is_hair { textured.clone() } else { plain.clone() }),
+                skin.clone(),
+                Transform::default(),
+                Visibility::default(),
+                ChildOf(node),
+            ));
+            nodes.push((item.clone(), is_hair, node));
+        }
+    }
+    let primitives_under = |world: &World, node: Entity| -> usize {
+        world.get::<Children>(node).map_or(0, |children| {
+            children
+                .iter()
+                .filter(|child| world.get::<Mesh3d>(*child).is_some())
+                .count()
+        })
+    };
+    let check = |world: &World, outfit: &HeroOutfit| {
+        assert_eq!(primitives_under(world, body), 0, "body is merged away");
+        for (name, is_hair, node) in &nodes {
+            let worn = !outfit.hides_node(&manifest, name);
+            let live = worn && *is_hair;
+            assert_eq!(
+                primitives_under(world, *node),
+                usize::from(live),
+                "{name}: worn={worn} hair={is_hair}"
+            );
+            assert_eq!(world.get::<WardrobeStash>(*node).is_some(), !live, "{name}: stash");
+        }
+        let merged = world.get::<HeroMerged>(hero).expect("merged outfit");
+        assert!(world.get::<Mesh3d>(merged.entity).is_some());
+        assert!(world
+            .get::<bevy::mesh::skinning::SkinnedMesh>(merged.entity)
+            .is_some());
+        assert_eq!(world.get::<ChildOf>(merged.entity).unwrap().parent(), scene);
+        assert_eq!(
+            world.get::<HeroSkinApplied>(hero).map(|applied| applied.0),
+            Some(outfit.skin)
+        );
+        merged.entity
+    };
+
+    world.run_system_once(dress_heroes).unwrap();
+    world.flush();
+    assert!(world.get::<HeroDressed>(hero).is_some());
+    let outfit = world.get::<HeroOutfit>(hero).unwrap().clone();
+    let first = check(&world, &outfit);
+    let cached = world.resource::<HeroAssets>().merged_meshes.len();
+    assert_eq!(cached, 1);
+
+    // Change a non-hair slot: a different merged mesh replaces the entity.
+    let slot = manifest
+        .slots
+        .iter()
+        .position(|slot| slot.name != "hair" && slot.items.len() >= 2)
+        .expect("a non-hair slot with two items");
+    world.get_mut::<HeroOutfit>(hero).unwrap().slots[slot] = 1;
+    world.run_system_once(dress_heroes).unwrap(); // clears HeroDressed
+    world.flush();
+    world.run_system_once(dress_heroes).unwrap();
+    world.flush();
+    let outfit = world.get::<HeroOutfit>(hero).unwrap().clone();
+    let second = check(&world, &outfit);
+    assert_ne!(first, second, "a new outfit gets a new merged entity");
+    assert!(world.get_entity(first).is_err(), "the old merged entity is despawned");
+    assert_eq!(world.resource::<HeroAssets>().merged_meshes.len(), 2);
 }
