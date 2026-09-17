@@ -37,6 +37,42 @@ const SPEED_WRITE_STEP: f32 = 0.01;
 const COVERAGE_WRITE_STEP: f32 = 0.005;
 const SUN_PROJ_WRITE_STEP: f32 = 0.01;
 const STRENGTH_WRITE_STEP: f32 = 0.005;
+
+/// Diff-gate set for the lane sweep. `FISTFORCE_CLOUD_LANE_QUIET=1` coarsens
+/// every threshold (and never starts a new sweep while the previous snapshot
+/// is still being applied). The shaders extrapolate cloud drift and sun sweep
+/// from the anchored values, so coarser anchors keep the field moving; only
+/// the periodic correction lags, by at most the anchor interval.
+#[derive(Clone, Copy)]
+struct LaneGate {
+    anchor_secs: f32,
+    speed: f32,
+    coverage: f32,
+    sun_proj: f32,
+    strength: f32,
+}
+
+impl LaneGate {
+    fn for_quiet(quiet: bool) -> Self {
+        if quiet {
+            Self {
+                anchor_secs: 4.0,
+                speed: 0.04,
+                coverage: 0.02,
+                sun_proj: 0.05,
+                strength: 0.02,
+            }
+        } else {
+            Self {
+                anchor_secs: ANCHOR_REFRESH_SECS,
+                speed: SPEED_WRITE_STEP,
+                coverage: COVERAGE_WRITE_STEP,
+                sun_proj: SUN_PROJ_WRITE_STEP,
+                strength: STRENGTH_WRITE_STEP,
+            }
+        }
+    }
+}
 /// Chunk materials receiving the newest lane snapshot per frame. Every
 /// `materials.get_mut` re-prepares that material on the GPU (five uniform
 /// buffers + a bind group), and with view_distance 8 there are up to 289 chunk
@@ -127,7 +163,11 @@ pub fn sync_cloud_shadow_params(
     mut terrain_materials: ResMut<Assets<TerrainSplatMaterial>>,
     mut water_materials: ResMut<Assets<ToonWaterMaterial>>,
     mut state: Local<CloudShadowParams>,
+    mut quiet_cache: Local<Option<bool>>,
 ) {
+    let quiet = *quiet_cache
+        .get_or_insert_with(|| crate::profiling::env_flag("FISTFORCE_CLOUD_LANE_QUIET"));
+    let gate = LaneGate::for_quiet(quiet);
     let Some(world_time) = world_time_query.iter().next() else {
         return;
     };
@@ -224,20 +264,30 @@ pub fn sync_cloud_shadow_params(
     let write_due = match state.written {
         None => true,
         Some((a, b, c, s)) => {
-            (clouds_a.x - a.x).abs() > COVERAGE_WRITE_STEP
-                || clouds_b.xy().distance_squared(b.xy())
-                    > SUN_PROJ_WRITE_STEP * SUN_PROJ_WRITE_STEP
-                || (clouds_b.z - b.z).abs() > STRENGTH_WRITE_STEP
+            (clouds_a.x - a.x).abs() > gate.coverage
+                || clouds_b.xy().distance_squared(b.xy()) > gate.sun_proj * gate.sun_proj
+                || (clouds_b.z - b.z).abs() > gate.strength
                 || clouds_b.w != b.w
-                || anchor_time - c.x > ANCHOR_REFRESH_SECS
-                || (speed_client - c.z).abs() > SPEED_WRITE_STEP
+                || anchor_time - c.x > gate.anchor_secs
+                || (speed_client - c.z).abs() > gate.speed
                 // Storminess normally rides the anchor cadence (slow lerp),
                 // but a settings toggle zeroes it instantly — write through.
-                || (storm.z - s.z).abs() > STRENGTH_WRITE_STEP
+                || (storm.z - s.z).abs() > gate.strength
         }
     };
+    // Quiet mode publishes a new sweep only after the previous snapshot has
+    // reached every live chunk. The lanes are recomputed from live state every
+    // frame, so the skipped snapshots are not lost data — the next accepted
+    // publish carries the newest values. This removes the re-write of chunks
+    // that a fast trigger stream (sun sweep at 1x) would otherwise keep
+    // re-uploading every frame.
+    let sweep_busy = quiet
+        && state.pending.is_some()
+        && chunks
+            .iter()
+            .any(|(entity, _)| state.applied.get(&entity) != Some(&state.generation));
 
-    if write_due {
+    if write_due && !sweep_busy {
         if let Some(water_assets) = &water_assets {
             if let Some(mut material) = water_materials.get_mut(&water_assets.material) {
                 material.uniform.clouds_a = clouds_a;
