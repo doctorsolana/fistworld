@@ -390,3 +390,28 @@ Reading:
 
 Reproduce: `FISTFORCE_TERRAIN_DEBUG_MODE=noise ./target/playtest/client` etc.; capture with
 `logs/perf-fundamentals/terrain-shader-diff.ron` (both paths under ignored `logs/`).
+
+---
+
+# Follow-up: TAA's prepasses — measured, no effect
+
+Bevy's `TemporalAntiAliasing` *requires* `DepthPrepass` and `MotionVectorPrepass`; required
+components stay on the camera after TAA is removed, so the `FISTFORCE_TAA=0` ablation never
+removed the two extra scene passes. `FISTFORCE_PREPASS=0` (commit `665ef4fa`) removes them
+with TAA off (no shader in the client reads the prepass textures).
+
+Short runs (150 s: 60 s fill at 10x, last 80 s measured, uncapped, `secure`, fan on):
+
+| run | p50 | p95 |
+|---|---:|---:|
+| baseline | 15.40 | 16.48 |
+| TAA off (prepasses still on) | 15.79 | 16.89 |
+| TAA off + prepasses off | 16.33 | 17.60 |
+
+Within noise. Two extra geometry passes over ~330 meshes cost nothing measurable, which
+also means the render thread's draw encoding is not the frame's critical path; the frame is
+bounded by per-pixel GPU work (consistent with half-res −3.6 ms, cloud noise −2.7, mottle
+−1.5). The "draw calls × passes" hypothesis is rejected; terrain chunk merging would not
+pay either. Note: the harness gate's `loginwindow` check fires when no window has focus
+(e.g. right after a game window closes), not only on the lock screen; it now also requires
+10 minutes of HID idle before refusing.
