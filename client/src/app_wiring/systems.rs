@@ -163,11 +163,16 @@ fn wire_common_systems(app: &mut App) {
         Update,
         // After the day/night cycle so the sun transform the shadow
         // projection reads is current-frame.
-        game_systems::sync_cloud_shadow_params
-            .after(game_systems::update_day_night_cycle)
-            .after(terrain::TerrainUpdateSet)
+        (
+            game_systems::maintain_cloud_field,
+            game_systems::sync_cloud_shadow_params
+                .after(game_systems::update_day_night_cycle)
+                .after(terrain::TerrainUpdateSet),
+        )
+            .chain()
             .run_if(in_state(GameState::Playing)),
     );
+    app.init_resource::<game_systems::CloudFieldState>();
 }
 
 /// Gameplay wiring: top-down commander camera + world visuals.

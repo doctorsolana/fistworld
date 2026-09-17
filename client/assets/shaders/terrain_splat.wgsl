@@ -42,6 +42,9 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var albedo_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var normal_array: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(105) var normal_sampler: sampler;
+// Baked cloud shape over a cloud-space window (see palette.cloud_field).
+// Sampled with weight_map_sampler: linear, clamp-to-edge.
+@group(#{MATERIAL_BIND_GROUP}) @binding(106) var cloud_field: texture_2d<f32>;
 
 // Scalar/vector parameters in ONE buffer (each separate uniform binding is a
 // separate GPU buffer re-created on every material re-prepare). Field order
@@ -81,6 +84,9 @@ struct TerrainPalette {
     climate: vec4<f32>,
     // xy: storm center at the wind anchor, z: storminess, w: reserved.
     storm: vec4<f32>,
+    // xy: baked window origin (cloud-space units), z: 1 / window size,
+    // w: mode (1 = sample cloud_field, 0 = per-fragment noise).
+    cloud_field: vec4<f32>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(124) var<uniform> palette: TerrainPalette;
 
@@ -191,6 +197,19 @@ fn cloud_density(world_xz: vec2<f32>, params_a: vec4<f32>, seed_phase: f32) -> f
     let q = vec2<f32>(cloud_fbm(p0 * 0.5), cloud_fbm(p0 * 0.5 + vec2<f32>(5.2, 1.3)));
     let p = p0 + 0.9 * (q - vec2<f32>(0.5, 0.5));
     let shape = cloud_fbm(p) * cloud_ridge(p * 0.9) * 2.4;
+    let cover = clamp(params_a.x, 0.0, 1.0);
+    let thresh = mix(0.78, 0.34, cover);
+    return smoothstep(thresh, thresh + 0.28, shape);
+}
+
+// Same density as `cloud_density`, but the shape term (two fbm + one ridge
+// after a domain warp: 16 value-noise evaluations) comes from the baked
+// `cloud_field` texture. The window is in the same cloud-space units as p0,
+// so wind drift is a plain uv translation and coverage stays a uniform.
+fn cloud_density_baked(world_xz: vec2<f32>, params_a: vec4<f32>, seed_phase: f32, window: vec4<f32>) -> f32 {
+    let p0 = (world_xz + params_a.zw) * params_a.y + vec2<f32>(seed_phase, seed_phase * 1.73);
+    let uv = (p0 - window.xy) * window.z;
+    let shape = textureSampleLevel(cloud_field, weight_map_sampler, uv, 0.0).r;
     let cover = clamp(params_a.x, 0.0, 1.0);
     let thresh = mix(0.78, 0.34, cover);
     return smoothstep(thresh, thresh + 0.28, shape);
@@ -731,13 +750,15 @@ fn fragment(
                 min(cloud_params.x + storm_at_cloud * 0.9, 1.0),
                 cloud_params.yzw,
             );
-            let cloud_shade = 1.0
-                - palette.clouds_b.z
-                    * smoothstep(
-                        0.22,
-                        0.62,
-                        cloud_density(cloud_shadow_xz, storm_params, palette.clouds_b.w),
-                    );
+            var density: f32;
+            if (palette.cloud_field.w > 0.5) {
+                density = cloud_density_baked(
+                    cloud_shadow_xz, storm_params, palette.clouds_b.w, palette.cloud_field,
+                );
+            } else {
+                density = cloud_density(cloud_shadow_xz, storm_params, palette.clouds_b.w);
+            }
+            let cloud_shade = 1.0 - palette.clouds_b.z * smoothstep(0.22, 0.62, density);
             shaded *= cloud_shade;
         }
         // Storm ground effects: storminess is a UNIFORM, so this branch is

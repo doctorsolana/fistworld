@@ -17,6 +17,7 @@ dev = ["bevy/dynamic_linking"]
 capture-video = ["dep:bevy_dev_tools", "bevy_dev_tools/screenrecording"]
 
 [dependencies]
+half = "2"
 bevy = { workspace = true }
 # Native display-mode evidence for the opt-in display smoke test.
 winit = { version = "0.30", default-features = false }

@@ -116,6 +116,7 @@ pub(super) fn new_chunk_material(
             weight_map,
             albedo_array: render_assets.albedo_array.clone(),
             normal_array: render_assets.normal_array.clone(),
+            cloud_field: Handle::default(),
             params,
             palette,
         },

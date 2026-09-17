@@ -3,6 +3,7 @@
 //! Atmosphere, day/night cycle, and camera setup.
 
 pub mod atmosphere;
+pub mod cloud_field;
 pub mod cloud_layer;
 pub mod cloud_shadows;
 pub mod clouds;
@@ -13,6 +14,7 @@ pub mod setup;
 
 pub(crate) use atmosphere::{sync_atmosphere_enabled, update_atmosphere};
 pub use cloud_layer::{spawn_cloud_plane, update_cloud_plane, CloudLayerMaterial, CloudLayerPlane};
+pub use cloud_field::{maintain_cloud_field, CloudFieldState};
 pub use cloud_shadows::sync_cloud_shadow_params;
 pub use clouds::{update_cloud_cover, CloudCover, CloudCoverMode, CloudCoverOverride};
 pub use day_night::update_day_night_cycle;

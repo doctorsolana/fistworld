@@ -125,6 +125,15 @@ pub struct TerrainSplatExtension {
     #[sampler(105)]
     pub normal_array: Handle<Image>,
 
+    /// Cloud shape field (R16Float, one channel), baked on the CPU over a
+    /// window of cloud space and sampled with the weight-map sampler so no
+    /// new sampler binding is added (Metal caps samplers per stage). The
+    /// palette's `cloud_field` lane holds the window; while its mode is 0 the
+    /// shader evaluates the noise per fragment instead and this handle is the
+    /// engine's default 1x1 image.
+    #[texture(106)]
+    pub cloud_field: Handle<Image>,
+
     /// Every non-texture, non-palette parameter in ONE uniform buffer.
     ///
     /// Each `#[uniform]` attribute is its own GPU buffer, re-created every time
@@ -204,6 +213,10 @@ pub struct TerrainPalette {
     /// (0 whenever clouds are disabled -- the rain must vanish with its sky),
     /// w: reserved. Live per frame-ish; pushed by sync_cloud_shadow_params.
     pub storm: Vec4,
+    /// Baked cloud shape window: xy = window origin in cloud-space units,
+    /// z = 1 / window size, w = mode (1.0 sample `cloud_field`, 0.0 evaluate
+    /// the noise per fragment). Pushed by sync_cloud_shadow_params.
+    pub cloud_field: Vec4,
 }
 
 /// Flat palette for the stylised terrain.
@@ -248,6 +261,8 @@ pub fn stylized_palette() -> TerrainPalette {
         climate: Vec4::new(4096.0, 0.0, 0.0, 0.0),
         // Storm center parked far off-world, strength 0.
         storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
+        // Per-fragment noise until a baked field window is published.
+        cloud_field: Vec4::ZERO,
     }
 }
 
