@@ -158,6 +158,16 @@ pub fn setup_rendering(
     let taa_enabled = crate::profiling::env_enabled_by_default("FISTFORCE_TAA");
     if taa_enabled && !matches!(ablation.as_deref(), Ok("gaussian") | Ok("hw")) {
         camera.insert(bevy::anti_alias::taa::TemporalAntiAliasing::default());
+    } else if !crate::profiling::env_enabled_by_default("FISTFORCE_PREPASS") {
+        // TAA *requires* the depth and motion-vector prepasses, and required
+        // components stay on the camera after TAA is removed: "TAA off" alone
+        // still draws the whole scene a second time. `FISTFORCE_PREPASS=0`
+        // (only meaningful with TAA off) removes those passes too. No shader
+        // in this client reads the prepass textures.
+        camera.remove::<(
+            bevy::core_pipeline::prepass::DepthPrepass,
+            bevy::core_pipeline::prepass::MotionVectorPrepass,
+        )>();
     }
     // Keep this out of the large tuple to avoid tuple-size bundle limits.
 
