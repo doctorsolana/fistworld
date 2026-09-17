@@ -1,6 +1,6 @@
 use super::super::{
     Affiliation, KnownPeople, PeopleFilter, PeopleListContent, PersonKind, PersonRow,
-    SelectedPerson, actions, state_sync,
+    SelectedPerson, actions, companies, state_sync,
 };
 use super::*;
 use bevy::input::ButtonState;
@@ -87,12 +87,13 @@ fn unicode_selection_edits_are_bounded_and_single_line() {
     assert!(draft.text.is_char_boundary(draft.cursor));
 }
 
-fn input_app() -> (App, Entity) {
+/// A book open on `tab` whose search field already holds keyboard focus.
+fn input_app(tab: EncyclopediaTab) -> (App, Entity) {
     let mut app = App::new();
     app.init_resource::<EncyclopediaSearch>()
         .init_resource::<InputState>()
         .insert_resource(EncyclopediaOpen(true))
-        .init_resource::<EncyclopediaTab>()
+        .insert_resource(tab)
         .insert_resource(ClickGuard(true))
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>()
@@ -107,10 +108,10 @@ fn input_app() -> (App, Entity) {
             )
                 .chain(),
         );
-    app.add_systems(Startup, |mut commands: Commands| {
+    app.add_systems(Startup, move |mut commands: Commands| {
         commands
-            .spawn((TabBody(EncyclopediaTab::People), Node::default()))
-            .with_children(|directory| spawn(directory, EncyclopediaTab::People));
+            .spawn((TabBody(tab), Node::default()))
+            .with_children(|directory| spawn(directory, tab, DIRECTORY_MARGIN));
     });
     app.update();
     let field = app
@@ -118,6 +119,9 @@ fn input_app() -> (App, Entity) {
         .query_filtered::<Entity, With<SearchField>>()
         .single(app.world())
         .unwrap();
+    // The foundation gives every enabled control its tab stop in production;
+    // this fixture runs no foundation, so seed the one the field would have.
+    app.world_mut().entity_mut(field).insert(TabIndex(0));
     app.world_mut()
         .resource_mut::<InputFocus>()
         .set(field, FocusCause::Pressed);
@@ -146,7 +150,7 @@ fn key(app: &mut App, code: KeyCode, logical: Key, text: Option<&str>) {
 
 #[test]
 fn typing_and_escape_claim_the_frame_without_closing_or_rebuilding_the_field() {
-    let (mut app, field) = input_app();
+    let (mut app, field) = input_app(EncyclopediaTab::People);
     for ch in ["n", "e", "t"] {
         let code = match ch {
             "n" => KeyCode::KeyN,
@@ -182,7 +186,7 @@ fn typing_and_escape_claim_the_frame_without_closing_or_rebuilding_the_field() {
 
 #[test]
 fn hidden_tab_cannot_keep_typing_and_visible_search_is_retained() {
-    let (mut app, field) = input_app();
+    let (mut app, field) = input_app(EncyclopediaTab::People);
     key(
         &mut app,
         KeyCode::KeyA,
@@ -205,6 +209,127 @@ fn hidden_tab_cannot_keep_typing_and_visible_search_is_retained() {
     assert_eq!(app.world().resource::<InputFocus>().get(), None);
     assert!(app.world().get::<InteractionDisabled>(field).is_some());
     assert!(app.world().get::<TabIndex>(field).is_none());
+}
+
+#[test]
+fn company_draft_is_independent_and_clear_companies_is_scoped() {
+    let mut search = EncyclopediaSearch::default();
+    search.set_query(EncyclopediaTab::People, "ada");
+    search.set_query(EncyclopediaTab::Places, "brack");
+    search.set_query(EncyclopediaTab::Companies, "Cassia");
+    assert_eq!(search.query(EncyclopediaTab::Companies), "Cassia");
+    assert_eq!(search.query(EncyclopediaTab::People), "ada");
+    assert_eq!(search.query(EncyclopediaTab::Places), "brack");
+    // Retinue and Army have no field of their own: they read the People draft.
+    assert_eq!(search.query(EncyclopediaTab::Retinue), "ada");
+    assert_eq!(search.query(EncyclopediaTab::Army), "ada");
+    assert!(search.active(EncyclopediaTab::Companies));
+    let revision = search.revision(EncyclopediaTab::Companies);
+    search.clear_companies();
+    assert!(!search.active(EncyclopediaTab::Companies));
+    assert_eq!(search.query(EncyclopediaTab::Companies), "");
+    assert_ne!(search.revision(EncyclopediaTab::Companies), revision);
+    assert!(search.active(EncyclopediaTab::People));
+    assert!(search.active(EncyclopediaTab::Places));
+    // Clearing an empty draft is not an edit: list owners keep their rows.
+    let cleared = search.revision(EncyclopediaTab::Companies);
+    search.clear_companies();
+    assert_eq!(search.revision(EncyclopediaTab::Companies), cleared);
+    search.clear_people();
+    assert!(search.active(EncyclopediaTab::Places));
+    assert!(!search.active(EncyclopediaTab::People));
+}
+
+/// N toggles the book everywhere except inside a text field. The Companies
+/// field must claim the frame like People's, or typing a company name that
+/// contains "n" would close the window under the player.
+#[test]
+fn typing_n_in_the_companies_field_never_closes_the_book_and_escape_leaves_editing() {
+    let (mut app, field) = input_app(EncyclopediaTab::Companies);
+    key(
+        &mut app,
+        KeyCode::KeyN,
+        Key::Character("n".into()),
+        Some("n"),
+    );
+    app.update();
+    assert!(
+        app.world().resource::<EncyclopediaOpen>().0,
+        "N must type into the field, not toggle the book"
+    );
+    assert!(app.world().resource::<InputState>().text_input_blocking());
+    assert_eq!(app.world().resource::<InputFocus>().get(), Some(field));
+    assert_eq!(
+        app.world().resource::<EncyclopediaSearch>().companies.text,
+        "n"
+    );
+    assert!(
+        app.world()
+            .resource::<EncyclopediaSearch>()
+            .people
+            .text
+            .is_empty()
+    );
+    assert!(app.world().get::<InteractionDisabled>(field).is_none());
+    assert!(app.world().get::<TabIndex>(field).is_some());
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset_all();
+    key(&mut app, KeyCode::Escape, Key::Escape, None);
+    app.update();
+    assert!(app.world().resource::<EncyclopediaOpen>().0);
+    assert!(app.world().resource::<InputState>().text_input_captured);
+    assert_eq!(app.world().resource::<InputFocus>().get(), None);
+    assert_eq!(
+        app.world().resource::<EncyclopediaSearch>().companies.text,
+        "n",
+        "Escape leaves editing and keeps the draft"
+    );
+    assert!(app.world().get::<SearchField>(field).is_some());
+}
+
+/// Company settings and ledgers cover the Companies body through the page
+/// host. The covered field leaves tab order, drops focus and ignores keys.
+#[test]
+fn a_covering_page_disables_the_companies_search_field() {
+    use crate::ui::business_management::{BusinessManagementSelection, BusinessManagementTarget};
+    let (mut app, field) = input_app(EncyclopediaTab::Companies);
+    app.init_resource::<crate::ui::history::HistoryPanelTarget>()
+        .init_resource::<BusinessManagementTarget>()
+        .init_resource::<crate::ui::business_management::BusinessManagementReturn>()
+        .init_resource::<crate::ui::company_founding::FoundingPageOpen>()
+        .init_resource::<crate::ui::market::MarketPageTarget>()
+        .init_resource::<companies::CompanyDirectory>()
+        .add_systems(Update, super::super::sync_page_host);
+    app.update();
+    assert!(app.world().get::<InteractionDisabled>(field).is_none());
+    assert!(app.world().get::<TabIndex>(field).is_some());
+    assert_eq!(app.world().resource::<InputFocus>().get(), Some(field));
+
+    app.world_mut().resource_mut::<BusinessManagementTarget>().0 = Some(
+        BusinessManagementSelection::Company(shared::components::CompanyId(1)),
+    );
+    // The page host hides the body in Update; the field reacts next PreUpdate.
+    app.update();
+    app.update();
+    assert!(app.world().get::<InteractionDisabled>(field).is_some());
+    assert!(app.world().get::<TabIndex>(field).is_none());
+    assert_eq!(app.world().resource::<InputFocus>().get(), None);
+    key(
+        &mut app,
+        KeyCode::KeyA,
+        Key::Character("a".into()),
+        Some("a"),
+    );
+    app.update();
+    assert!(
+        app.world()
+            .resource::<EncyclopediaSearch>()
+            .companies
+            .text
+            .is_empty(),
+        "a covered field cannot take text"
+    );
 }
 
 #[test]

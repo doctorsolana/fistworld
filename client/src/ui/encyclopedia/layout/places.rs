@@ -63,7 +63,7 @@ pub(super) fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                         );
                         toolbar.spawn((PlaceCountText, ledger::body("", 16.0)));
                     });
-                search::spawn(directory, EncyclopediaTab::Places);
+                search::spawn(directory, EncyclopediaTab::Places, search::DIRECTORY_MARGIN);
                 directory
                     .spawn((
                         PlacesListViewport,

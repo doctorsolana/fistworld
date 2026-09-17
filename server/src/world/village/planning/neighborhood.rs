@@ -107,10 +107,22 @@ pub(super) fn house_frontage_candidates(
                 continue;
             }
             // Do not spend a route proof on an already occupied neighbour.
-            // Pending buildings are included in `neighbors` as well.
+            // Pending buildings are included in `neighbors` as well. This is
+            // the same oriented land rule the permit applies; the full
+            // reservation snapshot still decides.
+            let shell = shared::components::footprint_claim(
+                Kind::House,
+                Vec3::new(position.x, 0.0, position.y),
+                anchor.rotation,
+            );
             if neighbors.iter().any(|other| {
-                position.distance_squared(Vec2::new(other.position.x, other.position.z))
-                    < (Kind::House.clearance() + other.kind.clearance()).powi(2)
+                shared::components::building_claims(
+                    other.kind,
+                    other.position,
+                    other.rotation,
+                    false,
+                )
+                .conflicts_with(&shell)
             }) {
                 continue;
             }
@@ -229,12 +241,20 @@ mod tests {
                     candidate.frontage.y.abs() < 0.001,
                     "doors retain a common street frontage"
                 );
+                let proposed = shared::components::footprint_claim(
+                    Kind::House,
+                    Vec3::new(candidate.local.x, 0.0, candidate.local.y),
+                    0.0,
+                );
                 assert!(
                     neighbors.iter().all(|neighbor| {
-                        candidate
-                            .local
-                            .distance(Vec2::new(neighbor.position.x, neighbor.position.z))
-                            >= Kind::House.clearance() * 2.0
+                        !shared::components::building_claims(
+                            neighbor.kind,
+                            neighbor.position,
+                            neighbor.rotation,
+                            false,
+                        )
+                        .conflicts_with(&proposed)
                     }),
                     "same-street infill must leave room for both upgraded houses"
                 );
@@ -303,7 +323,8 @@ mod tests {
     #[test]
     fn frontage_pitch_fits_both_upgrade_lines_and_plot_reservations() {
         let pitch = house_frontage_pitch();
-        assert!(pitch > Kind::House.clearance() * 2.0);
+        let reserved_width = Kind::House.placement_definition().footprint.x;
+        assert!(pitch >= reserved_width + 2.0 * shared::components::HOUSE_YARD_MARGIN);
         for building in [
             shared::building::BuildingType::CabinL2,
             shared::building::BuildingType::LongCabinL2,

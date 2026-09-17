@@ -188,6 +188,49 @@ impl SettlementDefenses {
                 )
             })
     }
+
+    /// Whether a plot of `kind` crosses a reserved wall or gate corridor: its
+    /// shell plus a 0.45 m verge, its intended wheat fields plus their terrace
+    /// margin and its pasture plus a 1 m verge. NPC permits, player permits
+    /// and the client's placement preview share this one test.
+    pub fn blocks_plot(
+        &self,
+        kind: super::SettlementBuildingKind,
+        position: Vec3,
+        rotation: f32,
+    ) -> bool {
+        let definition = kind.placement_definition();
+        if self.intersects_footprint(
+            definition.world_footprint_center(position, rotation),
+            definition.footprint * 0.5 + Vec2::splat(0.45),
+            rotation,
+        ) {
+            return true;
+        }
+        if let (Some(fields), Some(half)) = (
+            kind.intended_field_positions(position, rotation),
+            kind.intended_field_half_extents(),
+        ) {
+            if fields.into_iter().any(|field| {
+                self.intersects_footprint(
+                    field.xz(),
+                    half + Vec2::splat(super::FARM_FIELD_TERRACE_MARGIN),
+                    rotation,
+                )
+            }) {
+                return true;
+            }
+        }
+        if let (Some(pasture), Some(half)) = (
+            kind.pasture_position(position, rotation),
+            kind.pasture_half_extents(),
+        ) {
+            if self.intersects_footprint(pasture.xz(), half + Vec2::splat(1.0), rotation) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// SAT in the same Bevy XZ rotation convention used by authored buildings and

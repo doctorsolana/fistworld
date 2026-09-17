@@ -2,15 +2,19 @@
 
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn append_company_controls(
     blocks: &mut Vec<Block>,
     company: &CompanyView<'_>,
     local_person: &Option<PersonId>,
+    local_wallet: u64,
     share_draft: &ShareOrderDraft,
     dividend_draft: &DividendDraft,
+    capital_draft: &CapitalDraft,
     name_of: &dyn Fn(PersonId) -> String,
     can_manage: bool,
 ) {
+    let own_shares = local_person.map_or(0, |person| company.ownership.share_count(person));
     blocks.push(Block::Scope(BusinessManagementPage::Company));
     blocks.push(Block::Section("COMPANY DIRECTION"));
     blocks.push(row(
@@ -73,24 +77,57 @@ pub(super) fn append_company_controls(
             format_money(company.account.wage_arrears),
             format_money(company.account.tax_arrears)
         ),
-        if can_manage
-            && local_person.is_some_and(|person| company.ownership.share_count(person) == 1_000)
-        {
-            [100u64, 500]
-                .into_iter()
-                .map(|amount| {
-                    company_order(
-                        company.id,
-                        format!("company.capital.{amount}"),
-                        format!("CONTRIBUTE {} COIN", format_money(amount)),
-                        HeroCompanyAction::ContributeCapital { amount },
-                    )
-                })
-                .collect()
-        } else {
-            vec![]
-        },
+        vec![],
     ));
+    // Any shareholder may donate personal coin; the presets and the stepped
+    // draft both clamp to the replicated wallet, and the server checks it
+    // again when it debits.
+    if own_shares > 0 {
+        let amount = capital_draft.pennies.min(local_wallet);
+        let mut controls: Vec<ControlModel> = [100u64, 500]
+            .into_iter()
+            .map(|amount| {
+                company_order(
+                    company.id,
+                    format!("company.capital.{amount}"),
+                    format!("CONTRIBUTE {} COIN", format_money(amount)),
+                    HeroCompanyAction::ContributeCapital { amount },
+                )
+            })
+            .collect();
+        controls.extend(
+            [
+                ("down", "-1 COIN", CapitalDraftAction::Down),
+                ("up", "+1 COIN", CapitalDraftAction::Up),
+                ("ten", "+10 COIN", CapitalDraftAction::TenUp),
+                ("all", "ALL", CapitalDraftAction::All),
+            ]
+            .into_iter()
+            .map(|(suffix, label, step)| {
+                ControlModel::new(
+                    format!("company.capital.{suffix}"),
+                    label,
+                    ControlPress::CapitalDraft(step),
+                )
+            }),
+        );
+        controls.push(company_order(
+            company.id,
+            "company.capital.contribute",
+            format!("CONTRIBUTE {} COIN", format_money(amount)),
+            HeroCompanyAction::ContributeCapital { amount },
+        ));
+        blocks.push(row(
+            "company.capital",
+            "CONTRIBUTE PERSONAL COIN",
+            format!(
+                "Draft {} coin of your {} coin wallet. A donation becomes company capital, not revenue: it raises what is distributable and is recoverable only pro rata, through dividends or a share sale.",
+                format_money(amount),
+                format_money(local_wallet),
+            ),
+            controls,
+        ));
+    }
     push_dividend_rows(blocks, company, *local_person, dividend_draft, can_manage);
     blocks.push(Block::Section("OWNERSHIP & GOVERNANCE"));
     let cap_table = company
@@ -148,7 +185,6 @@ pub(super) fn append_company_controls(
     appoint,
 ));
 
-    let own_shares = local_person.map_or(0, |person| company.ownership.share_count(person));
     let own_offer = local_person.and_then(|person| company.share_market.offer_from(person));
     let listed = own_offer.map_or_else(
         || "No active offer.".to_string(),

@@ -10,7 +10,7 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender, RemoteId};
 
 use shared::components::{Company, CompanyId, Hero, PersonId, PlayerPosition, Settlement};
-use shared::economy::{format_money, Wallet, PENNIES_PER_COIN};
+use shared::economy::{CompanyManagementPolicy, PENNIES_PER_COIN, Wallet, format_money};
 use shared::protocol::{HeroCompanyFoundingOrder, HeroCompanyFoundingResult, ReliableChannel};
 
 use super::hero::OfflineHero;
@@ -115,14 +115,21 @@ pub fn handle_hero_company_founding(
                 }
 
                 let company = ids.company();
-                commands.spawn(crate::world::village::new_company_bundle(
-                    company,
-                    name.clone(),
-                    day,
-                    *founder,
-                    order.initial_capital,
-                    order.initial_capital,
-                ));
+                commands
+                    .spawn(crate::world::village::new_company_bundle(
+                        company,
+                        name.clone(),
+                        day,
+                        *founder,
+                        order.initial_capital,
+                        order.initial_capital,
+                    ))
+                    // A player decides when profit leaves the company; NPC
+                    // firms keep the automatic daily distribution.
+                    .insert(CompanyManagementPolicy {
+                        automatic_payout_percent: 0,
+                        ..default()
+                    });
                 reserved_names.insert(key);
                 *newly_mastered.entry(*founder).or_default() += 1;
                 info!(

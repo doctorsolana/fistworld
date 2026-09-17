@@ -268,6 +268,7 @@ fn handle_return(
     match nav.return_to.0.take() {
         Some(ReturnDestination::Company(company)) => {
             nav.company.0 = Some(company);
+            nav.search.clear_companies();
             *nav.tab = EncyclopediaTab::Companies;
         }
         Some(ReturnDestination::Place(place, entry, company)) => {

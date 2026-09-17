@@ -333,6 +333,26 @@ terrain, existing buildings, roads and reservations before granting a permit.
 Player placement uses the same authoritative access and collision rules. Completed
 buildings retain their accepted positions; later demand does not move them.
 
+Reserved land is oriented rectangles, never centre-to-centre discs. Every shell keeps a
+yard on each side (cabins 1.5 m, so two cabins stand 3.0 m apart wall to wall; workplaces
+2.0 m; the permanent Hall shell and the Marketplace 3.0 m), crop fields and pastures keep
+a 1.0 m verge outside their fence, the Hall reserves a 16 m wide and 12 m deep forecourt in
+front of its door, and every doorway's 2.25 m by 4.4 m apron is a hard blocker no
+neighbour may build on. A plot's rectangle plus a 0.45 m verge must also stay outside
+every road corridor and every access lane still reserved by a pending or roadless
+building. `shared::components::placement` owns that one rule set: NPC permits, player
+permits, civic-square surveys and the client preview all call the same functions. A
+refused player plot names the reservation and the shortfall ("Too close to HOUSE #7:
+2.0 m of 3.0 m", "Overlaps the access lane reserved for FARMSTEAD (under construction)",
+"Wheat field overlaps HOUSE #4's doorway"), and the reply carries the same fact as a
+machine-readable blocker. The placement ghost predicts the same verdict in the same words
+before the click, from replicated buildings, worksites, crop bands, roads, reserved lanes,
+walls and the civic square, and applies the same 1.5 m freeboard (0.35 m for a fishing
+hut); it draws the offending reservation in red with its required yard and the neighbouring
+reservations faintly. What the Hall alone decides (builder reach, a dry doorway approach,
+prop collisions, farm earthworks and the access-lane survey) is said on the card, and the
+Hall's refusal replaces the prediction verbatim when it arrives.
+
 Residential placement first tries a bounded set of neighboring frontage plots
 along connected streets, encouraging small seed-selected groups before the usual
 grammar search. Grid frontage pitch fits the reserved upgraded house geometry.
@@ -920,9 +940,10 @@ with a player who does nothing but found the hall and put people on the map.
     reservation prevents the hall selling the same unit again. The
     settlement tracks current edible stock, reserve days, unmet portions, and
     three-day average production and consumption.
-18a. The founding hall reserves a 16-metre planning clearance for its forecourt and
-    commons. That reservation contains the full authored Town Hall footprint from
-    foundation day onward, even while the visible building is still a Moot Hall.
+18a. The founding hall reserves its complete authored Town Hall shell with a 3 m
+    commons on every side, plus a 16 m wide, 12 m deep forecourt in front of the
+    permanent doorway for its service line, from foundation day onward, even while the
+    visible building is still a Moot Hall.
     Building permits and road surveys both treat that largest shell as occupied, so
     promotion never moves an existing building or discovers a road beneath the new
     hall. The three assets share one exporter-enforced door threshold, preserving

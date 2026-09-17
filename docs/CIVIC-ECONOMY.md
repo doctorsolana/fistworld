@@ -470,9 +470,16 @@ the reserved connector. `R` rotates an off-road plot or flips road side, `Tab` c
 frontages, left click submits, and `Esc` returns the unused permit to its tray. Farmstead and
 Lumberjack Hut placement also show the live farmland or timber-quality percentage and band;
 low-quality legal land remains the player's economic choice. The server repeats the terrain, earthwork, water, prop, overlap,
-field, forest/shore viability and full-width access proof before consuming the permit. Several
+field, forest/shore viability and full-width access proof before consuming the permit. Overlap
+is the shared oriented-rectangle rule from `shared::components::placement`: per-kind yards
+(cabins 1.5 m, workplaces 2.0 m, Hall shell and Marketplace 3.0 m), 1.0 m field and pasture
+verges, doorway aprons and the Hall forecourt as hard blockers, and a 0.45 m verge outside
+road corridors and reserved access lanes. It is built from the same occupied-land snapshot
+NPC permits use, including completed pastures. Several
 players confirming in one simulation tick are checked against earlier accepted plots and lanes
-from that same tick. A rejection preserves the permit and escrow.
+from that same tick. A rejection preserves the permit and escrow; a land refusal names the
+blocking reservation and the shortfall in metres, and carries the same fact as a
+machine-readable `PlacementBlocker` beside the text.
 
 Once accepted, the permit fee enters the treasury. The exact CompanyId remains on the permit,
 worksite and completed firm, while recommended working capital remains ordinary company cash.

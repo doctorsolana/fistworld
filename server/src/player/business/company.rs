@@ -9,8 +9,8 @@ use shared::{
         OperatedBy, PersonId, SettlementId, WorldTime, COMPANY_TOTAL_SHARES,
     },
     economy::{
-        format_money, CompanyAccount, CompanyBranchPolicies, CompanyDividendCapacity,
-        CompanyManagementPolicy, GoodsInventory, Wallet,
+        format_money, CompanyAccount, CompanyBranchPolicies, CompanyManagementPolicy,
+        GoodsInventory, Wallet, MAX_AUTOMATIC_PAYOUT_PERCENT,
     },
     protocol::{HeroCompanyAction, HeroCompanyOrder, HeroCompanyResult, ReliableChannel},
 };
@@ -31,8 +31,8 @@ pub(super) fn apply_company_policy_action(
             policy.autopilot = false;
         }
         HeroCompanyAction::SetAutopilot(enabled) => policy.autopilot = enabled,
-        HeroCompanyAction::SetAutomaticDividends(enabled) => {
-            policy.automatic_dividends = enabled;
+        HeroCompanyAction::SetAutomaticDividend { payout_percent } => {
+            policy.automatic_payout_percent = payout_percent;
         }
         _ => {}
     }
@@ -91,7 +91,9 @@ fn authorize(
         HeroCompanyAction::AppointCompanyMaster(_)
         | HeroCompanyAction::ListCompanyShares { .. }
         | HeroCompanyAction::CancelCompanyShareListing
-        | HeroCompanyAction::BuyCompanyShares { .. } => Ok(()),
+        | HeroCompanyAction::BuyCompanyShares { .. }
+        // A donation is checked against the cap table below, not the office.
+        | HeroCompanyAction::ContributeCapital { .. } => Ok(()),
         _ if leadership.can_manage(person) => Ok(()),
         _ => Err("Only the appointed Company Master may act for this company."),
     }
@@ -113,7 +115,6 @@ pub(crate) struct CompanyOrders<'w, 's> {
             &'static mut CompanyBranchPolicies,
             &'static mut CompanyManagementPolicy,
             &'static mut CompanyShareMarket,
-            Option<&'static CompanyDividendCapacity>,
         ),
     >,
     wallets: Query<'w, 's, (Entity, &'static PersonId, &'static mut Wallet)>,
@@ -151,7 +152,6 @@ impl CompanyOrders<'_, '_> {
             mut branches,
             mut management,
             mut market,
-            capacity,
         )) = self
             .companies
             .iter_mut()
@@ -161,18 +161,10 @@ impl CompanyOrders<'_, '_> {
         };
         authorize(order.action, person, &leadership, &ownership)?;
         if let HeroCompanyAction::DistributeDividend { pennies } = order.action {
-            if pennies == 0 {
-                return Err(
-                    if capacity.is_some_and(|capacity| capacity.distributable == 0) {
-                        "Nothing is distributable right now; choose a positive dividend once retained profit exceeds the company's reserves."
-                    } else {
-                        "Choose a positive dividend amount."
-                    },
-                );
-            }
             // Amount validation happens against live reserves in the finance
-            // pass, which clamps and reports; the replicated snapshot is stale
-            // within a day and must not reject a request spuriously.
+            // pass, which clamps, reports and republishes the snapshot; the
+            // replicated snapshot is stale within the hour and must not reject
+            // a request spuriously, not even one drafted against a zero.
             self.dividends.request(order.company, pennies, person, link);
             return Ok(None);
         }
@@ -242,23 +234,36 @@ impl CompanyOrders<'_, '_> {
             }
             HeroCompanyAction::SetStrategy(_)
             | HeroCompanyAction::SetAutopilot(_)
-            | HeroCompanyAction::SetAutomaticDividends(_) => {
-                apply_company_policy_action(order.action, &mut management);
+            | HeroCompanyAction::SetAutomaticDividend { .. } => {
+                if let HeroCompanyAction::SetAutomaticDividend { payout_percent } = order.action {
+                    if payout_percent > MAX_AUTOMATIC_PAYOUT_PERCENT {
+                        return Err("An automatic dividend may pay at most 50% of retained profit above the working-capital runway per day.");
+                    }
+                }
+                // Decide on a copy: a repeated choice must not mark the
+                // replicated policy changed and cost every client a resend.
+                let mut next = *management;
+                apply_company_policy_action(order.action, &mut next);
+                management.set_if_neq(next);
                 Ok(match order.action {
-                    HeroCompanyAction::SetStrategy(_) => "Company strategy updated; automatic sites follow this choice and executive strategy review is paused.",
-                    HeroCompanyAction::SetAutopilot(true) => "Company executive decisions enabled; manual site overrides remain unchanged.",
-                    HeroCompanyAction::SetAutopilot(false) => "Company executive decisions paused; the chosen company strategy is retained.",
-                    _ => "Company dividend policy updated.",
-                }.into())
+                    HeroCompanyAction::SetStrategy(_) => "Company strategy updated; automatic sites follow this choice and executive strategy review is paused.".into(),
+                    HeroCompanyAction::SetAutopilot(true) => "Company executive decisions enabled; manual site overrides remain unchanged.".into(),
+                    HeroCompanyAction::SetAutopilot(false) => "Company executive decisions paused; the chosen company strategy is retained.".into(),
+                    HeroCompanyAction::SetAutomaticDividend { payout_percent: 0 } => "Automatic dividends off: profits are retained.".into(),
+                    HeroCompanyAction::SetAutomaticDividend { payout_percent } => format!(
+                        "Automatic dividend set: {payout_percent}% of retained profit above the working-capital runway, paid daily."
+                    ),
+                    _ => unreachable!("only company policy actions reach this arm"),
+                })
             }
             HeroCompanyAction::DistributeDividend { .. } => {
                 unreachable!("dividend requests are deferred above")
             }
             HeroCompanyAction::ContributeCapital { amount } => {
-                if ownership.share_count(person) != COMPANY_TOTAL_SHARES {
-                    return Err(
-                        "Direct contributions are only available while you own all 1,000 shares; co-owned funding needs a shareholder agreement.",
-                    );
+                // A donation: the cap table is untouched, so the coin is
+                // recoverable only pro rata and only a holder may make one.
+                if ownership.share_count(person) == 0 {
+                    return Err("Only a shareholder may contribute capital.");
                 }
                 if amount == 0 {
                     return Err("Choose a positive capital contribution.");
@@ -277,7 +282,7 @@ impl CompanyOrders<'_, '_> {
                 account.credit(amount);
                 account.contributed_capital += amount;
                 Ok(format!(
-                    "Added {} coin of capital. Company treasury: {} coin.",
+                    "Donated {} coin of capital; it raises what is distributable and is recoverable only pro rata. Company treasury: {} coin.",
                     format_money(amount),
                     format_money(account.cash)
                 ))

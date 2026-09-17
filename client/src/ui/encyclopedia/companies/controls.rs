@@ -1,7 +1,7 @@
 //! Company UI markers, navigation, command submission and button state.
 
 use super::model::{
-    CompanyDrilldownReturn, CompanyFilter, CompanyPolicyFeedback, SelectedCompany,
+    CompanyDrilldownReturn, CompanyFilter, CompanyPolicyFeedback, CompanySort, SelectedCompany,
     TradeRouteEditorAction, TradeRouteQuickAction,
 };
 use crate::ui::business_management::{
@@ -34,6 +34,22 @@ pub struct CompanyCountText;
 
 #[derive(Component, Clone, Copy)]
 pub struct CompanyFilterButton(pub CompanyFilter);
+
+/// Cycles [`CompanySort::key`] through [`super::model::CompanySortKey::ALL`],
+/// resetting the direction to the new key's natural one.
+#[derive(Component)]
+pub struct CompanySortKeyButton;
+
+/// Flips [`CompanySort::descending`].
+#[derive(Component)]
+pub struct CompanySortDirectionButton;
+
+/// Label text rewritten in place by [`style_company_controls`].
+#[derive(Component)]
+pub struct CompanySortKeyLabel;
+
+#[derive(Component)]
+pub struct CompanySortDirectionLabel;
 
 /// Opens the NEW COMPANY page.
 #[derive(Component)]
@@ -106,6 +122,31 @@ pub(in crate::ui::encyclopedia) fn handle_company_filter_buttons(
         if *interaction == Interaction::Pressed {
             *filter = *next;
         }
+    }
+}
+
+/// Mouse only, like the filter chips: letters belong to the search field.
+pub(in crate::ui::encyclopedia) fn handle_company_sort_buttons(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut sort: ResMut<CompanySort>,
+    keys: Query<&Interaction, (With<CompanySortKeyButton>, Changed<Interaction>)>,
+    directions: Query<&Interaction, (With<CompanySortDirectionButton>, Changed<Interaction>)>,
+) {
+    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    if keys
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        *sort = CompanySort::natural(sort.key.next());
+    }
+    if directions
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        sort.descending = !sort.descending;
     }
 }
 
@@ -242,8 +283,23 @@ pub(in crate::ui::encyclopedia) fn receive_company_policy_results(
 pub(in crate::ui::encyclopedia) fn style_company_controls(
     filter: Res<CompanyFilter>,
     selected: Res<SelectedCompany>,
+    sort: Res<CompanySort>,
     mut filters: Query<(&CompanyFilterButton, &mut UiButtonStyle), Without<CompanyRow>>,
     mut rows: Query<(&CompanyRow, &mut UiButtonStyle), Without<CompanyFilterButton>>,
+    mut sort_keys: Query<
+        &mut Text,
+        (
+            With<CompanySortKeyLabel>,
+            Without<CompanySortDirectionLabel>,
+        ),
+    >,
+    mut sort_directions: Query<
+        &mut Text,
+        (
+            With<CompanySortDirectionLabel>,
+            Without<CompanySortKeyLabel>,
+        ),
+    >,
 ) {
     for (CompanyFilterButton(button), mut style) in filters.iter_mut() {
         let selected = *button == *filter;
@@ -255,6 +311,21 @@ pub(in crate::ui::encyclopedia) fn style_company_controls(
         let selected = selected.0 == Some(*company);
         if style.selected != selected {
             style.selected = selected;
+        }
+    }
+    // Both labels are spawned with the default sort; the rewrite here is what
+    // shows a reopened window its retained choice. ASCII carets only: the
+    // bundled faces carry no arrow glyphs.
+    let key = sort.key.label();
+    for mut text in sort_keys.iter_mut() {
+        if text.0 != key {
+            text.0 = key.into();
+        }
+    }
+    let direction = if sort.descending { "v" } else { "^" };
+    for mut text in sort_directions.iter_mut() {
+        if text.0 != direction {
+            text.0 = direction.into();
         }
     }
 }

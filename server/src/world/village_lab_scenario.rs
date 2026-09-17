@@ -108,7 +108,7 @@ fn merchant_beacon_market_plot(
     colliders: Option<&crate::collision::library::StaticColliders>,
     derived: Option<&crate::collision::library::DerivedColliderLibrary>,
 ) -> Option<village::ManualPlotApproval> {
-    let occupied = [(hall, SettlementBuildingKind::Hall.clearance())];
+    let occupied = village::OccupiedLand::hall(hall);
     for radius in [30.0_f32, 38.0, 46.0, 54.0] {
         for step in 0..16 {
             let angle = std::f32::consts::TAU * step as f32 / 16.0;
@@ -1633,7 +1633,7 @@ fn spawn_ux_fixture_building(
     kind: SettlementBuildingKind,
     owner_group: Option<u16>,
     sequence: usize,
-    occupied: &mut Vec<(Vec3, f32)>,
+    occupied: &mut Vec<village::OccupiedLand>,
     roads: &mut Vec<VillageRoad>,
     access_blockers: &mut Vec<village::RoadAccessBlocker>,
     mut colliders: Option<&mut crate::collision::library::StaticColliders>,
@@ -1783,7 +1783,12 @@ fn spawn_ux_fixture_building(
             0.0,
             &roads.iter().collect::<Vec<_>>(),
         ));
-        occupied.push((approval.position, kind.clearance()));
+        occupied.extend(village::OccupiedLand::building(
+            kind,
+            approval.position,
+            approval.rotation,
+            village::LandOwner::completed(Some(building), None, kind),
+        ));
         return Some((building, approval.position, approval.rotation));
     }
     warn!(
@@ -1834,7 +1839,7 @@ fn spawn_runtime_ux_town(
         ))
         .id();
 
-    let mut occupied = vec![(hall, 18.0)];
+    let mut occupied = village::OccupiedLand::hall(hall);
     let mut roads = Vec::new();
     let mut access_blockers = Vec::new();
     let mut homes = Vec::with_capacity(UX_TOWN_RESIDENTS.div_ceil(4));

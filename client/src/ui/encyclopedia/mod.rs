@@ -65,6 +65,7 @@ impl Plugin for EncyclopediaPlugin {
         app.init_resource::<places::SelectedPlaceEntry>();
         app.init_resource::<companies::CompanyDirectory>();
         app.init_resource::<companies::CompanyFilter>();
+        app.init_resource::<companies::CompanySort>();
         app.init_resource::<companies::SelectedCompany>();
         app.init_resource::<companies::CompanyDrilldownReturn>();
         app.init_resource::<companies::CompanyPolicyFeedback>();
@@ -172,6 +173,7 @@ impl Plugin for EncyclopediaPlugin {
             Update,
             (
                 companies::handle_company_filter_buttons,
+                companies::handle_company_sort_buttons,
                 companies::handle_new_company_button,
                 companies::handle_company_rows,
                 companies::handle_company_site_buttons,

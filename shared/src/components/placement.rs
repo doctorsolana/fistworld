@@ -1,7 +1,11 @@
-//! Deterministic water clearance and settlement-founding validation.
+//! Deterministic water clearance, settlement-founding validation and the one
+//! land-claim rule set behind every plot decision.
 
 use super::{CivicHallLevel, SettlementBuildingKind};
 use bevy::prelude::*;
+
+mod claims;
+pub use claims::*;
 
 /// Lowest vertical gap between a rotated ground rectangle and the local water
 /// surface beneath it.
@@ -105,6 +109,30 @@ pub const MIN_SETTLEMENT_SPACING: f32 = 300.0;
 /// never builds anything, because every plot its residents try is refused as
 /// underwater. Better to say no at the click.
 pub const SETTLEMENT_FREEBOARD: f32 = 0.35;
+
+/// How far above the local water surface an ordinary plot's footprint and
+/// doorway must stand, in metres.
+///
+/// Not zero: ground exactly at the waterline is shoreline, and a farmstead with
+/// its doorstep in the lake reads as a bug even though the maths permitted it.
+/// The server's plot validation and the client's placement preview both refuse
+/// below it, so a green ghost is never refused for water on confirmation.
+pub const BUILDING_FREEBOARD: f32 = 1.5;
+
+/// The freeboard a plot of `kind` must keep above the water.
+///
+/// Fishing huts need a dry bank close enough for their authored pier to reach
+/// water, so they keep the founding shoreline standard; the hut footprint,
+/// doorway, side route and submerged pier tip are still checked individually.
+/// Applying inland freeboard only to manual huts once rejected the same safe
+/// banks already used by automatic fishing permits.
+pub fn building_freeboard(kind: SettlementBuildingKind) -> f32 {
+    if kind == SettlementBuildingKind::FishermansHut {
+        SETTLEMENT_FREEBOARD
+    } else {
+        BUILDING_FREEBOARD
+    }
+}
 
 /// Why a settlement cannot be founded at a point, if it cannot.
 ///

@@ -159,40 +159,64 @@ impl VillageRoad {
         rotation: f32,
         padding: f32,
     ) -> bool {
-        let inflated =
-            half_extents + Vec2::splat(self.reservation_width() * 0.5 + padding.max(0.0));
-        self.points.windows(2).any(|pair| {
-            let start = crate::rotation::world_to_local_xz(pair[0] - center, rotation);
-            let end = crate::rotation::world_to_local_xz(pair[1] - center, rotation);
-            segment_intersects_axis_aligned_rect(start, end, inflated)
-        })
+        super::polyline_intersects_rotated_rect(
+            &self.points,
+            self.reservation_width() * 0.5,
+            center,
+            half_extents,
+            rotation,
+            padding,
+        )
+    }
+
+    /// Whether this road's protected corridor crosses a land claim plus its
+    /// road verge: the disc reject first, then the exact rectangle.
+    pub fn blocks_claim(&self, claim: &super::LandClaim) -> bool {
+        super::corridor_blocks_claim(&self.points, self.reservation_width() * 0.5, claim)
     }
 }
 
-fn segment_intersects_axis_aligned_rect(start: Vec2, end: Vec2, half: Vec2) -> bool {
-    let delta = end - start;
-    let mut enter = 0.0_f32;
-    let mut exit = 1.0_f32;
+/// The corridor a permit reserved between a doorway and the Hall network
+/// while its connector road is still unbuilt.
+///
+/// The server keeps the authoritative reservation on the owner worksite or
+/// building and mirrors it here so the client's placement preview can keep a
+/// new plot out of it; the mirror disappears with the reservation once the
+/// connector road is physically complete.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ReservedAccessLane {
+    /// Ground-plane polyline from the door to the network.
+    pub points: Vec<Vec2>,
+    /// Half of the reserved corridor width.
+    pub half_width: f32,
+}
 
-    for (origin, direction, extent) in [(start.x, delta.x, half.x), (start.y, delta.y, half.y)] {
-        if direction.abs() <= 1e-6 {
-            if origin.abs() > extent {
-                return false;
-            }
-            continue;
-        }
-        let mut near = (-extent - origin) / direction;
-        let mut far = (extent - origin) / direction;
-        if near > far {
-            std::mem::swap(&mut near, &mut far);
-        }
-        enter = enter.max(near);
-        exit = exit.min(far);
-        if enter > exit {
-            return false;
-        }
+impl ReservedAccessLane {
+    pub fn intersects_circle(&self, center: Vec2, radius: f32) -> bool {
+        super::polyline_within_radius(&self.points, self.half_width, center, radius)
     }
-    true
+
+    pub fn intersects_rotated_rect(
+        &self,
+        center: Vec2,
+        half_extents: Vec2,
+        rotation: f32,
+        padding: f32,
+    ) -> bool {
+        super::polyline_intersects_rotated_rect(
+            &self.points,
+            self.half_width,
+            center,
+            half_extents,
+            rotation,
+            padding,
+        )
+    }
+
+    /// Whether the corridor crosses a land claim plus its road verge.
+    pub fn blocks_claim(&self, claim: &super::LandClaim) -> bool {
+        super::corridor_blocks_claim(&self.points, self.half_width, claim)
+    }
 }
 
 pub fn distance_squared_to_segment(point: Vec2, start: Vec2, end: Vec2) -> f32 {
@@ -300,6 +324,44 @@ mod tests {
 
         assert!(!road.contains_built_point(future_shoulder, 0.0));
         assert!(road.contains_reserved_point(future_shoulder, 0.0));
+    }
+
+    #[test]
+    fn a_reserved_lane_keeps_the_same_corridor_test_as_a_road() {
+        let points = vec![Vec2::new(-8.0, 0.0), Vec2::new(8.0, 0.0)];
+        let lane = ReservedAccessLane {
+            points: points.clone(),
+            half_width: RoadClass::Lane.initial_reserved_width() * 0.5,
+        };
+        let road = VillageRoad {
+            settlement: "Test".to_string(),
+            builder: "Ada".to_string(),
+            points,
+            built_through: 0,
+            width: 2.0,
+            reserved_width: RoadClass::Lane.initial_reserved_width(),
+            surface: RoadSurface::Dirt,
+            class: RoadClass::Lane,
+            stone_committed: 0,
+        };
+        for z in [2.0, 4.0, 6.0, 8.0, 12.0] {
+            let center = Vec2::new(0.0, z);
+            let half = Vec2::new(4.0, 3.5);
+            assert_eq!(
+                lane.intersects_rotated_rect(center, half, 0.3, 0.45),
+                road.intersects_rotated_rect(center, half, 0.3, 0.45),
+                "z={z}"
+            );
+            assert_eq!(
+                lane.intersects_circle(center, 1.0),
+                road.contains_reserved_point(center, 1.0)
+            );
+        }
+        let bytes = bincode::serialize(&lane).unwrap();
+        assert_eq!(
+            bincode::deserialize::<ReservedAccessLane>(&bytes).unwrap(),
+            lane
+        );
     }
 
     #[test]

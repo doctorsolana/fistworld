@@ -398,6 +398,39 @@ fn input(world: &mut World) {
                 press(world, button);
             }
         }
+        19 => {
+            // Phase 18 left the empty company's settings page open.
+            if world.resource::<BusinessManagementTarget>().0.is_some() {
+                let button = find::<EncyclopediaPageBack>(world, |_| true);
+                press(world, button);
+                return;
+            }
+            type_query(world, index, Tab::Companies, "cassia");
+        }
+        20 => {
+            if tab(world, Tab::Companies)
+                && !world
+                    .resource::<EncyclopediaSearch>()
+                    .query(Tab::Companies)
+                    .is_empty()
+            {
+                let button = find::<ClearSearch>(world, |button| button.0 == Tab::Companies);
+                press(world, button);
+            }
+        }
+        21 => {
+            // One press per frame until the cycling key reads NAME.
+            if world.resource::<companies::CompanySort>().key != companies::CompanySortKey::Name {
+                let button = find::<companies::CompanySortKeyButton>(world, |_| true);
+                press(world, button);
+            }
+        }
+        22 => {
+            if !world.resource::<companies::CompanySort>().descending {
+                let button = find::<companies::CompanySortDirectionButton>(world, |_| true);
+                press(world, button);
+            }
+        }
         _ => panic!("unknown economy navigation phase: {name}"),
     }
 }
@@ -610,6 +643,84 @@ fn check(world: &mut World, index: usize, name: &str) -> Result<(), String> {
                 "company tab failed"
             );
         }
+        19..=22 => {
+            require!(
+                *world.resource::<Tab>() == Tab::Companies && target.is_none(),
+                "company directory not restored"
+            );
+            let query = world
+                .resource::<EncyclopediaSearch>()
+                .query(Tab::Companies)
+                .to_owned();
+            let sort = *world.resource::<companies::CompanySort>();
+            let rows = company_rows(world);
+            let names = company_names(world);
+            let texts = visible_text(world);
+            match phase {
+                19 => {
+                    require!(
+                        world.resource::<Rehearsal>().typed == Some(index) && query == "cassia",
+                        format!(
+                            "native company input not consumed: query={query:?}, focus={:?}",
+                            world.resource::<InputFocus>().get()
+                        )
+                    );
+                    require!(
+                        rows == [CompanyId(502)],
+                        format!("company search did not narrow to Cassia River Fish: {names:?}")
+                    );
+                    require!(
+                        world.resource::<companies::SelectedCompany>().0 == Some(CompanyId(503)),
+                        "a company search must not revoke the selection"
+                    );
+                    require!(
+                        texts.iter().any(|t| t == "1 of 3"),
+                        "search count did not read 1 of 3"
+                    );
+                }
+                20 => {
+                    require!(
+                        query.is_empty() && rows.len() == 3,
+                        format!("company clear did not restore the directory: {names:?}")
+                    );
+                    require!(
+                        texts.iter().any(|t| t == "3 companies"),
+                        "directory count did not read 3 companies"
+                    );
+                }
+                21 | 22 => {
+                    let expected = [
+                        "Aldric Grain & Bread",
+                        "Aldric New Venture",
+                        "Cassia River Fish",
+                    ];
+                    let descending = phase == 22;
+                    require!(
+                        sort == companies::CompanySort {
+                            key: companies::CompanySortKey::Name,
+                            descending,
+                        },
+                        format!("sort control did not reach NAME {descending}: {sort:?}")
+                    );
+                    let mut expected: Vec<&str> = expected.to_vec();
+                    if descending {
+                        expected.reverse();
+                    }
+                    require!(
+                        names == expected,
+                        format!("rows are not in {sort:?} order: {names:?}")
+                    );
+                    require!(
+                        texts.iter().any(|t| t == "NAME")
+                            && texts
+                                .iter()
+                                .any(|t| t == if descending { "v" } else { "^" }),
+                        "sort labels did not show the retained choice"
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }
         _ => return Err("unknown phase".into()),
     }
     if (13..=16).contains(&phase) {
@@ -634,6 +745,39 @@ fn check(world: &mut World, index: usize, name: &str) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+/// The directory rows in display order.
+fn company_rows(world: &mut World) -> Vec<CompanyId> {
+    let Some(list) = entities::<companies::CompanyListContent>(world)
+        .into_iter()
+        .next()
+    else {
+        return Vec::new();
+    };
+    world
+        .get::<Children>(list)
+        .map(|children| {
+            children
+                .iter()
+                .filter_map(|child| world.get::<companies::CompanyRow>(child).map(|row| row.0))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn company_names(world: &mut World) -> Vec<String> {
+    let rows = company_rows(world);
+    let directory = world.resource::<companies::CompanyDirectory>();
+    rows.iter()
+        .map(|id| {
+            directory
+                .records
+                .iter()
+                .find(|company| company.id == *id)
+                .map_or_else(|| format!("{id:?}"), |company| company.name.clone())
+        })
+        .collect()
 }
 
 fn visible_text(world: &mut World) -> Vec<String> {
@@ -663,7 +807,9 @@ fn inspect(world: &mut World) {
     }
     result.unwrap_or_else(|error| panic!("economy navigation capture failed: {error}"));
     let texts = visible_text(world);
-    let evidence = serde_json::json!({"shot":name,"passed":true,"input":"native KeyboardInput, production button handlers, real ScrollPosition", "fixture":"offline directory and employment facts; no financial or worker-simulation proof", "people_query":world.resource::<EncyclopediaSearch>().query(Tab::People), "places_query":world.resource::<EncyclopediaSearch>().query(Tab::Places), "selected_person":world.resource::<SelectedPerson>().0.map(|id|id.0), "management_target":format!("{:?}",world.resource::<BusinessManagementTarget>().0), "management_scope":format!("{:?}",world.resource::<Scope>()), "retained_controls":world.resource::<Rehearsal>().retained_buttons.len(), "site_scroll":world.resource::<Rehearsal>().site_scroll, "company_scroll":world.resource::<Rehearsal>().company_scroll,"visible_text":texts});
+    let company_rows: Vec<u64> = company_rows(world).into_iter().map(|id| id.0).collect();
+    let sort = *world.resource::<companies::CompanySort>();
+    let evidence = serde_json::json!({"shot":name,"passed":true,"input":"native KeyboardInput, production button handlers, real ScrollPosition", "fixture":"offline directory and employment facts; no financial or worker-simulation proof", "people_query":world.resource::<EncyclopediaSearch>().query(Tab::People), "places_query":world.resource::<EncyclopediaSearch>().query(Tab::Places), "companies_query":world.resource::<EncyclopediaSearch>().query(Tab::Companies), "company_sort":{"key":format!("{:?}",sort.key),"descending":sort.descending}, "company_rows":company_rows, "selected_company":world.resource::<companies::SelectedCompany>().0.map(|id|id.0), "selected_person":world.resource::<SelectedPerson>().0.map(|id|id.0), "management_target":format!("{:?}",world.resource::<BusinessManagementTarget>().0), "management_scope":format!("{:?}",world.resource::<Scope>()), "retained_controls":world.resource::<Rehearsal>().retained_buttons.len(), "site_scroll":world.resource::<Rehearsal>().site_scroll, "company_scroll":world.resource::<Rehearsal>().company_scroll,"visible_text":texts});
     std::fs::write(
         world
             .resource::<CaptureConfig>()

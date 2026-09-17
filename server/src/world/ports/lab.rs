@@ -128,7 +128,7 @@ pub(crate) fn stage_and_observe(world: &mut World, mut directory: Local<Option<O
 
 #[derive(Default)]
 struct TownLayout {
-    occupied: Vec<(Vec3, f32)>,
+    occupied: Vec<crate::world::village::OccupiedLand>,
     blockers: Vec<crate::world::village::RoadAccessBlocker>,
     roads: Vec<VillageRoad>,
 }
@@ -151,7 +151,12 @@ fn completed_building(
     let mut occupied = layout.occupied.clone();
     let mut blockers = layout.blockers.clone();
     for (kind, position, rotation) in existing {
-        occupied.push((position, kind.clearance()));
+        occupied.extend(crate::world::village::OccupiedLand::building(
+            kind,
+            position,
+            rotation,
+            crate::world::village::LandOwner::completed(None, None, kind),
+        ));
         blockers.extend(crate::world::village::road_access_blockers_for_plot(
             kind, position, rotation,
         ));
@@ -232,7 +237,14 @@ fn completed_building(
         Replicate::to_clients(NetworkTarget::All),
     ));
     layout.roads.push(road);
-    layout.occupied.push((approval.position, kind.clearance()));
+    layout
+        .occupied
+        .extend(crate::world::village::OccupiedLand::building(
+            kind,
+            approval.position,
+            approval.rotation,
+            crate::world::village::LandOwner::completed(Some(entity), Some(id), kind),
+        ));
     layout
         .blockers
         .extend(crate::world::village::road_access_blockers_for_plot(
@@ -310,10 +322,13 @@ fn stage(world: &mut World, directory: &std::path::Path, sites: [(Vec3, f32, Por
             occupied: sites
                 .iter()
                 .flat_map(|(hall, _, port)| {
-                    [
-                        (*hall, SettlementBuildingKind::Hall.clearance()),
-                        (port.shore, 10.5),
-                    ]
+                    crate::world::village::OccupiedLand::hall(*hall)
+                        .into_iter()
+                        .chain(std::iter::once(crate::world::village::OccupiedLand::block(
+                            port.shore,
+                            Vec2::splat(10.5),
+                            0.0,
+                        )))
                 })
                 .collect(),
             blockers: sites
@@ -438,7 +453,7 @@ fn stage(world: &mut World, directory: &std::path::Path, sites: [(Vec3, f32, Por
             CompanyBranchPolicies::default(),
             CompanyManagementPolicy {
                 autopilot: false,
-                automatic_dividends: false,
+                automatic_payout_percent: 0,
                 ..default()
             },
             Replicate::to_clients(NetworkTarget::All),

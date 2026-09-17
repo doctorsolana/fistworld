@@ -409,35 +409,34 @@ fn spawn_position(parent: &mut ChildSpawnerCommands<'_>, view: &CompanyView<'_>)
         view,
         CompanyBound::Company(CompanyField::PositionDividend),
     );
-    if class == OwnershipClass::SoleMaster {
-        parent
-            .spawn(Node {
-                flex_wrap: FlexWrap::Wrap,
-                column_gap: Val::Px(8.0),
-                row_gap: Val::Px(6.0),
-                margin: UiRect::vertical(Val::Px(4.0)),
-                ..default()
-            })
-            .with_children(|actions| {
-                for (amount, label) in [(1, "ADD 1 COIN"), (5, "ADD 5 COIN")] {
-                    detail_button(
-                        actions,
-                        CompanyBranchPolicyButton {
-                            company: company.id,
-                            action: HeroCompanyAction::ContributeCapital {
-                                amount: amount * shared::economy::PENNIES_PER_COIN,
-                            },
+    // Every remaining class holds shares: any shareholder may donate.
+    parent
+        .spawn(Node {
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(6.0),
+            margin: UiRect::vertical(Val::Px(4.0)),
+            ..default()
+        })
+        .with_children(|actions| {
+            for (amount, label) in [(1, "CONTRIBUTE 1 COIN"), (5, "CONTRIBUTE 5 COIN")] {
+                detail_button(
+                    actions,
+                    CompanyBranchPolicyButton {
+                        company: company.id,
+                        action: HeroCompanyAction::ContributeCapital {
+                            amount: amount * shared::economy::PENNIES_PER_COIN,
                         },
-                        label,
-                    );
-                }
-            });
-        bound_note(
-            parent,
-            view,
-            CompanyBound::Company(CompanyField::PositionNote),
-        );
-    }
+                    },
+                    label,
+                );
+            }
+        });
+    bound_note(
+        parent,
+        view,
+        CompanyBound::Company(CompanyField::PositionNote),
+    );
 }
 
 fn spawn_today_ledger(parent: &mut ChildSpawnerCommands<'_>, view: &CompanyView<'_>) {

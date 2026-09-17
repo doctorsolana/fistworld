@@ -1,5 +1,6 @@
 //! Bounded shoreline searches and resumed fishing-site certification.
 
+use super::land::OccupiedLand;
 use super::terrain::{MAX_BUILD_SLOPE, building_freeboard, plot_fits_navigation_bounds, slope_at};
 use crate::world::village::*;
 
@@ -14,7 +15,7 @@ use crate::world::village::*;
 pub fn find_fishing_site(
     terrain: &WorldTerrain,
     hall: Vec3,
-    occupied: &[(Vec3, f32)],
+    occupied: &[OccupiedLand],
     roads: &[&VillageRoad],
 ) -> Option<(Vec3, f32, f32)> {
     find_fishing_site_with_limits(terrain, hall, occupied, roads, None, None)
@@ -23,7 +24,7 @@ pub fn find_fishing_site(
 pub(super) fn find_fishing_site_with_limits(
     terrain: &WorldTerrain,
     hall: Vec3,
-    occupied: &[(Vec3, f32)],
+    occupied: &[OccupiedLand],
     roads: &[&VillageRoad],
     minimum_radius_hint: Option<f32>,
     maximum_search_rings: Option<usize>,
@@ -35,7 +36,6 @@ pub(super) fn find_fishing_site_with_limits(
     let water = terrain.water_level()?;
     let kind = SettlementBuildingKind::FishermansHut;
     let (min_radius, max_radius) = kind.preferred_ring();
-    let clearance = kind.clearance();
     let mut radius = minimum_radius_hint
         .map(|hint| hint.clamp(min_radius, max_radius))
         .unwrap_or(min_radius);
@@ -53,21 +53,17 @@ pub(super) fn find_fishing_site_with_limits(
             }
             let ground = terrain.get_height(x, z);
             let candidate = Vec3::new(x, ground, z);
-            if occupied.iter().any(|(other, other_clearance)| {
-                Vec2::new(candidate.x - other.x, candidate.z - other.z).length()
-                    < clearance + other_clearance
-            }) {
-                continue;
-            }
-            let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
-            if roads.iter().any(|road| {
-                road.contains_reserved_point(Vec2::new(candidate.x, candidate.z), footprint_radius)
-            }) {
-                continue;
-            }
 
             for facing in 0..FACINGS {
                 let rotation = facing as f32 / FACINGS as f32 * std::f32::consts::TAU;
+                // The same oriented land rule as every other plot: the hut's
+                // rotated shell against every reservation and road corridor.
+                let shell = shared::components::footprint_claim(kind, candidate, rotation);
+                if occupied.iter().any(|land| land.blocks(&shell))
+                    || roads.iter().any(|road| road.blocks_claim(&shell))
+                {
+                    continue;
+                }
                 if !plot_fits_navigation_bounds(terrain, kind, candidate, rotation) {
                     continue;
                 }
@@ -136,7 +132,7 @@ pub(super) fn find_fishing_site_with_limits(
 pub(super) fn find_incremental_fishing_site(
     terrain: &WorldTerrain,
     hall: Vec3,
-    occupied: &[(Vec3, f32)],
+    occupied: &[OccupiedLand],
     roads: &[&VillageRoad],
     settlement: Entity,
     clock: &mut VillageClock,

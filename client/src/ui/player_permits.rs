@@ -6,19 +6,24 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use bevy::ecs::system::SystemParam;
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{
-    Company, CompanyId, ConstructionSite, Hero, PermitId, PlayerPermit, PlayerPermitLedger,
-    PlayerPosition, PlayerRotation, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind,
-    SettlementId, VillageRoad,
+    accepted_field_claims, building_claims, building_freeboard, corridor_blocks_claim,
+    hall_claims, land_conflict_sentence, land_owner_label, lane_conflict_sentence,
+    proposed_plot_claims, road_conflict_sentence, worst_conflict, BuildingId, BuildingOf,
+    Company, CompanyId, ConstructionSite, FarmField, Hero, LandClaim, LandUse, PermitId,
+    PlayerPermit, PlayerPermitLedger, PlayerPosition, PlayerRotation, ReservedAccessLane, RoadOf,
+    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementCivicSquare,
+    SettlementDefenses, SettlementId, VillageRoad, BUILDING_FREEBOARD, FARM_FIELD_TERRACE_MARGIN,
 };
 use shared::economy::{format_money, Wallet};
 use shared::protocol::{
     HeroConstructionResult, HeroPermitAction, HeroPermitOrder, HeroPermitOutcome, HeroPermitQuote,
-    HeroPermitResult, ReliableChannel,
+    HeroPermitResult, PlacementBlocker, PlacementBlockerKind, ReliableChannel,
 };
 
 use crate::camera_rts::{CommanderCamera, CursorTerrainHit, LocalPeerId};
@@ -44,6 +49,8 @@ impl Plugin for PlayerPermitsPlugin {
         app.init_resource::<PermitPlacementControls>();
         app.init_resource::<PermitNotice>();
         app.init_resource::<PermitGhostAssets>();
+        app.init_resource::<PlacementSurvey>();
+        app.init_resource::<ServerRefusal>();
         app.add_systems(
             Update,
             (
@@ -102,6 +109,9 @@ struct PermitPlacementControls {
     flip_side: bool,
     submission_pending: bool,
     last_cursor: Option<Vec2>,
+    /// The exact plot last sent to the Hall, so its refusal can be pinned to
+    /// the ghost that asked for it.
+    last_submitted: Option<(PermitId, Vec3, f32)>,
 }
 
 #[derive(Resource, Default)]
@@ -144,6 +154,234 @@ struct PlacementPreview {
     door: Vec3,
     frontage: Vec2,
     road_locked: bool,
+    /// The surveyed reservation in the way, drawn as the red keep-out.
+    blocker: Option<PreviewBlocker>,
+}
+
+/// Which surveyed reservation refused the plot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewBlocker {
+    Claim(usize),
+    Corridor(usize),
+}
+
+/// The Hall's answer to a plot the player confirmed. It replaces the client's
+/// own guess for exactly that plot until the ghost moves, and its blocker is
+/// highlighted like a predicted one.
+#[derive(Resource, Default)]
+struct ServerRefusal(Option<RefusedPlot>);
+
+#[derive(Debug, Clone)]
+struct RefusedPlot {
+    permit: PermitId,
+    position: Vec3,
+    rotation: f32,
+    message: String,
+    blocker: Option<PlacementBlocker>,
+}
+
+/// Who reserved a surveyed claim or corridor, worded by the shared rule the
+/// server's refusals use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClaimOwner {
+    kind: Option<SettlementBuildingKind>,
+    id: Option<BuildingId>,
+    pending: bool,
+}
+
+impl ClaimOwner {
+    const HALL: Self = Self {
+        kind: Some(SettlementBuildingKind::Hall),
+        id: None,
+        pending: false,
+    };
+    const ANONYMOUS: Self = Self {
+        kind: None,
+        id: None,
+        pending: false,
+    };
+
+    fn completed(kind: SettlementBuildingKind, id: Option<BuildingId>) -> Self {
+        Self {
+            kind: Some(kind),
+            id,
+            pending: false,
+        }
+    }
+
+    fn pending(kind: SettlementBuildingKind) -> Self {
+        Self {
+            kind: Some(kind),
+            id: None,
+            pending: true,
+        }
+    }
+
+    fn label(&self) -> String {
+        land_owner_label(self.kind, self.id, self.pending)
+    }
+
+    /// Whether a server blocker names this owner: by durable id when it has
+    /// one, otherwise by the same label wording. The prefix test keeps the
+    /// per-candidate string build off entries that cannot match.
+    fn named_by(&self, blocker: &PlacementBlocker) -> bool {
+        if blocker.building.is_some() {
+            return self.id == blocker.building;
+        }
+        self.kind.is_none_or(|kind| {
+            blocker.label.starts_with(kind.label()) || kind == SettlementBuildingKind::Hall
+        }) && self.label() == blocker.label
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SurveyClaim {
+    claim: LandClaim,
+    owner: ClaimOwner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CorridorKind {
+    Road,
+    Lane,
+}
+
+/// One reserved corridor: a span of [`PlacementSurvey::corridor_points`].
+#[derive(Debug, Clone, Copy)]
+struct SurveyCorridor {
+    start: usize,
+    len: usize,
+    half_width: f32,
+    kind: CorridorKind,
+    owner: ClaimOwner,
+}
+
+/// Reserved land around the armed permit's settlement, mirrored from the
+/// replicated components with the same shared claim functions the server's
+/// occupied-land snapshot uses: completed buildings (shell, doorway apron,
+/// fallback fields, pasture), the Hall (future shell and forecourt), pending
+/// worksites (intended field envelopes), accepted crop bands, road corridors
+/// and reserved access lanes. Rebuilt in place each frame placement is armed;
+/// the buffers keep their capacity, so a warm preview allocates nothing here.
+#[derive(Resource, Default)]
+struct PlacementSurvey {
+    claims: Vec<SurveyClaim>,
+    corridors: Vec<SurveyCorridor>,
+    corridor_points: Vec<Vec2>,
+    farmsteads: Vec<(Vec2, ClaimOwner)>,
+}
+
+impl PlacementSurvey {
+    fn clear(&mut self) {
+        self.claims.clear();
+        self.corridors.clear();
+        self.corridor_points.clear();
+        self.farmsteads.clear();
+    }
+
+    fn push(&mut self, claims: impl IntoIterator<Item = LandClaim>, owner: ClaimOwner) {
+        for claim in claims {
+            self.claims.push(SurveyClaim { claim, owner });
+        }
+    }
+
+    fn push_corridor(
+        &mut self,
+        points: &[Vec2],
+        half_width: f32,
+        kind: CorridorKind,
+        owner: ClaimOwner,
+    ) {
+        if points.len() < 2 {
+            return;
+        }
+        let start = self.corridor_points.len();
+        self.corridor_points.extend_from_slice(points);
+        self.corridors.push(SurveyCorridor {
+            start,
+            len: points.len(),
+            half_width,
+            kind,
+            owner,
+        });
+    }
+
+    fn corridor_points(&self, corridor: &SurveyCorridor) -> &[Vec2] {
+        &self.corridor_points[corridor.start..corridor.start + corridor.len]
+    }
+
+    /// The surveyed entry a server blocker names, for the red keep-out.
+    fn locate(
+        &self,
+        blocker: &PlacementBlocker,
+        predicted: Option<PreviewBlocker>,
+    ) -> Option<PreviewBlocker> {
+        match blocker.kind {
+            PlacementBlockerKind::AccessLane => self
+                .corridors
+                .iter()
+                .position(|corridor| {
+                    corridor.kind == CorridorKind::Lane && corridor.owner.named_by(blocker)
+                })
+                .map(PreviewBlocker::Corridor),
+            // Roads carry no identity on the wire; the client's own road
+            // verdict for the same plot is the corridor to show.
+            PlacementBlockerKind::Road => predicted.filter(|found| {
+                matches!(found, PreviewBlocker::Corridor(index)
+                    if self.corridors[*index].kind == CorridorKind::Road)
+            }),
+            _ => self
+                .claims
+                .iter()
+                .position(|entry| {
+                    PlacementBlockerKind::from(entry.claim.land_use) == blocker.kind
+                        && entry.owner.named_by(blocker)
+                })
+                .map(PreviewBlocker::Claim),
+        }
+    }
+}
+
+/// The replicated land a placement preview reads. Read-only: the server's
+/// snapshot decides; this mirrors it for a responsive ghost.
+#[derive(SystemParam)]
+struct PlacementWorld<'w, 's> {
+    settlements: Query<'w, 's, (&'static SettlementId, &'static PlayerPosition)>,
+    buildings: Query<
+        'w,
+        's,
+        (
+            &'static SettlementBuilding,
+            &'static BuildingOf,
+            &'static PlayerPosition,
+            Option<&'static PlayerRotation>,
+            Option<&'static BuildingId>,
+        ),
+    >,
+    sites: Query<'w, 's, (&'static ConstructionSite, &'static PlayerPosition)>,
+    fields: Query<
+        'w,
+        's,
+        (
+            &'static FarmField,
+            &'static PlayerPosition,
+            &'static PlayerRotation,
+        ),
+    >,
+    roads: Query<'w, 's, (&'static VillageRoad, &'static RoadOf)>,
+    lanes: Query<
+        'w,
+        's,
+        (
+            &'static ReservedAccessLane,
+            Option<&'static ConstructionSite>,
+            Option<&'static SettlementBuilding>,
+            Option<&'static BuildingOf>,
+            Option<&'static BuildingId>,
+        ),
+    >,
+    squares: Query<'w, 's, &'static SettlementCivicSquare>,
+    defenses: Query<'w, 's, &'static SettlementDefenses>,
 }
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,6 +503,7 @@ fn receive_permit_results(
     mut property_target: ResMut<super::property_market::PropertyMarketTarget>,
     settlements: Query<(&SettlementId, &PlayerPosition)>,
     mut cameras: Query<&mut CommanderCamera>,
+    mut refusal: ResMut<ServerRefusal>,
 ) {
     let now = time.elapsed_secs_f64();
     for mut receiver in receivers.iter_mut() {
@@ -312,7 +551,26 @@ fn receive_permit_results(
                         *placement = WorldPlacementMode::None;
                     }
                 }
-                HeroPermitOutcome::Rejected { .. } => {}
+                // A refused plot: pin the Hall's verdict to the ghost that
+                // asked, so the status card and keep-out show the server's
+                // words rather than the client's guess.
+                HeroPermitOutcome::Rejected {
+                    permit: Some(permit),
+                    blocker,
+                } => {
+                    if let Some((submitted, position, rotation)) = controls.last_submitted {
+                        if submitted == permit {
+                            refusal.0 = Some(RefusedPlot {
+                                permit,
+                                position,
+                                rotation,
+                                message: result.message.clone(),
+                                blocker,
+                            });
+                        }
+                    }
+                }
+                HeroPermitOutcome::Rejected { permit: None, .. } => {}
                 _ => {}
             }
         }
@@ -798,10 +1056,11 @@ fn road_snap_candidates(
                 1.0
             } * if flip_side { -1.0 } else { 1.0 };
             let outward = normal * side;
-            // Match the server's conservative circular road-overlap proof.
-            // Door depth alone is insufficient for wide farmyards: it can put
-            // the threshold beside the lane while a footprint corner still
-            // occupies the reserved road bed.
+            // The corner radius plus the reserved half-width keeps every
+            // footprint corner outside the corridor at any facing and lands
+            // player plots on the same 8.5-9 m street setback the automatic
+            // planner gives NPC rows, so a player's house lines up with its
+            // neighbours instead of standing a lot closer to the road.
             let setback = kind.placement_definition().root_footprint_radius()
                 + 0.45
                 + road.reserved_width * 0.5
@@ -864,105 +1123,252 @@ fn predicted_slope(terrain: &shared::terrain::WorldTerrain, point: Vec2) -> f32 
     dx.max(dz) / STEP
 }
 
-fn plot_overlap_reason(
-    kind: SettlementBuildingKind,
-    position: Vec3,
-    rotation: f32,
+/// Whole-metre charter radius the server enforces around the Hall.
+const CHARTER_RADIUS: f32 = 320.0;
+/// The server's `MAX_BUILD_SLOPE` for ordinary shells; farms are judged by
+/// their earthworks instead, which the client does not predict.
+const MAX_BUILD_SLOPE: f32 = 0.30;
+
+/// Why the client's own rules refuse a plot, and which reservation is in the
+/// way when one is.
+#[derive(Debug, Clone, PartialEq)]
+struct PreviewRefusal {
+    reason: String,
+    blocker: Option<PreviewBlocker>,
+}
+
+impl PreviewRefusal {
+    fn terrain(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            blocker: None,
+        }
+    }
+}
+
+/// Mirror the settlement's reserved land into the survey buffers with the
+/// same shared claim functions the server's occupied-land snapshot uses, in
+/// the same order: completed buildings, the Hall, pending worksites, accepted
+/// crop bands, then road corridors and reserved access lanes.
+fn survey_reserved_land(
+    survey: &mut PlacementSurvey,
     settlement_id: SettlementId,
     settlement_name: &str,
     hall: Vec3,
-    buildings: &Query<(
-        &SettlementBuilding,
-        &shared::components::BuildingOf,
-        &PlayerPosition,
-        Option<&PlayerRotation>,
-    )>,
-    sites: &Query<(&ConstructionSite, &PlayerPosition)>,
-    fields: &Query<(
-        &shared::components::FarmField,
-        &PlayerPosition,
-        &PlayerRotation,
-    )>,
+    world: &PlacementWorld,
     roads: &[&VillageRoad],
-) -> Option<String> {
-    let clearance = kind.clearance();
-    let mut occupied = vec![(hall, SettlementBuildingKind::Hall.clearance())];
-    for (building, building_of, other, other_rotation) in buildings.iter() {
+) {
+    survey.clear();
+    for (building, building_of, position, rotation, id) in world.buildings.iter() {
         if building_of.0 != settlement_id {
             continue;
         }
-        occupied.push((other.0, building.kind.clearance()));
-        if let (Some(fields), Some(half)) = (
-            building
-                .kind
-                .field_positions(other.0, other_rotation.map_or(0.0, |rotation| rotation.0)),
-            building.kind.field_half_extents(),
-        ) {
-            occupied.extend(fields.into_iter().map(|field| {
-                (
-                    field,
-                    half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                )
-            }));
+        let rotation = rotation.map_or(0.0, |rotation| rotation.0);
+        let owner = ClaimOwner::completed(building.kind, id.copied());
+        if building.kind == SettlementBuildingKind::Farmstead {
+            survey.farmsteads.push((position.0.xz(), owner));
         }
+        survey.push(
+            building_claims(building.kind, position.0, rotation, false)
+                .iter()
+                .copied(),
+            owner,
+        );
     }
-    for (site, other) in sites.iter() {
+    survey.push(hall_claims(hall), ClaimOwner::HALL);
+    for (site, position) in world.sites.iter() {
         if site.settlement != settlement_name {
             continue;
         }
-        occupied.push((other.0, site.kind.clearance()));
-        if let (Some(fields), Some(half)) = (
-            site.kind.intended_field_positions(other.0, site.rotation),
-            site.kind.intended_field_half_extents(),
-        ) {
-            occupied.extend(fields.into_iter().map(|field| {
-                (
-                    field,
-                    half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                )
-            }));
+        survey.push(
+            building_claims(site.kind, position.0, site.rotation, true)
+                .iter()
+                .copied(),
+            ClaimOwner::pending(site.kind),
+        );
+    }
+    for (field, position, rotation) in world.fields.iter() {
+        let owner = survey
+            .farmsteads
+            .iter()
+            .find(|(at, _)| at.distance_squared(field.farmstead.xz()) < 0.25)
+            .map_or(
+                ClaimOwner::completed(SettlementBuildingKind::Farmstead, None),
+                |(_, owner)| *owner,
+            );
+        survey.push(accepted_field_claims(field, position.0, rotation.0), owner);
+    }
+    for road in roads {
+        survey.push_corridor(
+            &road.points,
+            road.reservation_width() * 0.5,
+            CorridorKind::Road,
+            ClaimOwner::ANONYMOUS,
+        );
+    }
+    for (lane, site, building, building_of, id) in world.lanes.iter() {
+        let ours = match (building_of, site, building) {
+            (Some(building_of), ..) => building_of.0 == settlement_id,
+            (None, Some(site), _) => site.settlement == settlement_name,
+            (None, None, Some(building)) => building.settlement == settlement_name,
+            (None, None, None) => true,
+        };
+        if !ours {
+            continue;
+        }
+        let owner = if let Some(site) = site {
+            ClaimOwner::pending(site.kind)
+        } else if let Some(building) = building {
+            ClaimOwner::completed(building.kind, id.copied())
+        } else {
+            ClaimOwner::ANONYMOUS
+        };
+        survey.push_corridor(&lane.points, lane.half_width, CorridorKind::Lane, owner);
+    }
+}
+
+/// The land half of the verdict, in the server's order: the shell against
+/// every reservation; each wheat field and the pasture against wet ground,
+/// reservations, roads and lanes; then the shell against roads and lanes.
+/// Every test is the shared claim geometry, and the offender is the shared
+/// worst-conflict rule, so the sentence matches the Hall's refusal.
+fn land_refusal(
+    kind: SettlementBuildingKind,
+    position: Vec3,
+    rotation: f32,
+    terrain: &shared::terrain::WorldTerrain,
+    survey: &PlacementSurvey,
+) -> Option<PreviewRefusal> {
+    let claims = proposed_plot_claims(kind, position, rotation);
+    let parts = claims.as_slice();
+    let occupied = |part: &LandClaim| {
+        worst_conflict(
+            std::slice::from_ref(part),
+            survey.claims.iter().map(|entry| &entry.claim),
+        )
+        .map(|(_, index, _)| {
+            let land = &survey.claims[index];
+            PreviewRefusal {
+                reason: land_conflict_sentence(part, &land.claim, &land.owner.label()),
+                blocker: Some(PreviewBlocker::Claim(index)),
+            }
+        })
+    };
+    let corridor = |part: &LandClaim, kind: CorridorKind| {
+        survey
+            .corridors
+            .iter()
+            .enumerate()
+            .filter(|(_, corridor)| corridor.kind == kind)
+            .find(|(_, corridor)| {
+                corridor_blocks_claim(survey.corridor_points(corridor), corridor.half_width, part)
+            })
+            .map(|(index, corridor)| PreviewRefusal {
+                reason: match kind {
+                    CorridorKind::Road => road_conflict_sentence(part).to_string(),
+                    CorridorKind::Lane => lane_conflict_sentence(part, &corridor.owner.label()),
+                },
+                blocker: Some(PreviewBlocker::Corridor(index)),
+            })
+    };
+    let wet = |part: &LandClaim| {
+        let (verge, sentence) = match part.land_use {
+            LandUse::Field => (
+                FARM_FIELD_TERRACE_MARGIN,
+                "One of the two wheat fields reaches wet ground.",
+            ),
+            _ => (2.0, "The livestock pasture reaches wet ground."),
+        };
+        (shared::components::minimum_rotated_rect_water_clearance(
+            terrain,
+            Vec3::new(part.center.x, position.y, part.center.y),
+            part.half_extents + Vec2::splat(verge),
+            part.rotation,
+        ) < BUILDING_FREEBOARD)
+            .then(|| PreviewRefusal::terrain(sentence))
+    };
+
+    let shell = &parts[0];
+    if let Some(refusal) = occupied(shell) {
+        return Some(refusal);
+    }
+    for part in &parts[1..] {
+        if let Some(refusal) = wet(part)
+            .or_else(|| occupied(part))
+            .or_else(|| corridor(part, CorridorKind::Road))
+            .or_else(|| corridor(part, CorridorKind::Lane))
+        {
+            return Some(refusal);
         }
     }
-    occupied.extend(fields.iter().flat_map(|(field, p, r)| {
-        field
-            .reservation_rects(p.0, r.0, 2.)
-            .into_iter()
-            .map(|(p, half, _)| (p, half.length()))
-    }));
-    if occupied.iter().any(|(other, other_clearance)| {
-        Vec2::new(position.x - other.x, position.z - other.z).length() < clearance + other_clearance
-    }) {
-        return Some("Overlaps an existing or reserved plot".into());
+    corridor(shell, CorridorKind::Road).or_else(|| corridor(shell, CorridorKind::Lane))
+}
+
+/// Every rule the client can judge from replicated state, in the server's
+/// order. Builder reach, a dry doorway approach, prop collisions and the
+/// access-lane survey remain the Hall's decision on confirmation.
+fn plot_refusal(
+    kind: SettlementBuildingKind,
+    position: Vec3,
+    rotation: f32,
+    terrain: &shared::terrain::WorldTerrain,
+    hall: Vec3,
+    survey: &PlacementSurvey,
+    world: &PlacementWorld,
+) -> Option<PreviewRefusal> {
+    if world
+        .defenses
+        .iter()
+        .any(|defenses| defenses.blocks_plot(kind, position, rotation))
+    {
+        return Some(PreviewRefusal::terrain(
+            "This plot overlaps the reserved city wall or gate corridor.",
+        ));
     }
-    let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
-    if roads.iter().any(|road| {
-        road.contains_reserved_point(Vec2::new(position.x, position.z), footprint_radius)
-    }) {
-        return Some("Building footprint overlaps a road reservation".into());
+    if world
+        .squares
+        .iter()
+        .any(|square| square.blocks_plot(kind, position, rotation))
+    {
+        return Some(PreviewRefusal::terrain(
+            "This plot overlaps the reserved civic square.",
+        ));
     }
-    if let (Some(fields), Some(half)) = (
-        kind.intended_field_positions(position, rotation),
-        kind.intended_field_half_extents(),
-    ) {
-        for field in fields {
-            let field_clearance = half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN;
-            if occupied.iter().any(|(other, other_clearance)| {
-                Vec2::new(field.x - other.x, field.z - other.z).length()
-                    < field_clearance + other_clearance
-            }) {
-                return Some("One of the two fields overlaps reserved land".into());
-            }
-            if roads.iter().any(|road| {
-                road.intersects_rotated_rect(
-                    Vec2::new(field.x, field.z),
-                    half,
-                    rotation,
-                    shared::components::FARM_FIELD_TERRACE_MARGIN,
-                )
-            }) {
-                return Some("A road reservation crosses a wheat field".into());
-            }
-        }
+    if position.xz().distance(hall.xz()) > CHARTER_RADIUS {
+        return Some(PreviewRefusal::terrain(format!(
+            "That plot is outside the settlement's {CHARTER_RADIUS:.0}m charter."
+        )));
+    }
+    if !matches!(
+        kind,
+        SettlementBuildingKind::Farmstead | SettlementBuildingKind::LivestockFarm
+    ) && predicted_slope(terrain, position.xz()) > MAX_BUILD_SLOPE
+    {
+        return Some(PreviewRefusal::terrain(
+            "The ground is too steep for this building.",
+        ));
+    }
+    if shared::components::minimum_building_water_clearance(terrain, position, kind, rotation)
+        < building_freeboard(kind)
+    {
+        return Some(PreviewRefusal::terrain(
+            "The building and its doorway must remain safely above the waterline.",
+        ));
+    }
+    if let Some(refusal) = land_refusal(kind, position, rotation, terrain, survey) {
+        return Some(refusal);
+    }
+    if kind == SettlementBuildingKind::FishermansHut
+        && terrain.water_level().is_none_or(|water| {
+            let fishing = kind.fishing_position(position, rotation);
+            let nets = kind.nets_position(position, rotation);
+            fishing.is_none_or(|point| terrain.get_height(point.x, point.z) > water - 0.12)
+                || nets.is_none_or(|point| terrain.get_height(point.x, point.z) < water + 0.15)
+        })
+    {
+        return Some(PreviewRefusal::terrain(
+            "Rotate the hut so its pier reaches water and its side path stays dry.",
+        ));
     }
     None
 }
@@ -975,20 +1381,9 @@ fn predict_permit_placement(
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
     placement: Res<WorldPlacementMode>,
     controls: Res<PermitPlacementControls>,
-    settlements: Query<(&SettlementId, &Settlement, &PlayerPosition)>,
-    buildings: Query<(
-        &SettlementBuilding,
-        &shared::components::BuildingOf,
-        &PlayerPosition,
-        Option<&PlayerRotation>,
-    )>,
-    sites: Query<(&ConstructionSite, &PlayerPosition)>,
-    fields: Query<(
-        &shared::components::FarmField,
-        &PlayerPosition,
-        &PlayerRotation,
-    )>,
-    road_query: Query<(&VillageRoad, &RoadOf)>,
+    world: PlacementWorld,
+    mut survey: ResMut<PlacementSurvey>,
+    mut refusal: ResMut<ServerRefusal>,
     mut preview: ResMut<PermitPlacementPreview>,
 ) {
     let WorldPlacementMode::Permit {
@@ -998,6 +1393,7 @@ fn predict_permit_placement(
     } = &*placement
     else {
         preview.value = None;
+        refusal.0 = None;
         return;
     };
     if input.gameplay_blocking() {
@@ -1007,18 +1403,29 @@ fn predict_permit_placement(
         preview.value = None;
         return;
     };
-    let Some((_, _, hall_position)) = settlements
+    let Some((_, hall_position)) = world
+        .settlements
         .iter()
-        .find(|(settlement_id, ..)| **settlement_id == permit.settlement)
+        .find(|(settlement_id, _)| **settlement_id == permit.settlement)
     else {
         preview.value = None;
         return;
     };
-    let roads: Vec<_> = road_query
+    let hall = hall_position.0;
+    let roads: Vec<_> = world
+        .roads
         .iter()
         .filter_map(|(road, road_of)| (road_of.0 == permit.settlement).then_some(road))
         .collect();
-    let hall_door3 = SettlementBuildingKind::Hall.entrance_position(hall_position.0, 0.0);
+    survey_reserved_land(
+        &mut survey,
+        permit.settlement,
+        settlement_name,
+        hall,
+        &world,
+        &roads,
+    );
+    let hall_door3 = SettlementBuildingKind::Hall.entrance_position(hall, 0.0);
     let hall_door = Vec2::new(hall_door3.x, hall_door3.z);
     let connected = connected_road_keys(hall_door, &roads);
     let cursor = Vec2::new(cursor_hit.x, cursor_hit.z);
@@ -1034,6 +1441,21 @@ fn predict_permit_placement(
             (snap.position, snap.rotation, true, snap.frontage)
         });
     let position = Vec3::new(point.x, terrain.get_height(point.x, point.y), point.y);
+    let mut band = if road_locked {
+        PreviewBand::Roadside
+    } else {
+        PreviewBand::Expansion
+    };
+    let verdict = plot_refusal(
+        permit.kind,
+        position,
+        rotation,
+        terrain,
+        hall,
+        &survey,
+        &world,
+    );
+
     let door = permit.kind.entrance_position(position, rotation);
     let door2 = Vec2::new(door.x, door.z);
     let nearest_connected = roads
@@ -1050,11 +1472,6 @@ fn predict_permit_placement(
         nearest_connected.unwrap_or(hall_door)
     };
     let access_length = door2.distance(access_target);
-    let mut band = if road_locked {
-        PreviewBand::Roadside
-    } else {
-        PreviewBand::Expansion
-    };
     let mut reason = if road_locked {
         format!("Road frontage locked | {:.0}m connector", access_length)
     } else {
@@ -1063,73 +1480,31 @@ fn predict_permit_placement(
             access_length
         )
     };
-
-    let flat_distance = Vec2::new(
-        position.x - hall_position.0.x,
-        position.z - hall_position.0.z,
-    )
-    .length();
-    let invalid = if flat_distance > 320.0 {
-        Some("Outside the settlement's 320m charter".to_string())
-    } else if permit.kind != SettlementBuildingKind::Farmstead
-        && predicted_slope(terrain, point) > 0.30
-    {
-        Some("Ground is too steep".to_string())
-    } else if shared::components::minimum_building_water_clearance(
-        terrain,
-        position,
-        permit.kind,
-        rotation,
-    ) < shared::components::SETTLEMENT_FREEBOARD
-    {
-        Some("Building or doorway reaches wet ground".to_string())
-    } else if permit
-        .kind
-        .intended_field_positions(position, rotation)
-        .is_some_and(|fields| {
-            permit
-                .kind
-                .intended_field_half_extents()
-                .is_some_and(|half| {
-                    fields.into_iter().any(|field| {
-                        shared::components::minimum_rotated_rect_water_clearance(
-                            terrain,
-                            field,
-                            half + Vec2::splat(shared::components::FARM_FIELD_TERRACE_MARGIN),
-                            rotation,
-                        ) < shared::components::SETTLEMENT_FREEBOARD
-                    })
-                })
-        })
-    {
-        Some("One of the two wheat fields reaches wet ground".to_string())
-    } else if permit.kind == SettlementBuildingKind::FishermansHut
-        && terrain.water_level().is_none_or(|water| {
-            let fishing = permit.kind.fishing_position(position, rotation);
-            let nets = permit.kind.nets_position(position, rotation);
-            fishing.is_none_or(|point| terrain.get_height(point.x, point.z) > water - 0.12)
-                || nets.is_none_or(|point| terrain.get_height(point.x, point.z) < water + 0.15)
-        })
-    {
-        Some("Rotate the hut so its pier reaches water and its side path stays dry".to_string())
-    } else {
-        plot_overlap_reason(
-            permit.kind,
-            position,
-            rotation,
-            permit.settlement,
-            settlement_name,
-            hall_position.0,
-            &buildings,
-            &sites,
-            &fields,
-            &roads,
-        )
-    };
-    if let Some(invalid) = invalid {
+    let mut blocker = None;
+    if let Some(invalid) = verdict {
         band = PreviewBand::Invalid;
-        reason = invalid;
+        blocker = invalid.blocker;
+        reason = invalid.reason;
     }
+
+    // The Hall's own refusal of this exact plot outranks every client guess
+    // until the ghost moves away from it.
+    if let Some(refused) = refusal.0.as_ref() {
+        let same_plot = refused.permit == permit.id
+            && refused.position.xz().distance_squared(position.xz()) < 1e-4
+            && (refused.rotation - rotation).abs() < 1e-4;
+        if same_plot {
+            band = PreviewBand::Invalid;
+            reason = refused.message.clone();
+            blocker = refused
+                .blocker
+                .as_ref()
+                .and_then(|server| survey.locate(server, blocker));
+        } else {
+            refusal.0 = None;
+        }
+    }
+
     let quality = displays_land_yield_quality(permit.kind)
         .then(|| predicted_site_quality(terrain, permit.kind, position));
     preview.value = Some(PlacementPreview {
@@ -1143,6 +1518,7 @@ fn predict_permit_placement(
         door,
         frontage: access_target,
         road_locked,
+        blocker,
     });
 }
 
@@ -1182,6 +1558,7 @@ fn submit_permit_placement(
         &mut clients,
     ) {
         controls.submission_pending = true;
+        controls.last_submitted = Some((preview.permit, preview.position, preview.rotation));
         notice.show(
             time.elapsed_secs_f64(),
             true,
@@ -1352,8 +1729,17 @@ fn ensure_placement_status(
     let body = if controls.submission_pending {
         "Registering this plot with the Hall...".to_string()
     } else if let Some(status) = status {
+        // The client judges reserved land, water, slope, walls and the civic
+        // square itself; the Hall's builders must also be able to reach the
+        // plot, and its doorway approach must be dry, which only the server
+        // checks on confirmation.
+        let hall_checks = if status.band == PreviewBand::Invalid {
+            ""
+        } else {
+            "\nThe Hall also confirms that its builders can reach the plot and that the doorway approach is dry."
+        };
         format!(
-            "{}\nLeft click: confirm  |  Shift: free placement  |  R: rotate/flip  |  Tab: next frontage  |  Esc: save for later",
+            "{}{hall_checks}\nLeft click: confirm  |  Shift: free placement  |  R: rotate/flip  |  Tab: next frontage  |  Esc: save for later",
             status.reason
         )
     } else {
@@ -1650,9 +2036,126 @@ fn draw_dashed_line(gizmos: &mut Gizmos, start: Vec3, end: Vec3, color: Color) {
     }
 }
 
+/// Ground-hugging outline of a surveyed claim, optionally inflated by a yard.
+fn draw_claim_outline(
+    gizmos: &mut Gizmos,
+    terrain: &shared::terrain::WorldTerrain,
+    claim: &LandClaim,
+    inflate: f32,
+    color: Color,
+    dashed: bool,
+) {
+    let inflated = LandClaim {
+        half_extents: claim.half_extents + Vec2::splat(inflate),
+        ..*claim
+    };
+    let corners = inflated.corners().map(|corner| {
+        Vec3::new(
+            corner.x,
+            terrain.get_height(corner.x, corner.y) + 0.2,
+            corner.y,
+        )
+    });
+    for index in 0..4 {
+        let (start, end) = (corners[index], corners[(index + 1) % 4]);
+        if dashed {
+            draw_dashed_line(gizmos, start, end, color);
+        } else {
+            gizmos.line(start, end, color);
+        }
+    }
+}
+
+/// Both edges of a reserved corridor, segment by segment.
+fn draw_corridor(
+    gizmos: &mut Gizmos,
+    terrain: &shared::terrain::WorldTerrain,
+    points: &[Vec2],
+    half_width: f32,
+    color: Color,
+) {
+    let lift =
+        |point: Vec2| Vec3::new(point.x, terrain.get_height(point.x, point.y) + 0.2, point.y);
+    for pair in points.windows(2) {
+        let tangent = (pair[1] - pair[0]).normalize_or_zero();
+        let normal = Vec2::new(-tangent.y, tangent.x) * half_width;
+        for side in [normal, -normal] {
+            gizmos.line(lift(pair[0] + side), lift(pair[1] + side), color);
+        }
+    }
+    if let (Some(first), Some(last)) = (points.first(), points.last()) {
+        for end in [first, last] {
+            let next = if std::ptr::eq(end, first) {
+                points.get(1)
+            } else {
+                points.get(points.len().wrapping_sub(2))
+            };
+            let Some(next) = next else { continue };
+            let tangent = (*next - *end).normalize_or_zero();
+            let normal = Vec2::new(-tangent.y, tangent.x) * half_width;
+            gizmos.line(lift(*end + normal), lift(*end - normal), color);
+        }
+    }
+}
+
+/// Reserved land the player is steering around: the offending reservation in
+/// red with its required yard dashed, every other claim within thirty metres
+/// faintly, and reserved access lanes as faint corridors.
+fn draw_reserved_land(
+    gizmos: &mut Gizmos,
+    terrain: &shared::terrain::WorldTerrain,
+    preview: &PlacementPreview,
+    survey: &PlacementSurvey,
+) {
+    const NEIGHBOUR_REACH: f32 = 30.0;
+    const OFFENDER: Color = Color::srgba(1.0, 0.16, 0.12, 1.0);
+    const NEIGHBOUR_SHELL: Color = Color::srgba(1.0, 0.62, 0.30, 0.22);
+    const NEIGHBOUR_CROP: Color = Color::srgba(0.72, 0.86, 0.32, 0.22);
+    const NEIGHBOUR_LANE: Color = Color::srgba(0.95, 0.85, 0.55, 0.18);
+    let here = preview.position.xz();
+    let shell =
+        shared::components::footprint_claim(preview.kind, preview.position, preview.rotation);
+    for (index, entry) in survey.claims.iter().enumerate() {
+        let reach = NEIGHBOUR_REACH + entry.claim.broad_radius();
+        if entry.claim.center.distance_squared(here) > reach * reach {
+            continue;
+        }
+        if preview.blocker == Some(PreviewBlocker::Claim(index)) {
+            draw_claim_outline(gizmos, terrain, &entry.claim, 0.0, OFFENDER, false);
+            if let Some(required) = shell.required_gap(&entry.claim).filter(|gap| *gap > 0.0) {
+                draw_claim_outline(gizmos, terrain, &entry.claim, required, OFFENDER, true);
+            }
+            continue;
+        }
+        let color = match entry.claim.land_use {
+            LandUse::Field | LandUse::Pasture => NEIGHBOUR_CROP,
+            LandUse::Building | LandUse::Doorway | LandUse::Forecourt => NEIGHBOUR_SHELL,
+        };
+        draw_claim_outline(gizmos, terrain, &entry.claim, 0.0, color, false);
+    }
+    for (index, corridor) in survey.corridors.iter().enumerate() {
+        let points = survey.corridor_points(corridor);
+        let offending = preview.blocker == Some(PreviewBlocker::Corridor(index));
+        if !offending
+            && (corridor.kind == CorridorKind::Road
+                || !shared::components::polyline_within_radius(
+                    points,
+                    corridor.half_width,
+                    here,
+                    NEIGHBOUR_REACH,
+                ))
+        {
+            continue;
+        }
+        let color = if offending { OFFENDER } else { NEIGHBOUR_LANE };
+        draw_corridor(gizmos, terrain, points, corridor.half_width, color);
+    }
+}
+
 fn draw_permit_placement_guides(
     mut gizmos: Gizmos,
     preview: Res<PermitPlacementPreview>,
+    survey: Res<PlacementSurvey>,
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
     placement: Res<WorldPlacementMode>,
     settlements: Query<(&SettlementId, &PlayerPosition)>,
@@ -1663,6 +2166,7 @@ fn draw_permit_placement_guides(
     let WorldPlacementMode::Permit { permit, .. } = &*placement else {
         return;
     };
+    draw_reserved_land(&mut gizmos, terrain, preview, &survey);
     let color = guide_color(preview.band);
     let definition = preview.kind.placement_definition();
     let footprint_center = definition.world_footprint_center(preview.position, preview.rotation);
@@ -1731,7 +2235,7 @@ fn draw_permit_placement_guides(
         gizmos
             .circle(
                 Isometry3d::new(center, horizontal),
-                320.0,
+                CHARTER_RADIUS,
                 Color::srgba(0.85, 0.70, 0.32, 0.28),
             )
             .resolution(128);
@@ -1752,12 +2256,16 @@ fn cleanup_permit_ui(
     mut quote: ResMut<PendingPermitQuote>,
     mut preview: ResMut<PermitPlacementPreview>,
     mut placement: ResMut<WorldPlacementMode>,
+    mut survey: ResMut<PlacementSurvey>,
+    mut refusal: ResMut<ServerRefusal>,
 ) {
     for root in roots.iter() {
         commands.entity(root).despawn();
     }
     quote.0 = None;
     preview.value = None;
+    survey.clear();
+    refusal.0 = None;
     *placement = WorldPlacementMode::None;
 }
 
@@ -1896,6 +2404,524 @@ mod tests {
                 .root_footprint_radius()
                 + 0.45,
         ));
+    }
+
+    use shared::components::{BuildingId, BuildingOf, SettlementTier};
+    use shared::terrain::WorldTerrain;
+
+    /// Dry, level ground around a Hall so only the reservation rules decide:
+    /// the same site the server's manual-plot tests use.
+    fn flat_hall_site() -> (WorldTerrain, Vec3) {
+        let mut terrain = WorldTerrain::default();
+        let hall = Vec3::new(1700.0, 80.0, 0.0);
+        terrain.apply_flatten_rect(hall, Vec2::splat(160.0), 0.0, 4.0);
+        (terrain, hall)
+    }
+
+    fn test_permit(kind: SettlementBuildingKind) -> PlayerPermit {
+        PlayerPermit {
+            id: shared::components::PermitId(1),
+            settlement: SettlementId(1),
+            kind,
+            fee_escrow: 0,
+            purchased_day: 1,
+            company: None,
+        }
+    }
+
+    /// The real prediction system over replicated components, with the
+    /// cursor forced to `cursor` and no roads to snap to. This exercises the
+    /// preview's land rules, not the connected server round trip.
+    fn placement_app(
+        terrain: WorldTerrain,
+        hall: Vec3,
+        kind: SettlementBuildingKind,
+        cursor: Vec2,
+    ) -> App {
+        let ground = terrain.get_height(cursor.x, cursor.y);
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::input::InputState>()
+            .insert_resource(CursorTerrainHit(Some(Vec3::new(
+                cursor.x, ground, cursor.y,
+            ))))
+            .insert_resource(terrain)
+            .init_resource::<PermitPlacementControls>()
+            .init_resource::<PermitPlacementPreview>()
+            .init_resource::<PlacementSurvey>()
+            .init_resource::<ServerRefusal>()
+            .insert_resource(WorldPlacementMode::Permit {
+                permit: test_permit(kind),
+                settlement_name: "Brackwater".into(),
+                rotation: 0.0,
+            })
+            .add_systems(Update, predict_permit_placement);
+        app.world_mut().spawn((
+            SettlementId(1),
+            Settlement {
+                name: "Brackwater".into(),
+                tier: SettlementTier::Village,
+                residents: 0,
+                treasury: 0,
+            },
+            PlayerPosition(hall),
+        ));
+        app
+    }
+
+    fn spawn_building(
+        app: &mut App,
+        kind: SettlementBuildingKind,
+        id: Option<u64>,
+        position: Vec3,
+        rotation: f32,
+    ) -> Entity {
+        let entity = app
+            .world_mut()
+            .spawn((
+                SettlementBuilding {
+                    kind,
+                    settlement: "Brackwater".into(),
+                    owner: None,
+                    quality: 0.5,
+                    workers: Vec::new(),
+                },
+                BuildingOf(SettlementId(1)),
+                PlayerPosition(position),
+                PlayerRotation(rotation),
+            ))
+            .id();
+        if let Some(id) = id {
+            app.world_mut().entity_mut(entity).insert(BuildingId(id));
+        }
+        entity
+    }
+
+    #[test]
+    fn preview_names_the_blocking_building_and_shortfall() {
+        let (terrain, hall) = flat_hall_site();
+        let kind = SettlementBuildingKind::House;
+        let width = kind.placement_definition().footprint.x;
+        let first = Vec3::new(hall.x + 30.0, hall.y, hall.z + 30.0);
+        // A two-metre wall gap where three are required: the same case the
+        // server refuses with "Too close to HOUSE #7: 2.0 m of 3.0 m."
+        let cursor = Vec2::new(first.x + width + 2.0, first.z);
+        let mut app = placement_app(terrain, hall, kind, cursor);
+        spawn_building(&mut app, kind, Some(7), first, 0.0);
+        app.update();
+        let (position, _, valid, reason) =
+            inspect_placement(app.world()).expect("the armed permit previews a plot");
+        assert!((position.x - cursor.x).abs() < 1e-3, "{position:?}");
+        assert!(!valid, "a two-metre wall gap must be refused: {reason}");
+        assert_eq!(reason, "Too close to HOUSE #7: 2.0 m of 3.0 m.");
+
+        // One metre further along the row the walls clear each other.
+        app.world_mut()
+            .resource_mut::<CursorTerrainHit>()
+            .0
+            .as_mut()
+            .unwrap()
+            .x += 1.0;
+        app.update();
+        let (_, _, valid, reason) = inspect_placement(app.world()).unwrap();
+        assert!(valid, "a three-metre wall gap was refused: {reason}");
+    }
+
+    fn move_cursor(app: &mut App, cursor: Vec2) {
+        let ground = app
+            .world()
+            .resource::<WorldTerrain>()
+            .get_height(cursor.x, cursor.y);
+        app.world_mut().resource_mut::<CursorTerrainHit>().0 =
+            Some(Vec3::new(cursor.x, ground, cursor.y));
+    }
+
+    fn arm(app: &mut App, kind: SettlementBuildingKind, rotation: f32) {
+        *app.world_mut().resource_mut::<WorldPlacementMode>() = WorldPlacementMode::Permit {
+            permit: test_permit(kind),
+            settlement_name: "Brackwater".into(),
+            rotation,
+        };
+    }
+
+    /// Both sides read the freeboard from `shared::components::building_freeboard`:
+    /// 1.5 m for ordinary plots, the founding 0.35 m for a fishing hut. This
+    /// fixture proves the preview applies those numbers to a plot standing
+    /// 1.0 m above the sea; the server's own validation is covered by its
+    /// manual-plot tests against the same shared function.
+    #[test]
+    fn preview_and_server_agree_on_inland_freeboard() {
+        assert_eq!(
+            shared::components::building_freeboard(SettlementBuildingKind::House),
+            BUILDING_FREEBOARD
+        );
+        let (mut terrain, hall) = flat_hall_site();
+        assert_eq!(
+            terrain.water_level(),
+            Some(0.0),
+            "the fixture map has a sea"
+        );
+        let plot = Vec3::new(hall.x + 40.0, 1.0, hall.z + 40.0);
+        terrain.apply_flatten_rect(plot, Vec2::splat(24.0), 0.0, 3.0);
+        let clearance = shared::components::minimum_building_water_clearance(
+            &terrain,
+            plot,
+            SettlementBuildingKind::House,
+            0.0,
+        );
+        assert!(
+            clearance > shared::components::SETTLEMENT_FREEBOARD && clearance < BUILDING_FREEBOARD,
+            "{clearance}"
+        );
+        let mut app = placement_app(terrain, hall, SettlementBuildingKind::House, plot.xz());
+        app.update();
+        let (_, _, valid, reason) = inspect_placement(app.world()).unwrap();
+        assert!(!valid);
+        assert_eq!(
+            reason,
+            "The building and its doorway must remain safely above the waterline."
+        );
+
+        // The same bank is dry enough for a fishing hut's footprint; whatever
+        // its pier says, the water rule is not what refuses it.
+        arm(&mut app, SettlementBuildingKind::FishermansHut, 0.0);
+        app.update();
+        let (_, _, _, reason) = inspect_placement(app.world()).unwrap();
+        assert_ne!(
+            reason,
+            "The building and its doorway must remain safely above the waterline."
+        );
+
+        // Half a metre higher the cabin clears the inland freeboard.
+        arm(&mut app, SettlementBuildingKind::House, 0.0);
+        app.world_mut()
+            .resource_mut::<WorldTerrain>()
+            .apply_flatten_rect(Vec3::new(plot.x, 1.6, plot.z), Vec2::splat(24.0), 0.0, 3.0);
+        app.update();
+        let (_, _, valid, reason) = inspect_placement(app.world()).unwrap();
+        assert!(valid, "{reason}");
+    }
+
+    /// The server's snapshot recipe, written out with the shared functions it
+    /// calls (`server/src/world/village/planning/land.rs`): what an occupied
+    /// list looks like and in which order `validate_manual_plot` tests a
+    /// plot's parts against it, roads and lanes.
+    fn server_recipe_verdict(
+        kind: SettlementBuildingKind,
+        position: Vec3,
+        rotation: f32,
+        occupied: &[(LandClaim, String)],
+        roads: &[&VillageRoad],
+        lanes: &[(&ReservedAccessLane, String)],
+    ) -> Option<String> {
+        let claims = proposed_plot_claims(kind, position, rotation);
+        let parts = claims.as_slice();
+        let land = |part: &LandClaim| {
+            worst_conflict(
+                std::slice::from_ref(part),
+                occupied.iter().map(|(claim, _)| claim),
+            )
+            .map(|(_, index, _)| {
+                land_conflict_sentence(part, &occupied[index].0, &occupied[index].1)
+            })
+        };
+        let road = |part: &LandClaim| {
+            roads
+                .iter()
+                .any(|road| road.blocks_claim(part))
+                .then(|| road_conflict_sentence(part).to_string())
+        };
+        let lane = |part: &LandClaim| {
+            lanes
+                .iter()
+                .find(|(lane, _)| lane.blocks_claim(part))
+                .map(|(_, owner)| lane_conflict_sentence(part, owner))
+        };
+        let shell = &parts[0];
+        if let Some(refusal) = land(shell) {
+            return Some(refusal);
+        }
+        for part in &parts[1..] {
+            if let Some(refusal) = land(part).or_else(|| road(part)).or_else(|| lane(part)) {
+                return Some(refusal);
+            }
+        }
+        road(shell).or_else(|| lane(shell))
+    }
+
+    /// A table of plots around a completed cabin, a completed farm with an
+    /// accepted field, a pending cabin with its reserved lane, the Hall and a
+    /// street, judged once by the live preview over replicated components and
+    /// once by the server's recipe over the same shared claim functions. The
+    /// verdicts, including which neighbour is named, must be identical.
+    #[test]
+    fn preview_and_server_recipe_agree_on_a_table_of_plots() {
+        use shared::components::{RoadClass, RoadSurface};
+        let (terrain, hall) = flat_hall_site();
+        let house = Vec3::new(hall.x + 30.0, hall.y, hall.z + 30.0);
+        let farm = Vec3::new(hall.x - 50.0, hall.y, hall.z + 20.0);
+        let site = Vec3::new(hall.x + 70.0, hall.y, hall.z + 40.0);
+        let farm_field = FarmField {
+            settlement: "Brackwater".into(),
+            farmstead: farm,
+            plot_index: 1,
+            layout_version: 0,
+            quality: 0.6,
+            shape: None,
+        };
+        let field_at = SettlementBuildingKind::Farmstead
+            .field_position_at(farm, 0.3, 1)
+            .unwrap();
+        let lane = ReservedAccessLane {
+            points: vec![
+                SettlementBuildingKind::House
+                    .entrance_position(site, 0.9)
+                    .xz(),
+                Vec2::new(site.x, hall.z - 10.0),
+                Vec2::new(hall.x, hall.z - 10.0),
+            ],
+            half_width: 2.0,
+        };
+        let street = VillageRoad {
+            settlement: "Brackwater".into(),
+            builder: "Ada".into(),
+            points: vec![
+                Vec2::new(hall.x - 80.0, hall.z - 40.0),
+                Vec2::new(hall.x + 80.0, hall.z - 40.0),
+            ],
+            built_through: 2,
+            width: 3.0,
+            reserved_width: 4.0,
+            surface: RoadSurface::Dirt,
+            class: RoadClass::Lane,
+            stone_committed: 0,
+        };
+
+        let mut app = placement_app(terrain, hall, SettlementBuildingKind::House, house.xz());
+        spawn_building(&mut app, SettlementBuildingKind::House, Some(7), house, 0.0);
+        spawn_building(
+            &mut app,
+            SettlementBuildingKind::Farmstead,
+            Some(12),
+            farm,
+            0.3,
+        );
+        app.world_mut().spawn((
+            farm_field.clone(),
+            PlayerPosition(field_at),
+            PlayerRotation(0.3),
+        ));
+        app.world_mut().spawn((
+            ConstructionSite {
+                kind: SettlementBuildingKind::House,
+                settlement: "Brackwater".into(),
+                raising: false,
+                stand: site,
+                rotation: 0.9,
+            },
+            PlayerPosition(site),
+            lane.clone(),
+        ));
+        app.world_mut()
+            .spawn((street.clone(), RoadOf(SettlementId(1))));
+        // Free placement: the table judges land, not road snapping.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
+
+        let mut occupied = Vec::new();
+        let mut tag = |claims: &[LandClaim], label: &str| {
+            occupied.extend(claims.iter().map(|claim| (*claim, label.to_string())));
+        };
+        tag(
+            building_claims(SettlementBuildingKind::House, house, 0.0, false).as_slice(),
+            "HOUSE #7",
+        );
+        tag(
+            building_claims(SettlementBuildingKind::Farmstead, farm, 0.3, false).as_slice(),
+            "FARMSTEAD #12",
+        );
+        tag(&hall_claims(hall), "the Moot Hall");
+        tag(
+            building_claims(SettlementBuildingKind::House, site, 0.9, true).as_slice(),
+            "HOUSE (under construction)",
+        );
+        tag(
+            &accepted_field_claims(&farm_field, field_at, 0.3),
+            "FARMSTEAD #12",
+        );
+        let roads = [&street];
+        let lanes = [(&lane, "HOUSE (under construction)".to_string())];
+
+        use SettlementBuildingKind::{Farmstead, House, LivestockFarm};
+        use std::f32::consts::PI;
+        let width = House.placement_definition().footprint.x;
+        let table = [
+            (House, Vec2::new(hall.x + 30.0, hall.z + 90.0), 0.0),
+            (House, Vec2::new(house.x + width + 2.0, house.z), 0.0),
+            (House, Vec2::new(house.x + width + 3.2, house.z), 0.0),
+            (House, Vec2::new(house.x, house.z - 9.0), PI),
+            (House, Vec2::new(field_at.x + 12.0, field_at.z), 0.3),
+            (House, Vec2::new(field_at.x + 6.0, field_at.z), 1.1),
+            (House, Vec2::new(site.x, hall.z + 5.0), 0.0),
+            (House, Vec2::new(hall.x + 40.0, hall.z - 44.0), 0.0),
+            (House, Vec2::new(hall.x, hall.z - 20.0), PI),
+            (Farmstead, Vec2::new(hall.x + 30.0, hall.z + 60.0), 0.0),
+            (Farmstead, Vec2::new(hall.x + 50.0, hall.z - 60.0), 0.0),
+            (Farmstead, Vec2::new(site.x - 25.0, hall.z + 10.0), 0.5),
+            (LivestockFarm, Vec2::new(farm.x, farm.z + 45.0), 0.3),
+            (LivestockFarm, Vec2::new(hall.x - 30.0, hall.z - 52.0), 0.0),
+        ];
+        let mut blocked = 0;
+        for (kind, cursor, rotation) in table {
+            arm(&mut app, kind, rotation);
+            move_cursor(&mut app, cursor);
+            app.update();
+            let (position, rotation, valid, reason) = inspect_placement(app.world()).unwrap();
+            let expected =
+                server_recipe_verdict(kind, position, rotation, &occupied, &roads, &lanes);
+            match &expected {
+                Some(expected) => {
+                    blocked += 1;
+                    assert!(!valid, "{kind:?} at {cursor}: preview accepted {reason:?}");
+                    assert_eq!(reason, expected.as_str(), "{kind:?} at {cursor}");
+                }
+                None => assert!(valid, "{kind:?} at {cursor}: preview refused {reason:?}"),
+            }
+        }
+        assert!(blocked >= 6 && blocked < table.len(), "{blocked} blocked");
+    }
+
+    #[test]
+    fn preview_names_a_reserved_lane_and_the_hall_forecourt() {
+        let (terrain, hall) = flat_hall_site();
+        let site = Vec3::new(hall.x + 60.0, hall.y, hall.z + 40.0);
+        let lane = ReservedAccessLane {
+            points: vec![
+                SettlementBuildingKind::Farmstead
+                    .entrance_position(site, 0.0)
+                    .xz(),
+                Vec2::new(site.x, hall.z - 30.0),
+            ],
+            half_width: 2.0,
+        };
+        let cursor = Vec2::new(site.x, hall.z);
+        let mut app = placement_app(terrain, hall, SettlementBuildingKind::House, cursor);
+        app.world_mut().spawn((
+            ConstructionSite {
+                kind: SettlementBuildingKind::Farmstead,
+                settlement: "Brackwater".into(),
+                raising: true,
+                stand: site,
+                rotation: 0.0,
+            },
+            PlayerPosition(site),
+            lane,
+        ));
+        app.update();
+        let (_, _, valid, reason) = inspect_placement(app.world()).unwrap();
+        assert!(!valid);
+        assert_eq!(
+            reason,
+            "Overlaps the access lane reserved for FARMSTEAD (under construction)."
+        );
+        let blocker = inspect_placement_blocker(app.world()).unwrap();
+        assert_eq!(
+            blocker,
+            ("FARMSTEAD (under construction)".to_string(), "access lane")
+        );
+
+        let door = SettlementBuildingKind::Hall.entrance_position(hall, 0.0);
+        move_cursor(&mut app, Vec2::new(door.x, door.z - 8.0));
+        arm(
+            &mut app,
+            SettlementBuildingKind::House,
+            std::f32::consts::PI,
+        );
+        app.update();
+        let (_, _, valid, reason) = inspect_placement(app.world()).unwrap();
+        assert!(!valid);
+        assert_eq!(reason, "Overlaps the Moot Hall forecourt.");
+    }
+
+    #[test]
+    fn the_halls_refusal_replaces_the_client_guess_until_the_ghost_moves() {
+        let (terrain, hall) = flat_hall_site();
+        let house = Vec3::new(hall.x + 30.0, hall.y, hall.z + 30.0);
+        let width = SettlementBuildingKind::House
+            .placement_definition()
+            .footprint
+            .x;
+        let cursor = Vec2::new(house.x + width + 3.2, house.z);
+        let mut app = placement_app(terrain, hall, SettlementBuildingKind::House, cursor);
+        spawn_building(&mut app, SettlementBuildingKind::House, Some(7), house, 0.0);
+        app.update();
+        let (position, rotation, valid, _) = inspect_placement(app.world()).unwrap();
+        assert!(valid);
+
+        // The Hall refuses the very plot the client accepted, for a reason the
+        // client cannot see, and names a neighbour.
+        app.world_mut()
+            .resource_mut::<PermitPlacementControls>()
+            .last_submitted = Some((shared::components::PermitId(1), position, rotation));
+        app.world_mut().resource_mut::<ServerRefusal>().0 = Some(RefusedPlot {
+            permit: shared::components::PermitId(1),
+            position,
+            rotation,
+            message: "Builders cannot reach this plot safely.".into(),
+            blocker: Some(PlacementBlocker {
+                kind: PlacementBlockerKind::Building,
+                building: Some(BuildingId(7)),
+                label: "HOUSE #7".into(),
+                shortfall_cm: 40,
+            }),
+        });
+        app.update();
+        let (_, _, valid, reason) = inspect_placement(app.world()).unwrap();
+        assert!(!valid);
+        assert_eq!(reason, "Builders cannot reach this plot safely.");
+        assert_eq!(
+            inspect_placement_blocker(app.world()),
+            Some(("HOUSE #7".to_string(), "building"))
+        );
+
+        // Moving the ghost releases the Hall's verdict and the client judges again.
+        move_cursor(&mut app, cursor + Vec2::new(0.0, 6.0));
+        app.update();
+        let (_, _, valid, reason) = inspect_placement(app.world()).unwrap();
+        assert!(valid, "{reason}");
+        assert!(app.world().resource::<ServerRefusal>().0.is_none());
+    }
+}
+
+/// The reservation a preview blames, as `(owner label, land use)`, for the
+/// capture sidecars.
+pub(crate) fn inspect_placement_blocker(world: &World) -> Option<(String, &'static str)> {
+    let preview = world
+        .get_resource::<PermitPlacementPreview>()?
+        .value
+        .as_ref()?;
+    let survey = world.get_resource::<PlacementSurvey>()?;
+    match preview.blocker? {
+        PreviewBlocker::Claim(index) => {
+            let entry = survey.claims.get(index)?;
+            let land_use = match entry.claim.land_use {
+                LandUse::Building => "building",
+                LandUse::Doorway => "doorway",
+                LandUse::Forecourt => "forecourt",
+                LandUse::Field => "field",
+                LandUse::Pasture => "pasture",
+            };
+            Some((entry.owner.label(), land_use))
+        }
+        PreviewBlocker::Corridor(index) => {
+            let corridor = survey.corridors.get(index)?;
+            let kind = match corridor.kind {
+                CorridorKind::Road => "road",
+                CorridorKind::Lane => "access lane",
+            };
+            Some((corridor.owner.label(), kind))
+        }
     }
 }
 

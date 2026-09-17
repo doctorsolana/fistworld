@@ -553,8 +553,13 @@ sell it dear. The M&B opening hour.
 - [x] NPC owner autopilot with Aggressive, Balanced and Conservative
       strategies, bounded daily repricing, adaptive wages, personal rescue capital and
       durable new/cash-tight/distressed/insolvent/liquidating/for-sale states.
-- [x] Business working-capital protection covers strategy-defined payroll, planned inputs,
-      liabilities and an operating buffer before the Company Master can distribute retained profit.
+- [x] Manual dividend reserve: every site's wage and tax debt plus one day of payroll and one
+      2.00 coin company float; a manual distribution may pay every coin above it and reports its
+      retained-profit / return-of-capital split. Automatic daily dividends pay a chosen share
+      (`automatic_payout_percent`: 0 retains, up to 50%) of the retained profit above the
+      planner-style working-capital runway (strategy payroll days and input coverage) that NPC
+      firms always kept, with no flat cap; NPC autopilots default to a lab-measured 25%,
+      player-founded companies to 0.
 - [x] Insolvent firms liquidate every physical input/output through discounted private
       listings, pay stable worker claims before tax, and only then auction the property.
 - [x] Portfolio and processor expansion gates: owners cannot compound unfinished/new or
@@ -592,14 +597,22 @@ sell it dear. The M&B opening hour.
       Master authority and mutates the same policies consumed by NPC autopilot. Manual
       dividends carry a chosen amount, are clamped to the live reserve-aware figure, and are
       answered one tick later with the coin actually paid, the rate per 10 shares, the
-      requester's own take and the held-back reserves, or a concrete refusal; the replicated
-      `CompanyDividendCapacity` snapshot exposes distributable/reserves/last paid.
+      requester's own take, the retained-profit / return-of-capital split and the reserve held
+      back, or a concrete refusal; the replicated `CompanyDividendCapacity` snapshot exposes
+      distributable/reserves/last paid and is republished within the world hour after the
+      treasury changes. Any shareholder may donate personal coin as contributed capital;
+      player-founded companies start with profits retained (share 0) and the Master picks
+      RETAIN / 10% / 25% / 50% on the AUTOMATIC DIVIDEND row, while NPC autopilots keep the
+      measured 25% share.
 - [x] Client amount picker and per-share preview for dividends: COMPANY SETTINGS binds the
       replicated headroom (available now, reserves, last paid), steps a drafted amount
       (`-1 COIN`/`+1 COIN`/`25%`/`50%`/`ALL`), confirms `DISTRIBUTE X COIN` with the clamped
-      payload and previews the per-10-share rate and the local holder's exact `pro_rata_split`
-      take; the Companies encyclopedia page shows the snapshot read-only (DISTRIBUTABLE line and
-      a Your Position note). The deferred server reply appears in the panel feedback line.
+      payload (`u64::MAX` against a zero snapshot, so the live pass answers) and previews the
+      per-10-share rate and the local holder's exact `pro_rata_split` take; a CONTRIBUTE
+      PERSONAL COIN row (presets plus a `-1 COIN`/`+1 COIN`/`+10 COIN`/`ALL` wallet-clamped
+      stepper) lets any shareholder donate; the Companies encyclopedia page shows the snapshot
+      read-only (DISTRIBUTABLE line and a Your Position note) with the same donation presets.
+      The deferred server reply appears in the panel feedback line.
 - [x] Company layer above operating sites: stable `CompanyId`, exactly 1,000 whole ordinary
       shares, a separately appointed Company Master, one authoritative treasury and consolidated liabilities,
       tax and pro-rata dividends. Shareholders can post and fill bounded public offers without

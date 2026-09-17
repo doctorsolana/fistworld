@@ -24,9 +24,9 @@
         "FISTFORCE_CAPTURE_HERO": "default",
         "FISTFORCE_CAPTURE_ENCYCLOPEDIA": "business",
         "FISTFORCE_CAPTURE_BUSINESS_PAGE": "company",
-        "FISTFORCE_CAPTURE_BUSINESS_SCROLL": "480",
-        "FISTFORCE_CAPTURE_DIVIDEND_DRAFT": "15000",
-        "FISTFORCE_CAPTURE_BUSINESS_FEEDBACK": "ok:Paid 150.00 coin to 2 shareholders: 1.50 coin per 10 shares; your 720 shares received 108.00 coin. Held back: 18.50 coin reserves, 462.00 coin not yet earned.",
+        "FISTFORCE_CAPTURE_BUSINESS_SCROLL": "660",
+        "FISTFORCE_CAPTURE_DIVIDEND_DRAFT": "5000",
+        "FISTFORCE_CAPTURE_BUSINESS_FEEDBACK": "ok:Paid 50.00 coin to 2 shareholders: 0.50 coin per 10 shares; your 720 shares received 36.00 coin. 50.00 coin of it from retained profit, 0.00 coin a return of capital. Held back 18.50 coin: wage debt / tax debt / one day of payroll / 2.00 coin float.",
     },
     diagnostics: (
         performance_overlay: false,

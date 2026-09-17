@@ -101,7 +101,7 @@ pub(super) fn stage(
         people.push(person);
     }
 
-    let mut occupied = vec![(hall, SettlementBuildingKind::Hall.clearance())];
+    let mut occupied = village::OccupiedLand::hall(hall);
     let mut roads = Vec::<VillageRoad>::new();
     let mut blockers = Vec::new();
     let mut manifest_sites = Vec::new();
@@ -190,7 +190,7 @@ pub(super) fn stage(
                         if attempts <= 3 {
                             info!(?kind, ?position, rotation, %reason, "Worker fixture candidate refused");
                         }
-                        *refusals.entry(reason).or_default() += 1;
+                        *refusals.entry(reason.message).or_default() += 1;
                         None
                     }
                 }
@@ -301,7 +301,12 @@ pub(super) fn stage(
             approval.position,
             approval.rotation,
         ));
-        occupied.push((approval.position, kind.clearance()));
+        occupied.extend(village::OccupiedLand::building(
+            kind,
+            approval.position,
+            approval.rotation,
+            village::LandOwner::completed(Some(building), Some(building_id), kind),
+        ));
         manifest_sites.push(serde_json::json!({"id":building_id.0,"kind":format!("{kind:?}"),"position":approval.position.to_array(),"work_point":work_point.to_array(),"entrance":entrance.to_array(),"quality":approval.quality,"initial_stock":0}));
     }
     let directory = std::env::var_os("FISTWORLD_WORKER_TRACE_DIR")

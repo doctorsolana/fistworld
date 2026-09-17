@@ -49,8 +49,10 @@ pub(super) fn snapshot(world: &mut World) -> Value {
     let roads: Vec<_> = world.query::<&VillageRoad>().iter(world).map(|road| json!({
         "settlement":road.settlement,"points":road.points,"built_through":road.built_through,"reserved_width":road.reserved_width,
     })).collect();
+    let blocker = crate::ui::player_permits::inspect_placement_blocker(world)
+        .map(|(label, land)| json!({"label":label,"land":land}));
     let preview = crate::ui::player_permits::inspect_placement(world).map(|(position, rotation, valid, reason)|
-        json!({"position":position.to_array(),"rotation":rotation,"valid":valid,"reason":reason}));
+        json!({"position":position.to_array(),"rotation":rotation,"valid":valid,"reason":reason,"blocker":blocker}));
     let (pending, response) = crate::ui::house_upgrades::inspect_requests(world);
     json!({"buildings":buildings,"sites":sites,"heroes":heroes,"roads":roads,"preview":preview,
         "house_upgrade_request":{"pending":pending,"response":response}})

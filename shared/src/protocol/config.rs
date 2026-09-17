@@ -2,12 +2,14 @@ use std::time::Duration;
 
 pub const SERVER_PORT: u16 = 5000;
 pub const SERVER_ADDR: &str = "127.0.0.1";
-// Dividends: `HeroCompanyAction::DistributeDividend { pennies }` replaced the
-// payload-less variant in the same slot and `CompanyDividendCapacity` is a new
-// replicated company component, registered after every pre-existing component
-// (last in the component registry) so no earlier net-id moved. This wire
-// revision requires both client and server to restart together.
-pub const PROTOCOL_ID: u64 = 0x1234567890ABCE10;
+// Placement: `ReservedAccessLane` is a new replicated component (registered
+// last in the component registry, so no earlier net-id moved) mirroring each
+// pending plot's reserved road corridor, and `HeroPermitOutcome::Rejected`
+// gained a `blocker: Option<PlacementBlocker>` field after `permit`. The
+// earlier dividend-policy layout changes (`CompanyManagementPolicy`,
+// `HeroCompanyAction::SetAutomaticDividend`) ship in the same revision. Client
+// and server must restart together.
+pub const PROTOCOL_ID: u64 = 0x1234567890ABCE12;
 pub const NETCODE_CLIENT_TIMEOUT_SECS: i32 = 10;
 pub const NETCODE_TOKEN_EXPIRE_SECS: i32 = 30;
 

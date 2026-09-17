@@ -1,0 +1,30 @@
+// The permit placement preview over replicated land: a clear expansion plot,
+// the one free lot between two cabins on a street, a cabin 0.7 m off a farm
+// fence, and a cabin across a pending neighbour's reserved access lane. Each
+// shot's `.placement.json` sidecar records the production preview's verdict,
+// wording and named keep-out; the fixture is offline and proves the client's
+// own rules, not a connected Hall's answer.
+(
+    version: 1,
+    name: "permit-placement",
+    map: "village_lab",
+    output_dir: "logs/captures/permit-placement",
+    resolution: (1600, 1000),
+    fixed_delta_seconds: 0.016666667,
+    target: window,
+    show_window: false,
+    warmup_frames: 240,
+    readiness: (minimum_frames: 90, maximum_frames: 1500, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+    environment: {
+        "FISTFORCE_CAPTURE_SETTLEMENT": "1",
+        "FISTFORCE_CAPTURE_PERMIT_TOUR": "1",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "00-overview", focus: (0.0, 0.0, 0.0), yaw: 0.0, zoom: 150.0, time_of_day: 0.5, assertions: [settlements_at_least(count: 1), settlement_buildings_at_least(count: 3)]),
+        (name: "01-clear", focus: (-40.0, 0.0, -60.0), yaw: 0.0, zoom: 48.0, time_of_day: 0.5),
+        (name: "02-street-gap", focus: (24.2, 0.0, -36.0), yaw: 0.0, zoom: 48.0, time_of_day: 0.5),
+        (name: "03-field-edge", focus: (-30.0, 0.0, 27.0), yaw: 0.0, zoom: 48.0, time_of_day: 0.5),
+        (name: "04-reserved-lane", focus: (45.0, 0.0, 2.0), yaw: 0.0, zoom: 52.0, time_of_day: 0.5),
+    ],
+)

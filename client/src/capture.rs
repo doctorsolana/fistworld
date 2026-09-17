@@ -60,6 +60,7 @@ mod shipping_hulls;
 mod fortification_fixtures;
 mod journey_tour;
 mod ledger_nested;
+mod permit_placement;
 mod scene_fixtures;
 mod startup_tour;
 mod town_art_fields;
@@ -420,6 +421,7 @@ pub fn run(mut config: CaptureConfig) {
     fleet_ui::install(&mut app);
     shipping_hulls::install(&mut app);
     ledger_nested::install(&mut app);
+    permit_placement::install(&mut app);
     crate::ui::name_entry::capture::install(&mut app);
     startup_tour::install(&mut app);
 
@@ -484,6 +486,7 @@ pub fn run(mut config: CaptureConfig) {
                 .run_if(fleet_ui::ready)
                 .run_if(shipping_hulls::ready)
                 .run_if(ledger_nested::ready)
+                .run_if(permit_placement::ready)
                 .run_if(startup_tour::ready)
                 .run_if(wildlife::ready)
                 .run_if(cavalry_visuals::ready),

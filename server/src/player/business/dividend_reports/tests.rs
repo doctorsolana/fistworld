@@ -12,8 +12,9 @@ fn paid_outcome(link: Entity) -> DividendOutcome {
         shareholders: 2,
         own_shares: 600,
         own_take: 18_000,
+        from_profit: 20_000,
+        return_of_capital: 10_000,
         withheld_reserves: 1_250,
-        withheld_profit_cap: 40_000,
         refusal: None,
     }
 }
@@ -75,11 +76,22 @@ fn report_dividend_outcomes_sends_one_result_and_drops_disconnected_links() {
 }
 
 #[test]
-fn dividend_report_text_names_paid_rate_own_take_and_held_back_amounts() {
+fn dividend_report_text_names_paid_rate_own_take_the_split_and_the_reserve() {
     let outcome = paid_outcome(Entity::PLACEHOLDER);
     assert_eq!(
         dividend_report_text(&outcome),
-        "Paid 300.00 coin to 2 shareholders: 3.00 coin per 10 shares; your 600 shares received 180.00 coin. Held back: 12.50 coin reserves, 400.00 coin not yet earned."
+        "Paid 300.00 coin to 2 shareholders: 3.00 coin per 10 shares; your 600 shares received 180.00 coin. 200.00 coin of it from retained profit, 100.00 coin a return of capital. Held back 12.50 coin: wage debt / tax debt / one day of payroll / 2.00 coin float."
+    );
+    let all_profit = DividendOutcome {
+        from_profit: 30_000,
+        return_of_capital: 0,
+        ..outcome
+    };
+    assert!(
+        dividend_report_text(&all_profit)
+            .contains("300.00 coin of it from retained profit, 0.00 coin a return of capital."),
+        "{}",
+        dividend_report_text(&all_profit)
     );
     let sole = DividendOutcome {
         shareholders: 1,
@@ -96,6 +108,7 @@ fn every_refusal_reads_as_a_concrete_failure_with_the_held_back_figures() {
         DividendRefusal::NoOperatingSite,
         DividendRefusal::ShareholderUnreachable,
         DividendRefusal::NothingDistributable,
+        DividendRefusal::NothingRequested,
         DividendRefusal::WalletFull,
         DividendRefusal::TreasuryDebitFailed,
     ] {
@@ -103,15 +116,20 @@ fn every_refusal_reads_as_a_concrete_failure_with_the_held_back_figures() {
             paid: 0,
             per_ten_shares: 0,
             own_take: 0,
+            from_profit: 0,
+            return_of_capital: 0,
             refusal: Some(refusal),
             ..paid_outcome(Entity::PLACEHOLDER)
         };
         let text = dividend_report_text(&outcome);
         assert!(text.starts_with("No dividend: "), "{refusal:?}: {text}");
         assert!(
-            text.ends_with("Held back: 12.50 coin reserves, 400.00 coin not yet earned."),
+            text.ends_with(
+                "Held back 12.50 coin: wage debt / tax debt / one day of payroll / 2.00 coin float."
+            ),
             "{refusal:?}: {text}"
         );
+        assert!(!text.contains("return of capital"), "{refusal:?}: {text}");
     }
     assert!(dividend_report_text(&DividendOutcome {
         refusal: Some(DividendRefusal::NoOperatingSite),
@@ -123,8 +141,9 @@ fn every_refusal_reads_as_a_concrete_failure_with_the_held_back_figures() {
         paid: 0,
         per_ten_shares: 0,
         own_take: 0,
+        from_profit: 0,
+        return_of_capital: 0,
         withheld_reserves: 0,
-        withheld_profit_cap: 0,
         refusal: Some(DividendRefusal::CompanyUnavailable),
         ..paid_outcome(Entity::PLACEHOLDER)
     });

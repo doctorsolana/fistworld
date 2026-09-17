@@ -26,15 +26,16 @@ mod tavern;
 
 pub use accounts::{BusinessAccount, BusinessDayLedger};
 pub use business::{
-    business_working_capital, BusinessCondition, BusinessForSale, BusinessInputRule,
-    BusinessLiquidation, BusinessManagementPolicy, BusinessPrivateInputRule,
+    business_working_capital, dividend_reserve, BusinessCondition, BusinessForSale,
+    BusinessInputRule, BusinessLiquidation, BusinessManagementPolicy, BusinessPrivateInputRule,
     BusinessProcurementPolicy, BusinessSalePolicy, BusinessSaleReason, BusinessSourcingMode,
     BusinessStaffingPolicy, BusinessState, BusinessStrategy, BusinessSupplyPolicy,
     BusinessWageClaim, BusinessWagePolicy, BusinessWorkingCapital, WorkforceRequirements,
-    BUSINESS_WAGE_REVIEW_STEP, DEFAULT_DAILY_PRICE_STEP_BPS, DEFAULT_INPUT_COVERAGE_DAYS,
-    DEFAULT_TARGET_MARGIN_BPS, FOUNDING_DAILY_WAGE, FULLY_STAFFED_DAYS_BEFORE_REVIEW,
-    MAXIMUM_BUSINESS_DAILY_WAGE, MAXIMUM_STOCK_COVERAGE_DAYS, MINIMUM_BUSINESS_DAILY_WAGE,
-    PAYROLL_STRESS_DAYS_BEFORE_CUT, PROPERTY_MARKET_EXPOSURE_DAYS, VACANCY_DAYS_BEFORE_RAISE,
+    BUSINESS_WAGE_REVIEW_STEP, COMPANY_DIVIDEND_FLOAT, DEFAULT_DAILY_PRICE_STEP_BPS,
+    DEFAULT_INPUT_COVERAGE_DAYS, DEFAULT_TARGET_MARGIN_BPS, FOUNDING_DAILY_WAGE,
+    FULLY_STAFFED_DAYS_BEFORE_REVIEW, MAXIMUM_BUSINESS_DAILY_WAGE, MAXIMUM_STOCK_COVERAGE_DAYS,
+    MINIMUM_BUSINESS_DAILY_WAGE, PAYROLL_STRESS_DAYS_BEFORE_CUT, PROPERTY_MARKET_EXPOSURE_DAYS,
+    VACANCY_DAYS_BEFORE_RAISE,
 };
 pub use civic::{
     CivicAccount, CivicDayLedger, CIVIC_POLICY_REVIEW_DAYS, DEFAULT_BUSINESS_PERMIT_SUBSIDY_BPS,
@@ -46,9 +47,11 @@ pub use civic::{
     PROFIT_TAX_REVIEW_STEP_BPS,
 };
 pub use company::{
-    company_expansion_cash, pro_rata_split, CompanyAccount, CompanyBranchPolicies,
-    CompanyBranchPolicy, CompanyDayLedger, CompanyDecisionHistory, CompanyDecisionReason,
-    CompanyDecisionRecord, CompanyDividendCapacity, CompanyManagementPolicy, CompanyResourcePolicy,
+    automatic_payout, company_expansion_cash, pro_rata_split, CompanyAccount,
+    CompanyBranchPolicies, CompanyBranchPolicy, CompanyDayLedger, CompanyDecisionHistory,
+    CompanyDecisionReason, CompanyDecisionRecord, CompanyDividendCapacity,
+    CompanyManagementPolicy, CompanyResourcePolicy, DEFAULT_NPC_PAYOUT_PERCENT,
+    MAX_AUTOMATIC_PAYOUT_PERCENT,
 };
 pub use demand::FundedDemandCurve;
 pub use goods::{Good, MarketTradeTier};

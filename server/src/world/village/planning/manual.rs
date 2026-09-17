@@ -1,6 +1,7 @@
 //! Validation of a player-selected plot against authoritative placement rules.
 
 use super::fishing::fishing_water_quality;
+use super::land::{LaneReservation, OccupiedLand, PlacementRefusal, worst_land_conflict};
 use super::plots::MAX_SETTLEMENT_SEARCH_RADIUS;
 use super::road_access::{RoadAccessBlocker, planned_road_access_path};
 use super::terrain::{
@@ -9,6 +10,7 @@ use super::terrain::{
     slope_at,
 };
 use crate::world::village::*;
+use shared::components::{LandClaim, LandUse, proposed_plot_claims};
 
 /// Authoritative result of a player-selected plot.
 ///
@@ -29,7 +31,8 @@ pub(crate) struct ManualPlotApproval {
 /// This intentionally receives compact snapshots rather than ECS queries so
 /// the player/network domain cannot grow a second planner. Any future terrain,
 /// field, collision or road rule belongs here and therefore governs both NPC
-/// and player construction.
+/// and player construction. Land conflicts come back as a structured
+/// [`PlacementRefusal`] naming the offending reservation and the shortfall.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_manual_plot(
     terrain: &WorldTerrain,
@@ -37,15 +40,15 @@ pub(crate) fn validate_manual_plot(
     kind: SettlementBuildingKind,
     requested_position: Vec3,
     requested_rotation: f32,
-    occupied: &[(Vec3, f32)],
+    occupied: &[OccupiedLand],
     roads: &[&VillageRoad],
-    planned_accesses: &[PlannedRoadAccess],
+    lanes: &[LaneReservation],
     access_blockers: &[RoadAccessBlocker],
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
     defenses: Option<&shared::components::SettlementDefenses>,
     squares: &[&shared::components::SettlementCivicSquare],
-) -> Result<ManualPlotApproval, String> {
+) -> Result<ManualPlotApproval, PlacementRefusal> {
     if !requested_position.is_finite() || !requested_rotation.is_finite() {
         return Err("That plot position is not valid.".into());
     }
@@ -68,7 +71,8 @@ pub(crate) fn validate_manual_plot(
         return Err(format!(
             "That plot is outside the settlement's {:.0}m charter.",
             MAX_SETTLEMENT_SEARCH_RADIUS
-        ));
+        )
+        .into());
     }
 
     if kind == SettlementBuildingKind::Farmstead {
@@ -101,18 +105,42 @@ pub(crate) fn validate_manual_plot(
         return Err("A permanent object blocks the doorway.".into());
     }
 
-    let clearance = kind.clearance();
-    if occupied.iter().any(|(other, other_clearance)| {
-        Vec2::new(position.x - other.x, position.z - other.z).length() < clearance + other_clearance
-    }) {
-        return Err("This plot overlaps an existing or reserved building.".into());
-    }
+    // The one land rule: every part of this plot is an oriented rectangle
+    // with its own yard, tested edge to edge against every reservation.
+    let claims = proposed_plot_claims(kind, position, rotation);
+    let shell = claims.as_slice()[0];
+    let land_conflict = |part: &LandClaim| -> Result<(), PlacementRefusal> {
+        match worst_land_conflict(std::slice::from_ref(part), occupied) {
+            Some((part, land, _)) => Err(PlacementRefusal::land(part, land)),
+            None => Ok(()),
+        }
+    };
+    let lane_conflict = |part: &LandClaim| -> Result<(), PlacementRefusal> {
+        match lanes.iter().find(|lane| lane.blocks(part)) {
+            Some(lane) => Err(PlacementRefusal::lane(part, lane)),
+            None => Ok(()),
+        }
+    };
+    let road_conflict = |part: &LandClaim| -> Result<(), PlacementRefusal> {
+        if roads.iter().any(|road| road.blocks_claim(part)) {
+            Err(PlacementRefusal::road(part))
+        } else {
+            Ok(())
+        }
+    };
+    land_conflict(&shell)?;
 
     if let (Some(fields), Some(field_half)) = (
         kind.intended_field_positions(position, rotation),
         kind.intended_field_half_extents(),
     ) {
+        let mut field_claims = claims
+            .iter()
+            .filter(|claim| claim.land_use == LandUse::Field);
         for field in fields {
+            let field_claim = *field_claims
+                .next()
+                .expect("a farm's claims list both intended fields");
             if shared::components::minimum_rotated_rect_water_clearance(
                 terrain,
                 field,
@@ -134,32 +162,9 @@ pub(crate) fn validate_manual_plot(
             }) {
                 return Err("A permanent object blocks one of the wheat fields.".into());
             }
-            let field_clearance =
-                field_half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN;
-            if occupied.iter().any(|(other, other_clearance)| {
-                Vec2::new(field.x - other.x, field.z - other.z).length()
-                    < field_clearance + other_clearance
-            }) {
-                return Err("One of the two wheat fields overlaps reserved land.".into());
-            }
-            if roads.iter().any(|road| {
-                road.intersects_rotated_rect(
-                    Vec2::new(field.x, field.z),
-                    field_half,
-                    rotation,
-                    shared::components::FARM_FIELD_TERRACE_MARGIN,
-                )
-            }) {
-                return Err("A road reservation crosses one of the wheat fields.".into());
-            }
-            if planned_accesses.iter().any(|access| {
-                access.intersects_circle(
-                    Vec2::new(field.x, field.z),
-                    field_half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                )
-            }) {
-                return Err("Another building's access lane crosses a wheat field.".into());
-            }
+            land_conflict(&field_claim)?;
+            road_conflict(&field_claim)?;
+            lane_conflict(&field_claim)?;
         }
     }
     if let (Some(pasture), Some(half)) = (
@@ -175,13 +180,11 @@ pub(crate) fn validate_manual_plot(
         {
             return Err("The livestock pasture reaches wet ground.".into());
         }
-        let pasture_clearance = half.length() + 2.0;
-        if occupied.iter().any(|(other, other_clearance)| {
-            Vec2::new(pasture.x - other.x, pasture.z - other.z).length()
-                < pasture_clearance + other_clearance
-        }) {
-            return Err("The livestock pasture overlaps reserved land.".into());
-        }
+        let pasture_claim = *claims
+            .iter()
+            .find(|claim| claim.land_use == LandUse::Pasture)
+            .expect("a livestock farm's claims include its pasture");
+        land_conflict(&pasture_claim)?;
         if colliders.zip(derived).is_some_and(|(colliders, derived)| {
             !crate::world::village_roads::rotated_rect_is_clear_of_permanent_props(
                 Vec2::new(pasture.x, pasture.z),
@@ -194,27 +197,12 @@ pub(crate) fn validate_manual_plot(
         }) {
             return Err("A permanent object blocks the livestock pasture.".into());
         }
-        if roads.iter().any(|road| {
-            road.intersects_rotated_rect(Vec2::new(pasture.x, pasture.z), half, rotation, 1.0)
-        }) {
-            return Err("A road reservation crosses the livestock pasture.".into());
-        }
+        road_conflict(&pasture_claim)?;
+        lane_conflict(&pasture_claim)?;
     }
 
-    let point = Vec2::new(position.x, position.z);
-    let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
-    if roads
-        .iter()
-        .any(|road| road.contains_reserved_point(point, footprint_radius))
-    {
-        return Err("The building footprint overlaps a road reservation.".into());
-    }
-    if planned_accesses
-        .iter()
-        .any(|access| access.intersects_circle(point, footprint_radius))
-    {
-        return Err("The building footprint overlaps another reserved access lane.".into());
-    }
+    road_conflict(&shell)?;
+    lane_conflict(&shell)?;
 
     if kind == SettlementBuildingKind::FishermansHut {
         let water = terrain
@@ -307,6 +295,201 @@ pub(crate) fn validate_manual_plot(
 mod tests {
     use super::*;
 
+    /// Dry, level ground around a Hall so only the reservation rules decide.
+    fn flat_hall_site() -> (WorldTerrain, Vec3) {
+        let mut terrain = WorldTerrain::default();
+        let hall = Vec3::new(1700.0, 80.0, 0.0);
+        terrain.apply_flatten_rect(hall, Vec2::splat(160.0), 0.0, 4.0);
+        (terrain, hall)
+    }
+
+    fn validate(
+        terrain: &WorldTerrain,
+        hall: Vec3,
+        kind: SettlementBuildingKind,
+        position: Vec3,
+        rotation: f32,
+        occupied: &[OccupiedLand],
+    ) -> Result<ManualPlotApproval, PlacementRefusal> {
+        validate_manual_plot(
+            terrain,
+            hall,
+            kind,
+            position,
+            rotation,
+            occupied,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &[],
+        )
+    }
+
+    #[test]
+    fn house_beside_a_farm_field_is_accepted_when_walls_clear_the_field() {
+        let (terrain, hall) = flat_hall_site();
+        let farm_kind = SettlementBuildingKind::Farmstead;
+        let farm = Vec3::new(hall.x + 30.0, hall.y, hall.z + 40.0);
+        let fields = farm_kind.intended_field_positions(farm, 0.0).unwrap();
+        let mut occupied = OccupiedLand::hall(hall);
+        occupied.extend(OccupiedLand::plot(
+            farm_kind,
+            farm,
+            0.0,
+            super::super::land::LandOwner::pending(None, farm_kind),
+        ));
+        // 17 m from the field centre: the cabin's wall clears the 10 m field
+        // half-width by 2.6 m, which is more than enough room to walk between
+        // the fence and the wall.
+        let field = fields[1];
+        let house = Vec3::new(field.x + 17.0, hall.y, field.z);
+        let approval = validate(
+            &terrain,
+            hall,
+            SettlementBuildingKind::House,
+            house,
+            0.0,
+            &occupied,
+        );
+        assert!(
+            approval.is_ok(),
+            "a cabin whose wall clears the field edge by 2.6 m was refused: {approval:?}"
+        );
+
+        // Fifteen metres leaves only 0.66 m between fence and wall.
+        let refusal = validate(
+            &terrain,
+            hall,
+            SettlementBuildingKind::House,
+            Vec3::new(field.x + 15.0, hall.y, field.z),
+            0.0,
+            &occupied,
+        )
+        .unwrap_err();
+        assert_eq!(
+            refusal.message,
+            "Too close to FARMSTEAD (under construction)'s wheat field: 0.7 m of 2.5 m."
+        );
+        let blocker = refusal.blocker.expect("land refusals are structured");
+        assert_eq!(blocker.kind, shared::protocol::PlacementBlockerKind::Field);
+        assert!(
+            (blocker.shortfall_metres() - 1.84).abs() < 0.02,
+            "{blocker:?}"
+        );
+    }
+
+    #[test]
+    fn two_houses_may_stand_three_metres_apart_wall_to_wall() {
+        let (terrain, hall) = flat_hall_site();
+        let kind = SettlementBuildingKind::House;
+        let width = kind.placement_definition().footprint.x;
+        let first = Vec3::new(hall.x + 30.0, hall.y, hall.z + 30.0);
+        let mut occupied = OccupiedLand::hall(hall);
+        occupied.extend(OccupiedLand::building(
+            kind,
+            first,
+            0.0,
+            super::super::land::LandOwner::completed(
+                None,
+                Some(shared::components::BuildingId(7)),
+                kind,
+            ),
+        ));
+        let second = Vec3::new(first.x + width + 3.0, hall.y, first.z);
+        let approval = validate(&terrain, hall, kind, second, 0.0, &occupied);
+        assert!(
+            approval.is_ok(),
+            "two cabins with a three-metre wall gap were refused: {approval:?}"
+        );
+
+        let refusal = validate(
+            &terrain,
+            hall,
+            kind,
+            Vec3::new(first.x + width + 2.0, hall.y, first.z),
+            0.0,
+            &occupied,
+        )
+        .unwrap_err();
+        assert_eq!(refusal.message, "Too close to HOUSE #7: 2.0 m of 3.0 m.");
+        let blocker = refusal.blocker.unwrap();
+        assert_eq!(blocker.building, Some(shared::components::BuildingId(7)));
+        assert_eq!(blocker.shortfall_cm, 100);
+    }
+
+    #[test]
+    fn houses_may_not_block_each_others_door_apron() {
+        let (terrain, hall) = flat_hall_site();
+        let kind = SettlementBuildingKind::House;
+        let depth = kind.placement_definition().footprint.y;
+        let first = Vec3::new(hall.x + 30.0, hall.y, hall.z + 30.0);
+        let mut occupied = OccupiedLand::hall(hall);
+        occupied.extend(OccupiedLand::building(
+            kind,
+            first,
+            0.0,
+            super::super::land::LandOwner::completed(None, None, kind),
+        ));
+        // Door to door across a two-metre gap: the second cabin stands on the
+        // first cabin's doorstep.
+        let second = Vec3::new(first.x, hall.y, first.z - depth - 2.0);
+        let refusal = validate(
+            &terrain,
+            hall,
+            kind,
+            second,
+            std::f32::consts::PI,
+            &occupied,
+        )
+        .expect_err("a cabin on a doorstep was accepted");
+        assert!(refusal.message.contains("HOUSE"), "{refusal}");
+    }
+
+    /// The apron is a hard blocker in its own right: a fence that keeps the
+    /// 2.5 m field-to-wall gap can still stand across the doorway.
+    #[test]
+    fn a_fence_may_not_close_a_neighbours_doorway() {
+        let (terrain, hall) = flat_hall_site();
+        let house_kind = SettlementBuildingKind::House;
+        let house = Vec3::new(hall.x + 60.0, hall.y, hall.z + 60.0);
+        let mut occupied = OccupiedLand::hall(hall);
+        occupied.extend(OccupiedLand::building(
+            house_kind,
+            house,
+            0.0,
+            super::super::land::LandOwner::completed(
+                None,
+                Some(shared::components::BuildingId(4)),
+                house_kind,
+            ),
+        ));
+        let farm_kind = SettlementBuildingKind::Farmstead;
+        let field_half = farm_kind.intended_field_half_extents().unwrap();
+        let door = house_kind.entrance_position(house, 0.0);
+        // The +X field's far edge stops 0.15 m short of the apron's end, and
+        // the cabin's front wall is 2.5 m from that edge.
+        let apron_end = door.z - shared::components::DOOR_APRON_LENGTH;
+        let farm = Vec3::new(
+            house.x - 10.0,
+            hall.y,
+            apron_end + 0.15 - 19.0 - field_half.y,
+        );
+        let refusal = validate(&terrain, hall, farm_kind, farm, 0.0, &occupied)
+            .expect_err("a field across a doorway must be refused");
+        assert_eq!(refusal.message, "Wheat field overlaps HOUSE #4's doorway.");
+        assert_eq!(
+            refusal.blocker.unwrap().kind,
+            shared::protocol::PlacementBlockerKind::Doorway
+        );
+        // Half a metre further back the fence clears the apron.
+        let clear = Vec3::new(farm.x, hall.y, farm.z - 0.5);
+        let approval = validate(&terrain, hall, farm_kind, clear, 0.0, &occupied);
+        assert!(approval.is_ok(), "{approval:?}");
+    }
+
     #[test]
     #[ignore = "loads isolated village_lab bounds; run this regression by name with --ignored"]
     fn manual_and_automatic_fishing_share_the_shoreline_clearance() {
@@ -322,7 +505,7 @@ mod tests {
             &terrain, position, kind, rotation,
         );
         assert!(clearance >= building_freeboard(kind) && clearance < FREEBOARD);
-        let occupied = [(hall, SettlementBuildingKind::Hall.clearance())];
+        let occupied = OccupiedLand::hall(hall);
         let validate = |at| {
             validate_manual_plot(
                 &terrain,

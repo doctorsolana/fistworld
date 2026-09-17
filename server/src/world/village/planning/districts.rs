@@ -7,6 +7,7 @@ use shared::components::{SettlementBuildingKind as Kind, SettlementDevelopment, 
 use shared::terrain::WorldTerrain;
 use shared::worldgen::splitmix64 as mix;
 
+use super::land::{occupied_plot_count, OccupiedLand};
 use super::neighborhood::{house_frontage_pitch, PlotNeighbor};
 use super::plots::{PlannedPlotCandidate, MAX_SETTLEMENT_SEARCH_RADIUS};
 use super::road_access::nearest_completed_road_frontage;
@@ -87,11 +88,16 @@ fn sort_anchors(anchors: &mut [(Vec2, Vec2)], seed: u64) {
     });
 }
 
-fn vacant(point: Vec2, occupied: &[(Vec3, f32)]) -> bool {
-    occupied.iter().all(|(other, clearance)| {
-        point.distance_squared(Vec2::new(other.x, other.z))
-            >= (Kind::House.clearance() + clearance).powi(2)
-    })
+/// Whether a cabin facing `frontage` at `point` would clear every
+/// reservation, by the same land rule the permit itself applies.
+fn vacant(point: Vec2, frontage: Vec2, occupied: &[OccupiedLand]) -> bool {
+    let rotation = super::plots::rotation_facing_frontage(point, frontage);
+    let shell = shared::components::footprint_claim(
+        Kind::House,
+        Vec3::new(point.x, 0.0, point.y),
+        rotation,
+    );
+    occupied.iter().all(|land| !land.blocks(&shell))
 }
 
 impl SettlementUrbanPlan {
@@ -157,7 +163,7 @@ impl SettlementUrbanPlan {
         hall: Vec3,
         neighbors: &[PlotNeighbor],
         roads: &[&VillageRoad],
-        occupied: &[(Vec3, f32)],
+        occupied: &[OccupiedLand],
     ) -> bool {
         const MAX_WARDS: usize = 12;
         let homes: Vec<_> = neighbors.iter().filter(|p| p.kind == Kind::House).collect();
@@ -168,7 +174,7 @@ impl SettlementUrbanPlan {
             && homes.len() < self.wards.len() * 18
             && self.wards.iter().any(|ward| {
                 ward.slots()
-                    .filter(|(point, _)| vacant(*point, occupied))
+                    .filter(|(point, frontage)| vacant(*point, *frontage, occupied))
                     .take(4)
                     .count()
                     >= 4
@@ -177,7 +183,7 @@ impl SettlementUrbanPlan {
             return false;
         }
         let signature = (
-            occupied.len(),
+            occupied_plot_count(occupied),
             roads.iter().map(|road| road.built_points().len()).sum(),
             terrain.modification_version(),
         );
@@ -247,7 +253,7 @@ impl SettlementUrbanPlan {
                 let open = ward
                     .slots()
                     .filter(|(point, frontage)| {
-                        if !vacant(*point, occupied) {
+                        if !vacant(*point, *frontage, occupied) {
                             return false;
                         }
                         let position =
@@ -312,7 +318,7 @@ impl SettlementUrbanPlan {
     pub(super) fn candidates(
         &self,
         hall: Vec3,
-        occupied: &[(Vec3, f32)],
+        occupied: &[OccupiedLand],
         roads: &[&VillageRoad],
     ) -> Vec<PlannedPlotCandidate> {
         let hall2 = Vec2::new(hall.x, hall.z);
@@ -321,7 +327,7 @@ impl SettlementUrbanPlan {
             .iter()
             .flat_map(|ward| {
                 ward.slots().filter_map(move |(point, frontage)| {
-                    if !vacant(point, occupied) {
+                    if !vacant(point, frontage, occupied) {
                         return None;
                     }
                     let road = nearest_completed_road_frontage(frontage, roads)?;
@@ -411,12 +417,20 @@ mod tests {
             };
             let slots: Vec<_> = ward.slots().collect();
             assert_eq!(slots.len(), 36);
-            for (i, (point, _)) in slots.iter().enumerate() {
+            let cabin = |(point, frontage): &(Vec2, Vec2)| {
+                shared::components::footprint_claim(
+                    Kind::House,
+                    Vec3::new(point.x, 0.0, point.y),
+                    super::super::plots::rotation_facing_frontage(*point, *frontage),
+                )
+            };
+            for (i, slot) in slots.iter().enumerate() {
+                let (point, _) = slot;
                 assert!(ward.contains(*point));
                 assert!(point.x.abs() >= house_frontage_pitch());
                 assert!(slots[..i]
                     .iter()
-                    .all(|(other, _)| point.distance(*other) >= Kind::House.clearance() * 2.0));
+                    .all(|other| !cabin(other).conflicts_with(&cabin(slot))));
             }
         }
     }
@@ -489,13 +503,24 @@ mod tests {
             };
             let mut occupied: Vec<_> = homes
                 .iter()
-                .map(|house| (house.position, Kind::House.clearance()))
+                .flat_map(|house| {
+                    OccupiedLand::building(
+                        Kind::House,
+                        house.position,
+                        house.rotation,
+                        super::super::land::LandOwner::completed(None, None, Kind::House),
+                    )
+                })
                 .collect();
-            occupied.push((hall, Kind::Hall.clearance()));
+            occupied.extend(OccupiedLand::hall(hall));
             if inner_blocked {
                 // Coarse claimed-land snapshot: all adjoining blocks are
                 // unavailable, but the distant end of the public road is open.
-                occupied.push((Vec3::new(original.center.x, 0.0, original.center.y), 180.0));
+                occupied.push(OccupiedLand::block(
+                    Vec3::new(original.center.x, 0.0, original.center.y),
+                    Vec2::splat(180.0),
+                    0.0,
+                ));
             }
             assert!(
                 plan.extend_for_housing(&terrain, &charter, hall, &homes, &road_refs, &occupied)
@@ -539,7 +564,7 @@ mod tests {
         let charter = SettlementDevelopment::from_seed(23, 0);
         let mut plan = SettlementUrbanPlan::default();
         let mut neighbors = Vec::new();
-        let mut occupied = vec![(hall, Kind::Hall.clearance())];
+        let mut occupied = OccupiedLand::hall(hall);
         let mut roads: Vec<VillageRoad> = Vec::new();
         let mut blockers = Vec::new();
         let mut in_quarters = 0;
@@ -568,10 +593,8 @@ mod tests {
                 &[],
             )
             .unwrap_or_else(|| panic!("house {number} has no legal plot"));
-            assert!(occupied
-                .iter()
-                .all(|(other, radius)| position.xz().distance(other.xz())
-                    >= Kind::House.clearance() + radius));
+            let shell = shared::components::footprint_claim(Kind::House, position, rotation);
+            assert!(occupied.iter().all(|land| !land.blocks(&shell)));
             let connected = crate::world::village_roads::hall_connected_road_keys(
                 Kind::Hall.entrance_position(hall, 0.0).xz(),
                 &road_refs,
@@ -597,7 +620,12 @@ mod tests {
                 position,
                 rotation,
             });
-            occupied.push((position, Kind::House.clearance()));
+            occupied.extend(OccupiedLand::plot(
+                Kind::House,
+                position,
+                rotation,
+                super::super::land::LandOwner::pending(None, Kind::House),
+            ));
             blockers.extend(road_access_blockers_for_plot(
                 Kind::House,
                 position,

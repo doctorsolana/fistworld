@@ -223,6 +223,14 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   dense service/civic sites must not bypass it and synchronously scan a whole town.
   A failed band resumes at the next review, and the fixed Marketplace square remains
   its authoritative anchor. Startup layout surveys retain their separate full search.
+- Reserved land is the shared oriented-rectangle rule in `shared::components::placement`
+  (per-kind yards, field and pasture verges, doorway aprons, the Hall forecourt, road and
+  reserved-lane corridors); centre discs survive only as its broad phase. `planning/land.rs`
+  builds the one occupied-land snapshot for NPC permits, player permits and civic-square
+  surveys, tags every claim and reserved lane with its owner, and formats the structured
+  refusal. `village_roads::PlannedRoadAccess` mirrors itself into the replicated
+  `ReservedAccessLane` through component hooks on insert and removal, so the client's
+  placement preview always sees the corridors the server still reserves.
 - `planning/search_access.rs` compares built-road geometry and local terrain chunk
   revisions only at an admitted permit review. Meaningful access changes rewind that
   settlement's ordinary land searches; metadata, unfinished suffixes and distant

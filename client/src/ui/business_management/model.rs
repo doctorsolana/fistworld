@@ -9,13 +9,14 @@ mod company;
 // --- model ------------------------------------------------------------------
 
 /// What pressing a control does. Orders go to the server; draft steps edit the
-/// local share-offer or dividend-amount draft.
+/// local share-offer, dividend-amount or capital-contribution draft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ControlPress {
     Order(HeroBusinessAction),
     Company(CompanyId, HeroCompanyAction),
     Draft(ShareDraftAction),
     DividendDraft(DividendDraftAction),
+    CapitalDraft(CapitalDraftAction),
     Person(PersonId),
     /// A fixed slot with no occupant this frame. The button is spawned hidden
     /// and inert but keeps its entity and payload component, so a later
@@ -210,6 +211,21 @@ pub(super) fn company_choice(
     }
 }
 
+/// The automatic dividend shares a Company Master can choose: `0` retains
+/// profits, the rest pay that percentage of the retained profit above the
+/// working-capital runway every day. The server accepts any share up to
+/// `MAX_AUTOMATIC_PAYOUT_PERCENT`; an off-preset value (a future NPC default
+/// viewed by its Master, say) binds into the fixed custom chip slot.
+pub(super) const AUTOMATIC_DIVIDEND_PRESETS: [u8; 4] = [0, 10, 25, 50];
+
+pub(super) fn automatic_dividend_label(percent: u8) -> String {
+    if percent == 0 {
+        "RETAIN".to_string()
+    } else {
+        format!("{percent}%")
+    }
+}
+
 pub(super) fn choice(
     id: impl Into<String>,
     label: impl Into<String>,
@@ -337,8 +353,12 @@ pub(super) struct ModelInputs<'a> {
     pub(super) workers: &'a [PersonId],
     pub(super) company: Option<CompanyView<'a>>,
     pub(super) local_person: Option<PersonId>,
+    /// The local hero's replicated wallet in pennies (zero while unknown);
+    /// the capital-contribution draft and payload clamp to it.
+    pub(super) local_wallet: u64,
     pub(super) share_draft: &'a ShareOrderDraft,
     pub(super) dividend_draft: &'a DividendDraft,
+    pub(super) capital_draft: &'a CapitalDraft,
     pub(super) page: BusinessManagementPage,
     pub(super) feedback: &'a BusinessFeedback,
     pub(super) name_of: &'a dyn Fn(PersonId) -> String,
@@ -351,8 +371,10 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
         workers,
         company,
         local_person,
+        local_wallet,
         share_draft,
         dividend_draft,
+        capital_draft,
         page,
         feedback,
         name_of,
@@ -413,8 +435,10 @@ pub(super) fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             &mut blocks,
             company,
             local_person,
+            *local_wallet,
             share_draft,
             dividend_draft,
+            capital_draft,
             *name_of,
             can_manage,
         );
@@ -813,13 +837,16 @@ pub(super) fn strategy_row(id: &str, strategy: BusinessStrategy) -> Block {
     )
 }
 
-/// The SHAREHOLDER DIVIDENDS row (replicated headroom, policy, amount picker
-/// and confirm control) plus the IF DISTRIBUTED NOW preview row.
+/// The AUTOMATIC DIVIDEND choice row (the policy line and the RETAIN / share
+/// chips), the SHAREHOLDER DIVIDENDS row (replicated headroom, amount picker
+/// and confirm control) and the IF DISTRIBUTED NOW preview row.
 ///
 /// Every control is present whenever the viewer can manage, whatever the
 /// snapshot says: a headroom of zero, or none published yet, is a value
-/// (label `DISTRIBUTE 0.00 COIN`, payload `pennies: 0`, which the server
-/// refuses with a plain message), never a structural change.
+/// (label `DISTRIBUTE 0.00 COIN`, payload `pennies: u64::MAX`, so the
+/// finance pass answers from its live figure and republishes the snapshot),
+/// never a structural change. A draft at the whole headroom (ALL, or one the
+/// player never stepped) also sends `u64::MAX`.
 pub(super) fn push_dividend_rows(
     blocks: &mut Vec<Block>,
     company: &CompanyView<'_>,
@@ -828,7 +855,6 @@ pub(super) fn push_dividend_rows(
     can_manage: bool,
 ) {
     let id = "company.dividends";
-    let automatic = company.policy.automatic_dividends;
     let distributable = company.distributable();
     let headroom = match company.capacity {
         None => "Available now: awaiting the first finance review".to_string(),
@@ -855,14 +881,58 @@ pub(super) fn push_dividend_rows(
             text
         }
     };
-    let policy = if automatic {
+    let float = format_money(COMPANY_DIVIDEND_FLOAT);
+    let percent = company.policy.automatic_payout_percent;
+    let policy = if percent > 0 {
         format!(
-            "Automatic after company-wide payroll, tax, input and operating reserves (up to {} coin per day)",
-            format_money(company.policy.max_daily_dividend)
+            "Pays {percent}% of retained profit above the working-capital runway (wage and tax debt, each site's payroll days and input coverage, {float} coin float) every day."
         )
     } else {
-        "Retained until manually distributed".to_string()
+        format!(
+            "Profits are retained until you distribute them. Anything above wage and tax debt, one day of every site's payroll and a {float} coin float may be paid, contributed capital included."
+        )
     };
+    // The share is a choice row: every preset is a fixed chip and the sixth
+    // slot shows a share no preset can send as its own selected chip, so a
+    // policy change (or an unusual value) binds in place and never respawns.
+    let policy_controls = if can_manage {
+        let mut chips: Vec<ControlModel> = AUTOMATIC_DIVIDEND_PRESETS
+            .into_iter()
+            .map(|preset| {
+                company_choice(
+                    company.id,
+                    format!("{id}.auto.{preset}"),
+                    automatic_dividend_label(preset),
+                    HeroCompanyAction::SetAutomaticDividend {
+                        payout_percent: preset,
+                    },
+                    preset == percent,
+                )
+            })
+            .collect();
+        chips.push(if AUTOMATIC_DIVIDEND_PRESETS.contains(&percent) {
+            ControlModel::vacant(format!("{id}.auto.custom"), VacantSlot::Action)
+        } else {
+            company_choice(
+                company.id,
+                format!("{id}.auto.custom"),
+                automatic_dividend_label(percent),
+                HeroCompanyAction::SetAutomaticDividend {
+                    payout_percent: percent,
+                },
+                true,
+            )
+        });
+        chips
+    } else {
+        vec![]
+    };
+    blocks.push(row(
+        format!("{id}.policy"),
+        "AUTOMATIC DIVIDEND",
+        policy,
+        policy_controls,
+    ));
     // Managers distribute the drafted amount; everyone else previews a full
     // distribution of the published headroom.
     let amount = if can_manage {
@@ -871,13 +941,7 @@ pub(super) fn push_dividend_rows(
         distributable
     };
     let controls = if can_manage {
-        let mut controls = vec![company_choice(
-            company.id,
-            format!("{id}.auto"),
-            "AUTO DIVIDEND",
-            HeroCompanyAction::SetAutomaticDividends(!automatic),
-            automatic,
-        )];
+        let mut controls = Vec::with_capacity(6);
         controls.extend(
             [
                 ("down", "-1 COIN", DividendDraftAction::Down),
@@ -895,22 +959,27 @@ pub(super) fn push_dividend_rows(
                 )
             }),
         );
+        // ALL (a draft at the whole published headroom) and a press while the
+        // snapshot shows nothing ask for everything: the server clamps against
+        // its live figure and republishes, so a stale snapshot is never a
+        // dead end or a ceiling. A deliberately smaller draft is sent as is.
         controls.push(company_order(
             company.id,
             format!("{id}.distribute"),
             format!("DISTRIBUTE {} COIN", format_money(amount)),
-            HeroCompanyAction::DistributeDividend { pennies: amount },
+            HeroCompanyAction::DistributeDividend {
+                pennies: if distributable == 0 || amount >= distributable {
+                    u64::MAX
+                } else {
+                    amount
+                },
+            },
         ));
         controls
     } else {
         vec![]
     };
-    blocks.push(row(
-        id,
-        "SHAREHOLDER DIVIDENDS",
-        format!("{headroom}\n{policy}"),
-        controls,
-    ));
+    blocks.push(row(id, "SHAREHOLDER DIVIDENDS", headroom, controls));
     let own = local_person
         .filter(|person| person.is_assigned())
         .map(|person| {

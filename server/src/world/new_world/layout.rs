@@ -116,7 +116,7 @@ struct Planner<'a> {
     colliders: &'a StaticColliders,
     library: &'a DerivedColliderLibrary,
     plots: Vec<Plot>,
-    occupied: Vec<(Vec3, f32)>,
+    occupied: Vec<village::OccupiedLand>,
     blockers: Vec<village::RoadAccessBlocker>,
     sequence: u64,
     population: usize,
@@ -285,24 +285,12 @@ impl Planner<'_> {
             }
             let position = approval.position;
             let rotation = approval.rotation;
-            self.occupied.push((position, kind.clearance()));
-            if let (Some(fields), Some(half)) = (
-                kind.intended_field_positions(position, rotation),
-                kind.intended_field_half_extents(),
-            ) {
-                self.occupied.extend(fields.into_iter().map(|p| {
-                    (
-                        p,
-                        half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                    )
-                }));
-            }
-            if let (Some(pasture), Some(half)) = (
-                kind.pasture_position(position, rotation),
-                kind.pasture_half_extents(),
-            ) {
-                self.occupied.push((pasture, half.length() + 2.0));
-            }
+            self.occupied.extend(village::OccupiedLand::plot(
+                kind,
+                position,
+                rotation,
+                village::LandOwner::pending(None, kind),
+            ));
             self.blockers
                 .extend(village::road_access_blockers_for_new_plot(
                     kind, position, rotation,
@@ -358,7 +346,7 @@ pub(super) fn plan(
             colliders,
             library,
             plots: Vec::new(),
-            occupied: vec![(site.hall, 15.0)],
+            occupied: village::OccupiedLand::hall(site.hall),
             // The access planner owns the Hall shell and its doorway escape.
             // Adding it as an ordinary plot blocker would seal that escape.
             blockers: Vec::new(),

@@ -1095,7 +1095,7 @@ fn real_world_village_route_profile() {
         terrain.get_height(village_centre.x, village_centre.y),
         village_centre.y,
     );
-    let mut occupied = vec![(hall, SettlementBuildingKind::Hall.clearance())];
+    let mut occupied = crate::world::village::OccupiedLand::hall(hall);
     let mut radial_roads = Vec::new();
     let mut houses = 0usize;
     while let Some((position, rotation)) = crate::world::village::find_site(
@@ -1105,7 +1105,12 @@ fn real_world_village_route_profile() {
         &occupied,
         &radial_roads.iter().collect::<Vec<_>>(),
     ) {
-        occupied.push((position, SettlementBuildingKind::House.clearance()));
+        occupied.extend(crate::world::village::OccupiedLand::plot(
+            SettlementBuildingKind::House,
+            position,
+            rotation,
+            crate::world::village::LandOwner::pending(None, SettlementBuildingKind::House),
+        ));
         let door = SettlementBuildingKind::House.entrance_position(position, rotation);
         let hall_door = SettlementBuildingKind::Hall.entrance_position(hall, 0.0);
         radial_roads.push(VillageRoad {
@@ -4950,4 +4955,53 @@ fn route_prop_recipe_does_not_resurrect_cleared_loaded_trees() {
         !blockers.blocks(felled),
         "known axe-work clearance survives unloading"
     );
+}
+
+/// The replicated lane mirror follows the authoritative reservation through
+/// component hooks: it appears with `PlannedRoadAccess`, tracks a replaced
+/// polyline, and leaves with the reservation whichever path removes it.
+#[test]
+fn reserved_access_lane_mirrors_the_planned_road_access_reservation() {
+    use shared::components::ReservedAccessLane;
+
+    let mut world = World::new();
+    let access = PlannedRoadAccess {
+        settlement_id: shared::components::SettlementId(1),
+        points: vec![Vec2::ZERO, Vec2::X * 8.0],
+        half_width: RoadClass::Lane.initial_reserved_width() * 0.5,
+    };
+    let site = world.spawn(access.clone()).id();
+    world.flush();
+    assert_eq!(
+        world.get::<ReservedAccessLane>(site),
+        Some(&access.lane()),
+        "the mirror must appear with the reservation"
+    );
+
+    let moved = PlannedRoadAccess {
+        points: vec![Vec2::ZERO, Vec2::Y * 12.0],
+        ..access.clone()
+    };
+    world.entity_mut(site).insert(moved.clone());
+    world.flush();
+    assert_eq!(
+        world
+            .get::<ReservedAccessLane>(site)
+            .map(|lane| lane.points.clone()),
+        Some(moved.points.clone()),
+        "a replaced reservation replaces the mirror"
+    );
+
+    world.entity_mut(site).remove::<PlannedRoadAccess>();
+    world.flush();
+    assert!(
+        world.get::<ReservedAccessLane>(site).is_none(),
+        "releasing the reservation removes the mirror"
+    );
+
+    let despawned = world.spawn(access).id();
+    world.flush();
+    world.despawn(despawned);
+    world.flush();
+    assert!(world.get_entity(despawned).is_err());
 }

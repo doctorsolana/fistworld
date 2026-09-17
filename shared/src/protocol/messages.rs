@@ -333,7 +333,14 @@ pub enum HeroCompanyAction {
     },
     SetStrategy(crate::economy::BusinessStrategy),
     SetAutopilot(bool),
-    SetAutomaticDividends(bool),
+    /// The daily automatic dividend as a share of the automatic headroom
+    /// (consolidated retained profit above the working-capital runway):
+    /// `0` retains profits until a manual distribution, `1..=50` pays that
+    /// percentage every day. The server rejects larger shares and treats an
+    /// unchanged value as a no-op.
+    SetAutomaticDividend {
+        payout_percent: u8,
+    },
     /// Distribute up to `pennies` of retained profit pro rata over the cap
     /// table (`u64::MAX` = everything distributable). The server clamps the
     /// amount against live reserves when the finance pass pays and answers
@@ -341,8 +348,10 @@ pub enum HeroCompanyAction {
     DistributeDividend {
         pennies: u64,
     },
-    /// Move personal money into a sole-owned company. This is an explicit
-    /// capital contribution, never revenue and never an implicit permit top-up.
+    /// Donate personal money to a company the sender holds at least one
+    /// share of. It is recorded as contributed capital, never revenue and
+    /// never an implicit permit top-up; the cap table is untouched, so the
+    /// coin is recoverable only pro rata (a dividend or a share sale).
     ContributeCapital {
         amount: u64,
     },
@@ -639,7 +648,57 @@ pub enum HeroPermitOutcome {
     },
     Rejected {
         permit: Option<crate::components::PermitId>,
+        /// The land that stood in the way of a refused plot, when a
+        /// reservation rather than terrain, water or the charter refused it.
+        blocker: Option<PlacementBlocker>,
     },
+}
+
+/// Which reservation refused a plot.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+pub enum PlacementBlockerKind {
+    Building,
+    Doorway,
+    Forecourt,
+    Field,
+    Pasture,
+    AccessLane,
+    Road,
+}
+
+impl From<crate::components::LandUse> for PlacementBlockerKind {
+    fn from(land_use: crate::components::LandUse) -> Self {
+        use crate::components::LandUse;
+        match land_use {
+            LandUse::Building => Self::Building,
+            LandUse::Doorway => Self::Doorway,
+            LandUse::Forecourt => Self::Forecourt,
+            LandUse::Field => Self::Field,
+            LandUse::Pasture => Self::Pasture,
+        }
+    }
+}
+
+/// Machine-readable half of a placement refusal, beside the sentence shown to
+/// the player, so the client can highlight the offending reservation and say
+/// how far the plot must move.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct PlacementBlocker {
+    pub kind: PlacementBlockerKind,
+    /// Durable identity of the offending building when it has one. Pending
+    /// worksites carry none yet; their label says so.
+    pub building: Option<crate::components::BuildingId>,
+    /// Player-facing name of the offender, for example `HOUSE #7`.
+    pub label: String,
+    /// How far the plot must move to clear the blocker, in whole
+    /// centimetres, so the message stays exactly comparable.
+    pub shortfall_cm: u32,
+}
+
+impl PlacementBlocker {
+    pub fn shortfall_metres(&self) -> f32 {
+        self.shortfall_cm as f32 / 100.0
+    }
 }
 
 /// Server explanation for a quote, purchase, placement or surrender attempt.
@@ -1094,7 +1153,8 @@ mod tests {
             },
             HeroCompanyAction::SetStrategy(BusinessStrategy::Conservative),
             HeroCompanyAction::SetAutopilot(false),
-            HeroCompanyAction::SetAutomaticDividends(false),
+            HeroCompanyAction::SetAutomaticDividend { payout_percent: 0 },
+            HeroCompanyAction::SetAutomaticDividend { payout_percent: 50 },
             HeroCompanyAction::DistributeDividend { pennies: 1 },
             HeroCompanyAction::DistributeDividend { pennies: u64::MAX },
             HeroCompanyAction::ContributeCapital { amount: 1_275 },
@@ -1157,6 +1217,46 @@ mod tests {
         assert_eq!(
             bincode::deserialize::<HeroPermitResult>(&bytes).unwrap(),
             result
+        );
+
+        let refused = HeroPermitResult {
+            success: false,
+            outcome: HeroPermitOutcome::Rejected {
+                permit: Some(crate::components::PermitId(3)),
+                blocker: Some(PlacementBlocker {
+                    kind: PlacementBlockerKind::Building,
+                    building: Some(crate::components::BuildingId(7)),
+                    label: "HOUSE #7".into(),
+                    shortfall_cm: 104,
+                }),
+            },
+            message: "Too close to HOUSE #7: 1.96 m of 3.00 m".into(),
+        };
+        let bytes = bincode::serialize(&refused).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroPermitResult>(&bytes).unwrap(),
+            refused
+        );
+        let HeroPermitOutcome::Rejected {
+            blocker: Some(blocker),
+            ..
+        } = &refused.outcome
+        else {
+            panic!("structured blocker survives the wire");
+        };
+        assert!((blocker.shortfall_metres() - 1.04).abs() < 1e-6);
+        let plain = HeroPermitResult {
+            success: false,
+            outcome: HeroPermitOutcome::Rejected {
+                permit: None,
+                blocker: None,
+            },
+            message: "That is not a settlement Hall.".into(),
+        };
+        let bytes = bincode::serialize(&plain).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroPermitResult>(&bytes).unwrap(),
+            plain
         );
     }
 

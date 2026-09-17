@@ -223,6 +223,8 @@ impl Plugin for ProtocolPlugin {
         // Registered after every pre-existing replicated component so none of
         // their net-ids moved. Append further components below this line.
         app.component::<CompanyDividendCapacity>().replicate();
+        app.component::<crate::components::ReservedAccessLane>()
+            .replicate();
 
         // === MESSAGES ===
         // Client -> Server

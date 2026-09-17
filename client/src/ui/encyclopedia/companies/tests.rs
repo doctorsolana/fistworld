@@ -11,14 +11,16 @@ use super::controls::{
 use super::model::{
     CompanyBranchRecord, CompanyDirectory, CompanyFilter, CompanyHolderRecord, CompanyOfferRecord,
     CompanyPolicyFeedback, CompanyRecord, CompanyRouteRecord, CompanyRouteStopRecord,
-    CompanySettlementRecord, CompanySiteRecord, TradeRouteDraft, TradeRouteEditorAction,
-    TradeRouteEditorState, TradeRouteQuickAction,
+    CompanySettlementRecord, CompanySiteRecord, CompanySort, CompanySortKey, TradeRouteDraft,
+    TradeRouteEditorAction, TradeRouteEditorState, TradeRouteQuickAction,
 };
 use super::portfolio::CompanyRowStatus;
 use super::route_editor::spawn_trade_route_editor;
 use super::routes::spawn_route_card;
 use super::sites::spawn_site_card;
-use super::view::visible_companies;
+use super::view::{compare_companies, visible_companies};
+use crate::ui::encyclopedia::search::EncyclopediaSearch;
+use crate::ui::encyclopedia::EncyclopediaTab;
 use bevy::prelude::*;
 use shared::components::{
     BuildingId, CompanyId, PersonId, SettlementBuildingKind, SettlementId, TradeRouteId,
@@ -105,6 +107,7 @@ fn company_selection_styles_change_only_when_selection_changes() {
 
     let mut app = App::new();
     app.init_resource::<CompanyFilter>();
+    app.init_resource::<CompanySort>();
     app.insert_resource(SelectedCompany(Some(CompanyId(1))));
     app.init_resource::<StyleChanges>();
     app.add_systems(
@@ -202,10 +205,119 @@ fn holdings_filter_supports_more_than_one_company() {
         local_person: Some(owner),
         local_wallet: Some(2_000),
     };
-    let visible = visible_companies(&directory, CompanyFilter::MyHoldings);
+    let visible = visible_companies(
+        &directory,
+        CompanyFilter::MyHoldings,
+        &EncyclopediaSearch::default(),
+        CompanySort::default(),
+    );
     assert_eq!(visible.len(), 2);
     assert_eq!(visible[0].id, CompanyId(1));
     assert_eq!(visible[1].id, CompanyId(2));
+}
+
+#[test]
+fn company_search_matches_name_master_and_branch_settlement() {
+    let owner = PersonId(8);
+    let mut grain = company(1, owner, 0, 0, 0);
+    grain.name = "Aldric Grain & Bread".into();
+    grain.master_name = "Bryn".into();
+    grain.branches = vec![CompanyBranchRecord {
+        settlement: "Brackwater".into(),
+        settlement_id: SettlementId(1),
+        sites: 1,
+        storage_halls: 0,
+        used_bulk: 0,
+        bulk_capacity: 0,
+        resources: Vec::new(),
+    }];
+    let mut fish = company(2, owner, 0, 0, 0);
+    fish.name = "Cassia River Fish".into();
+    fish.master_name = "Cassia".into();
+    let mut search = EncyclopediaSearch::default();
+    assert!(
+        search.matches_company(&grain) && search.matches_company(&fish),
+        "an empty query hides nothing"
+    );
+    search.set_query(EncyclopediaTab::Companies, "  cAsSia ");
+    assert!(!search.matches_company(&grain));
+    assert!(search.matches_company(&fish), "name, any case, trimmed");
+    search.set_query(EncyclopediaTab::Companies, "bryn");
+    assert!(search.matches_company(&grain), "the Master's name");
+    assert!(!search.matches_company(&fish));
+    search.set_query(EncyclopediaTab::Companies, "brack");
+    assert!(search.matches_company(&grain), "a town the company operates in");
+    assert!(!search.matches_company(&fish));
+    search.set_query(EncyclopediaTab::Companies, "bread brack");
+    assert!(search.matches_company(&grain), "every term may hit a different field");
+    search.set_query(EncyclopediaTab::Companies, "bread cassia");
+    assert!(!search.matches_company(&grain) && !search.matches_company(&fish));
+    // The People draft is a different field and never narrows this directory.
+    search.clear_companies();
+    search.set_query(EncyclopediaTab::People, "nobody");
+    assert!(search.matches_company(&grain) && search.matches_company(&fish));
+    assert!(!search.active(EncyclopediaTab::Companies));
+}
+
+#[test]
+fn comparator_reverses_only_the_primary_key_and_breaks_ties_by_name_then_id() {
+    use std::cmp::Ordering;
+    let owner = PersonId(8);
+    let mut alpha = company(1, owner, 500, 0, 0);
+    alpha.name = "alpha works".into();
+    let mut beta = company(2, owner, 500, 0, 0);
+    beta.name = "Beta Works".into();
+    let mut twin = company(3, owner, 500, 0, 0);
+    twin.name = "alpha works".into();
+    for key in CompanySortKey::ALL {
+        for descending in [false, true] {
+            let sort = CompanySort { key, descending };
+            // Equal on every figure: the case-insensitive name decides, in
+            // ascending order whichever way a figure key points. Only NAME
+            // itself is the primary key and therefore reverses.
+            let expected = if key == CompanySortKey::Name && descending {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+            assert_eq!(
+                compare_companies(&alpha, &beta, sort, Some(owner)),
+                expected,
+                "{sort:?}"
+            );
+            assert_eq!(
+                compare_companies(&alpha, &twin, sort, Some(owner)),
+                Ordering::Less,
+                "equal names fall back to id under {sort:?}"
+            );
+        }
+    }
+    let richer = company(4, owner, 900, 0, 0);
+    let cash = CompanySort::natural(CompanySortKey::Cash);
+    assert!(cash.descending, "figures read largest first");
+    assert_eq!(
+        compare_companies(&richer, &alpha, cash, Some(owner)),
+        Ordering::Less
+    );
+    let ascending = CompanySort {
+        descending: false,
+        ..cash
+    };
+    assert_eq!(
+        compare_companies(&richer, &alpha, ascending, Some(owner)),
+        Ordering::Greater
+    );
+    let name = CompanySort::natural(CompanySortKey::Name);
+    assert!(!name.descending, "names read A to Z");
+    // Without a local hero nobody holds anything: HOLDINGS degrades to name order.
+    let holdings = CompanySort::default();
+    assert_eq!(holdings, CompanySort::natural(CompanySortKey::Holdings));
+    assert_eq!(
+        compare_companies(&beta, &alpha, holdings, None),
+        Ordering::Greater
+    );
+    assert_eq!(CompanySortKey::Sites.next(), CompanySortKey::Holdings);
+    assert_eq!(CompanySortKey::Holdings.next(), CompanySortKey::Name);
 }
 
 #[test]
@@ -438,9 +550,13 @@ fn route_editor_exposes_ordered_three_town_timetable_controls() {
     assert!(actions.contains(&TradeRouteEditorAction::NextStopAction(2)));
 }
 
+/// The retained page over two wholly owned companies: `Company 1` (selected,
+/// 100 cash) and `Company 2` (200 cash), with a real list viewport, count
+/// text and detail viewport. Returns the detail viewport and content.
 fn retained_company_app() -> (App, Entity, Entity) {
     use super::controls::{
-        CompanyDetailContent, CompanyDetailViewport, CompanyListContent, CompanyPortfolioContent,
+        CompanyCountText, CompanyDetailContent, CompanyDetailViewport, CompanyListContent,
+        CompanyListViewport, CompanyPortfolioContent,
     };
     use super::model::{CompanyPolicyFeedback, SelectedCompany};
     let mut app = App::new();
@@ -452,6 +568,8 @@ fn retained_company_app() -> (App, Entity, Entity) {
         ..default()
     });
     app.init_resource::<CompanyFilter>()
+        .init_resource::<CompanySort>()
+        .init_resource::<EncyclopediaSearch>()
         .insert_resource(SelectedCompany(Some(CompanyId(1))))
         .init_resource::<CompanyPolicyFeedback>()
         .init_resource::<TradeRouteEditorState>()
@@ -459,7 +577,17 @@ fn retained_company_app() -> (App, Entity, Entity) {
         .add_systems(Update, super::view::rebuild_company_view);
     app.world_mut()
         .spawn((CompanyPortfolioContent, Node::default()));
-    app.world_mut().spawn((CompanyListContent, Node::default()));
+    let list_viewport = app
+        .world_mut()
+        .spawn((
+            CompanyListViewport,
+            Node::default(),
+            ScrollPosition::default(),
+        ))
+        .id();
+    app.world_mut()
+        .spawn((CompanyListContent, Node::default(), ChildOf(list_viewport)));
+    app.world_mut().spawn((CompanyCountText, Text::new("")));
     let viewport = app
         .world_mut()
         .spawn((
@@ -979,6 +1107,398 @@ fn rows_rebuild_when_visible_order_changes() {
     );
 }
 
+/// The list rows in display order.
+fn list_order(world: &mut World) -> Vec<CompanyId> {
+    row_entities(world)
+        .into_iter()
+        .map(|row| world.get::<CompanyRow>(row).unwrap().0)
+        .collect()
+}
+
+fn row_entities(world: &mut World) -> Vec<Entity> {
+    use super::controls::CompanyListContent;
+    let list = world
+        .query_filtered::<Entity, With<CompanyListContent>>()
+        .single(world)
+        .unwrap();
+    world
+        .get::<Children>(list)
+        .map(|children| {
+            children
+                .iter()
+                .filter(|child| world.get::<CompanyRow>(*child).is_some())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn count_text(world: &mut World) -> String {
+    use super::controls::CompanyCountText;
+    world
+        .query_filtered::<&Text, With<CompanyCountText>>()
+        .single(world)
+        .unwrap()
+        .0
+        .clone()
+}
+
+fn list_shows_text(world: &mut World, wanted: &str) -> bool {
+    use super::controls::CompanyListContent;
+    let list = world
+        .query_filtered::<Entity, With<CompanyListContent>>()
+        .single(world)
+        .unwrap();
+    world.get::<Children>(list).is_some_and(|children| {
+        children
+            .iter()
+            .any(|child| world.get::<Text>(child).is_some_and(|text| text.0 == wanted))
+    })
+}
+
+fn set_company_query(app: &mut App, query: &str) {
+    app.world_mut()
+        .resource_mut::<EncyclopediaSearch>()
+        .set_query(EncyclopediaTab::Companies, query);
+}
+
+#[test]
+fn search_filters_rows_once_and_keeps_selection_and_detail() {
+    use super::model::SelectedCompany;
+    let (mut app, _, detail) = retained_company_app();
+    app.world_mut().resource_mut::<CompanyDirectory>().records[1].name =
+        "Cassia River Fish".into();
+    app.update();
+    // Equal holdings: "Cassia River Fish" sorts before "Company 1" by name.
+    assert_eq!(list_order(app.world_mut()), vec![CompanyId(2), CompanyId(1)]);
+    assert_eq!(count_text(app.world_mut()), "2 companies");
+    let detail_children = app.world().get::<Children>(detail).unwrap().to_vec();
+
+    set_company_query(&mut app, "cassia");
+    app.update();
+    assert_eq!(list_order(app.world_mut()), vec![CompanyId(2)]);
+    assert_eq!(count_text(app.world_mut()), "1 of 2");
+    assert_eq!(
+        app.world().resource::<SelectedCompany>().0,
+        Some(CompanyId(1)),
+        "a text search never revokes the selection"
+    );
+    assert_eq!(
+        app.world().get::<Children>(detail).unwrap().to_vec(),
+        detail_children,
+        "the detail pane is not structure of the list"
+    );
+    let rows = row_entities(app.world_mut());
+    app.update();
+    app.update();
+    assert_eq!(
+        row_entities(app.world_mut()),
+        rows,
+        "one query rebuilds the rows once, not every frame"
+    );
+
+    app.world_mut()
+        .resource_mut::<EncyclopediaSearch>()
+        .clear_companies();
+    app.update();
+    assert_eq!(list_order(app.world_mut()), vec![CompanyId(2), CompanyId(1)]);
+    assert_eq!(count_text(app.world_mut()), "2 companies");
+    assert_eq!(
+        app.world().get::<Children>(detail).unwrap().to_vec(),
+        detail_children
+    );
+}
+
+#[test]
+fn sort_key_and_direction_reorder_rows_and_ties_break_by_name() {
+    use super::controls::{
+        handle_company_sort_buttons, style_company_controls, CompanySortDirectionButton,
+        CompanySortDirectionLabel, CompanySortKeyButton, CompanySortKeyLabel,
+    };
+    use crate::ui::encyclopedia::ClickGuard;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[derive(Resource, Default)]
+    struct LabelChanges(usize);
+    fn count_label_changes(
+        changed: Query<
+            (),
+            (
+                Changed<Text>,
+                Or<(With<CompanySortKeyLabel>, With<CompanySortDirectionLabel>)>,
+            ),
+        >,
+        mut count: ResMut<LabelChanges>,
+    ) {
+        count.0 = changed.iter().count();
+    }
+
+    let (mut app, _, _) = retained_company_app();
+    app.init_resource::<LabelChanges>().add_systems(
+        Update,
+        (style_company_controls, count_label_changes)
+            .chain()
+            .after(super::view::rebuild_company_view),
+    );
+    app.world_mut()
+        .spawn((CompanySortKeyLabel, Text::new("HOLDINGS")));
+    app.world_mut()
+        .spawn((CompanySortDirectionLabel, Text::new("v")));
+    {
+        let mut directory = app.world_mut().resource_mut::<CompanyDirectory>();
+        directory.records[0].sites = vec![
+            storage_site(40, SettlementId(1), "Oakfell"),
+            storage_site(41, SettlementId(1), "Oakfell"),
+        ];
+        directory.records[1].sites = vec![storage_site(42, SettlementId(1), "Oakfell")];
+        directory.records[0].account.current_day.external_revenue = 50;
+        directory.records[1].account.current_day.external_revenue = 500;
+    }
+    app.update();
+    app.update();
+    assert_eq!(
+        list_order(app.world_mut()),
+        vec![CompanyId(1), CompanyId(2)],
+        "equal holdings tie, so the default order is by name"
+    );
+    assert_eq!(app.world().resource::<LabelChanges>().0, 0);
+
+    let expectations = [
+        (CompanySort::natural(CompanySortKey::Cash), [2, 1], "CASH", "v"),
+        (
+            CompanySort {
+                key: CompanySortKey::Cash,
+                descending: false,
+            },
+            [1, 2],
+            "CASH",
+            "^",
+        ),
+        (CompanySort::natural(CompanySortKey::Sites), [1, 2], "SITES", "v"),
+        (CompanySort::natural(CompanySortKey::Profit), [2, 1], "PROFIT", "v"),
+        (CompanySort::natural(CompanySortKey::Name), [1, 2], "NAME", "^"),
+        (
+            CompanySort {
+                key: CompanySortKey::Name,
+                descending: true,
+            },
+            [2, 1],
+            "NAME",
+            "v",
+        ),
+    ];
+    for (sort, order, key_label, direction_label) in expectations {
+        *app.world_mut().resource_mut::<CompanySort>() = sort;
+        app.update();
+        assert_eq!(
+            list_order(app.world_mut()),
+            order.map(CompanyId).to_vec(),
+            "{sort:?}"
+        );
+        let world = app.world_mut();
+        let key = world
+            .query_filtered::<&Text, With<CompanySortKeyLabel>>()
+            .single(world)
+            .unwrap()
+            .0
+            .clone();
+        let direction = world
+            .query_filtered::<&Text, With<CompanySortDirectionLabel>>()
+            .single(world)
+            .unwrap()
+            .0
+            .clone();
+        assert_eq!((key.as_str(), direction.as_str()), (key_label, direction_label));
+        app.update();
+        assert_eq!(
+            app.world().resource::<LabelChanges>().0,
+            0,
+            "labels are rewritten only when they differ"
+        );
+    }
+    // Equal cash: the direction cannot shuffle a tie, which stays by name.
+    app.world_mut().resource_mut::<CompanyDirectory>().records[1]
+        .account
+        .cash = 100;
+    for descending in [true, false] {
+        *app.world_mut().resource_mut::<CompanySort>() = CompanySort {
+            key: CompanySortKey::Cash,
+            descending,
+        };
+        app.update();
+        assert_eq!(list_order(app.world_mut()), vec![CompanyId(1), CompanyId(2)]);
+    }
+
+    // The key button cycles through every key and resets the direction to
+    // the new key's natural one; the toggle flips it. Mouse presses only.
+    app.insert_resource(ClickGuard(true));
+    let mut mouse = ButtonInput::<MouseButton>::default();
+    mouse.press(MouseButton::Left);
+    app.insert_resource(mouse);
+    *app.world_mut().resource_mut::<CompanySort>() = CompanySort {
+        key: CompanySortKey::Holdings,
+        descending: false,
+    };
+    let key_button = app
+        .world_mut()
+        .spawn((CompanySortKeyButton, Interaction::Pressed))
+        .id();
+    app.world_mut()
+        .run_system_once(handle_company_sort_buttons)
+        .unwrap();
+    assert_eq!(
+        *app.world().resource::<CompanySort>(),
+        CompanySort::natural(CompanySortKey::Name),
+        "a new key starts in its natural direction"
+    );
+    app.world_mut().despawn(key_button);
+    let direction_button = app
+        .world_mut()
+        .spawn((CompanySortDirectionButton, Interaction::Pressed))
+        .id();
+    app.world_mut()
+        .run_system_once(handle_company_sort_buttons)
+        .unwrap();
+    assert_eq!(
+        *app.world().resource::<CompanySort>(),
+        CompanySort {
+            key: CompanySortKey::Name,
+            descending: true,
+        }
+    );
+    app.world_mut().resource_mut::<ClickGuard>().0 = false;
+    app.world_mut()
+        .run_system_once(handle_company_sort_buttons)
+        .unwrap();
+    assert_eq!(
+        *app.world().resource::<CompanySort>(),
+        CompanySort {
+            key: CompanySortKey::Name,
+            descending: true,
+        },
+        "an unarmed click guard ignores the press"
+    );
+    app.world_mut().despawn(direction_button);
+}
+
+#[test]
+fn a_books_tick_that_does_not_reorder_keeps_row_entities_under_a_cash_sort() {
+    use super::portfolio::CompanyRowLedger;
+    let (mut app, _, _) = retained_company_app();
+    *app.world_mut().resource_mut::<CompanySort>() = CompanySort::natural(CompanySortKey::Cash);
+    app.update();
+    assert_eq!(list_order(app.world_mut()), vec![CompanyId(2), CompanyId(1)]);
+    let rows = row_entities(app.world_mut());
+    app.world_mut().resource_mut::<CompanyDirectory>().records[1]
+        .account
+        .cash = 250;
+    app.update();
+    assert_eq!(
+        row_entities(app.world_mut()),
+        rows,
+        "a tick that keeps the order rewrites the ledger line in place"
+    );
+    let ledger = app
+        .world_mut()
+        .query::<(&CompanyRowLedger, &Text)>()
+        .iter(app.world())
+        .find(|(row, _)| row.0 == CompanyId(2))
+        .map(|(_, text)| text.0.clone())
+        .unwrap();
+    assert!(
+        ledger.contains(&format!("{} cash", shared::economy::format_money(250))),
+        "{ledger}"
+    );
+    // Crossing the other company's cash changes the order: a real rebuild.
+    app.world_mut().resource_mut::<CompanyDirectory>().records[0]
+        .account
+        .cash = 300;
+    app.update();
+    assert_eq!(list_order(app.world_mut()), vec![CompanyId(1), CompanyId(2)]);
+    assert!(
+        row_entities(app.world_mut())
+            .iter()
+            .all(|row| !rows.contains(row)),
+        "a reorder respawns the rows in the new order"
+    );
+}
+
+#[test]
+fn no_match_search_shows_its_own_empty_state_and_clears() {
+    use super::model::SelectedCompany;
+    let (mut app, _, _) = retained_company_app();
+    set_company_query(&mut app, "zz-no-such-company");
+    app.update();
+    assert!(list_order(app.world_mut()).is_empty());
+    assert_eq!(count_text(app.world_mut()), "0 of 2");
+    assert!(list_shows_text(
+        app.world_mut(),
+        "No companies match this search"
+    ));
+    assert_eq!(
+        app.world().resource::<SelectedCompany>().0,
+        Some(CompanyId(1)),
+        "the selection outlives a fruitless query"
+    );
+    app.world_mut()
+        .resource_mut::<EncyclopediaSearch>()
+        .clear_companies();
+    app.update();
+    assert_eq!(list_order(app.world_mut()), vec![CompanyId(1), CompanyId(2)]);
+    assert!(!list_shows_text(
+        app.world_mut(),
+        "No companies match this search"
+    ));
+    assert_eq!(count_text(app.world_mut()), "2 companies");
+}
+
+#[test]
+fn list_scroll_resets_on_search_and_sort_changes_but_not_on_ticks() {
+    use super::controls::CompanyListViewport;
+    let (mut app, detail_viewport, _) = retained_company_app();
+    let list_viewport = app
+        .world_mut()
+        .query_filtered::<Entity, With<CompanyListViewport>>()
+        .single(app.world())
+        .unwrap();
+    let list_scroll = |app: &App| app.world().get::<ScrollPosition>(list_viewport).unwrap().y;
+    let scroll_to = |app: &mut App, y: f32| {
+        app.world_mut()
+            .get_mut::<ScrollPosition>(list_viewport)
+            .unwrap()
+            .y = y;
+    };
+    scroll_to(&mut app, 300.0);
+    app.world_mut()
+        .get_mut::<ScrollPosition>(detail_viewport)
+        .unwrap()
+        .y = 420.0;
+    app.world_mut().resource_mut::<CompanyDirectory>().records[0]
+        .account
+        .cash += 10;
+    app.update();
+    assert_eq!(list_scroll(&app), 300.0, "a books tick keeps the reader's place");
+
+    set_company_query(&mut app, "company");
+    app.update();
+    assert_eq!(list_scroll(&app), 0.0, "a new query starts at the top");
+    assert_eq!(
+        app.world().get::<ScrollPosition>(detail_viewport).unwrap().y,
+        420.0,
+        "the detail pane's scroll is not the list's business"
+    );
+
+    scroll_to(&mut app, 300.0);
+    app.world_mut()
+        .resource_mut::<EncyclopediaSearch>()
+        .set_query(EncyclopediaTab::People, "someone");
+    app.update();
+    assert_eq!(list_scroll(&app), 300.0, "another tab's draft is not an input here");
+
+    *app.world_mut().resource_mut::<CompanySort>() = CompanySort::natural(CompanySortKey::Cash);
+    app.update();
+    assert_eq!(list_scroll(&app), 0.0, "a new order starts at the top");
+}
+
 #[test]
 fn structural_key_covers_every_button_gate() {
     use shared::components::*;
@@ -1003,8 +1523,8 @@ fn structural_key_covers_every_button_gate() {
     base.account.previous_day.day = 3;
     base.branches = vec![wheat_branch(5, false)];
     // Two holders: the master keeps executive control, so a share sale
-    // inside the class is a value; dropping from sole to shared ownership
-    // (the contribute buttons) is covered by the class case below.
+    // inside the class is a value (the contribute buttons belong to every
+    // holder, so sole ownership is not a class of its own).
     base.holders = vec![
         CompanyHolderRecord {
             person: owner,
@@ -1136,13 +1656,6 @@ fn structural_key_covers_every_button_gate() {
         (
             "ownership class (master -> no shares)",
             Box::new(|_, d| d.local_person = Some(PersonId(999))),
-        ),
-        (
-            "ownership class (master -> sole master)",
-            Box::new(|c, _| {
-                c.holders.truncate(1);
-                c.holders[0].shares = 1_000;
-            }),
         ),
         ("no local hero", Box::new(|_, d| d.local_person = None)),
         (
@@ -1704,6 +2217,78 @@ fn company_details_show_distributable_and_last_paid_dividend() {
         .and_then(|value| value.text)
         .unwrap();
     assert!(capacity.contains("never paid"), "{capacity}");
+}
+
+#[test]
+fn contribute_buttons_follow_share_ownership_not_sole_mastery() {
+    let (mut app, _, _) = retained_company_app();
+    let contribute_buttons = |world: &mut World| {
+        world
+            .query::<&CompanyBranchPolicyButton>()
+            .iter(world)
+            .filter(|button| matches!(button.action, HeroCompanyAction::ContributeCapital { .. }))
+            .count()
+    };
+    // The sole master sees the two donation presets.
+    assert_eq!(contribute_buttons(app.world_mut()), 2);
+
+    // A co-owned company: the master is still a shareholder and may donate.
+    let owner = PersonId(10);
+    let minor = PersonId(11);
+    {
+        let mut directory = app.world_mut().resource_mut::<CompanyDirectory>();
+        let record = &mut directory.records[0];
+        record.ownership = shared::components::CompanyOwnership::from_shares(vec![
+            shared::components::CompanyShare {
+                shareholder: owner,
+                shares: 600,
+            },
+            shared::components::CompanyShare {
+                shareholder: minor,
+                shares: 400,
+            },
+        ])
+        .unwrap();
+        record.holders = vec![
+            CompanyHolderRecord {
+                person: owner,
+                name: "Owner".into(),
+                shares: 600,
+            },
+            CompanyHolderRecord {
+                person: minor,
+                name: "Minor".into(),
+                shares: 400,
+            },
+        ];
+    }
+    app.update();
+    app.update();
+    assert_eq!(
+        contribute_buttons(app.world_mut()),
+        2,
+        "a co-owning master may still donate"
+    );
+
+    // So may the minority holder.
+    app.world_mut()
+        .resource_mut::<CompanyDirectory>()
+        .local_person = Some(minor);
+    app.update();
+    app.update();
+    assert_eq!(
+        contribute_buttons(app.world_mut()),
+        2,
+        "any shareholder may donate"
+    );
+
+    // Someone without shares has nothing to donate into.
+    app.world_mut()
+        .resource_mut::<CompanyDirectory>()
+        .local_person = Some(PersonId(999));
+    app.update();
+    app.update();
+    assert_eq!(contribute_buttons(app.world_mut()), 0);
 }
 
 /// A page (company settings, ledger) covering the tab body stops the bind

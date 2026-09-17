@@ -232,10 +232,6 @@ const NAVIGATION_DOOR_RECOVERY_DISTANCE: f32 = 2.0;
 /// intersection. This tiny cushion absorbs rounding without visibly widening
 /// the requested crop clearance.
 const ROAD_SURVEY_FIELD_EPSILON: f32 = 0.25;
-/// Authored entrances sit just outside the wall. Surveying begins beyond a
-/// short front apron so A* cannot approach the same door through a side or the
-/// rear of the building.
-const DOOR_APPROACH_LENGTH: f32 = 2.25;
 pub const ROAD_SPEED_MULTIPLIER: f32 = 1.22;
 
 pub(crate) fn doorway_road_apron_is_dry(
@@ -267,13 +263,12 @@ pub(crate) fn doorway_road_apron_is_clear_of_props(
     derived: &DerivedColliderLibrary,
 ) -> bool {
     let (door, approach) = doorway_approach(kind, position, rotation);
-    let road_half_width = RoadClass::Lane.initial_reserved_width() * 0.5;
     !static_collider_overlaps_segment_filtered(
         colliders,
         derived,
         door,
         approach,
-        road_half_width + 0.2,
+        shared::components::DOOR_APRON_HALF_WIDTH,
         false,
     )
 }
@@ -286,10 +281,44 @@ pub(crate) fn doorway_road_apron_is_clear_of_props(
 /// from boxing in one another's entrances while the road is only surveyed or
 /// partially built.
 #[derive(Component, Debug, Clone)]
+#[component(on_insert = mirror_reserved_access_lane, on_remove = clear_reserved_access_lane)]
 pub(crate) struct PlannedRoadAccess {
     pub(crate) settlement_id: shared::components::SettlementId,
     pub(crate) points: Vec<Vec2>,
     pub(crate) half_width: f32,
+}
+
+/// Keep the replicated [`shared::components::ReservedAccessLane`] mirror on
+/// the same entity as this authoritative reservation. Hooks rather than an
+/// ordering-dependent system: every insertion site (NPC permits, player
+/// permits, port and regional-road surveys) and the single release path get
+/// the mirror for free, so the client's preview can never see a stale lane.
+fn mirror_reserved_access_lane(
+    mut world: bevy::ecs::world::DeferredWorld,
+    bevy::ecs::lifecycle::HookContext { entity, .. }: bevy::ecs::lifecycle::HookContext,
+) {
+    let Some(lane) = world
+        .get::<PlannedRoadAccess>(entity)
+        .map(PlannedRoadAccess::lane)
+    else {
+        return;
+    };
+    world.commands().queue(move |world: &mut World| {
+        if let Ok(mut owner) = world.get_entity_mut(entity) {
+            owner.insert(lane);
+        }
+    });
+}
+
+fn clear_reserved_access_lane(
+    mut world: bevy::ecs::world::DeferredWorld,
+    bevy::ecs::lifecycle::HookContext { entity, .. }: bevy::ecs::lifecycle::HookContext,
+) {
+    world.commands().queue(move |world: &mut World| {
+        if let Ok(mut owner) = world.get_entity_mut(entity) {
+            owner.remove::<shared::components::ReservedAccessLane>();
+        }
+    });
 }
 
 /// Keeps a surveyed-but-unfinished connector tied to the building whose
@@ -318,6 +347,14 @@ impl PlannedRoadAccess {
         self.points.windows(2).any(|segment| {
             point_segment_distance_squared(center, segment[0], segment[1]) <= clearance * clearance
         })
+    }
+
+    /// The compact replicated geometry the client preview tests against.
+    pub(crate) fn lane(&self) -> shared::components::ReservedAccessLane {
+        shared::components::ReservedAccessLane {
+            points: self.points.clone(),
+            half_width: self.half_width,
+        }
     }
 }
 
@@ -1569,28 +1606,15 @@ fn survey_village_road(
     resample_path(&rounded, 2.0)
 }
 
+/// The door and the far end of its straight apron. The geometry lives in
+/// `shared` so plot reservations, the client preview and this survey origin
+/// describe exactly the same apron.
 pub(crate) fn doorway_approach(
     kind: SettlementBuildingKind,
     building_position: Vec3,
     rotation: f32,
 ) -> (Vec2, Vec2) {
-    let door3 = kind.entrance_position(building_position, rotation);
-    let door = Vec2::new(door3.x, door3.z);
-    let center = Vec2::new(building_position.x, building_position.z);
-    let outward = (door - center).normalize_or_zero();
-    let length = if kind == SettlementBuildingKind::Tavern {
-        // Its door opens into a walkable courtyard. Keep that straight,
-        // narrow private apron until clear of the reserved patio before a
-        // full-width public lane may turn toward an existing street.
-        let reserved = kind.placement_definition();
-        let front_reach = reserved.footprint.y * 0.5 - reserved.footprint_center.y;
-        (front_reach + RoadClass::Lane.initial_reserved_width() * 0.5 + 0.55
-            - door.distance(center))
-        .max(DOOR_APPROACH_LENGTH)
-    } else {
-        DOOR_APPROACH_LENGTH
-    };
-    (door, door + outward * length)
+    shared::components::doorway_approach(kind, building_position, rotation)
 }
 
 fn point_segment_distance_squared(point: Vec2, start: Vec2, end: Vec2) -> f32 {

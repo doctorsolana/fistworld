@@ -278,6 +278,9 @@ fn spawn_control(
         ControlPress::DividendDraft(step) => {
             button.insert(step);
         }
+        ControlPress::CapitalDraft(step) => {
+            button.insert(step);
+        }
         ControlPress::Person(_) | ControlPress::Vacant(VacantSlot::Person) => {
             button.insert(crate::ui::encyclopedia::person_links::PersonLink(
                 control_person(control),

@@ -348,6 +348,8 @@ fn site_card_roster_is_present_on_the_same_frame_as_the_card() {
         local_wallet: Some(10),
     })
     .init_resource::<CompanyFilter>()
+    .init_resource::<companies::CompanySort>()
+    .init_resource::<search::EncyclopediaSearch>()
     .insert_resource(SelectedCompany(Some(CompanyId(7))))
     .init_resource::<CompanyPolicyFeedback>()
     .init_resource::<TradeRouteEditorState>()

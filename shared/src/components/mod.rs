@@ -63,9 +63,20 @@ pub use permits::{
     PropertyMarketListing, SettlementOpportunityBoard, SettlementPropertyBoard,
 };
 pub use placement::{
-    founding_refusal, minimum_building_water_clearance,
+    building_freeboard, founding_refusal, minimum_building_water_clearance,
     minimum_civic_hall_reservation_water_clearance, minimum_rotated_rect_water_clearance,
-    settlement_founding_refusal, MIN_SETTLEMENT_SPACING, SETTLEMENT_FREEBOARD,
+    settlement_founding_refusal, BUILDING_FREEBOARD, MIN_SETTLEMENT_SPACING,
+    SETTLEMENT_FREEBOARD,
+};
+pub use placement::{
+    accepted_field_claims, building_claims, corridor_blocks_claim, describe_claim,
+    doorway_approach, doorway_claim, footprint_claim, hall_claims, intended_field_claims,
+    land_conflict_sentence, land_owner_label, lane_conflict_sentence, legacy_field_claims,
+    pasture_claim, polyline_intersects_rotated_rect, polyline_within_radius,
+    proposed_plot_claims, road_conflict_sentence, worst_conflict, yard_margin, LandClaim,
+    LandUse, PlotClaims, CIVIC_YARD_MARGIN, DOOR_APRON_HALF_WIDTH, DOOR_APRON_LENGTH,
+    FIELD_VERGE_MARGIN, HALL_FORECOURT_HALF_EXTENTS, HOUSE_YARD_MARGIN, ROAD_VERGE,
+    WORKPLACE_YARD_MARGIN,
 };
 pub use settlements::{
     Settlement, SettlementCenterStyle, SettlementDevelopment, SettlementDevelopmentEvidence,

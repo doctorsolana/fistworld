@@ -92,7 +92,7 @@ pub(super) fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                         toolbar.spawn((PeopleCountText, ledger::body("", 16.0)));
                     });
                 person_links::spawn_return_link(directory);
-                search::spawn(directory, EncyclopediaTab::People);
+                search::spawn(directory, EncyclopediaTab::People, search::DIRECTORY_MARGIN);
                 directory
                     .spawn((
                         PeopleListViewport,

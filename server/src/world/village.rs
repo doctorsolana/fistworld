@@ -121,8 +121,10 @@ pub use planning::{
 #[cfg(test)]
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
 pub(crate) use planning::{
-    nearby_defense_reservations, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
-    site_quality, validate_manual_plot, ManualPlotApproval, RoadAccessBlocker,
+    nearby_defense_reservations, occupied_land_snapshot, road_access_blockers_for_new_plot,
+    road_access_blockers_for_plot, site_quality, validate_manual_plot, LandOwner,
+    LaneReservation, ManualPlotApproval, OccupiedLand, PendingPlot, PlacedBuilding,
+    PlacementRefusal, RoadAccessBlocker,
 };
 pub use population::{
     advance_immigration_departures, arrive_at_settlement, recount_residents, seek_settlement,
@@ -230,7 +232,19 @@ pub struct PermitPlanningResources<'w, 's> {
     colliders: Option<Res<'w, StaticColliders>>,
     derived: Option<Res<'w, DerivedColliderLibrary>>,
     diagnostics: Option<ResMut<'w, PermitPlanningDiagnostics>>,
-    planned_road_accesses: Query<'w, 's, &'static PlannedRoadAccess>,
+    /// Each reservation with whatever owns it today, so a refusal can name
+    /// the pending worksite or roadless building whose lane is in the way.
+    planned_road_accesses: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static PlannedRoadAccess,
+            Option<&'static UnderConstruction>,
+            Option<&'static SettlementBuilding>,
+            Option<&'static shared::components::BuildingId>,
+        ),
+    >,
     defenses: Query<'w, 's, &'static shared::components::SettlementDefenses>,
     civic_squares: Query<'w, 's, &'static shared::components::SettlementCivicSquare>,
     hall_upgrades: Query<

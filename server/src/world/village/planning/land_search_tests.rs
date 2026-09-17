@@ -8,7 +8,7 @@ fn exhausted_service_permits_never_scan_the_whole_settlement_in_one_review() {
     let plan = shared::components::SettlementDevelopment::from_foundation("Budget", hall, 0);
     // Simulate a crowded mature town. These failed services formerly scanned
     // thousands of charter and fallback samples synchronously.
-    let occupied = vec![(hall, 1000.0); 80];
+    let occupied = vec![OccupiedLand::block(hall, Vec2::splat(1000.0), 0.0); 80];
     for kind in [
         SettlementBuildingKind::House,
         SettlementBuildingKind::Market,
@@ -58,7 +58,7 @@ fn a_tavern_search_reaches_legal_land_beyond_its_filled_founding_ring() {
     let settlement = Entity::from_bits(29);
     let mut clock = VillageClock::default();
     let occupied_radius = kind.preferred_ring().1 + 6.0;
-    let occupied = [(hall, occupied_radius)];
+    let occupied = [OccupiedLand::block(hall, Vec2::splat(occupied_radius), 0.0)];
     let mut accepted = None;
     for _ in 0..60 {
         let mut rejected = SiteSearchRejections::default();
@@ -89,8 +89,10 @@ fn a_tavern_search_reaches_legal_land_beyond_its_filled_founding_ring() {
             "flat dry land outside the crowded founding core must remain discoverable: {rejected:?}"
         );
     }
-    let (position, _) = accepted.expect("incremental survey eventually finds a real legal site");
-    assert!(position.xz().distance(hall.xz()) >= occupied_radius + kind.clearance());
+    let (position, rotation) =
+        accepted.expect("incremental survey eventually finds a real legal site");
+    let shell = shared::components::footprint_claim(kind, position, rotation);
+    assert!(!occupied[0].blocks(&shell));
     assert!(position.xz().distance(hall.xz()) > kind.preferred_ring().1);
 }
 

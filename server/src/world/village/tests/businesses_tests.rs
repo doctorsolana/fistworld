@@ -168,7 +168,7 @@ fn player_owner_receives_only_profit_above_protected_working_capital() {
             ..default()
         },
         CompanyManagementPolicy {
-            max_daily_dividend: 2 * PENNIES_PER_COIN,
+            automatic_payout_percent: 25,
             ..default()
         },
     ));
@@ -208,10 +208,13 @@ fn player_owner_receives_only_profit_above_protected_working_capital() {
 
     app.update();
 
+    // One position at the founding wage over the Balanced three payroll days
+    // (3.00 coin) plus the 2.00 coin float leave 5.00 coin of the 10.00 coin
+    // of retained profit as headroom; the 25% policy pays 1.25 coin of it.
     assert_eq!(
         app.world().get::<Wallet>(hero).unwrap().balance(),
-        2 * PENNIES_PER_COIN,
-        "player owners must receive the same bounded daily draw as NPC owners"
+        125,
+        "player owners must receive the same self-limiting daily share as NPC owners"
     );
 }
 

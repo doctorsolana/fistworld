@@ -689,7 +689,7 @@ mod road_access_tests {
             SettlementBuildingKind::House,
             position,
             0.0,
-            &[(hall, SettlementBuildingKind::Hall.clearance())],
+            &super::super::land::OccupiedLand::hall(hall),
             &[],
             &[],
             &[],
@@ -712,7 +712,7 @@ mod road_access_tests {
             SettlementBuildingKind::House,
             outside,
             0.0,
-            &[(hall, SettlementBuildingKind::Hall.clearance())],
+            &super::super::land::OccupiedLand::hall(hall),
             &[],
             &[],
             &[],
@@ -722,7 +722,88 @@ mod road_access_tests {
             &[],
         )
         .unwrap_err();
-        assert!(rejection.contains("charter"));
+        assert!(rejection.message.contains("charter"));
+    }
+
+    /// Dry, level ground around a Hall so only the corridor rules decide.
+    fn flat_hall_site() -> (WorldTerrain, Vec3) {
+        let mut terrain = WorldTerrain::default();
+        let hall = Vec3::new(1700.0, 80.0, 0.0);
+        terrain.apply_flatten_rect(hall, Vec2::splat(160.0), 0.0, 4.0);
+        (terrain, hall)
+    }
+
+    /// A pending neighbour's reserved lane running west-east 30 m north of
+    /// the Hall, and a cabin standing side-on to it (its long wall parallel
+    /// to the lane) at `offset` metres from the lane centreline.
+    fn side_on_house_beside_a_lane(
+        offset: f32,
+    ) -> Result<super::super::manual::ManualPlotApproval, super::super::land::PlacementRefusal>
+    {
+        let (terrain, hall) = flat_hall_site();
+        let lane = PlannedRoadAccess {
+            settlement_id: shared::components::SettlementId(1),
+            points: vec![
+                Vec2::new(hall.x + 10.0, hall.z + 30.0),
+                Vec2::new(hall.x + 60.0, hall.z + 30.0),
+            ],
+            half_width: RoadClass::Lane.initial_reserved_width() * 0.5,
+        };
+        let reservation = super::super::land::LaneReservation::new(
+            &lane,
+            super::super::land::LandOwner::pending(None, SettlementBuildingKind::Farmstead),
+        );
+        let house = Vec3::new(hall.x + 30.0, hall.y, hall.z + 30.0 + offset);
+        validate_manual_plot(
+            &terrain,
+            hall,
+            SettlementBuildingKind::House,
+            house,
+            std::f32::consts::FRAC_PI_2,
+            &super::super::land::OccupiedLand::hall(hall),
+            &[],
+            &[reservation],
+            &[],
+            None,
+            None,
+            None,
+            &[],
+        )
+    }
+
+    #[test]
+    fn side_on_house_clears_a_lane_at_6_8_m() {
+        // The reserved envelope is 8.69 m wide, so its wall stands 4.34 m from
+        // the centre; the lane keeps a 2.0 m half-width plus 0.45 m of verge,
+        // so 6.79 m is the threshold and 6.85 m leaves 5 cm of slack.
+        let approval = side_on_house_beside_a_lane(6.85);
+        assert!(
+            approval.is_ok(),
+            "a cabin whose wall clears the reserved lane was refused: {approval:?}"
+        );
+    }
+
+    #[test]
+    fn house_corner_inside_the_corridor_is_refused() {
+        let refusal = side_on_house_beside_a_lane(6.5).unwrap_err();
+        assert!(refusal.message.contains("access lane"), "{refusal}");
+        assert_eq!(
+            refusal.blocker.as_ref().map(|blocker| blocker.kind),
+            Some(shared::protocol::PlacementBlockerKind::AccessLane)
+        );
+    }
+
+    #[test]
+    fn refusal_names_the_reserved_lane_owner() {
+        let refusal = side_on_house_beside_a_lane(6.5).unwrap_err();
+        assert_eq!(
+            refusal.message,
+            "Overlaps the access lane reserved for FARMSTEAD (under construction)."
+        );
+        assert_eq!(
+            refusal.blocker.unwrap().label,
+            "FARMSTEAD (under construction)"
+        );
     }
 
     #[test]
@@ -733,7 +814,11 @@ mod road_access_tests {
         // One deliberately enormous occupied plot makes every shoreline
         // candidate fail before its facing checks. The assertion here is the
         // live cursor contract, independent of a particular generated coast.
-        let occupied = vec![(hall, 1_000.0)];
+        let occupied = vec![super::super::land::OccupiedLand::block(
+            hall,
+            Vec2::splat(1_000.0),
+            0.0,
+        )];
         let settlement = Entity::from_bits(9);
         let kind = SettlementBuildingKind::FishermansHut;
         let (minimum, maximum) = kind.preferred_ring();

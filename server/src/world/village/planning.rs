@@ -11,6 +11,7 @@ mod demand;
 mod districts;
 mod fishing;
 mod funding;
+mod land;
 mod manual;
 mod market_signals;
 mod neighborhood;
@@ -30,6 +31,10 @@ pub(super) use demand::{concurrent_worksite_capacity, should_try_complementary_f
 #[cfg(test)]
 pub(crate) use districts::SettlementUrbanPlan;
 pub use fishing::find_fishing_site;
+pub(crate) use land::{
+    occupied_land_snapshot, LandOwner, LaneReservation, OccupiedLand, PendingPlot,
+    PlacedBuilding, PlacementRefusal,
+};
 pub(crate) use manual::{validate_manual_plot, ManualPlotApproval};
 pub use permits::{consider_permits, PermitPlanningDiagnostics};
 #[cfg(test)]

@@ -154,15 +154,19 @@ pub(super) fn stage_capture_companies(commands: &mut Commands) {
             },
             ..default()
         },
+        // A player-founded company retains its profit until the Master
+        // distributes it, so the default screenshot shows RETAIN selected.
         CompanyManagementPolicy {
             strategy: shared::economy::BusinessStrategy::Aggressive,
+            automatic_payout_percent: 0,
             ..default()
         },
-        // The finance pass's headroom snapshot: 315.00 coin distributable on
-        // day 12 after 18.50 coin of reserves; 250.00 coin was paid on day 11.
+        // The finance pass's headroom snapshot: the 89.50 coin treasury above
+        // 18.50 coin of reserves is 71.00 coin distributable on day 12;
+        // 250.00 coin was paid on day 11.
         shared::economy::CompanyDividendCapacity {
             day: 12,
-            distributable: 31_500,
+            distributable: 7_100,
             protected_reserves: 1_850,
             retained_profit: 46_200,
             last_paid_day: 11,

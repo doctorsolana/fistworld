@@ -1,6 +1,7 @@
 //! Settlement layout grammar, candidate ranking and resumable land-site searches.
 
 use super::districts::SettlementUrbanPlan;
+use super::land::{LaneReservation, OccupiedLand, occupied_plot_count};
 use super::neighborhood::{
     PlotNeighbor, affinity_score, house_frontage_candidates, house_frontage_pitch,
 };
@@ -100,7 +101,7 @@ pub fn find_site(
     terrain: &WorldTerrain,
     hall: Vec3,
     kind: SettlementBuildingKind,
-    occupied: &[(Vec3, f32)],
+    occupied: &[OccupiedLand],
     roads: &[&VillageRoad],
 ) -> Option<(Vec3, f32)> {
     find_site_with_plan(
@@ -316,9 +317,9 @@ pub(in crate::world::village) fn find_site_with_plan(
     terrain: &WorldTerrain,
     hall: Vec3,
     kind: SettlementBuildingKind,
-    occupied: &[(Vec3, f32)],
+    occupied: &[OccupiedLand],
     roads: &[&VillageRoad],
-    planned_accesses: &[PlannedRoadAccess],
+    planned_accesses: &[LaneReservation],
     access_blockers: &[RoadAccessBlocker],
     development: Option<&shared::components::SettlementDevelopment>,
     colliders: Option<&StaticColliders>,
@@ -354,10 +355,10 @@ pub(super) fn find_permit_site(
     terrain: &WorldTerrain,
     hall: Vec3,
     kind: SettlementBuildingKind,
-    occupied: &[(Vec3, f32)],
+    occupied: &[OccupiedLand],
     neighbors: &[PlotNeighbor],
     roads: &[&VillageRoad],
-    planned_accesses: &[PlannedRoadAccess],
+    planned_accesses: &[LaneReservation],
     access_blockers: &[RoadAccessBlocker],
     development: Option<&shared::components::SettlementDevelopment>,
     colliders: Option<&StaticColliders>,
@@ -394,10 +395,10 @@ pub(super) fn find_site_with_plan_diagnostics(
     terrain: &WorldTerrain,
     hall: Vec3,
     kind: SettlementBuildingKind,
-    occupied: &[(Vec3, f32)],
+    occupied: &[OccupiedLand],
     neighbors: &[PlotNeighbor],
     roads: &[&VillageRoad],
-    planned_accesses: &[PlannedRoadAccess],
+    planned_accesses: &[LaneReservation],
     access_blockers: &[RoadAccessBlocker],
     development: Option<&shared::components::SettlementDevelopment>,
     colliders: Option<&StaticColliders>,
@@ -437,7 +438,7 @@ pub(super) fn find_site_with_plan_diagnostics(
     // boundary. Six buildings and their fields can fill that core quickly;
     // widen future search bands deterministically as the occupied envelope
     // grows so a migration wave cannot strand everyone after the sixth cabin.
-    let expansion_bands = occupied.len().saturating_sub(6).div_ceil(6) as f32;
+    let expansion_bands = occupied_plot_count(occupied).saturating_sub(6).div_ceil(6) as f32;
     let expansion_per_band = match kind {
         SettlementBuildingKind::House
         | SettlementBuildingKind::Market
@@ -474,7 +475,6 @@ pub(super) fn find_site_with_plan_diagnostics(
     // merely a ranking hint inside the founding layout radius.
     (min_radius, max_radius) =
         include_resumable_search_cursor(min_radius, max_radius, minimum_radius_hint);
-    let clearance = kind.clearance();
     let resource_scored = matches!(
         kind,
         SettlementBuildingKind::Farmstead
@@ -699,19 +699,30 @@ pub(super) fn find_site_with_plan_diagnostics(
                 reject!(props);
                 continue;
             }
-            let clashes = occupied.iter().any(|(other, other_clearance)| {
-                let flat = Vec2::new(candidate.x - other.x, candidate.z - other.z).length();
-                flat < clearance + other_clearance
-            });
-            if clashes {
+            // The one land rule shared with manual placement: oriented
+            // rectangles with per-kind yards, tested edge to edge.
+            let claims = shared::components::proposed_plot_claims(kind, candidate, rotation);
+            let shell = claims.as_slice()[0];
+            if occupied.iter().any(|land| land.blocks(&shell)) {
                 reject!(occupied);
                 continue;
             }
+            // Borrowed from the stack-held claims: this loop visits many
+            // candidates per review and must not allocate for each one.
+            let field_claims = || {
+                claims
+                    .iter()
+                    .filter(|claim| claim.land_use == shared::components::LandUse::Field)
+            };
+            let pasture_claim = claims
+                .iter()
+                .find(|claim| claim.land_use == shared::components::LandUse::Pasture)
+                .copied();
             if let (Some(field_positions), Some(field_half)) = (
                 kind.intended_field_positions(candidate, rotation),
                 kind.intended_field_half_extents(),
             ) {
-                for field in field_positions {
+                for (field, field_claim) in field_positions.into_iter().zip(field_claims()) {
                     if shared::components::minimum_rotated_rect_water_clearance(
                         terrain,
                         field,
@@ -735,12 +746,7 @@ pub(super) fn find_site_with_plan_diagnostics(
                         reject!(props);
                         continue 'candidate;
                     }
-                    let field_clearance =
-                        field_half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN;
-                    if occupied.iter().any(|(other, other_clearance)| {
-                        Vec2::new(field.x - other.x, field.z - other.z).length()
-                            < field_clearance + other_clearance
-                    }) {
+                    if occupied.iter().any(|land| land.blocks(field_claim)) {
                         reject!(occupied);
                         continue 'candidate;
                     }
@@ -773,68 +779,34 @@ pub(super) fn find_site_with_plan_diagnostics(
                     reject!(props);
                     continue 'candidate;
                 }
-                let pasture_clearance = half.length() + 2.0;
-                if occupied.iter().any(|(other, other_clearance)| {
-                    Vec2::new(pasture.x - other.x, pasture.z - other.z).length()
-                        < pasture_clearance + other_clearance
-                }) {
+                let pasture_claim =
+                    pasture_claim.expect("a livestock farm's claims include its pasture");
+                if occupied.iter().any(|land| land.blocks(&pasture_claim)) {
                     reject!(occupied);
                     continue 'candidate;
                 }
             }
-            let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
-            if roads.iter().any(|road| {
-                road.contains_reserved_point(Vec2::new(candidate.x, candidate.z), footprint_radius)
-            }) {
+            if roads.iter().any(|road| road.blocks_claim(&shell)) {
                 reject!(roads);
                 continue;
             }
-            if planned_accesses
-                .iter()
-                .any(|access| access.intersects_circle(candidate2, footprint_radius))
-            {
+            if planned_accesses.iter().any(|lane| lane.blocks(&shell)) {
                 reject!(roads);
                 continue;
             }
-            if let (Some(field_positions), Some(field_half)) = (
-                kind.intended_field_positions(candidate, rotation),
-                kind.intended_field_half_extents(),
-            ) {
-                for field in field_positions {
-                    let field_center = Vec2::new(field.x, field.z);
-                    if roads.iter().any(|road| {
-                        road.intersects_rotated_rect(
-                            field_center,
-                            field_half,
-                            rotation,
-                            shared::components::FARM_FIELD_TERRACE_MARGIN,
-                        )
-                    }) {
-                        reject!(roads);
-                        continue 'candidate;
-                    }
-                    if planned_accesses.iter().any(|access| {
-                        access.intersects_circle(
-                            field_center,
-                            field_half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                        )
-                    }) {
-                        reject!(roads);
-                        continue 'candidate;
-                    }
+            for field_claim in field_claims() {
+                if roads.iter().any(|road| road.blocks_claim(field_claim))
+                    || planned_accesses.iter().any(|lane| lane.blocks(field_claim))
+                {
+                    reject!(roads);
+                    continue 'candidate;
                 }
             }
-            if let (Some(pasture), Some(half)) = (
-                kind.pasture_position(candidate, rotation),
-                kind.pasture_half_extents(),
-            ) {
-                let center = Vec2::new(pasture.x, pasture.z);
-                if roads
-                    .iter()
-                    .any(|road| road.intersects_rotated_rect(center, half, rotation, 1.0))
+            if let Some(pasture_claim) = pasture_claim {
+                if roads.iter().any(|road| road.blocks_claim(&pasture_claim))
                     || planned_accesses
                         .iter()
-                        .any(|access| access.intersects_circle(center, half.length() + 1.0))
+                        .any(|lane| lane.blocks(&pasture_claim))
                 {
                     reject!(roads);
                     continue 'candidate;
@@ -1048,10 +1020,18 @@ mod neighborhood_integration_tests {
             )
             .local
         });
+        let cabin = |local: Vec2| {
+            shared::components::footprint_claim(
+                SettlementBuildingKind::House,
+                Vec3::new(local.x, 0.0, local.y),
+                0.0,
+            )
+        };
         for (i, location) in locations.iter().enumerate() {
             assert!(
-                locations[..i].iter().all(|other| other.distance(*location)
-                    >= SettlementBuildingKind::House.clearance() * 2.0),
+                locations[..i]
+                    .iter()
+                    .all(|other| !cabin(*other).conflicts_with(&cabin(*location))),
                 "nominally adjacent grid slots must not fail their own house reservations: {locations:?}"
             );
         }
@@ -1087,11 +1067,15 @@ mod neighborhood_integration_tests {
             class: default(),
             stone_committed: 0,
         };
-        let mut occupied = vec![
-            (hall, SettlementBuildingKind::Hall.clearance()),
-            (house.position, house.kind.clearance()),
-            (other_house.position, other_house.kind.clearance()),
-        ];
+        let mut occupied = OccupiedLand::hall(hall);
+        for neighbor in &neighbors {
+            occupied.extend(OccupiedLand::building(
+                neighbor.kind,
+                neighbor.position,
+                neighbor.rotation,
+                super::super::land::LandOwner::completed(None, None, neighbor.kind),
+            ));
+        }
         let blockers: Vec<_> = neighbors
             .iter()
             .flat_map(|neighbor| {
@@ -1102,7 +1086,7 @@ mod neighborhood_integration_tests {
                 )
             })
             .collect();
-        let find = |occupied: &[(Vec3, f32)], context: &[PlotNeighbor]| {
+        let find = |occupied: &[OccupiedLand], context: &[PlotNeighbor]| {
             find_site_with_plan_diagnostics(
                 &terrain,
                 hall,
@@ -1126,7 +1110,14 @@ mod neighborhood_integration_tests {
         };
         let (first, rotation) = find(&occupied, &neighbors);
         let (without_context, _) = find(&occupied, &[]);
-        assert!(first.distance(house.position) >= house.kind.clearance() * 2.0);
+        let cabin = |position, rotation| {
+            shared::components::footprint_claim(SettlementBuildingKind::House, position, rotation)
+        };
+        assert!(
+            occupied
+                .iter()
+                .all(|land| !land.blocks(&cabin(first, rotation)))
+        );
         assert!(
             first.distance(house.position) < 14.0,
             "prefer adjacent frontage over unrelated open ring samples"
@@ -1147,10 +1138,13 @@ mod neighborhood_integration_tests {
         // Fields and other reservations need not themselves be a house to
         // invalidate a promising infill candidate. The shared proof remains
         // authoritative over the new neighbourhood preference.
-        occupied.push((first, 8.0));
-        let (next, _) = find(&occupied, &neighbors);
-        assert!(next.distance(first) >= 8.0 + house.kind.clearance());
-        assert!(next.distance(house.position) >= house.kind.clearance() * 2.0);
+        occupied.push(OccupiedLand::block(first, Vec2::splat(8.0), 0.0));
+        let (next, next_rotation) = find(&occupied, &neighbors);
+        assert!(
+            occupied
+                .iter()
+                .all(|land| !land.blocks(&cabin(next, next_rotation)))
+        );
     }
 
     #[test]

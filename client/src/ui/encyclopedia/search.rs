@@ -12,6 +12,7 @@ use bevy::input_focus::{
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 
+use super::companies::CompanyRecord;
 use super::{ClickGuard, EncyclopediaOpen, EncyclopediaTab, PersonRecord, TabBody};
 use crate::input::InputState;
 use crate::ui::foundation::{UiArtworkFocus, UiButtonLabel, UiButtonVariant, button_chrome};
@@ -130,27 +131,34 @@ impl SearchDraft {
     }
 }
 
+/// One draft per searchable directory. Retinue and Army have no field of
+/// their own and read the People draft, so a tab switch is always exhaustive.
 #[derive(Resource, Default)]
 pub(crate) struct EncyclopediaSearch {
     people: SearchDraft,
     places: SearchDraft,
+    companies: SearchDraft,
     focused: Option<EncyclopediaTab>,
 }
 
 impl EncyclopediaSearch {
     fn draft(&self, tab: EncyclopediaTab) -> &SearchDraft {
-        if tab == EncyclopediaTab::Places {
-            &self.places
-        } else {
-            &self.people
+        match tab {
+            EncyclopediaTab::Places => &self.places,
+            EncyclopediaTab::Companies => &self.companies,
+            EncyclopediaTab::People | EncyclopediaTab::Retinue | EncyclopediaTab::Army => {
+                &self.people
+            }
         }
     }
 
     fn draft_mut(&mut self, tab: EncyclopediaTab) -> &mut SearchDraft {
-        if tab == EncyclopediaTab::Places {
-            &mut self.places
-        } else {
-            &mut self.people
+        match tab {
+            EncyclopediaTab::Places => &mut self.places,
+            EncyclopediaTab::Companies => &mut self.companies,
+            EncyclopediaTab::People | EncyclopediaTab::Retinue | EncyclopediaTab::Army => {
+                &mut self.people
+            }
         }
     }
 
@@ -175,6 +183,10 @@ impl EncyclopediaSearch {
         self.places.clear();
     }
 
+    pub(crate) fn clear_companies(&mut self) {
+        self.companies.clear();
+    }
+
     pub(super) fn active(&self, tab: EncyclopediaTab) -> bool {
         !self.draft(tab).terms.is_empty()
     }
@@ -195,6 +207,24 @@ impl EncyclopediaSearch {
     pub(super) fn matches_place(&self, name: &str) -> bool {
         self.places.matches(&[name])
     }
+
+    /// A company is found by its name, its Master or any town it operates
+    /// in. Like People, this filters the directory the player already sees.
+    pub(super) fn matches_company(&self, company: &CompanyRecord) -> bool {
+        if self.companies.terms.is_empty() {
+            return true;
+        }
+        let mut fields: Vec<&str> = Vec::with_capacity(2 + company.branches.len());
+        fields.push(&company.name);
+        fields.push(&company.master_name);
+        fields.extend(
+            company
+                .branches
+                .iter()
+                .map(|branch| branch.settlement.as_str()),
+        );
+        self.companies.matches(&fields)
+    }
 }
 
 #[derive(Component)]
@@ -208,12 +238,23 @@ pub(super) struct SearchCaret(EncyclopediaTab);
 #[derive(Component)]
 pub(super) struct SearchSuffix(EncyclopediaTab);
 
+/// The People and Places directories pad their own gutter around the row.
+pub(super) const DIRECTORY_MARGIN: UiRect = UiRect {
+    left: Val::Px(16.0),
+    right: Val::Px(16.0),
+    top: Val::Px(0.0),
+    bottom: Val::Px(12.0),
+};
+
 /// This stays outside the list's rebuilt subtree, retaining keyboard focus and its glyph atlas.
-pub(super) fn spawn(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab) {
-    let (name, clear) = if tab == EncyclopediaTab::People {
-        ("Search people", "Clear people search")
-    } else {
-        ("Search places", "Clear places search")
+/// `margin` lets a padded sidebar (Companies) place the row with its own column gap.
+pub(super) fn spawn(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab, margin: UiRect) {
+    let (name, clear) = match tab {
+        EncyclopediaTab::Places => ("Search places", "Clear places search"),
+        EncyclopediaTab::Companies => ("Search companies", "Clear companies search"),
+        EncyclopediaTab::People | EncyclopediaTab::Retinue | EncyclopediaTab::Army => {
+            ("Search people", "Clear people search")
+        }
     };
     parent
         .spawn((
@@ -222,7 +263,7 @@ pub(super) fn spawn(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab)
                 modal: true,
             },
             Node {
-                margin: UiRect::new(px(16), px(16), px(0), px(12)),
+                margin,
                 align_items: AlignItems::Center,
                 column_gap: px(6),
                 flex_shrink: 0.0,
@@ -317,7 +358,10 @@ pub(super) fn handle_input(
 ) {
     let was_focused = search.focused.is_some();
     let visible = open.0
-        && matches!(*tab, EncyclopediaTab::People | EncyclopediaTab::Places)
+        && matches!(
+            *tab,
+            EncyclopediaTab::People | EncyclopediaTab::Places | EncyclopediaTab::Companies
+        )
         && bodies
             .iter()
             .any(|(body, node)| body.0 == *tab && node.display != Display::None)
@@ -468,10 +512,12 @@ pub(super) fn sync_view(
         let focused = search.focused == Some(field.0);
         let placeholder = draft.text.is_empty() && !focused;
         let label = if placeholder {
-            if field.0 == EncyclopediaTab::People {
-                "Search name or place…"
-            } else {
-                "Search places…"
+            match field.0 {
+                EncyclopediaTab::Places => "Search places…",
+                EncyclopediaTab::Companies => "Search company, master or town…",
+                EncyclopediaTab::People | EncyclopediaTab::Retinue | EncyclopediaTab::Army => {
+                    "Search name or place…"
+                }
             }
         } else {
             &draft.text[..draft.cursor]

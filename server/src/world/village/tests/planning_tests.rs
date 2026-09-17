@@ -56,12 +56,18 @@ fn later_buildings_do_not_overwrite_completed_village_paths() {
         stone_committed: 0,
     };
 
-    let (replacement, _) = find_site(&terrain, hall, kind, &[], &[&road]).unwrap();
-    let footprint_radius = kind.art().definition().footprint.length() * 0.5 + 0.45;
+    let (replacement, rotation) = find_site(&terrain, hall, kind, &[], &[&road]).unwrap();
     assert!(first.distance_squared(replacement) > 1.0);
-    assert!(
-        !road.contains_reserved_point(Vec2::new(replacement.x, replacement.z), footprint_radius,)
-    );
+    // The reserved envelope plus its road verge must stay clear of the whole
+    // protected corridor, by the same oriented test the permit applies.
+    let shell = shared::components::footprint_claim(kind, replacement, rotation);
+    assert!(!road.blocks_claim(&shell));
+    assert!(!road.intersects_rotated_rect(
+        shell.center,
+        shell.half_extents,
+        shell.rotation,
+        shared::components::ROAD_VERGE,
+    ));
 }
 
 #[test]
@@ -84,7 +90,7 @@ fn seeded_layouts_face_streets_and_produce_distinct_first_plots() {
         let mut plan = SettlementDevelopment::from_foundation("Planford", hall, 0);
         plan.layout = style;
         plan.center = SettlementCenterStyle::Green;
-        let mut occupied = vec![(hall, SettlementBuildingKind::Hall.clearance())];
+        let mut occupied = crate::world::village::OccupiedLand::hall(hall);
         let mut hall_facing = 0;
 
         for index in 0..4 {
@@ -112,7 +118,12 @@ fn seeded_layouts_face_streets_and_produce_distinct_first_plots() {
             if door_direction.dot(hall_direction) > 0.985 {
                 hall_facing += 1;
             }
-            occupied.push((plot, kind.clearance()));
+            occupied.extend(crate::world::village::OccupiedLand::plot(
+                kind,
+                plot,
+                rotation,
+                crate::world::village::LandOwner::pending(None, kind),
+            ));
         }
 
         assert!(

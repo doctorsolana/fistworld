@@ -1,4 +1,5 @@
 // Native input and retained navigation with offline replicated facts.
+// Phases 19-22 add the Companies search field and its sort controls.
 // Does not exercise network commands, financial transactions or worker simulation.
 (
     version: 1,
@@ -39,6 +40,10 @@
         (name: "16-site-return", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
         (name: "17-site-back", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
         (name: "18-company-no-sites", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "19-companies-search", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "20-companies-clear", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "21-companies-sort", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
+        (name: "22-companies-sort-direction", focus: (0.0, 0.0, 0.0), yaw: -0.45, zoom: 100.0, time_of_day: 0.5),
     ],
 )
 

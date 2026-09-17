@@ -73,8 +73,10 @@ fn sample_model_with_owner(
         }),
         company: None,
         local_person,
+        local_wallet: 0,
         share_draft: &draft,
         dividend_draft: &DividendDraft::default(),
+        capital_draft: &CapitalDraft::default(),
         page: BusinessManagementPage::Site,
         feedback: &feedback,
         name_of: &name_of,
@@ -150,6 +152,12 @@ struct ScopedFixture {
     share_market: CompanyShareMarket,
     capacity: Option<CompanyDividendCapacity>,
     dividend_draft: DividendDraft,
+    /// The local hero's replicated wallet, in pennies.
+    wallet: u64,
+    capital_draft: CapitalDraft,
+    /// The company's automatic dividend share; `0` retains profits, as a
+    /// player-founded company does by default.
+    payout_percent: u8,
 }
 
 /// A published headroom snapshot: `distributable` pennies on day 12, 18.50
@@ -176,7 +184,29 @@ impl ScopedFixture {
             share_market: CompanyShareMarket::default(),
             capacity: None,
             dividend_draft: DividendDraft::default(),
+            wallet: 12_345,
+            capital_draft: CapitalDraft::default(),
+            payout_percent: 0,
         }
+    }
+
+    fn wallet(mut self, pennies: u64) -> Self {
+        self.wallet = pennies;
+        self
+    }
+
+    fn capital_draft(mut self, pennies: u64) -> Self {
+        self.capital_draft = CapitalDraft {
+            company: Some(CompanyId(4)),
+            pennies,
+            edited: true,
+        };
+        self
+    }
+
+    fn payout_percent(mut self, percent: u8) -> Self {
+        self.payout_percent = percent;
+        self
     }
 
     fn workers(mut self, workers: &[PersonId]) -> Self {
@@ -249,6 +279,9 @@ fn scoped_model_from(fixture: &ScopedFixture) -> ControlsModel {
         share_market,
         capacity,
         dividend_draft,
+        wallet,
+        capital_draft,
+        payout_percent,
     } = fixture;
     let (page, with_site, manager) = (*page, *with_site, *manager);
     let person = PersonId(1);
@@ -265,6 +298,7 @@ fn scoped_model_from(fixture: &ScopedFixture) -> ControlsModel {
     };
     let company_policy = CompanyManagementPolicy {
         strategy: BusinessStrategy::Conservative,
+        automatic_payout_percent: *payout_percent,
         ..default()
     };
     let decisions = CompanyDecisionHistory::default();
@@ -316,8 +350,10 @@ fn scoped_model_from(fixture: &ScopedFixture) -> ControlsModel {
             capacity: *capacity,
         }),
         local_person: Some(person),
+        local_wallet: *wallet,
         share_draft: &ShareOrderDraft::default(),
         dividend_draft,
+        capital_draft,
         page,
         feedback: &BusinessFeedback::default(),
         name_of: &fixture_name,
@@ -390,7 +426,16 @@ fn company_and_site_policies_keep_distinct_scopes_and_manual_selections() {
                 assert_eq!(id, CompanyId(4));
                 assert_eq!(*page, BusinessManagementPage::Company);
             }
-            ControlPress::Draft(_) | ControlPress::DividendDraft(_) => {
+            ControlPress::Draft(_)
+            | ControlPress::DividendDraft(_)
+            | ControlPress::CapitalDraft(_) => {
+                assert_eq!(*page, BusinessManagementPage::Company)
+            }
+            // The custom dividend chip is a fixed company slot; it stays
+            // vacant while the policy sits on a preset.
+            ControlPress::Vacant(VacantSlot::Action)
+                if control.id == "company.dividends.auto.custom" =>
+            {
                 assert_eq!(*page, BusinessManagementPage::Company)
             }
             ControlPress::Vacant(slot) => panic!("unexpected vacant {slot:?} slot {}", control.id),
@@ -417,29 +462,57 @@ fn company_and_site_policies_keep_distinct_scopes_and_manual_selections() {
         vec![(9, "Ada"), (10, "Ada")],
         "identical names must retain different person identities"
     );
-    // A Bakery has two positions and both are observed: no vacant slot.
-    assert!(controls.iter().all(|(_, control)| control.visible()));
+    // A Bakery has two positions and both are observed: no vacant worker
+    // slot. The only hidden control is the fixed custom dividend chip.
+    assert!(controls
+        .iter()
+        .all(|(_, control)| control.visible() || control.id == "company.dividends.auto.custom"));
 }
 
 #[test]
-fn shareholders_without_executive_authority_do_not_get_operating_controls() {
-    let model = scoped_model(BusinessManagementPage::Company, true, false);
+fn minority_holders_get_contribute_controls_but_no_operating_controls() {
+    // PersonId(1) holds 900 shares; PersonId(2) holds 100 and is the Master.
+    let model = ScopedFixture::new(BusinessManagementPage::Company, true, false)
+        .offers(&[])
+        .model();
     let controls = scoped_controls(&model);
     assert!(!controls.iter().any(|(_, control)| matches!(
         control.press,
         ControlPress::Order(_)
+            | ControlPress::DividendDraft(_)
             | ControlPress::Company(
                 _,
                 HeroCompanyAction::SetStrategy(_)
                     | HeroCompanyAction::SetAutopilot(_)
-                    | HeroCompanyAction::SetAutomaticDividends(_)
+                    | HeroCompanyAction::SetAutomaticDividend { .. }
                     | HeroCompanyAction::DistributeDividend { .. }
-                    | HeroCompanyAction::ContributeCapital { .. }
             )
     )));
     assert!(controls.iter().any(|(_, control)| matches!(
         control.press,
         ControlPress::Company(_, HeroCompanyAction::ListCompanyShares { .. })
+    )));
+    assert!(
+        controls.iter().any(|(_, control)| matches!(
+            control.press,
+            ControlPress::Company(CompanyId(4), HeroCompanyAction::ContributeCapital { .. })
+        )),
+        "any shareholder may donate personal coin"
+    );
+    assert!(
+        controls
+            .iter()
+            .any(|(_, control)| matches!(control.press, ControlPress::CapitalDraft(_)))
+    );
+
+    // Without shares there is nothing to donate into.
+    let mut outsider = ScopedFixture::new(BusinessManagementPage::Company, true, false);
+    outsider.ownership = CompanyOwnership::sole(PersonId(2));
+    let model = outsider.model();
+    assert!(!scoped_controls(&model).iter().any(|(_, control)| matches!(
+        control.press,
+        ControlPress::CapitalDraft(_)
+            | ControlPress::Company(_, HeroCompanyAction::ContributeCapital { .. })
     )));
 }
 
@@ -784,6 +857,7 @@ fn management_app() -> (App, Entity) {
         .init_resource::<BusinessFeedback>()
         .init_resource::<ShareOrderDraft>()
         .init_resource::<DividendDraft>()
+        .init_resource::<CapitalDraft>()
         .init_resource::<EncyclopediaOpen>()
         .init_resource::<EncyclopediaTab>()
         .init_resource::<KnownPeople>()
@@ -983,17 +1057,30 @@ fn dividend_controls_step_within_capacity_and_send_the_drafted_amount() {
         "{value}"
     );
 
-    // An oversized draft is clamped to the published headroom before it is
-    // sent; the server clamps again against its live figure.
+    // An oversized draft (or ALL) is shown clamped to the published headroom
+    // and asks the server for everything, so its live figure, not the
+    // snapshot, is the ceiling.
     let oversized = fixture(999_999);
+    assert_eq!(
+        control(&oversized, "company.dividends.distribute").label,
+        "DISTRIBUTE 300.00 COIN"
+    );
     assert_eq!(
         confirm_payload(&oversized),
         ControlPress::Company(
             CompanyId(4),
-            HeroCompanyAction::DistributeDividend {
-                pennies: distributable
-            }
+            HeroCompanyAction::DistributeDividend { pennies: u64::MAX }
         )
+    );
+    assert_eq!(
+        confirm_payload(&fixture(distributable - 1)),
+        ControlPress::Company(
+            CompanyId(4),
+            HeroCompanyAction::DistributeDividend {
+                pennies: distributable - 1
+            }
+        ),
+        "a deliberately smaller draft is sent as drafted"
     );
     assert_eq!(half.structure_key(), oversized.structure_key());
 
@@ -1008,6 +1095,102 @@ fn dividend_controls_step_within_capacity_and_send_the_drafted_amount() {
             ControlPress::DividendDraft(_)
                 | ControlPress::Company(_, HeroCompanyAction::DistributeDividend { .. })
         ))
+    );
+}
+
+#[test]
+fn capital_controls_step_within_the_wallet_and_send_the_drafted_amount() {
+    let wallet = 12_345;
+    let mut draft = CapitalDraft::for_company(CompanyId(4), wallet);
+    assert_eq!(draft.pennies, 100, "seeded at one coin");
+    assert!(!draft.edited);
+    draft.step(CapitalDraftAction::All, wallet);
+    assert_eq!(draft.pennies, 12_345);
+    assert!(draft.edited, "a stepped draft no longer follows the wallet");
+    draft.step(CapitalDraftAction::Up, wallet);
+    assert_eq!(draft.pennies, 12_345, "+1 coin never exceeds the wallet");
+    draft.step(CapitalDraftAction::Down, wallet);
+    assert_eq!(draft.pennies, 12_245);
+    draft.step(CapitalDraftAction::TenUp, wallet);
+    assert_eq!(draft.pennies, 12_345, "+10 coin clamps to the wallet");
+    for _ in 0..200 {
+        draft.step(CapitalDraftAction::Down, wallet);
+    }
+    assert_eq!(draft.pennies, 0, "-1 coin stops at zero");
+    draft.step(CapitalDraftAction::TenUp, wallet);
+    assert_eq!(draft.pennies, 1_000);
+    // A wallet that shrank below the draft pulls the draft down first.
+    draft.pennies = 50_000;
+    draft.step(CapitalDraftAction::Up, wallet);
+    assert_eq!(draft.pennies, 12_345);
+    assert_eq!(
+        CapitalDraft::for_company(CompanyId(4), 40).pennies,
+        40,
+        "a wallet below one coin seeds the whole wallet"
+    );
+
+    let fixture = |pennies: u64| {
+        ScopedFixture::new(BusinessManagementPage::Company, false, true)
+            .wallet(wallet)
+            .capital_draft(pennies)
+            .model()
+    };
+    let drafted = fixture(2_500);
+    assert_eq!(
+        control(&drafted, "company.capital.contribute").press,
+        ControlPress::Company(
+            CompanyId(4),
+            HeroCompanyAction::ContributeCapital { amount: 2_500 }
+        )
+    );
+    assert_eq!(
+        control(&drafted, "company.capital.contribute").label,
+        "CONTRIBUTE 25.00 COIN"
+    );
+    for (id, step) in [
+        ("company.capital.down", CapitalDraftAction::Down),
+        ("company.capital.up", CapitalDraftAction::Up),
+        ("company.capital.ten", CapitalDraftAction::TenUp),
+        ("company.capital.all", CapitalDraftAction::All),
+    ] {
+        assert_eq!(
+            control(&drafted, id).press,
+            ControlPress::CapitalDraft(step)
+        );
+    }
+    assert_eq!(
+        control(&drafted, "company.capital.100").press,
+        ControlPress::Company(
+            CompanyId(4),
+            HeroCompanyAction::ContributeCapital { amount: 100 }
+        )
+    );
+    let value = row_value(&drafted, "company.capital");
+    assert!(
+        value.contains("Draft 25.00 coin of your 123.45 coin wallet")
+            && value.contains("recoverable only pro rata"),
+        "{value}"
+    );
+
+    // An oversized draft is clamped to the wallet before it is sent; the
+    // server checks the wallet again when it debits.
+    let oversized = fixture(999_999);
+    assert_eq!(
+        control(&oversized, "company.capital.contribute").press,
+        ControlPress::Company(
+            CompanyId(4),
+            HeroCompanyAction::ContributeCapital { amount: wallet }
+        )
+    );
+    assert_eq!(drafted.structure_key(), oversized.structure_key());
+    assert_eq!(
+        drafted.structure_key(),
+        ScopedFixture::new(BusinessManagementPage::Company, false, true)
+            .wallet(0)
+            .capital_draft(2_500)
+            .model()
+            .structure_key(),
+        "the wallet is a value, not structure"
     );
 }
 
@@ -1038,8 +1221,9 @@ fn confirm_control_stays_present_when_nothing_is_distributable() {
             confirm_payload(model),
             ControlPress::Company(
                 CompanyId(4),
-                HeroCompanyAction::DistributeDividend { pennies: 0 }
-            )
+                HeroCompanyAction::DistributeDividend { pennies: u64::MAX }
+            ),
+            "a press against a zero snapshot asks the live finance pass for everything"
         );
         assert_eq!(
             control(model, "company.dividends.distribute").label,
@@ -1143,7 +1327,7 @@ fn dividend_capacity_tick_rebinds_the_dividend_rows_in_place() {
     assert_eq!(
         bound_text(app.world_mut(), "company.dividends.distribute"),
         "DISTRIBUTE 200.00 COIN",
-        "the confirm payload is clamped to the new headroom"
+        "the confirm label is clamped to the new headroom"
     );
     let confirm = {
         let key = BoundId::of("company.dividends.distribute");
@@ -1158,8 +1342,9 @@ fn dividend_capacity_tick_rebinds_the_dividend_rows_in_place() {
         confirm,
         ControlPress::Company(
             CompanyId(4),
-            HeroCompanyAction::DistributeDividend { pennies: 20_000 }
-        )
+            HeroCompanyAction::DistributeDividend { pennies: u64::MAX }
+        ),
+        "an unedited draft is everything distributable, so it asks for the live figure"
     );
     let steps: Vec<_> = app
         .world_mut()
@@ -1210,8 +1395,9 @@ fn an_unedited_draft_follows_the_headroom_when_the_snapshot_arrives() {
         confirm(app.world_mut()),
         ControlPress::Company(
             CompanyId(4),
-            HeroCompanyAction::DistributeDividend { pennies: 31_500 }
-        )
+            HeroCompanyAction::DistributeDividend { pennies: u64::MAX }
+        ),
+        "everything distributable is a live request, not the snapshot figure"
     );
 
     // Once the player steps the amount, later snapshots leave it alone
@@ -1332,4 +1518,99 @@ fn worker_churn_after_the_first_frame_still_rebinds_the_chips() {
     assert_eq!(root_after, root, "worker churn never respawns the page");
     assert_eq!(structure_after, structure);
     assert_eq!(buttons_after, buttons);
+}
+
+#[test]
+fn dividend_policy_chips_reflect_retain_and_each_preset() {
+    let mut keys = std::collections::HashSet::new();
+    for percent in AUTOMATIC_DIVIDEND_PRESETS {
+        let model = ScopedFixture::new(BusinessManagementPage::Company, true, true)
+            .payout_percent(percent)
+            .model();
+        for preset in AUTOMATIC_DIVIDEND_PRESETS {
+            let chip = control(&model, &format!("company.dividends.auto.{preset}"));
+            assert_eq!(chip.label, automatic_dividend_label(preset));
+            assert_eq!(
+                chip.press,
+                ControlPress::Company(
+                    CompanyId(4),
+                    HeroCompanyAction::SetAutomaticDividend {
+                        payout_percent: preset
+                    }
+                )
+            );
+            assert_eq!(
+                chip.selected,
+                preset == percent,
+                "{percent}% must select only its own chip"
+            );
+            assert!(chip.visible());
+        }
+        let custom = control(&model, "company.dividends.auto.custom");
+        assert!(!custom.visible(), "a preset needs no sixth chip");
+        assert!(!custom.selected);
+        let policy = row_value(&model, "company.dividends.policy");
+        if percent == 0 {
+            assert!(
+                policy.starts_with("Profits are retained until you distribute them."),
+                "{policy}"
+            );
+            assert!(
+                policy.contains("one day of every site's payroll"),
+                "{policy}"
+            );
+        } else {
+            assert!(
+                policy.starts_with(&format!(
+                    "Pays {percent}% of retained profit above the working-capital runway"
+                )),
+                "{policy}"
+            );
+            assert!(policy.contains("every day"), "{policy}");
+        }
+        keys.insert(model.structure_key());
+    }
+    assert_eq!(
+        keys.len(),
+        1,
+        "changing the share binds in place; it never respawns the panel"
+    );
+    // A minority holder reads the policy line but gets no chips.
+    let model = ScopedFixture::new(BusinessManagementPage::Company, true, false)
+        .payout_percent(25)
+        .model();
+    assert!(row_value(&model, "company.dividends.policy").starts_with("Pays 25%"));
+    assert!(!scoped_controls(&model)
+        .iter()
+        .any(|(_, control)| control.id.starts_with("company.dividends.auto.")));
+}
+
+#[test]
+fn an_unusual_percent_shows_as_its_own_selected_chip() {
+    let model = ScopedFixture::new(BusinessManagementPage::Company, true, true)
+        .payout_percent(40)
+        .model();
+    let custom = control(&model, "company.dividends.auto.custom");
+    assert!(custom.visible());
+    assert!(custom.selected);
+    assert_eq!(custom.label, "40%");
+    assert_eq!(
+        custom.press,
+        ControlPress::Company(
+            CompanyId(4),
+            HeroCompanyAction::SetAutomaticDividend { payout_percent: 40 }
+        )
+    );
+    for preset in AUTOMATIC_DIVIDEND_PRESETS {
+        assert!(!control(&model, &format!("company.dividends.auto.{preset}")).selected);
+    }
+    assert!(
+        row_value(&model, "company.dividends.policy").starts_with("Pays 40% of retained profit")
+    );
+    // The sixth slot is fixed, so an off-preset value binds into the same
+    // tree as a preset instead of respawning it.
+    let preset = ScopedFixture::new(BusinessManagementPage::Company, true, true)
+        .payout_percent(25)
+        .model();
+    assert_eq!(model.structure_key(), preset.structure_key());
 }

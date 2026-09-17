@@ -3,7 +3,8 @@ use bevy::ecs::system::RunSystemOnce;
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessProcurementPolicy,
     BusinessSalePolicy, BusinessStaffingPolicy, BusinessState, BusinessStrategy,
-    BusinessSupplyPolicy, BusinessWagePolicy, CompanyDecisionHistory, Good,
+    BusinessSupplyPolicy, BusinessWagePolicy, CompanyDecisionHistory, CompanyDividendCapacity,
+    Good,
 };
 
 const COMPANY: CompanyId = CompanyId(42);
@@ -102,7 +103,7 @@ fn company_governance_and_finance_need_no_live_or_operating_site() {
             HeroCompanyAction::SetStrategy(BusinessStrategy::Conservative),
         )
         .unwrap();
-        f.order(f.master, HeroCompanyAction::SetAutomaticDividends(false))
+        f.order(f.master, HeroCompanyAction::SetAutomaticDividend { payout_percent: 0 })
             .unwrap();
         f.order(
             f.master,
@@ -120,7 +121,7 @@ fn company_governance_and_finance_need_no_live_or_operating_site() {
         let policy = f.world.get::<CompanyManagementPolicy>(f.company).unwrap();
         assert_eq!(policy.strategy, BusinessStrategy::Conservative);
         assert!(!policy.autopilot);
-        assert!(!policy.automatic_dividends);
+        assert_eq!(policy.automatic_payout_percent, 0);
         assert_eq!(f.world.get::<Wallet>(f.master).unwrap().balance(), 875);
         let account = f.world.get::<CompanyAccount>(f.company).unwrap();
         assert_eq!((account.cash, account.contributed_capital), (1_025, 125));
@@ -138,34 +139,6 @@ fn company_governance_and_finance_need_no_live_or_operating_site() {
             }]
         );
     }
-}
-
-#[test]
-fn distribute_dividend_rejects_zero_synchronously() {
-    let mut f = Fixture::new();
-    let refusal = f
-        .order(
-            f.master,
-            HeroCompanyAction::DistributeDividend { pennies: 0 },
-        )
-        .unwrap_err();
-    assert_eq!(refusal, "Choose a positive dividend amount.");
-    assert!(f.pending_dividends().is_empty());
-
-    f.world
-        .entity_mut(f.company)
-        .insert(CompanyDividendCapacity::default());
-    let refusal = f
-        .order(
-            f.master,
-            HeroCompanyAction::DistributeDividend { pennies: 0 },
-        )
-        .unwrap_err();
-    assert!(
-        refusal.starts_with("Nothing is distributable right now"),
-        "a published zero capacity explains the refusal: {refusal}"
-    );
-    assert!(f.pending_dividends().is_empty());
 }
 
 #[test]
@@ -225,7 +198,7 @@ fn minority_shareholders_can_sell_their_own_interest_but_cannot_direct_company_p
     for action in [
         HeroCompanyAction::SetStrategy(BusinessStrategy::Aggressive),
         HeroCompanyAction::SetAutopilot(false),
-        HeroCompanyAction::SetAutomaticDividends(false),
+        HeroCompanyAction::SetAutomaticDividend { payout_percent: 0 },
         HeroCompanyAction::DistributeDividend { pennies: u64::MAX },
         HeroCompanyAction::DistributeDividend { pennies: 1 },
         HeroCompanyAction::AppointCompanyMaster(OTHER),
@@ -270,11 +243,11 @@ fn minority_shareholders_can_sell_their_own_interest_but_cannot_direct_company_p
         OTHER
     );
     assert!(
-        f.order(f.master, HeroCompanyAction::SetAutomaticDividends(false))
+        f.order(f.master, HeroCompanyAction::SetAutomaticDividend { payout_percent: 0 })
             .is_err(),
         "majority ownership does not bypass the appointed executive"
     );
-    f.order(f.other, HeroCompanyAction::SetAutomaticDividends(false))
+    f.order(f.other, HeroCompanyAction::SetAutomaticDividend { payout_percent: 0 })
         .unwrap();
     f.order(f.other, HeroCompanyAction::CancelCompanyShareListing)
         .unwrap();
@@ -370,7 +343,7 @@ fn company_share_commands_settle_actual_wallets_and_reject_overflow_atomically()
 }
 
 #[test]
-fn capital_refusal_preserves_both_ledgers_and_coowners_cannot_be_silently_subsidized() {
+fn capital_refusal_preserves_both_ledgers() {
     for (cash, contributed) in [(u64::MAX, 0), (900, u64::MAX)] {
         let mut f = Fixture::new();
         f.world.entity_mut(f.company).insert(CompanyAccount {
@@ -386,17 +359,17 @@ fn capital_refusal_preserves_both_ledgers_and_coowners_cannot_be_silently_subsid
         assert_eq!(f.world.get::<Wallet>(f.master).unwrap().balance(), 1_000);
     }
     let mut f = Fixture::new();
-    assert!(f
-        .world
-        .get_mut::<CompanyOwnership>(f.company)
-        .unwrap()
-        .transfer(MASTER, OTHER, 1));
-    assert!(f
-        .order(
+    assert!(
+        f.order(
             f.master,
-            HeroCompanyAction::ContributeCapital { amount: 100 }
+            HeroCompanyAction::ContributeCapital { amount: 1_001 }
         )
-        .is_err());
+        .is_err()
+    );
+    assert!(
+        f.order(f.master, HeroCompanyAction::ContributeCapital { amount: 0 })
+            .is_err()
+    );
     assert_eq!(f.world.get::<CompanyAccount>(f.company).unwrap().cash, 900);
     assert_eq!(f.world.get::<Wallet>(f.master).unwrap().balance(), 1_000);
 }
@@ -514,4 +487,283 @@ fn company_strategy_reaches_automatic_siblings_but_preserves_a_manual_site_overr
             .strategy,
         BusinessStrategy::Conservative
     );
+}
+
+#[test]
+fn any_shareholder_may_contribute_capital_as_a_donation() {
+    let mut f = Fixture::new();
+    assert!(
+        f.world
+            .get_mut::<CompanyOwnership>(f.company)
+            .unwrap()
+            .transfer(MASTER, OTHER, 400)
+    );
+    // The minority holder donates without any Master involvement.
+    assert!(
+        f.order(
+            f.other,
+            HeroCompanyAction::ContributeCapital { amount: 100 }
+        )
+        .is_ok()
+    );
+    assert_eq!(f.world.get::<Wallet>(f.other).unwrap().balance(), 1_900);
+    let account = f.world.get::<CompanyAccount>(f.company).unwrap();
+    assert_eq!((account.cash, account.contributed_capital), (1_000, 100));
+    // So does the co-owning Master.
+    assert!(
+        f.order(
+            f.master,
+            HeroCompanyAction::ContributeCapital { amount: 50 }
+        )
+        .is_ok()
+    );
+    assert_eq!(f.world.get::<Wallet>(f.master).unwrap().balance(), 950);
+    let account = f.world.get::<CompanyAccount>(f.company).unwrap();
+    assert_eq!((account.cash, account.contributed_capital), (1_050, 150));
+    let ownership = f.world.get::<CompanyOwnership>(f.company).unwrap();
+    assert_eq!(ownership.share_count(MASTER), 600);
+    assert_eq!(ownership.share_count(OTHER), 400);
+    assert_eq!(
+        f.world.get::<CompanyLeadership>(f.company).unwrap().master,
+        MASTER
+    );
+    // Someone with a wallet but no shares may not.
+    let stranger = f.world.spawn((PersonId(9), Wallet::new(500))).id();
+    assert_eq!(
+        f.order(stranger, HeroCompanyAction::ContributeCapital { amount: 1 }),
+        Err("Only a shareholder may contribute capital.")
+    );
+    assert_eq!(f.world.get::<Wallet>(stranger).unwrap().balance(), 500);
+    assert_eq!(
+        f.world.get::<CompanyAccount>(f.company).unwrap().cash,
+        1_050
+    );
+}
+
+#[test]
+fn a_contribution_never_changes_the_cap_table_or_revenue() {
+    let mut f = Fixture::new();
+    assert!(
+        f.world
+            .get_mut::<CompanyOwnership>(f.company)
+            .unwrap()
+            .transfer(MASTER, OTHER, 400)
+    );
+    f.order(
+        f.other,
+        HeroCompanyAction::ListCompanyShares {
+            shares: 10,
+            unit_price: 5,
+        },
+    )
+    .unwrap();
+    let ownership = f.world.get::<CompanyOwnership>(f.company).unwrap().clone();
+    let market = f
+        .world
+        .get::<CompanyShareMarket>(f.company)
+        .unwrap()
+        .clone();
+    let before = *f.world.get::<CompanyAccount>(f.company).unwrap();
+
+    f.order(
+        f.other,
+        HeroCompanyAction::ContributeCapital { amount: 250 },
+    )
+    .unwrap();
+
+    let account = *f.world.get::<CompanyAccount>(f.company).unwrap();
+    assert_eq!(account.cash, before.cash + 250);
+    assert_eq!(
+        account.contributed_capital,
+        before.contributed_capital + 250
+    );
+    assert_eq!(
+        CompanyAccount {
+            cash: before.cash,
+            contributed_capital: before.contributed_capital,
+            ..account
+        },
+        before,
+        "a donation touches cash and the lifetime contribution total only: no revenue, no ledger line, no withdrawal"
+    );
+    assert_eq!(
+        f.world.get::<CompanyOwnership>(f.company).unwrap(),
+        &ownership,
+        "no shares are issued for a donation"
+    );
+    assert_eq!(
+        f.world.get::<CompanyShareMarket>(f.company).unwrap(),
+        &market
+    );
+}
+
+#[test]
+fn a_zero_snapshot_all_request_is_enqueued_not_refused() {
+    let mut f = Fixture::new();
+    f.world
+        .entity_mut(f.company)
+        .insert(CompanyDividendCapacity {
+            day: 7,
+            distributable: 0,
+            ..default()
+        });
+    assert_eq!(
+        f.order(
+            f.master,
+            HeroCompanyAction::DistributeDividend { pennies: u64::MAX }
+        ),
+        Ok(None),
+        "the snapshot is stale within the day; the finance pass answers from the live figure"
+    );
+    assert_eq!(
+        f.pending_dividends(),
+        vec![crate::world::village::DividendRequest {
+            company: COMPANY,
+            pennies: u64::MAX,
+            requester_person: MASTER,
+            requester_link: f.link,
+        }]
+    );
+    // Even a literal zero is answered by the pass (and republishes the
+    // snapshot) instead of being refused against stale data here.
+    assert_eq!(
+        f.order(
+            f.master,
+            HeroCompanyAction::DistributeDividend { pennies: 0 }
+        ),
+        Ok(None)
+    );
+    assert_eq!(f.pending_dividends()[0].pennies, 0);
+    assert_eq!(f.world.get::<CompanyAccount>(f.company).unwrap().cash, 900);
+}
+
+fn policy_of(f: &Fixture) -> CompanyManagementPolicy {
+    *f.world.get::<CompanyManagementPolicy>(f.company).unwrap()
+}
+
+#[test]
+fn set_automatic_dividend_rejects_more_than_fifty_percent_and_non_masters() {
+    let mut f = Fixture::new();
+    f.world
+        .entity_mut(f.company)
+        .insert(CompanyManagementPolicy {
+            automatic_payout_percent: 0,
+            ..default()
+        });
+    // Any share up to half of the headroom is accepted and named in the reply.
+    assert_eq!(
+        f.order(
+            f.master,
+            HeroCompanyAction::SetAutomaticDividend { payout_percent: 25 }
+        ),
+        Ok(Some(
+            "Automatic dividend set: 25% of retained profit above the working-capital runway, paid daily."
+                .to_string()
+        ))
+    );
+    assert_eq!(policy_of(&f).automatic_payout_percent, 25);
+    f.order(
+        f.master,
+        HeroCompanyAction::SetAutomaticDividend {
+            payout_percent: MAX_AUTOMATIC_PAYOUT_PERCENT,
+        },
+    )
+    .unwrap();
+    assert_eq!(policy_of(&f).automatic_payout_percent, 50);
+    // More than half is refused with the reason and leaves the policy alone.
+    assert_eq!(
+        f.order(
+            f.master,
+            HeroCompanyAction::SetAutomaticDividend { payout_percent: 51 }
+        ),
+        Err(
+            "An automatic dividend may pay at most 50% of retained profit above the working-capital runway per day."
+        )
+    );
+    assert!(f
+        .order(
+            f.master,
+            HeroCompanyAction::SetAutomaticDividend {
+                payout_percent: u8::MAX
+            }
+        )
+        .is_err());
+    assert_eq!(policy_of(&f).automatic_payout_percent, 50);
+    // Zero retains profits.
+    assert_eq!(
+        f.order(
+            f.master,
+            HeroCompanyAction::SetAutomaticDividend { payout_percent: 0 }
+        ),
+        Ok(Some(
+            "Automatic dividends off: profits are retained.".to_string()
+        ))
+    );
+    assert_eq!(policy_of(&f).automatic_payout_percent, 0);
+    // A majority holder who is not the Master and a stranger cannot change it.
+    assert!(f
+        .world
+        .get_mut::<CompanyOwnership>(f.company)
+        .unwrap()
+        .transfer(MASTER, OTHER, 600));
+    let stranger = f.world.spawn((PersonId(9), Wallet::new(0))).id();
+    for actor in [f.other, stranger] {
+        assert_eq!(
+            f.order(
+                actor,
+                HeroCompanyAction::SetAutomaticDividend { payout_percent: 10 }
+            ),
+            Err("Only the appointed Company Master may act for this company.")
+        );
+    }
+    assert_eq!(policy_of(&f).automatic_payout_percent, 0);
+}
+
+#[test]
+fn an_unchanged_policy_write_is_not_marked_changed() {
+    fn changed(f: &mut Fixture) -> bool {
+        let company = f.company;
+        f.world
+            .query_filtered::<Entity, Changed<CompanyManagementPolicy>>()
+            .iter(&f.world)
+            .any(|entity| entity == company)
+    }
+    let mut f = Fixture::new();
+    f.world
+        .entity_mut(f.company)
+        .insert(CompanyManagementPolicy {
+            automatic_payout_percent: 0,
+            ..default()
+        });
+    // A real change is visible to replication.
+    f.world.clear_trackers();
+    f.order(
+        f.master,
+        HeroCompanyAction::SetAutomaticDividend { payout_percent: 25 },
+    )
+    .unwrap();
+    assert!(changed(&mut f));
+    // Repeating the same choice writes nothing.
+    f.world.clear_trackers();
+    f.order(
+        f.master,
+        HeroCompanyAction::SetAutomaticDividend { payout_percent: 25 },
+    )
+    .unwrap();
+    assert!(
+        !changed(&mut f),
+        "an unchanged dividend policy must not dirty the replicated component"
+    );
+    // Neither does a refused share, nor an autopilot flag already in that state.
+    f.world.clear_trackers();
+    assert!(f
+        .order(
+            f.master,
+            HeroCompanyAction::SetAutomaticDividend { payout_percent: 60 }
+        )
+        .is_err());
+    f.order(f.master, HeroCompanyAction::SetAutopilot(true))
+        .unwrap();
+    assert!(!changed(&mut f));
+    assert_eq!(policy_of(&f).automatic_payout_percent, 25);
 }

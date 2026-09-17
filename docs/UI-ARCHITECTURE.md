@@ -47,8 +47,10 @@ inspected layouts, connected behavior, compressed art budget and portrait timing
 | `client/src/siege/controls.rs` | Selected siege controls and placement above mixed-army cards |
 | `client/src/ui/market/model.rs` | Pure market presentation: eligible purchase quote, cargo/listed ownership and disabled reasons |
 | `client/src/ui/business_management/model.rs`, `model/company.rs` | Separate site/company control models, stable control IDs and authoritative command payloads |
-| `client/src/ui/encyclopedia/search.rs` | Independent People/Places drafts, native keyboard focus and local-knowledge filtering |
+| `client/src/ui/encyclopedia/search.rs` | Independent People/Places/Companies drafts, native keyboard focus and local-knowledge filtering |
+| `client/src/ui/encyclopedia/companies/model.rs` | `CompanyFilter` chips and the `CompanySort` key/direction resource behind the directory's SORT control |
 | `client/src/ui/encyclopedia/person_links/` | Durable person navigation, observed workplace rosters and return destinations |
+| `client/src/ui/player_permits.rs` | Permit tray, placement ghost, reserved-land survey and the predicted/authoritative placement verdict |
 
 Do not put a new palette alias, hover state machine, modal scrim or scroll algorithm in a
 screen module. Screen-specific data colours (for example chart series or a health grade) are
@@ -283,8 +285,9 @@ Fixed shader grain stays still, and the source image is never copied per widget.
 
 `ledger::LedgerButtonScope` opts a retained panel outside the encyclopedia into the
 shared worn button faces and ledger scrollbars. It changes presentation scope, not
-input ownership or modal behavior. `ledger::selector_face()` supplies the reusable
-paper inset behind selector values; screen layouts own its dimensions and live text.
+input ownership or modal behavior. `ledger` exports no selector face: the hero
+creator's `CreatorArtwork::inset()` supplies the worn paper inset behind its
+selector values, and screen layouts own its dimensions and live text.
 `LedgerIllustration::settlement` maps Hamlet, Village, Town and City to separate
 paintings in the directory, Overview and page header. Settlement upgrades update
 those retained instances without replacing observed building appearances. Ruins
@@ -463,12 +466,19 @@ rows or optional sections:
   a change in it respawns the tree. `bind_panel` then writes every value by id into
   `BoundText` nodes, `BoundButton`s (label, `UiButtonStyle.selected`, visibility, and the
   payload the button carries — the `Action` order, a worker chip's `PersonLink`, a
-  `ShareDraftAction` step or a `DividendDraftAction` step of the dividend amount picker) and
-  `MeterFill` lanes. The dividend rows are the model for a control whose payload embeds an
-  absolute value: the replicated `CompanyDividendCapacity` and the client `DividendDraft` are
-  values, the picker steps and the `DISTRIBUTE X COIN` confirm control are always present for a
-  manager (a headroom of zero binds `pennies: 0`, it never removes the slot), and the
-  IF DISTRIBUTED NOW preview row binds its text from the shared `pro_rata_split`. Ids that
+  `ShareDraftAction` step, a `DividendDraftAction` step of the dividend amount picker or a
+  `CapitalDraftAction` step of the contribution picker) and `MeterFill` lanes. The dividend
+  rows are the model for a control whose payload embeds an absolute value: the replicated
+  `CompanyDividendCapacity` and the client `DividendDraft` are values, the picker steps and
+  the `DISTRIBUTE X COIN` confirm control are always present for a manager (a headroom of
+  zero binds `pennies: u64::MAX`, so the finance pass answers from its live figure; it never
+  removes the slot), and the IF DISTRIBUTED NOW preview row binds its text from the shared
+  `pro_rata_split`. The AUTOMATIC DIVIDEND row above them is a choice row (RETAIN / 10% /
+  25% / 50%, `UiButtonStyle.selected` bound from the replicated `automatic_payout_percent`)
+  with a fixed sixth `Vacant(Action)` slot that only an off-preset share occupies as its own
+  selected chip, so a policy change binds in place and the structure key never moves.
+  The CONTRIBUTE PERSONAL COIN row mirrors it for any shareholder with a
+  `CapitalDraft` clamped to the local replicated `Wallet` (the wallet is a value). Ids that
   would leak volatile identity are
   *fixed slots*: `worker.{i}` for `i in 0..kind.positions()` (observed employees deduped and
   sorted by `PersonId`, so interest-scoped replication churn only rebinds chips) and
@@ -508,6 +518,12 @@ rows or optional sections:
   `Display` toggles on always-spawned note rows. Only a structural change to the same record is
   deferred while a control is hovered; the portfolio strip is spawned once per hero presence, and
   list rows keep their entities while `CompanyRowLedger` / `CompanyRowStatus` rewrite. The
+  rows signature (`company_rows_signature`) covers the visible ids in order, the filter, the
+  search state and the `CompanySort` key/direction, so a query or sort change respawns the rows
+  and resets only the list viewport's scroll, while a books tick that leaves the order alone
+  keeps every row entity even under a CASH or PROFIT sort. The search draft and the sort are
+  folded into the `CompanyListInputs` param and never enter `company_structure_key`, so the
+  detail pane, its scroll and its bind pass are untouched by them. The
   worker roster fill (`person_links::roster_systems`) runs after `rebuild_company_view` so a
   respawned site card carries its WORKERS rows on the same frame, and after
   `business_management::ensure_panel` so a worker chip filled this frame gains or loses
@@ -573,12 +589,23 @@ The server rechecks every permission. Company replies carry CompanyId;
 site replies carry the mapped originating entity. One receiver per message type routes
 feedback to its matching context rather than letting a late reply label another company.
 
-People and Places search fields remain outside their lists' rebuilt subtrees. Each retains
-its own bounded UTF-8 draft and cached case-insensitive search terms; People searches names,
-residence and workplace, while Places searches town names. Search filters already-visible
-knowledge and cannot discover an unseen person. Native keyboard events run after chat's
-input reset, capture typing and its closing frame, and preserve the draft on Enter/Escape.
-The first Escape leaves editing; a later Escape follows ordinary page/window navigation.
+People, Places and Companies search fields remain outside their lists' rebuilt subtrees. Each
+retains its own bounded UTF-8 draft and cached case-insensitive search terms (Retinue and Army
+have no field and read the People draft); People searches names, residence and workplace,
+Places searches town names, and Companies searches the company name, its Master and the towns
+it operates in. Search filters already-visible knowledge and cannot discover an unseen person
+or company. Native keyboard events run after chat's input reset, capture typing and its
+closing frame, and preserve the draft on Enter/Escape. The first Escape leaves editing; a
+later Escape follows ordinary page/window navigation. A page covering the tab disables its
+field and removes it from tab order. The Companies sidebar reads chips, search, then one
+count/sort row (`N companies`, or `N of M` while a query narrows the chip-permitted M), a
+muted SORT caption, a cycling key button (HOLDINGS, NAME, CASH, PROFIT, SITES) and a 35 px
+direction toggle whose ASCII `v` / `^` label follows `CompanySort::descending`. A new key
+starts in its natural direction (names ascend, figures descend); `descending` reverses only
+the primary key and ties always fall back to name, then id. Neither a search nor a sort
+revokes `SelectedCompany`; the BACK-to-company link from a person record clears the
+Companies draft so the returned record's row is visible. The sort buttons are mouse-only:
+letters belong to the search field.
 
 Workplace, company and management worker links address `PersonId`, never a display name or
 transient body entity. They open the existing People record only if it is known, the local
@@ -609,6 +636,49 @@ with `FISTFORCE_CAPTURE_HERO=default FISTFORCE_CAPTURE_HERO_OFFSET=0,0 FISTFORCE
   reports scene pixels plus scale (25–100%). Its labels and disabled/selected states bind
   from current settings and window size, including after a timed revert. Pixel dimensions
   use the same calculation as the production scene target.
+
+## Permit placement preview
+
+`client/src/ui/player_permits.rs` owns the placement tool: the ghost, the status card,
+the road magnet and the prediction behind the green/amber/red band. The client
+**predicts** and the Hall **decides**; the prediction is only trustworthy because it calls
+the same `shared::components::placement` functions as `validate_manual_plot`:
+
+- Each frame placement is armed, `survey_reserved_land` mirrors the settlement's land into
+  the `PlacementSurvey` resource in the server snapshot's order: completed buildings
+  (`building_claims(.., false)`: shell, doorway apron, fallback fields, pasture), the Hall
+  (`hall_claims`: future shell and forecourt), pending worksites (`building_claims(.., true)`
+  with the intended field envelope), accepted crop bands (`accepted_field_claims`), road
+  corridors and every replicated `ReservedAccessLane`. The buffers are cleared and refilled in
+  place, so a warm preview allocates nothing for the survey.
+- `plot_refusal` runs the rules in the server's order: walls and gates
+  (`SettlementDefenses::blocks_plot`), the civic square (`SettlementCivicSquare::blocks_plot`),
+  the 320 m charter, slope for ordinary shells, the 1.5 m building freeboard
+  (`building_freeboard`; 0.35 m for a fishing hut), then `land_refusal`: the shell against
+  every claim, each wheat field and the pasture against wet ground, claims, roads and lanes,
+  then the shell against roads and lanes. The named offender is `worst_conflict` (largest
+  shortfall, ties by centre), and the sentence is `land_conflict_sentence` /
+  `lane_conflict_sentence` / `road_conflict_sentence`, so the status card reads exactly what a
+  refusal would: `Too close to HOUSE #7: 2.0 m of 3.0 m.` or
+  `Overlaps the access lane reserved for FARMSTEAD (under construction).`
+- The Hall alone checks builder reach, a dry doorway approach, prop collisions, farm
+  earthworks and the access-lane survey. A valid card says so in one line; the client never
+  invents a substitute for those rules.
+- A structured `HeroPermitOutcome::Rejected { blocker }` for the plot last submitted is kept
+  in `ServerRefusal` and shown **verbatim** in the status body (the red toast already shows
+  the message) in place of the client's guess until the ghost moves; its blocker is located
+  in the survey by durable `BuildingId`, else by the shared label wording.
+- `draw_permit_placement_guides` draws the offending claim in solid red with its required
+  yard dashed, every other surveyed claim within 30 m faintly (shells, aprons and the
+  forecourt in wood tones, crops and pastures in green), reserved lanes as faint corridors,
+  and the road-locked shackle, door ring and charter circle as before. Gizmos only: no
+  entities are spawned per frame.
+
+The road magnet keeps the 8.5 m street setback the automatic planner gives NPC rows, so a
+snapped player cabin lines up with its neighbours; free placement (Shift) follows the cursor.
+`capture/scenarios/permit-placement.ron` photographs a clear plot, the one free lot between
+two cabins, a cabin 0.7 m off a farm fence and a cabin across a reserved lane, and its
+sidecars assert the wording. No automatic nudge exists; the player moves the ghost.
 
 ## Regression checks
 

@@ -213,6 +213,71 @@ impl CompanyFilter {
     }
 }
 
+/// Directory row order. `descending` reverses only the primary key; equal
+/// rows always fall back to name, then id, so a sort never shuffles ties.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompanySort {
+    pub key: CompanySortKey,
+    pub descending: bool,
+}
+
+impl Default for CompanySort {
+    /// Largest holding first: the order the directory always had.
+    fn default() -> Self {
+        Self::natural(CompanySortKey::Holdings)
+    }
+}
+
+impl CompanySort {
+    /// A key in its natural reading direction: names ascend, figures descend.
+    pub const fn natural(key: CompanySortKey) -> Self {
+        Self {
+            key,
+            descending: key.natural_descending(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CompanySortKey {
+    #[default]
+    Holdings,
+    Name,
+    Cash,
+    Profit,
+    Sites,
+}
+
+impl CompanySortKey {
+    pub const ALL: [Self; 5] = [
+        Self::Holdings,
+        Self::Name,
+        Self::Cash,
+        Self::Profit,
+        Self::Sites,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Holdings => "HOLDINGS",
+            Self::Name => "NAME",
+            Self::Cash => "CASH",
+            Self::Profit => "PROFIT",
+            Self::Sites => "SITES",
+        }
+    }
+
+    pub const fn natural_descending(self) -> bool {
+        !matches!(self, Self::Name)
+    }
+
+    /// The key after this one in [`Self::ALL`], wrapping around.
+    pub fn next(self) -> Self {
+        let index = Self::ALL.iter().position(|key| *key == self).unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+}
+
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SelectedCompany(pub Option<CompanyId>);
 

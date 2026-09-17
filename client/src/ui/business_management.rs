@@ -19,11 +19,16 @@
 //! `CompanyDividendCapacity` (available now, reserves, last paid), an amount
 //! picker (`DividendDraft` stepped by `DividendDraftAction` controls), one
 //! always-present confirm control whose payload is
-//! `DistributeDividend { pennies: min(draft, distributable) }` and a preview
-//! row computed with the shared `pro_rata_split`, so the local holder's take
-//! matches the server's payout penny for penny. The server answers one tick
-//! later with a `HeroCompanyResult`, which lands in the feedback line through
-//! `encyclopedia::companies::receive_company_policy_results`.
+//! `DistributeDividend { pennies: min(draft, distributable) }` (`u64::MAX`,
+//! everything, while the snapshot shows nothing, so the server answers from
+//! its live figure) and a preview row computed with the shared
+//! `pro_rata_split`, so the local holder's take matches the server's payout
+//! penny for penny. The server answers one tick later with a
+//! `HeroCompanyResult`, which lands in the feedback line through
+//! `encyclopedia::companies::receive_company_policy_results`. The CONTRIBUTE
+//! PERSONAL COIN row (any shareholder) mirrors the picker with a
+//! `CapitalDraft` stepped by `CapitalDraftAction` controls and clamped to the
+//! local hero's replicated `Wallet`.
 //!
 //! Ids that would otherwise leak volatile identity are fixed slots:
 //! `worker.{i}` for `i in 0..kind.positions()` (observed employees, deduped
@@ -51,7 +56,7 @@ use shared::economy::{
     BusinessProcurementPolicy, BusinessSalePolicy, BusinessSourcingMode, BusinessStaffingPolicy,
     BusinessStrategy, BusinessSupplyPolicy, BusinessWagePolicy, CompanyAccount,
     CompanyDecisionHistory, CompanyDividendCapacity, CompanyManagementPolicy, Good, GoodsInventory,
-    TavernService, PENNIES_PER_COIN,
+    TavernService, Wallet, COMPANY_DIVIDEND_FLOAT, PENNIES_PER_COIN,
 };
 use shared::protocol::{
     HeroBusinessAction, HeroBusinessOrder, HeroBusinessResult, HeroCompanyAction, HeroCompanyOrder,
@@ -78,6 +83,7 @@ impl Plugin for BusinessManagementPlugin {
         app.init_resource::<BusinessFeedback>();
         app.init_resource::<ShareOrderDraft>();
         app.init_resource::<DividendDraft>();
+        app.init_resource::<CapitalDraft>();
         app.add_systems(
             Update,
             (
@@ -87,6 +93,7 @@ impl Plugin for BusinessManagementPlugin {
                 handle_action_buttons,
                 handle_share_draft_buttons,
                 handle_dividend_draft_buttons,
+                handle_capital_draft_buttons,
                 handle_page_buttons,
                 sync_input_state,
             )
@@ -179,8 +186,8 @@ pub(crate) struct BodyScroll;
 struct BoundText(BoundId);
 
 /// A button whose label, selected chrome, visibility and payload (`Action`,
-/// `PersonLink`, `ShareDraftAction` or `DividendDraftAction`) are bound by
-/// model id every frame.
+/// `PersonLink`, `ShareDraftAction`, `DividendDraftAction` or
+/// `CapitalDraftAction`) are bound by model id every frame.
 #[derive(Component)]
 struct BoundButton(BoundId);
 
@@ -321,6 +328,7 @@ struct BoundControls<'w, 's> {
             Option<&'static mut PersonLink>,
             Option<&'static mut ShareDraftAction>,
             Option<&'static mut DividendDraftAction>,
+            Option<&'static mut CapitalDraftAction>,
         ),
         (Without<BoundText>, Without<MeterFill>, Without<PageBody>),
     >,
@@ -413,6 +421,68 @@ impl DividendDraft {
     }
 }
 
+/// One step of the capital-contribution picker: ±1 coin, +10 coin or the
+/// whole wallet; every step clamps the draft into `0..=wallet`.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CapitalDraftAction {
+    Down,
+    Up,
+    TenUp,
+    All,
+}
+
+/// The donation a shareholder is about to make, in pennies. Until the player
+/// steps it, the draft follows one coin of the local hero's replicated
+/// `Wallet` (so a panel opened before the wallet replicates does not stay
+/// pinned at zero); every step and the confirm payload clamp to that wallet,
+/// and the server checks it again when it debits.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CapitalDraft {
+    pub(crate) company: Option<CompanyId>,
+    pub(crate) pennies: u64,
+    /// True once the player has stepped the amount for this company.
+    pub(crate) edited: bool,
+}
+
+impl CapitalDraft {
+    /// One coin (or the whole wallet below that), not yet edited by the player.
+    pub(crate) fn for_company(company: CompanyId, wallet: u64) -> Self {
+        Self {
+            company: Some(company),
+            pennies: PENNIES_PER_COIN.min(wallet),
+            edited: false,
+        }
+    }
+
+    /// Apply one picker step against the local wallet.
+    pub(crate) fn step(&mut self, action: CapitalDraftAction, wallet: u64) {
+        self.edited = true;
+        let current = self.pennies.min(wallet);
+        self.pennies = match action {
+            CapitalDraftAction::Down => current.saturating_sub(PENNIES_PER_COIN),
+            CapitalDraftAction::Up => current.saturating_add(PENNIES_PER_COIN),
+            CapitalDraftAction::TenUp => current.saturating_add(10 * PENNIES_PER_COIN),
+            CapitalDraftAction::All => wallet,
+        }
+        .min(wallet);
+    }
+}
+
+/// The replicated wallet of the local hero, or zero while none is known.
+fn local_hero_wallet<'a>(
+    local: Option<&crate::camera_rts::LocalPeerId>,
+    heroes: impl Iterator<Item = (&'a Hero, Option<&'a Wallet>)>,
+) -> u64 {
+    let Some(local) = local else {
+        return 0;
+    };
+    heroes
+        .into_iter()
+        .find(|(hero, _)| shared::player::peer_id_to_u64(hero.owner) == local.0)
+        .and_then(|(_, wallet)| wallet)
+        .map_or(0, |wallet| wallet.balance())
+}
+
 // --- type scale -------------------------------------------------------------
 
 const T_TITLE: f32 = 22.0;
@@ -446,6 +516,7 @@ fn ensure_panel(
     mut page: ResMut<BusinessManagementPage>,
     mut share_draft: ResMut<ShareOrderDraft>,
     mut dividend_draft: ResMut<DividendDraft>,
+    mut capital_draft: ResMut<CapitalDraft>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     businesses: Query<(
         &SettlementBuilding,
@@ -474,7 +545,7 @@ fn ensure_panel(
         Option<&CompanyDividendCapacity>,
     )>,
     mut replicated: ReplicatedPeople,
-    heroes: Query<(&Hero, &PersonId)>,
+    heroes: Query<(&Hero, &PersonId, Option<&Wallet>)>,
     mut ui: ManagementPanelUi,
     mut bound: BoundControls,
     mut scratch: Local<PanelScratch>,
@@ -558,15 +629,24 @@ fn ensure_panel(
     let local_person = local.as_ref().and_then(|local| {
         heroes
             .iter()
-            .find(|(hero, _)| shared::player::peer_id_to_u64(hero.owner) == local.0)
-            .map(|(_, person)| *person)
+            .find(|(hero, ..)| shared::player::peer_id_to_u64(hero.owner) == local.0)
+            .map(|(_, person, _)| *person)
     });
+    let local_wallet = local_hero_wallet(
+        local.as_deref(),
+        heroes.iter().map(|(hero, _, wallet)| (hero, wallet)),
+    );
     if let Some(company) = company.as_ref() {
         if share_draft.company != Some(company.id) {
             *share_draft = ShareOrderDraft {
                 company: Some(company.id),
                 ..default()
             };
+        }
+        if capital_draft.company != Some(company.id) {
+            *capital_draft = CapitalDraft::for_company(company.id, local_wallet);
+        } else if !capital_draft.edited {
+            capital_draft.set_if_neq(CapitalDraft::for_company(company.id, local_wallet));
         }
         // Start from everything distributable, the same amount the old single
         // DISTRIBUTE AVAILABLE control sent, and keep following the published
@@ -671,8 +751,10 @@ fn ensure_panel(
         ),
         company,
         local_person,
+        local_wallet,
         share_draft: &share_draft,
         dividend_draft: &dividend_draft,
+        capital_draft: &capital_draft,
         page: *page,
         feedback: &feedback,
         name_of: &name_of,
@@ -783,7 +865,7 @@ fn bind_panel(
             node.display = display;
         }
     }
-    for (bound_button, mut style, mut node, action, person, draft, dividend) in
+    for (bound_button, mut style, mut node, action, person, draft, dividend, capital) in
         bound.buttons.iter_mut()
     {
         let Some(control) = slots
@@ -818,6 +900,11 @@ fn bind_panel(
         if let (Some(mut dividend), ControlPress::DividendDraft(step)) = (dividend, control.press) {
             if *dividend != step {
                 *dividend = step;
+            }
+        }
+        if let (Some(mut capital), ControlPress::CapitalDraft(step)) = (capital, control.press) {
+            if *capital != step {
+                *capital = step;
             }
         }
     }
@@ -896,6 +983,24 @@ fn handle_dividend_draft_buttons(
     }
 }
 
+/// Step the capital-contribution picker against the local hero's wallet.
+fn handle_capital_draft_buttons(
+    guard: Res<BusinessClickGuard>,
+    mut draft: ResMut<CapitalDraft>,
+    page: Res<BusinessManagementPage>,
+    buttons: Query<(&Interaction, &CapitalDraftAction, &ControlPage), Changed<Interaction>>,
+    local: Option<Res<crate::camera_rts::LocalPeerId>>,
+    heroes: Query<(&Hero, Option<&Wallet>)>,
+) {
+    for (interaction, action, control_page) in buttons.iter() {
+        if *interaction != Interaction::Pressed || !guard.0 || control_page.0 != *page {
+            continue;
+        }
+        let wallet = local_hero_wallet(local.as_deref(), heroes.iter());
+        draft.step(*action, wallet);
+    }
+}
+
 fn handle_action_buttons(
     guard: Res<BusinessClickGuard>,
     target: Res<BusinessManagementTarget>,
@@ -930,6 +1035,7 @@ fn handle_action_buttons(
             }
             ControlPress::Draft(_)
             | ControlPress::DividendDraft(_)
+            | ControlPress::CapitalDraft(_)
             | ControlPress::Person(_)
             | ControlPress::Vacant(_) => {}
         }

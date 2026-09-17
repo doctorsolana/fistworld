@@ -9,6 +9,10 @@ use super::fishing::{advance_incremental_fishing_search, find_incremental_fishin
 use super::funding::{
     CompanyExpansionFunds, NPC_PERSONAL_INVESTMENT_RESERVE, debit_company_expansion,
 };
+use super::land::{
+    LandOwner, LaneReservation, PendingPlot, PlacedBuilding, occupied_land_snapshot,
+    occupied_plot_count,
+};
 use super::market_signals::accumulate_business_signals;
 use super::neighborhood::PlotNeighbor;
 use super::plots::{
@@ -129,10 +133,12 @@ pub fn consider_permits(
     )>,
     road_requests: Query<&RoadRequest>,
     placed: Query<(
+        Entity,
         &SettlementBuilding,
         &shared::components::BuildingOf,
         &PlayerPosition,
         Option<&PlayerRotation>,
+        Option<&shared::components::BuildingId>,
     )>,
     roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
     // ONE query, read then written. Two -- a read of `&VillagerIntent` and a
@@ -1005,103 +1011,55 @@ pub fn consider_permits(
 
         // Accepted and pending plots supply both hard reservations and soft
         // neighbourhood preferences. Their actual positions never get replanned.
-        let neighbors: Vec<_> = placed
+        let placed_buildings: Vec<_> = placed
             .iter()
-            .filter(|(_, building_of, _, _)| building_of.0 == *settlement_id)
-            .map(|(building, _, position, rotation)| PlotNeighbor {
-                kind: building.kind,
-                position: position.0,
-                rotation: rotation.map_or(0.0, |rotation| rotation.0),
+            .filter(|(_, _, building_of, ..)| building_of.0 == *settlement_id)
+            .map(
+                |(entity, building, _, position, rotation, id)| PlacedBuilding {
+                    entity: Some(entity),
+                    id: id.copied(),
+                    kind: building.kind,
+                    position: position.0,
+                    rotation: rotation.map_or(0.0, |rotation| rotation.0),
+                },
+            )
+            .collect();
+        let pending_plots: Vec<_> = pending
+            .iter()
+            .filter(|(under, _, _)| under.settlement == settlement_entity)
+            .map(|(under, _, _)| PendingPlot {
+                entity: None,
+                kind: under.kind,
+                position: under.position,
+                rotation: under.rotation,
             })
-            .chain(pending.iter().filter_map(|(under, _, _)| {
-                (under.settlement == settlement_entity).then_some(PlotNeighbor {
-                    kind: under.kind,
-                    position: under.position,
-                    rotation: under.rotation,
-                })
+            .collect();
+        let neighbors: Vec<_> = placed_buildings
+            .iter()
+            .map(|building| PlotNeighbor {
+                kind: building.kind,
+                position: building.position,
+                rotation: building.rotation,
+            })
+            .chain(pending_plots.iter().map(|plot| PlotNeighbor {
+                kind: plot.kind,
+                position: plot.position,
+                rotation: plot.rotation,
             }))
             .collect();
-        // Occupied ground, so a new building does not land on an old one.
-        let mut occupied: Vec<(Vec3, f32)> = neighbors
-            .iter()
-            .map(|neighbor| (neighbor.position, neighbor.kind.clearance()))
-            .chain(std::iter::once((
-                hall.0,
-                SettlementBuildingKind::Hall.clearance(),
-            )))
-            .collect();
-
-        // A Farmstead owns more ground than its cabin. Reserve the separate
-        // crop plot as well, including while construction is pending, so a
-        // later building cannot be approved on top of the wheat rows.
-        occupied.extend(
-            placed
+        // Occupied ground, so a new building does not land on an old one:
+        // shells, doorways, crop plots (intended while pending, accepted
+        // once surveyed) and pastures, from the one snapshot the player
+        // command also uses.
+        let occupied = occupied_land_snapshot(
+            hall.0,
+            &placed_buildings,
+            &pending_plots,
+            planning
+                .fields
                 .iter()
-                .filter(|(_, building_of, _, _)| building_of.0 == *settlement_id)
-                .flat_map(|(building, _, position, rotation)| {
-                    let rotation = rotation.map_or(0.0, |rotation| rotation.0);
-                    let radius = building
-                        .kind
-                        .field_half_extents()
-                        .map(|half| half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN);
-                    building
-                        .kind
-                        .field_positions(position.0, rotation)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(move |field| radius.map(|radius| (field, radius)))
-                }),
+                .map(|(field, position, rotation)| (field, position.0, rotation.0)),
         );
-        occupied.extend(
-            pending
-                .iter()
-                .filter(|(under, _, _)| under.settlement == settlement_entity)
-                .flat_map(|(under, _, _)| {
-                    let radius = under
-                        .kind
-                        .intended_field_half_extents()
-                        .map(|half| half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN);
-                    under
-                        .kind
-                        .intended_field_positions(under.position, under.rotation)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(move |field| radius.map(|radius| (field, radius)))
-                }),
-        );
-        occupied.extend(planning.fields.iter().flat_map(|(field, p, r)| {
-            field
-                .reservation_rects(p.0, r.0, 2.)
-                .into_iter()
-                .map(|(center, half, _)| (center, half.length()))
-        }));
-        // The fenced pasture is a permanent land use even though it is not a
-        // solid building. Reserve it from permits and roads from approval day.
-        occupied.extend(
-            placed
-                .iter()
-                .filter_map(|(building, building_of, position, rotation)| {
-                    if building_of.0 != *settlement_id {
-                        return None;
-                    }
-                    let rotation = rotation.map_or(0.0, |rotation| rotation.0);
-                    Some((
-                        building.kind.pasture_position(position.0, rotation)?,
-                        building.kind.pasture_half_extents()?.length() + 2.0,
-                    ))
-                }),
-        );
-        occupied.extend(pending.iter().filter_map(|(under, _, _)| {
-            if under.settlement != settlement_entity {
-                return None;
-            }
-            Some((
-                under
-                    .kind
-                    .pasture_position(under.position, under.rotation)?,
-                under.kind.pasture_half_extents()?.length() + 2.0,
-            ))
-        }));
 
         let village_roads: Vec<_> = roads
             .iter()
@@ -1140,18 +1098,18 @@ pub fn consider_permits(
         let existing_accesses: Vec<_> = planning
             .planned_road_accesses
             .iter()
-            .filter(|access| access.settlement_id == *settlement_id)
-            .cloned()
-            .collect();
-        let mut access_blockers: Vec<_> = placed
-            .iter()
-            .filter(|(_, building_of, _, _)| building_of.0 == *settlement_id)
-            .flat_map(|(building, _, position, rotation)| {
-                road_access_blockers_for_plot(
-                    building.kind,
-                    position.0,
-                    rotation.map_or(0.0, |rotation| rotation.0),
+            .filter(|(_, access, ..)| access.settlement_id == *settlement_id)
+            .map(|(entity, access, site, building, id)| {
+                LaneReservation::new(
+                    access,
+                    LandOwner::of_reserving_entity(entity, site, building, id),
                 )
+            })
+            .collect();
+        let mut access_blockers: Vec<_> = placed_buildings
+            .iter()
+            .flat_map(|building| {
+                road_access_blockers_for_plot(building.kind, building.position, building.rotation)
             })
             .collect();
         access_blockers.extend(
@@ -1186,7 +1144,7 @@ pub fn consider_permits(
         );
         let search_signature = FailedSiteSearch {
             kind: missing,
-            occupied_plots: occupied.len(),
+            occupied_plots: occupied_plot_count(&occupied),
             // Coastal searches retain their separate whole-terrain contract.
             access_version: if missing == SettlementBuildingKind::FishermansHut {
                 u64::from(terrain.modification_version())
@@ -1470,10 +1428,8 @@ pub fn consider_permits(
             }
             continue;
         };
-        if existing_accesses.iter().any(|access| {
-            let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
-            access.intersects_circle(Vec2::new(position.x, position.z), footprint_radius)
-        }) {
+        let shell = shared::components::footprint_claim(kind, position, rotation);
+        if existing_accesses.iter().any(|access| access.blocks(&shell)) {
             // Fishing uses its own shoreline search and alternative selection,
             // so repeat the generic access proof here. Ordinary plots already
             // passed it inside `find_site_with_plan`; this is deliberately a

@@ -705,9 +705,17 @@ pub struct BusinessForSale {
 /// days before the automatic resident-investor system may acquire it.
 pub const PROPERTY_MARKET_EXPOSURE_DAYS: u32 = 1;
 
-/// Compute the reserve used by both NPC autopilot and business UI. Input
-/// targets are priced at the current cheapest local offer, falling back to the
-/// good's base value when a market has no quote yet.
+/// The planner-style working-capital runway of one site: the strategy's
+/// payroll days, the input shortfall priced at the current cheapest local
+/// offer (the good's base value when a market has no quote yet) and one
+/// operating buffer. The automatic dividend branch of the finance pass keeps
+/// `payroll + inputs` (plus the site's liabilities and one
+/// [`COMPANY_DIVIDEND_FLOAT`] per company) before the daily payout, so NPC
+/// firms retain this runway; the Full Ledger and the places/site displays
+/// show the same figure. A Company Master's manual request keeps only
+/// [`dividend_reserve`] plus the float. NPC investment protects payroll
+/// runway through [`super::company_expansion_cash`] and procurement spends
+/// free cash.
 pub fn business_working_capital(
     staffed_positions: u8,
     wage: &BusinessWagePolicy,
@@ -736,4 +744,32 @@ pub fn business_working_capital(
         inputs,
         operating_buffer: 2 * PENNIES_PER_COIN,
     }
+}
+
+/// One operating float a company keeps across its pooled treasury before any
+/// dividend, in addition to every site's [`dividend_reserve`] (manual) or
+/// [`business_working_capital`] runway (automatic). One float per company,
+/// never one per cost centre.
+pub const COMPANY_DIVIDEND_FLOAT: u64 = 2 * PENNIES_PER_COIN;
+
+/// Cash one operating site keeps out of a Company Master's manual dividend:
+/// its unpaid wage and tax claims plus exactly one day of payroll for
+/// `protected_positions` (the enabled positions or the workers still
+/// employed, whichever is larger). Input purchases are not reserved; stock is
+/// bought from the same treasury as it is needed, so a Master who pays out
+/// tomorrow's input money pays out capital, and the dividend reply reports it
+/// as a return of capital. The automatic daily payout keeps the longer
+/// [`business_working_capital`] runway instead.
+pub fn dividend_reserve(
+    protected_positions: u8,
+    wage: &BusinessWagePolicy,
+    account: &BusinessAccount,
+) -> u64 {
+    account
+        .wage_arrears
+        .saturating_add(account.tax_arrears)
+        .saturating_add(
+            wage.daily_wage
+                .saturating_mul(u64::from(protected_positions)),
+        )
 }

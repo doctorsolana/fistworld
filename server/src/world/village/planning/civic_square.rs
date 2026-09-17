@@ -5,6 +5,7 @@
 use bevy::platform::collections::HashMap;
 use shared::components::{SettlementCivicSquare, SettlementDefenses};
 
+use super::land::{LandOwner, LaneReservation, OccupiedLand, PendingPlot, PlacedBuilding};
 use super::neighborhood::PlotNeighbor;
 use super::plots::PlannedPlotCandidate;
 use super::road_access::{RoadAccessBlocker, road_access_blockers_for_plot};
@@ -33,7 +34,7 @@ pub(crate) fn founding_civic_square(
                     SettlementBuildingKind::Market,
                     square.market_position,
                     square.market_rotation,
-                    &[(hall, SettlementBuildingKind::Hall.clearance())],
+                    &OccupiedLand::hall(hall),
                     &[],
                     &[],
                     &[],
@@ -65,13 +66,22 @@ pub fn ensure_civic_squares(
         Without<SettlementCivicSquare>,
     >,
     buildings: Query<(
+        Entity,
         &SettlementBuilding,
         &PlayerPosition,
         Option<&PlayerRotation>,
+        Option<&shared::components::BuildingId>,
     )>,
     pending: Query<&UnderConstruction>,
     roads: Query<&VillageRoad>,
-    accesses: Query<&PlannedRoadAccess>,
+    accesses: Query<(
+        Entity,
+        &PlannedRoadAccess,
+        Option<&UnderConstruction>,
+        Option<&SettlementBuilding>,
+        Option<&shared::components::BuildingId>,
+    )>,
+    fields: Query<(&FarmField, &PlayerPosition, &PlayerRotation)>,
     defenses: Query<&SettlementDefenses>,
     squares: Query<&SettlementCivicSquare>,
     mut failed: Local<HashMap<Entity, SurveySignature>>,
@@ -99,14 +109,35 @@ pub fn ensure_civic_squares(
     {
         return;
     }
-    let plots: Vec<_> = buildings
+    let placed_buildings: Vec<_> = buildings
         .iter()
-        .map(|(building, position, rotation)| PlotNeighbor {
-            kind: building.kind,
-            position: position.0,
-            rotation: rotation.map_or(0.0, |r| r.0),
+        .map(
+            |(entity, building, position, rotation, id)| PlacedBuilding {
+                entity: Some(entity),
+                id: id.copied(),
+                kind: building.kind,
+                position: position.0,
+                rotation: rotation.map_or(0.0, |r| r.0),
+            },
+        )
+        .collect();
+    let pending_plots: Vec<_> = pending
+        .iter()
+        .map(|site| PendingPlot {
+            entity: None,
+            kind: site.kind,
+            position: site.position,
+            rotation: site.rotation,
         })
-        .chain(pending.iter().map(|site| PlotNeighbor {
+        .collect();
+    let plots: Vec<_> = placed_buildings
+        .iter()
+        .map(|building| PlotNeighbor {
+            kind: building.kind,
+            position: building.position,
+            rotation: building.rotation,
+        })
+        .chain(pending_plots.iter().map(|site| PlotNeighbor {
             kind: site.kind,
             position: site.position,
             rotation: site.rotation,
@@ -131,13 +162,18 @@ pub fn ensure_civic_squares(
             .collect();
         let accesses: Vec<_> = accesses
             .iter()
-            .filter(|access| {
+            .filter(|(_, access, ..)| {
                 access
                     .points
                     .iter()
                     .any(|point| point.distance(hall.0.xz()) < 120.0)
             })
-            .cloned()
+            .map(|(entity, access, site, building, id)| {
+                LaneReservation::new(
+                    access,
+                    LandOwner::of_reserving_entity(entity, site, building, id),
+                )
+            })
             .collect();
         let defenses =
             super::reservations::nearby_defense_reservations(defenses.iter(), hall.0.xz(), 100.0);
@@ -172,32 +208,33 @@ pub fn ensure_civic_squares(
             }) {
                 return true;
             }
-            let mut occupied = vec![(hall.0, SettlementBuildingKind::Hall.clearance())];
+            let near = |position: Vec3| position.xz().distance(hall.0.xz()) < 150.0;
+            let nearby_buildings: Vec<_> = placed_buildings
+                .iter()
+                .copied()
+                .filter(|building| near(building.position))
+                .collect();
+            let nearby_pending: Vec<_> = pending_plots
+                .iter()
+                .copied()
+                .filter(|plot| near(plot.position))
+                .collect();
+            let occupied = super::land::occupied_land_snapshot(
+                hall.0,
+                &nearby_buildings,
+                &nearby_pending,
+                fields
+                    .iter()
+                    .filter(|(_, position, _)| near(position.0))
+                    .map(|(field, position, rotation)| (field, position.0, rotation.0)),
+            );
             let mut blockers = Vec::new();
             for plot in &nearby {
-                occupied.push((plot.position, plot.kind.clearance()));
                 blockers.extend(road_access_blockers_for_plot(
                     plot.kind,
                     plot.position,
                     plot.rotation,
                 ));
-                if let (Some(fields), Some(half)) = (
-                    plot.kind.field_positions(plot.position, plot.rotation),
-                    plot.kind.field_half_extents(),
-                ) {
-                    occupied.extend(fields.into_iter().map(|field| {
-                        (
-                            field,
-                            half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                        )
-                    }));
-                }
-                if let (Some(pasture), Some(half)) = (
-                    plot.kind.pasture_position(plot.position, plot.rotation),
-                    plot.kind.pasture_half_extents(),
-                ) {
-                    occupied.push((pasture, half.length() + 2.0));
-                }
             }
             super::manual::validate_manual_plot(
                 terrain,
@@ -552,7 +589,7 @@ mod tests {
     fn prove_market_and_edges(app: &App, hall: Vec3, square: &SettlementCivicSquare) {
         let terrain = app.world().resource::<WorldTerrain>();
         let charter = shared::components::SettlementDevelopment::from_seed(23, 0);
-        let occupied = vec![(hall, Kind::Hall.clearance())];
+        let occupied = OccupiedLand::hall(hall);
         let market = super::super::plots::find_site_with_plan_diagnostics(
             terrain,
             hall,
@@ -605,10 +642,13 @@ mod tests {
             class: default(),
             stone_committed: 0,
         };
-        let occupied = vec![
-            (hall, Kind::Hall.clearance()),
-            (market.0, Kind::Market.clearance()),
-        ];
+        let mut occupied = OccupiedLand::hall(hall);
+        occupied.extend(OccupiedLand::building(
+            Kind::Market,
+            market.0,
+            market.1,
+            LandOwner::completed(None, None, Kind::Market),
+        ));
         let blockers = road_access_blockers_for_plot(Kind::Market, market.0, market.1);
         let mut legal_edges = 0;
         for candidate in civic_frontage_candidates(square, hall, Kind::House) {
@@ -662,7 +702,7 @@ mod tests {
             &[square],
         )
         .unwrap_err();
-        assert!(rejected.contains("civic square"));
+        assert!(rejected.message.contains("civic square"));
     }
 
     #[test]

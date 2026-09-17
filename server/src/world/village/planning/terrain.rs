@@ -143,21 +143,14 @@ pub(super) fn livestock_earthwork_effort(
 
 /// How far above the waterline ordinary inland plots must stand, in metres.
 ///
-/// Not zero: ground exactly at the waterline is shoreline, and a farmstead with
-/// its doorstep in the lake reads as a bug even though the maths permitted it.
-pub const FREEBOARD: f32 = 1.5;
+/// The number lives in `shared` so the client's placement preview refuses the
+/// same wet plots this validation does.
+pub const FREEBOARD: f32 = shared::components::BUILDING_FREEBOARD;
 
-/// Fishing huts need a dry bank close enough for their authored pier to reach
-/// water. Keep manual permits and both automatic searches on the same shore
-/// standard; the hut footprint, doorway, side route and submerged pier tip are
-/// still checked individually. Applying inland freeboard only to manual huts
-/// rejected the same safe banks already used by automatic fishing permits.
+/// Fishing huts keep the founding shoreline standard instead; see
+/// [`shared::components::building_freeboard`].
 pub(super) fn building_freeboard(kind: SettlementBuildingKind) -> f32 {
-    if kind == SettlementBuildingKind::FishermansHut {
-        shared::components::SETTLEMENT_FREEBOARD
-    } else {
-        FREEBOARD
-    }
+    shared::components::building_freeboard(kind)
 }
 
 /// Keep every authored interaction point on navigable terrain.

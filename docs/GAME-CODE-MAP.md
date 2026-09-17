@@ -35,6 +35,8 @@ transfers out of client presentation systems.
 | Accepted-field vegetation clearing and local revisions | `shared/src/building/field_claims.rs` |
 | Civic roles and policy contracts | `shared/src/components/civic.rs` |
 | Permits and placement validation | `shared/src/components/permits.rs`, `placement.rs` |
+| Land claims: per-kind yards, door aprons, Hall forecourt and corridor tests (the one placement rule set) | `shared/src/components/placement/claims.rs` |
+| Replicated reserved access lanes (mirror of a pending plot's road corridor) | `shared/src/components/village_roads.rs` |
 | Resident plans, nutrition and households | `shared/src/components/village_life.rs` |
 | Goods, money, bounded inventory and economic ledgers | `shared/src/economy.rs` and its `economy/` modules |
 | Terrain recipes, edits and sampling | `shared/src/worldgen.rs`, `shared/src/terrain/` |
@@ -90,6 +92,9 @@ Inside permit planning:
 - `market_signals.rs` collects business evidence without approving or paying for permits.
 - `terrain.rs`, `fishing.rs` and `plots.rs` own suitability and bounded searches.
 - `road_access.rs` proves a dry, unobstructed connector.
+- `land.rs` owns the one occupied-land snapshot (shells, doorways, fields, pastures,
+  the Hall) and owner-tagged lane reservations shared by NPC permits, player permits
+  and civic-square surveys, plus the structured `PlacementRefusal`.
 - `manual.rs` validates player-selected plots using those same proofs.
 
 Keep Bevy query access, system ordering and deferred-command boundaries visible.
@@ -127,12 +132,21 @@ of the underlying data; an empty cache can still represent a completed rebuild.
 | Capture readiness, orchestration and fixture ownership | `client/src/capture.rs` and `capture/` |
 | Connected creation, travel, trading and reconnect regression | `client/src/capture/session.rs`, `capture/first_session.py` |
 | Company directory and management presentation | `client/src/ui/encyclopedia/companies.rs` and `companies/` |
+| Permit tray, placement ghost, reserved-land survey mirroring the server's claims and keep-out guides | `client/src/ui/player_permits.rs` |
 
 The company page keeps snapshots in `model.rs`/`directory.rs`, input handling in
 `controls.rs`/`route_actions.rs`, the typed `CompanyBound` markers, value function
 and id-only structure key in `binding.rs`, the build-once/bind-in-place decision
 in `view.rs`, and focused portfolio, detail, site, route, fleet and route-editor
-views beside them. A books snapshot binds values (text, colours, meter widths,
+views beside them. `model.rs` also owns the `CompanyFilter` chips and the
+`CompanySort` resource (`CompanySortKey` plus direction, `natural()` reading
+direction per key); `controls.rs` handles their presses in
+`handle_company_filter_buttons` / `handle_company_sort_buttons` and rewrites the
+sort labels in `style_company_controls`; `view.rs` reduces them with the shared
+`search::EncyclopediaSearch` draft through
+`visible_companies(directory, filter, search, sort)` (filter, then
+`matches_company`, then the pure `compare_companies` order) and hashes the result
+into `company_rows_signature`. A books snapshot binds values (text, colours, meter widths,
 button payloads) into the retained tree rather than deferring a respawn; only a
 change of ids or gating bits respawns, and that alone waits for the pointer to
 leave. Avoid marking unchanged UI state as changed. Use existing shared widgets

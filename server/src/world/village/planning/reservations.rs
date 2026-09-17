@@ -29,43 +29,15 @@ pub(crate) fn nearby_defense_reservations<'a>(
     }
 }
 
+/// The shared wall/gate corridor test, so the client preview and this
+/// authoritative check cannot drift.
 pub(crate) fn plot_intersects_defenses(
     defenses: &SettlementDefenses,
     kind: Kind,
     position: Vec3,
     rotation: f32,
 ) -> bool {
-    let definition = kind.placement_definition();
-    if defenses.intersects_footprint(
-        definition.world_footprint_center(position, rotation),
-        definition.footprint * 0.5 + Vec2::splat(0.45),
-        rotation,
-    ) {
-        return true;
-    }
-    if let (Some(fields), Some(half)) = (
-        kind.intended_field_positions(position, rotation),
-        kind.intended_field_half_extents(),
-    ) {
-        if fields.into_iter().any(|field| {
-            defenses.intersects_footprint(
-                field.xz(),
-                half + Vec2::splat(shared::components::FARM_FIELD_TERRACE_MARGIN),
-                rotation,
-            )
-        }) {
-            return true;
-        }
-    }
-    if let (Some(pasture), Some(half)) = (
-        kind.pasture_position(position, rotation),
-        kind.pasture_half_extents(),
-    ) {
-        if defenses.intersects_footprint(pasture.xz(), half + Vec2::splat(1.0), rotation) {
-            return true;
-        }
-    }
-    false
+    defenses.blocks_plot(kind, position, rotation)
 }
 
 /// Future connectors respect reserved walls from the outset. Gate spans stay

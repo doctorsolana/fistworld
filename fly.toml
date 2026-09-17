@@ -13,8 +13,8 @@ primary_region = 'ams'
 
 [env]
   CITYSIM_MAP_ID = "world"
-  FISTWORLD_WORLD_CONFIG = "/app/config/worlds/small-frontier-10.ron"
-  FISTWORLD_IMMIGRANTS_PER_DAY = "3"
+  FISTWORLD_WORLD_CONFIG = "/app/config/worlds/small-frontier-20.ron"
+  FISTWORLD_IMMIGRANTS_PER_DAY = "5"
   FISTWORLD_WORLD_NPC_CAP = "5000"
   RUST_LOG = "info"
 

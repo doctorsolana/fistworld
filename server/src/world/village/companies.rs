@@ -11,9 +11,10 @@ use shared::components::{
     OwnedBy, PersonId, PlayerPermitLedger,
 };
 use shared::economy::{
-    business_working_capital, BusinessDayLedger, BusinessProcurementPolicy, BusinessStrategy,
-    CompanyAccount, CompanyBranchPolicies, CompanyDayLedger, CompanyDecisionHistory,
-    CompanyDecisionReason, CompanyDecisionRecord, CompanyDividendCapacity, CompanyManagementPolicy,
+    BusinessDayLedger, BusinessStrategy, COMPANY_DIVIDEND_FLOAT, CompanyAccount,
+    CompanyBranchPolicies, CompanyDayLedger, CompanyDecisionHistory, CompanyDecisionReason,
+    CompanyDecisionRecord, CompanyDividendCapacity, CompanyManagementPolicy,
+    business_working_capital, dividend_reserve,
 };
 
 /// One authoritative constructor for a legal company. Player incorporation,
@@ -445,7 +446,13 @@ pub fn review_company_strategies(
 struct DividendSite {
     entity: Entity,
     building: shared::components::BuildingId,
+    /// The manual reserve (`dividend_reserve`): wage and tax debt plus one
+    /// day of payroll.
     protected: u64,
+    /// The automatic reserve: the same debts plus the planner-style
+    /// working-capital runway (`business_working_capital`: the strategy's
+    /// payroll days and the input shortfall at the home market's quote).
+    runway: u64,
     gross_revenue: u64,
     operating_expenses: u64,
     prior_withdrawals: u64,
@@ -516,14 +523,17 @@ impl CompanyDividendQueue {
 /// the finance pass took instead of a silent skip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DividendRefusal {
-    /// The company operates no site with business books; contributed capital
-    /// alone is never distributable profit.
+    /// The company operates no site with business books, so there is no
+    /// cost centre to attribute a distribution to.
     NoOperatingSite,
     /// A shareholder on the cap table has no wallet entity, so the exact
     /// pro-rata payment cannot be delivered to everyone.
     ShareholderUnreachable,
-    /// Retained profit or treasury cash above reserves is zero right now.
+    /// Treasury cash above the reserve is zero right now.
     NothingDistributable,
+    /// The order asked for zero pennies; the snapshot was republished so the
+    /// requester sees the live figure.
+    NothingRequested,
     /// One receiving wallet would overflow; nothing was redirected.
     WalletFull,
     /// The treasury debit failed after validation (should not happen).
@@ -535,10 +545,11 @@ pub enum DividendRefusal {
 
 /// The honest result of one manual request, produced on every path of the
 /// finance pass. After the payout the treasury decomposes into
-/// `capacity.distributable + withheld_reserves + withheld_profit_cap`:
-/// reserves are cash kept for payroll, inputs, taxes and the operating
-/// buffer; the profit cap is free cash that is not yet earned profit
-/// (contributed capital), which a dividend may never touch.
+/// `capacity.distributable + withheld_reserves`: the reserve is every site's
+/// wage and tax debt plus one day of its payroll, and the company's one
+/// float. `from_profit + return_of_capital == paid`: the part covered by
+/// consolidated retained profit before the payout, and the remainder, which
+/// hands contributed capital back to the shareholders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DividendOutcome {
     pub requester_link: Entity,
@@ -552,8 +563,11 @@ pub struct DividendOutcome {
     pub own_shares: u16,
     /// The requester's exact pro-rata take (including any penny remainder).
     pub own_take: u64,
+    /// `min(paid, retained profit before the payout)`.
+    pub from_profit: u64,
+    /// `paid - from_profit`: capital returned to the shareholders.
+    pub return_of_capital: u64,
     pub withheld_reserves: u64,
-    pub withheld_profit_cap: u64,
     pub refusal: Option<DividendRefusal>,
 }
 
@@ -613,23 +627,34 @@ pub fn refund_company_escrows(
 /// Consolidated reserve/profit figures of one company for one pass.
 #[derive(Clone, Copy)]
 struct CompanyHeadroom {
+    /// The manual reserve: every site's `dividend_reserve` plus the float.
+    /// This is the published `protected_reserves`.
     protected: u64,
+    /// The automatic reserve: every site's working-capital runway plus the
+    /// float, so NPC firms keep the runway they always had.
+    automatic_protected: u64,
     retained_profit: u64,
 }
 
 impl CompanyHeadroom {
     fn of(sites: &[DividendSite]) -> Self {
+        // A company treasury keeps one ordinary operating float, not a
+        // duplicate two-coin reserve for every cost centre it operates.
         let protected = sites
             .iter()
             .map(|site| site.protected)
             .fold(0u64, u64::saturating_add)
-            // A company treasury needs one ordinary operating buffer, not a
-            // duplicate two-coin reserve for every cost centre it operates.
-            .saturating_add(2 * PENNIES_PER_COIN);
+            .saturating_add(COMPANY_DIVIDEND_FLOAT);
+        let automatic_protected = sites
+            .iter()
+            .map(|site| site.runway)
+            .fold(0u64, u64::saturating_add)
+            .saturating_add(COMPANY_DIVIDEND_FLOAT);
         // Consolidate revenue, expenses and prior withdrawals across every
         // cost centre BEFORE clamping at zero: a loss-making site offsets a
-        // profitable sibling, so the company never distributes (or publishes)
-        // more than its consolidated retained profit. The per-site
+        // profitable sibling, so the automatic policy never pays more than
+        // the consolidated retained profit and a manual payout beyond it is
+        // reported as a return of capital. The per-site
         // `DividendSite::retained_profit` figure is only for memo attribution.
         let revenue = sites
             .iter()
@@ -648,19 +673,24 @@ impl CompanyHeadroom {
             .saturating_sub(prior_withdrawals);
         Self {
             protected,
+            automatic_protected,
             retained_profit,
         }
     }
 
-    fn distributable(self, cash: u64) -> u64 {
-        self.retained_profit
-            .min(cash.saturating_sub(self.protected))
+    /// What a Company Master's request may pay: every coin above the
+    /// one-day reserve, contributed capital included. This is the published
+    /// figure.
+    fn manual_distributable(self, cash: u64) -> u64 {
+        cash.saturating_sub(self.protected)
     }
 
-    /// Free treasury cash that is not earned profit; see [`DividendOutcome`].
-    fn unearned_cash(self, cash: u64) -> u64 {
-        cash.saturating_sub(self.protected)
-            .saturating_sub(self.retained_profit)
+    /// The automatic headroom: retained profit only, and only as far as the
+    /// cash above the working-capital runway covers it. The caller pays the
+    /// policy's `automatic_payout_percent` share of it.
+    fn automatic_distributable(self, cash: u64) -> u64 {
+        self.retained_profit
+            .min(cash.saturating_sub(self.automatic_protected))
     }
 
     fn after_paying(self, paid: u64) -> Self {
@@ -789,17 +819,27 @@ fn pay_dividend(
 }
 
 /// Pay automatic dividends once per day and manual requests as they arrive.
-/// Every amount is validated against consolidated retained profit and the
-/// single treasury after every site's employee, tax, input and operating
-/// reserves; manual requests are clamped to that figure and reported, never
-/// rejected on a stale snapshot, and are exempt from `max_daily_dividend` and
-/// the one-per-day cadence. Payment follows the cap table: one whole share out
-/// of 1,000 receives exactly one-thousandth of the distribution before
-/// deterministic penny rounding. The pass publishes `CompanyDividendCapacity`
-/// after its payouts (daily for every company, per request for that company,
-/// and once for a company founded mid-day whose capacity is still the
-/// never-reviewed default) and otherwise runs only at day changes or on a
-/// request, so nothing here is per tick beyond one `Added` filter check.
+/// Two reserves are computed per site. The automatic daily policy keeps the
+/// planner-style working-capital runway (`business_working_capital`: wage
+/// and tax debt, the strategy's payroll days for the protected positions and
+/// the input shortfall priced at the home market's quote), so NPC firms keep
+/// the runway they always had; a manual request keeps only
+/// `dividend_reserve` (the same debts plus one day of payroll). Both add the
+/// company's one `COMPANY_DIVIDEND_FLOAT`. The automatic policy pays its
+/// `automatic_payout_percent` share of the consolidated retained profit
+/// above that runway (whole pennies, no other cap); a manual request may
+/// pay every coin above its reserve (beyond retained profit it is a return
+/// of capital), is clamped to that live figure and reported, never rejected
+/// on a stale snapshot, and is exempt from the payout share and the
+/// one-per-day cadence. Payment follows the cap
+/// table: one whole share out of 1,000 receives exactly one-thousandth of
+/// the distribution before deterministic penny rounding.
+/// The pass publishes `CompanyDividendCapacity` after its payouts: daily for
+/// every company, per request for that company, once for a company founded
+/// mid-day whose capacity is still the never-reviewed default, and once per
+/// world hour for the companies whose replicated `CompanyAccount` changed
+/// since the last publication (a dirty set fed by `Changed<CompanyAccount>`,
+/// so a quiet treasury costs nothing and nothing here writes per tick).
 #[allow(clippy::type_complexity)]
 pub fn review_company_finance(
     mut commands: Commands,
@@ -807,13 +847,18 @@ pub fn review_company_finance(
     mut requests: ResMut<CompanyDividendQueue>,
     mut outcomes: ResMut<CompanyDividendOutcomes>,
     mut processed_day: Local<Option<u32>>,
+    // `(day, hour)` of the last publication that drained the dirty set.
+    mut published_hour: Local<Option<(u32, u32)>>,
+    mut dirty: Local<HashSet<CompanyId>>,
     employees: Query<&shared::components::EmployedAt>,
     markets: Query<(&shared::components::SettlementId, &MootMarket), With<Settlement>>,
     // p0: companies whose capacity component appeared since the last pass
-    // (a mid-day founding); p1: the review query. One `ParamSet` because the
-    // `Added` filter reads the same ticks p1 writes.
+    // (a mid-day founding); p1: companies whose replicated books changed
+    // since the last pass; p2: the review query. One `ParamSet` because the
+    // filters read the same ticks p2 writes.
     mut companies: ParamSet<(
         Query<(), (With<CompanyId>, Added<CompanyDividendCapacity>)>,
+        Query<&CompanyId, Changed<CompanyAccount>>,
         Query<(
             Entity,
             &CompanyId,
@@ -841,9 +886,18 @@ pub fn review_company_finance(
     )>,
     mut people: ParamSet<(Query<(Entity, &PersonId), With<Wallet>>, Query<&mut Wallet>)>,
 ) {
-    let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    let (day, hour) = world_time
+        .iter()
+        .next()
+        .map_or((0, 0), |clock| (clock.day, clock.clock_hour()));
+    // Drain this tick's change signals before deciding whether to run, so a
+    // change inside a quiet hour survives the early return below.
+    for company in companies.p1().iter() {
+        dirty.insert(*company);
+    }
     let daily = *processed_day != Some(day);
-    if !daily && requests.requested.is_empty() && companies.p0().is_empty() {
+    let hourly = !dirty.is_empty() && *published_hour != Some((day, hour));
+    if !daily && !hourly && requests.requested.is_empty() && companies.p0().is_empty() {
         return;
     }
     *processed_day = Some(day);
@@ -893,6 +947,8 @@ pub fn review_company_finance(
                 .copied()
                 .unwrap_or_default(),
         );
+        // The automatic policy keeps the planner-style runway: the strategy's
+        // payroll days and the input shortfall at the home market's quote.
         let mut stock = [0; Good::COUNT];
         for good in Good::ALL {
             stock[good.index()] = inventory.amount(good);
@@ -905,18 +961,18 @@ pub fn review_company_finance(
             Some(&stock),
             building_of.and_then(|home| market_by_settlement.get(&home.0).copied()),
         );
-        let protected = account
-            .wage_arrears
-            .saturating_add(account.tax_arrears)
-            .saturating_add(working.payroll)
-            .saturating_add(working.inputs);
         sites_by_company
             .entry(operated_by.0)
             .or_default()
             .push(DividendSite {
                 entity,
                 building: *building_id,
-                protected,
+                protected: dividend_reserve(protected_positions, wage, account),
+                runway: account
+                    .wage_arrears
+                    .saturating_add(account.tax_arrears)
+                    .saturating_add(working.payroll)
+                    .saturating_add(working.inputs),
                 gross_revenue: account.gross_revenue,
                 operating_expenses: account.operating_expenses,
                 prior_withdrawals: account.owner_withdrawals,
@@ -925,7 +981,7 @@ pub fn review_company_finance(
 
     let mut split = Vec::<(PersonId, u64)>::new();
     let mut no_sites = Vec::<DividendSite>::new();
-    let mut companies = companies.p1();
+    let mut companies = companies.p2();
     for (entity, company_id, ownership, mut company_account, mut policy, capacity) in
         companies.iter_mut()
     {
@@ -933,7 +989,8 @@ pub fn review_company_finance(
         let never_reviewed = capacity
             .as_deref()
             .is_none_or(|capacity| capacity.day == u32::MAX);
-        if !daily && request.is_none() && !never_reviewed {
+        let changed_books = hourly && dirty.contains(company_id);
+        if !daily && request.is_none() && !never_reviewed && !changed_books {
             continue;
         }
         let company_sites = match sites_by_company.get_mut(company_id) {
@@ -949,17 +1006,18 @@ pub fn review_company_finance(
         } else {
             CompanyHeadroom {
                 protected: 0,
+                automatic_protected: 0,
                 retained_profit: 0,
             }
         };
         let mut last_paid: Option<u64> = None;
 
-        // Automatic distribution: once per day, bounded by policy.
-        if daily && policy.automatic_dividends && policy.last_dividend_day != day {
+        // Automatic distribution: once per day, the policy's share of the
+        // retained profit above the working-capital runway.
+        if daily && policy.pays_automatic_dividends() && policy.last_dividend_day != day {
             policy.last_dividend_day = day;
-            let wanted = headroom
-                .distributable(company_account.cash)
-                .min(policy.max_daily_dividend);
+            let wanted =
+                policy.automatic_payout(headroom.automatic_distributable(company_account.cash));
             if has_sites
                 && wanted > 0
                 && pay_dividend(
@@ -982,10 +1040,13 @@ pub fn review_company_finance(
 
         // Manual distribution: clamp to the live figure and report honestly.
         if let Some(request) = request {
-            let distributable = headroom.distributable(company_account.cash);
+            let distributable = headroom.manual_distributable(company_account.cash);
             let wanted = request.pennies.min(distributable);
+            let retained_before = headroom.retained_profit;
             let result = if !has_sites {
                 Err(DividendRefusal::NoOperatingSite)
+            } else if request.pennies == 0 {
+                Err(DividendRefusal::NothingRequested)
             } else if wanted == 0 {
                 Err(DividendRefusal::NothingDistributable)
             } else if ownership
@@ -1020,6 +1081,7 @@ pub fn review_company_finance(
             } else {
                 0
             };
+            let from_profit = paid.min(retained_before);
             outcomes.push(DividendOutcome {
                 requester_link: request.requester_link,
                 requester_person: request.requester_person,
@@ -1029,17 +1091,25 @@ pub fn review_company_finance(
                 shareholders: ownership.shares().len(),
                 own_shares: ownership.share_count(request.requester_person),
                 own_take,
+                from_profit,
+                return_of_capital: paid - from_profit,
                 withheld_reserves: headroom.protected.min(company_account.cash),
-                withheld_profit_cap: headroom.unearned_cash(company_account.cash),
                 refusal: result.err(),
             });
         }
 
         // Publish the post-payout snapshot. Consolidate off-component so an
         // identical result never advances Bevy's replication change tick.
+        // A company without an operating site is refused above, so it
+        // publishes nothing distributable rather than an amount it would
+        // never pay.
         let mut published = capacity.as_deref().copied().unwrap_or_default();
         published.day = day;
-        published.distributable = headroom.distributable(company_account.cash);
+        published.distributable = if has_sites {
+            headroom.manual_distributable(company_account.cash)
+        } else {
+            0
+        };
         published.protected_reserves = headroom.protected;
         published.retained_profit = headroom.retained_profit;
         if let Some(paid) = last_paid {
@@ -1068,10 +1138,17 @@ pub fn review_company_finance(
             shareholders: 0,
             own_shares: 0,
             own_take: 0,
+            from_profit: 0,
+            return_of_capital: 0,
             withheld_reserves: 0,
-            withheld_profit_cap: 0,
             refusal: Some(DividendRefusal::CompanyUnavailable),
         });
+    }
+    // Every dirty company was reviewed by the daily or the hourly pass; a
+    // request-only pass leaves the set for the next hour boundary.
+    if daily || hourly {
+        *published_hour = Some((day, hour));
+        dirty.clear();
     }
 }
 
@@ -1410,7 +1487,10 @@ mod tests {
                     cash: 2_000,
                     ..default()
                 },
-                CompanyManagementPolicy::default(),
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 0,
+                    ..default()
+                },
             ))
             .id();
         let mut account = BusinessAccount::default();
@@ -1418,7 +1498,7 @@ mod tests {
         let site = app.world_mut().spawn(farm_site(company, 11, account)).id();
         app.world_mut()
             .resource_mut::<CompanyDividendQueue>()
-            .request(company, u64::MAX, PersonId(0), Entity::PLACEHOLDER);
+            .request(company, 1_000, PersonId(0), Entity::PLACEHOLDER);
 
         app.update();
 
@@ -1470,7 +1550,10 @@ mod tests {
                     cash: u64::MAX,
                     ..default()
                 },
-                CompanyManagementPolicy::default(),
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 0,
+                    ..default()
+                },
             ))
             .id();
         app.world_mut().spawn(farm_site(
@@ -1483,7 +1566,7 @@ mod tests {
         ));
         app.world_mut()
             .resource_mut::<CompanyDividendQueue>()
-            .request(company, u64::MAX, PersonId(0), Entity::PLACEHOLDER);
+            .request(company, payout, PersonId(0), Entity::PLACEHOLDER);
         app.update();
 
         let second_due = (u128::from(payout) * 400 / 1_000) as u64;
@@ -1531,7 +1614,10 @@ mod tests {
                     cash: 2_000,
                     ..default()
                 },
-                CompanyManagementPolicy::default(),
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 0,
+                    ..default()
+                },
             ))
             .id();
         let site = app
@@ -1547,7 +1633,7 @@ mod tests {
             .id();
         app.world_mut()
             .resource_mut::<CompanyDividendQueue>()
-            .request(company, u64::MAX, PersonId(0), Entity::PLACEHOLDER);
+            .request(company, 1_000, PersonId(0), Entity::PLACEHOLDER);
         app.update();
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
@@ -1580,7 +1666,7 @@ mod tests {
             .debit(1_000));
         app.world_mut()
             .resource_mut::<CompanyDividendQueue>()
-            .request(company, u64::MAX, PersonId(0), Entity::PLACEHOLDER);
+            .request(company, 1_000, PersonId(0), Entity::PLACEHOLDER);
         app.update();
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
@@ -1636,11 +1722,12 @@ mod tests {
             .resource_mut::<CompanyDividendQueue>()
             .request(company, u64::MAX, PersonId(0), Entity::PLACEHOLDER);
         app.update();
+        // One day of the retained worker's payroll plus the 2.00 coin float.
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
-            500
+            300
         );
-        assert_eq!(app.world().get::<Wallet>(person).unwrap().balance(), 200);
+        assert_eq!(app.world().get::<Wallet>(person).unwrap().balance(), 400);
 
         // Once cargo/door work is finished, removing the durable employment
         // releases that payroll reserve on the next explicit dividend request.
@@ -1656,77 +1743,6 @@ mod tests {
             200
         );
         assert_eq!(app.world().get::<Wallet>(person).unwrap().balance(), 500);
-    }
-
-    #[test]
-    fn dividends_protect_input_shortfall_at_the_actual_local_quote() {
-        let mut app = App::new();
-        app.init_resource::<CompanyDividendQueue>();
-        app.init_resource::<CompanyDividendOutcomes>();
-        app.add_systems(Update, review_company_finance);
-        app.world_mut().spawn(WorldTime::new_default());
-        let founder = PersonId(970);
-        let company = CompanyId(971);
-        let town = shared::components::SettlementId(972);
-        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
-        let treasury = app
-            .world_mut()
-            .spawn((
-                company,
-                CompanyOwnership::sole(founder),
-                CompanyAccount {
-                    cash: 1_000,
-                    ..default()
-                },
-                CompanyManagementPolicy::default(),
-            ))
-            .id();
-        let mut market = MootMarket::founding();
-        market.consign(
-            MarketSeller::Business(shared::components::BuildingId(974)),
-            Good::Flour,
-            8,
-            200,
-        );
-        app.world_mut().spawn((
-            town,
-            market,
-            Settlement {
-                name: "Millford".into(),
-                tier: shared::components::SettlementTier::Village,
-                residents: 1,
-                treasury: 0,
-            },
-        ));
-        let mut account = BusinessAccount::default();
-        account.record_sale(0, 2_000, 0, 20);
-        let mut stock = GoodsInventory::new(100);
-        stock.add(Good::Flour, 1);
-        app.world_mut()
-            .spawn(farm_site(company, 973, account))
-            .insert((
-                shared::components::BuildingOf(town),
-                BusinessStaffingPolicy::new(0),
-                stock,
-                BusinessProcurementPolicy::none().with_rule(
-                    Good::Flour,
-                    BusinessInputRule {
-                        enabled: true,
-                        target_units: 4,
-                        ..default()
-                    },
-                ),
-            ));
-        app.world_mut()
-            .resource_mut::<CompanyDividendQueue>()
-            .request(company, u64::MAX, PersonId(0), Entity::PLACEHOLDER);
-        app.update();
-        assert_eq!(
-            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
-            800,
-            "three missing Flour at the live 200-penny quote plus one 200-penny company buffer"
-        );
-        assert_eq!(app.world().get::<Wallet>(person).unwrap().balance(), 200);
     }
 
     const REQUESTER_LINK: Entity = Entity::from_raw_u32(777).unwrap();
@@ -1783,7 +1799,7 @@ mod tests {
                     ..default()
                 },
                 CompanyManagementPolicy {
-                    automatic_dividends: false,
+                    automatic_payout_percent: 0,
                     ..default()
                 },
             ))
@@ -1809,10 +1825,13 @@ mod tests {
         );
         let capacity = capacity_of(&app, treasury);
         assert_eq!(capacity.day, 0);
-        assert_eq!(capacity.distributable, 700);
+        assert_eq!(
+            capacity.distributable, 1_300,
+            "1,700 of cash above two Farmstead positions' daily wage and the float"
+        );
         assert_eq!(capacity.retained_profit, 700);
         assert_eq!((capacity.last_paid_day, capacity.last_paid), (0, 300));
-        assert!(capacity.protected_reserves > 0 && capacity.protected_reserves <= 1_000);
+        assert_eq!(capacity.protected_reserves, 400);
         assert_eq!(
             app.world()
                 .get::<CompanyManagementPolicy>(treasury)
@@ -1835,9 +1854,9 @@ mod tests {
         assert_eq!(outcome.refusal, None);
         assert_eq!(outcome.withheld_reserves, capacity.protected_reserves);
         assert_eq!(
-            outcome.withheld_profit_cap,
-            1_700 - capacity.protected_reserves - 700,
-            "free cash that is not earned profit is reported, not distributable"
+            (outcome.from_profit, outcome.return_of_capital),
+            (300, 0),
+            "a request within retained profit returns no capital"
         );
     }
 
@@ -1857,7 +1876,7 @@ mod tests {
                     ..default()
                 },
                 CompanyManagementPolicy {
-                    automatic_dividends: false,
+                    automatic_payout_percent: 0,
                     ..default()
                 },
             ))
@@ -1874,25 +1893,32 @@ mod tests {
 
         app.update();
 
-        assert_eq!(balance_of(&app, person), 800);
+        assert_eq!(balance_of(&app, person), 1_600);
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
-            1_200
+            400
         );
         let capacity = capacity_of(&app, treasury);
         assert_eq!(capacity.distributable, 0);
         assert_eq!(capacity.retained_profit, 0);
-        assert_eq!(capacity.last_paid, 800);
+        assert_eq!(capacity.last_paid, 1_600);
         let outcome = take_outcomes(&mut app)[0];
-        assert_eq!(outcome.paid, 800, "clamped to the live figure, not refused");
-        assert_eq!(outcome.refusal, None);
-        assert_eq!(outcome.own_take, 800);
-        assert_eq!(outcome.per_ten_shares, 8);
-        assert!(outcome.withheld_reserves > 0);
-        assert_eq!(outcome.withheld_reserves, capacity.protected_reserves);
-        assert!(outcome.withheld_profit_cap > 0);
         assert_eq!(
-            outcome.paid + outcome.withheld_reserves + outcome.withheld_profit_cap,
+            outcome.paid, 1_600,
+            "clamped to the live figure, not refused"
+        );
+        assert_eq!(outcome.refusal, None);
+        assert_eq!(outcome.own_take, 1_600);
+        assert_eq!(outcome.per_ten_shares, 16);
+        assert_eq!(outcome.withheld_reserves, 400);
+        assert_eq!(outcome.withheld_reserves, capacity.protected_reserves);
+        assert_eq!(
+            (outcome.from_profit, outcome.return_of_capital),
+            (800, 800),
+            "the 800 of retained profit comes first; the rest is capital handed back"
+        );
+        assert_eq!(
+            outcome.paid + outcome.withheld_reserves,
             2_000,
             "the report decomposes the whole pre-payout treasury"
         );
@@ -1902,8 +1928,9 @@ mod tests {
     fn a_loss_making_site_offsets_its_profitable_sibling_in_the_consolidated_headroom() {
         // Cash 2,400 = 2,000 contributed capital + 1,000 sales - 600 wages.
         // Site A earned 1,000, site B spent 600 before its first sale, so the
-        // company's consolidated retained profit is 400: a saturating per-site
-        // sum would report 1,000 and pay 600 of contributed capital out.
+        // company's consolidated retained profit is 400 and the 50% policy
+        // pays 200: a saturating per-site sum would let it pay 500, 300 of
+        // it capital.
         let mut app = finance_app();
         let founder = PersonId(40);
         let company = CompanyId(41);
@@ -1919,7 +1946,7 @@ mod tests {
                     ..default()
                 },
                 CompanyManagementPolicy {
-                    automatic_dividends: false,
+                    automatic_payout_percent: 50,
                     ..default()
                 },
             ))
@@ -1940,35 +1967,27 @@ mod tests {
                 ..default()
             },
         ));
-        request_dividend(&mut app, company, u64::MAX, founder);
 
         app.update();
 
         assert_eq!(
             balance_of(&app, person),
-            400,
-            "only consolidated profit is paid"
+            200,
+            "the automatic policy pays its share of consolidated profit only: half of 400, never half of one site's 1,000"
         );
         let account = app.world().get::<CompanyAccount>(treasury).unwrap();
-        assert_eq!(account.cash, 2_000);
-        assert!(
-            account.cash >= account.contributed_capital,
-            "contributed capital never leaves the treasury as a dividend"
-        );
+        assert_eq!(account.cash, 2_200);
         let capacity = capacity_of(&app, treasury);
-        assert_eq!(capacity.distributable, 0);
-        assert_eq!(capacity.retained_profit, 0);
-        assert_eq!(capacity.last_paid, 400);
-        let outcome = take_outcomes(&mut app)[0];
-        assert_eq!(outcome.paid, 400);
-        assert_eq!(outcome.refusal, None);
+        assert_eq!(capacity.retained_profit, 200);
+        assert_eq!(capacity.protected_reserves, 600);
         assert_eq!(
-            outcome.paid + outcome.withheld_reserves + outcome.withheld_profit_cap,
-            2_400
+            capacity.distributable, 1_600,
+            "the published manual figure is the cash above both sites' reserve"
         );
+        assert_eq!((capacity.last_paid_day, capacity.last_paid), (0, 200));
         assert!(
-            outcome.withheld_profit_cap >= 2_000 - outcome.withheld_reserves,
-            "the unearned contributed capital is reported as held back"
+            take_outcomes(&mut app).is_empty(),
+            "automatic payouts report nothing"
         );
     }
 
@@ -1994,8 +2013,10 @@ mod tests {
             .spawn((
                 company,
                 CompanyOwnership::sole(founder),
+                // No enabled position and no profit: the treasury is exactly
+                // the 2.00 coin float, so neither branch can pay anything.
                 CompanyAccount {
-                    cash: 2_000,
+                    cash: 200,
                     ..default()
                 },
                 // Automatic dividends on (the policy default) with an operating
@@ -2004,7 +2025,8 @@ mod tests {
             ))
             .id();
         app.world_mut()
-            .spawn(farm_site(company, 52, BusinessAccount::default()));
+            .spawn(farm_site(company, 52, BusinessAccount::default()))
+            .insert(BusinessStaffingPolicy::new(0));
         app.update();
 
         let clock = app
@@ -2031,7 +2053,7 @@ mod tests {
         assert_eq!(outcome.refusal, Some(DividendRefusal::NothingDistributable));
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
-            2_000
+            200
         );
     }
 
@@ -2053,7 +2075,7 @@ mod tests {
                     ..default()
                 },
                 CompanyManagementPolicy {
-                    automatic_dividends: false,
+                    automatic_payout_percent: 0,
                     ..default()
                 },
                 CompanyDividendCapacity::default(),
@@ -2076,7 +2098,7 @@ mod tests {
             "a never-reviewed capacity is published the same day, not at the next boundary"
         );
         assert_eq!(capacity.retained_profit, 1_000);
-        assert!(capacity.distributable > 0 && capacity.distributable <= 1_000);
+        assert_eq!(capacity.distributable, 2_000 - capacity.protected_reserves);
         assert_eq!(capacity.last_paid_day, u32::MAX);
 
         // Once published the company is not re-reviewed every tick.
@@ -2125,6 +2147,8 @@ mod tests {
 
     #[test]
     fn zero_distributable_manual_request_reports_a_refusal_instead_of_silence() {
+        // No enabled position and no employee: the reserve is the 2.00 coin
+        // float, and the treasury holds exactly that.
         let mut app = finance_app();
         let founder = PersonId(30);
         let company = CompanyId(31);
@@ -2135,15 +2159,16 @@ mod tests {
                 company,
                 CompanyOwnership::sole(founder),
                 CompanyAccount {
-                    cash: 1_000,
-                    contributed_capital: 1_000,
+                    cash: 200,
+                    contributed_capital: 200,
                     ..default()
                 },
                 CompanyManagementPolicy::default(),
             ))
             .id();
         app.world_mut()
-            .spawn(farm_site(company, 32, BusinessAccount::default()));
+            .spawn(farm_site(company, 32, BusinessAccount::default()))
+            .insert(BusinessStaffingPolicy::new(0));
         request_dividend(&mut app, company, u64::MAX, founder);
 
         app.update();
@@ -2151,10 +2176,11 @@ mod tests {
         assert_eq!(balance_of(&app, person), 50);
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
-            1_000
+            200
         );
         let capacity = capacity_of(&app, treasury);
         assert_eq!(capacity.distributable, 0);
+        assert_eq!(capacity.protected_reserves, 200);
         assert_eq!(capacity.last_paid_day, u32::MAX);
         let outcome = take_outcomes(&mut app)[0];
         assert_eq!(outcome.refusal, Some(DividendRefusal::NothingDistributable));
@@ -2162,11 +2188,10 @@ mod tests {
             (outcome.paid, outcome.own_take, outcome.per_ten_shares),
             (0, 0, 0)
         );
-        assert_eq!(outcome.withheld_reserves, capacity.protected_reserves);
+        assert_eq!((outcome.from_profit, outcome.return_of_capital), (0, 0));
         assert_eq!(
-            outcome.withheld_reserves + outcome.withheld_profit_cap,
-            1_000,
-            "contributed capital is reserves plus not-yet-earned cash, never a dividend"
+            outcome.withheld_reserves, 200,
+            "cash that only covers the reserve is never a dividend"
         );
     }
 
@@ -2228,16 +2253,20 @@ mod tests {
                     cash: 2_000,
                     ..default()
                 },
-                CompanyManagementPolicy::default(),
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 25,
+                    ..default()
+                },
             ))
             .id();
         let mut account = BusinessAccount::default();
         account.record_sale(0, 1_000, 0, 10);
         app.world_mut().spawn(farm_site(company, 52, account));
 
-        // Day start: the automatic policy pays its bounded 2-coin dividend.
+        // Day start: the automatic policy pays 25% of the 10.00 coin of
+        // retained profit above the 8.00 coin runway.
         app.update();
-        assert_eq!(balance_of(&app, person), 200);
+        assert_eq!(balance_of(&app, person), 250);
         let policy = *app
             .world()
             .get::<CompanyManagementPolicy>(treasury)
@@ -2250,21 +2279,22 @@ mod tests {
                 capacity.last_paid,
                 capacity.last_paid_day
             ),
-            (800, 200, 0),
-            "capacity is published after the automatic payout"
+            (1_350, 250, 0),
+            "capacity is published after the automatic payout: 1,750 above the 400 reserve"
         );
         assert!(
             take_outcomes(&mut app).is_empty(),
             "automatic payouts report nothing"
         );
 
-        // Same day: a manual request is exempt from the cap and the cadence.
+        // Same day: a manual request is exempt from the payout share and
+        // the cadence.
         request_dividend(&mut app, company, u64::MAX, founder);
         app.update();
-        assert_eq!(balance_of(&app, person), 1_000);
+        assert_eq!(balance_of(&app, person), 1_600);
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
-            1_000
+            400
         );
         assert_eq!(
             *app.world()
@@ -2274,11 +2304,16 @@ mod tests {
             "the manual payout leaves the automatic policy untouched"
         );
         let capacity = capacity_of(&app, treasury);
-        assert_eq!((capacity.distributable, capacity.last_paid), (0, 800));
+        assert_eq!((capacity.distributable, capacity.last_paid), (0, 1_350));
         let outcome = take_outcomes(&mut app)[0];
         assert_eq!(
             (outcome.paid, outcome.own_take, outcome.refusal),
-            (800, 800, None)
+            (1_350, 1_350, None)
+        );
+        assert_eq!(
+            (outcome.from_profit, outcome.return_of_capital),
+            (750, 600),
+            "the 250 already paid automatically came out of the same retained profit"
         );
     }
 
@@ -2297,7 +2332,10 @@ mod tests {
                     cash: 2_000,
                     ..default()
                 },
-                CompanyManagementPolicy::default(),
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 25,
+                    ..default()
+                },
                 CompanyDividendCapacity::default(),
             ))
             .id();
@@ -2317,11 +2355,11 @@ mod tests {
         assert!(changed(&mut app));
         let capacity = capacity_of(&app, treasury);
         assert_eq!(
-            capacity.distributable, 800,
-            "1,000 of retained profit minus the 200 automatic payout already made this pass"
+            capacity.distributable, 1_350,
+            "2,000 of cash minus the 250 automatic payout (25% of the 1,000 above the 800 runway) already made this pass and the 400 reserve"
         );
-        assert_eq!(capacity.retained_profit, 800);
-        assert_eq!((capacity.last_paid_day, capacity.last_paid), (0, 200));
+        assert_eq!(capacity.retained_profit, 750);
+        assert_eq!((capacity.last_paid_day, capacity.last_paid), (0, 250));
 
         // A same-day tick without a request does not run the pass at all.
         app.world_mut().clear_trackers();
@@ -2366,7 +2404,7 @@ mod tests {
                     ..default()
                 },
                 CompanyManagementPolicy {
-                    automatic_dividends: false,
+                    automatic_payout_percent: 0,
                     ..default()
                 },
             ))
@@ -2386,7 +2424,7 @@ mod tests {
         let capacity = capacity_of(&app, treasury);
         assert_eq!(
             (capacity.day, capacity.distributable, capacity.last_paid),
-            (0, 600, 400)
+            (0, 1_200, 400)
         );
         assert_eq!(take_outcomes(&mut app)[0].paid, 400);
     }
@@ -2407,12 +2445,15 @@ mod tests {
                     ..default()
                 },
                 CompanyManagementPolicy {
-                    automatic_dividends: false,
+                    automatic_payout_percent: 50,
                     ..default()
                 },
             ))
             .id();
         // The first sorted site earned nothing; the second earned everything.
+        // The 50% policy pays 500 of the 1,000 on day 0 and, once the memo
+        // sits on the earning site, 250 of the remaining 500 on day 1: the
+        // double-payment bug would pay 500 again.
         let idle = app
             .world_mut()
             .spawn(farm_site(company, 82, BusinessAccount::default()))
@@ -2420,12 +2461,16 @@ mod tests {
         let mut earning = BusinessAccount::default();
         earning.record_sale(0, 1_000, 0, 10);
         let earning = app.world_mut().spawn(farm_site(company, 83, earning)).id();
-        request_dividend(&mut app, company, u64::MAX, founder);
+        let clock = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorldTime>>()
+            .single(app.world())
+            .unwrap();
         app.update();
-        assert_eq!(balance_of(&app, person), 1_000);
+        assert_eq!(balance_of(&app, person), 500);
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
-            2_000
+            2_500
         );
         assert_eq!(
             app.world()
@@ -2440,25 +2485,675 @@ mod tests {
                 .get::<BusinessAccount>(earning)
                 .unwrap()
                 .owner_withdrawals,
-            1_000
+            500
         );
-        take_outcomes(&mut app);
 
         app.world_mut().despawn(idle);
-        request_dividend(&mut app, company, u64::MAX, founder);
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
         app.update();
         assert_eq!(
             balance_of(&app, person),
-            1_000,
-            "already-distributed profit must not become distributable again"
+            750,
+            "already-distributed profit must not become distributable again: day 1 pays half of the remaining 500, not half of the full 1,000"
         );
         assert_eq!(
             app.world().get::<CompanyAccount>(treasury).unwrap().cash,
-            2_000
+            2_250
         );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.retained_profit, 250);
+        assert_eq!((capacity.last_paid_day, capacity.last_paid), (1, 250));
+        assert_eq!(
+            capacity.distributable, 1_850,
+            "the manual figure offers cash above the remaining site's reserve, not profit"
+        );
+    }
+
+    #[test]
+    fn manual_dividend_reserves_one_day_of_payroll_and_liabilities_only() {
+        // Two enabled positions at 1.00 coin, 0.50 coin of unpaid wages and
+        // 0.30 coin of unpaid tax: 50 + 30 + 200 payroll + 200 float = 480.
+        // The three missing Flour at the live 2.00 coin quote are not
+        // reserved; inputs are bought from the same treasury as needed.
+        let mut app = finance_app();
+        let founder = PersonId(90);
+        let company = CompanyId(91);
+        let town = shared::components::SettlementId(92);
+        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 1_000,
+                    ..default()
+                },
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 0,
+                    ..default()
+                },
+            ))
+            .id();
+        let mut market = MootMarket::founding();
+        market.consign(
+            MarketSeller::Business(shared::components::BuildingId(94)),
+            Good::Flour,
+            8,
+            200,
+        );
+        app.world_mut().spawn((
+            town,
+            market,
+            Settlement {
+                name: "Millford".into(),
+                tier: shared::components::SettlementTier::Village,
+                residents: 1,
+                treasury: 0,
+            },
+        ));
+        let mut account = BusinessAccount::default();
+        account.record_sale(0, 2_000, 0, 20);
+        account.incur_wages(0, 50);
+        account.incur_profit_tax(0, 30);
+        let mut stock = GoodsInventory::new(100);
+        stock.add(Good::Flour, 1);
+        app.world_mut()
+            .spawn(farm_site(company, 93, account))
+            .insert((
+                shared::components::BuildingOf(town),
+                BusinessStaffingPolicy::new(2),
+                BusinessWagePolicy {
+                    daily_wage: 100,
+                    ..default()
+                },
+                stock,
+                BusinessProcurementPolicy::none().with_rule(
+                    Good::Flour,
+                    BusinessInputRule {
+                        enabled: true,
+                        target_units: 4,
+                        ..default()
+                    },
+                ),
+            ));
+        request_dividend(&mut app, company, u64::MAX, founder);
+
+        app.update();
+
+        assert_eq!(balance_of(&app, person), 520);
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            480
+        );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.protected_reserves, 480);
+        assert_eq!(capacity.distributable, 0);
         let outcome = take_outcomes(&mut app)[0];
-        assert_eq!(outcome.refusal, Some(DividendRefusal::NothingDistributable));
-        assert_eq!(capacity_of(&app, treasury).distributable, 0);
+        assert_eq!((outcome.paid, outcome.withheld_reserves), (520, 480));
+        assert_eq!(outcome.refusal, None);
+    }
+
+    #[test]
+    fn automatic_dividends_protect_input_shortfall_at_the_actual_local_quote() {
+        // No enabled position, 20.00 coin of sales and a Flour target of four
+        // with one in stock: the automatic policy keeps the three missing
+        // units at the live 2.00 coin quote (not Flour's 1.20 coin base
+        // value) plus the 2.00 coin float, so only 2.00 coin of the 10.00
+        // coin treasury is headroom and the 50% policy pays 1.00 coin of it.
+        let mut app = finance_app();
+        let founder = PersonId(970);
+        let company = CompanyId(971);
+        let town = shared::components::SettlementId(972);
+        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 1_000,
+                    ..default()
+                },
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 50,
+                    ..default()
+                },
+            ))
+            .id();
+        let mut market = MootMarket::founding();
+        market.consign(
+            MarketSeller::Business(shared::components::BuildingId(974)),
+            Good::Flour,
+            8,
+            200,
+        );
+        app.world_mut().spawn((
+            town,
+            market,
+            Settlement {
+                name: "Millford".into(),
+                tier: shared::components::SettlementTier::Village,
+                residents: 1,
+                treasury: 0,
+            },
+        ));
+        let mut account = BusinessAccount::default();
+        account.record_sale(0, 2_000, 0, 20);
+        let mut stock = GoodsInventory::new(100);
+        stock.add(Good::Flour, 1);
+        app.world_mut()
+            .spawn(farm_site(company, 973, account))
+            .insert((
+                shared::components::BuildingOf(town),
+                BusinessStaffingPolicy::new(0),
+                stock,
+                BusinessProcurementPolicy::none().with_rule(
+                    Good::Flour,
+                    BusinessInputRule {
+                        enabled: true,
+                        target_units: 4,
+                        ..default()
+                    },
+                ),
+            ));
+
+        app.update();
+
+        assert_eq!(
+            balance_of(&app, person),
+            100,
+            "three missing Flour at the live 200-penny quote plus the 200-penny float stay in the treasury; the 50% policy pays half of the 200 above them"
+        );
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            900
+        );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!((capacity.last_paid_day, capacity.last_paid), (0, 100));
+        assert_eq!(
+            capacity.protected_reserves, 200,
+            "the published reserve is the manual one: no payroll, only the float"
+        );
+        assert_eq!(capacity.distributable, 700);
+        assert!(
+            take_outcomes(&mut app).is_empty(),
+            "automatic payouts report nothing"
+        );
+    }
+
+    #[test]
+    fn manual_headroom_exceeds_the_automatic_runway_when_input_stock_is_short() {
+        // Two enabled positions at 1.00 coin on the Balanced three-day
+        // runway, a Flour target of four with one in stock at the live 2.00
+        // coin quote, 30.00 coin of sales in a 20.00 coin treasury. On one
+        // tick the automatic 50% policy reaches only the cash above its
+        // runway (600 payroll + 600 inputs + 200 float = 1,400, so half of
+        // 600), while the Master's request on the same tick may take
+        // everything above the one-day reserve (200 payroll + 200 float =
+        // 400).
+        let mut app = finance_app();
+        let founder = PersonId(150);
+        let company = CompanyId(151);
+        let town = shared::components::SettlementId(152);
+        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 2_000,
+                    ..default()
+                },
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 50,
+                    ..default()
+                },
+            ))
+            .id();
+        let mut market = MootMarket::founding();
+        market.consign(
+            MarketSeller::Business(shared::components::BuildingId(154)),
+            Good::Flour,
+            8,
+            200,
+        );
+        app.world_mut().spawn((
+            town,
+            market,
+            Settlement {
+                name: "Millford".into(),
+                tier: shared::components::SettlementTier::Village,
+                residents: 1,
+                treasury: 0,
+            },
+        ));
+        let mut account = BusinessAccount::default();
+        account.record_sale(0, 3_000, 0, 30);
+        let mut stock = GoodsInventory::new(100);
+        stock.add(Good::Flour, 1);
+        app.world_mut()
+            .spawn(farm_site(company, 153, account))
+            .insert((
+                shared::components::BuildingOf(town),
+                BusinessStaffingPolicy::new(2),
+                BusinessWagePolicy {
+                    daily_wage: 100,
+                    ..default()
+                },
+                stock,
+                BusinessProcurementPolicy::none().with_rule(
+                    Good::Flour,
+                    BusinessInputRule {
+                        enabled: true,
+                        target_units: 4,
+                        ..default()
+                    },
+                ),
+            ));
+        request_dividend(&mut app, company, u64::MAX, founder);
+
+        app.update();
+
+        let outcome = take_outcomes(&mut app)[0];
+        assert_eq!(outcome.refusal, None);
+        assert_eq!(
+            balance_of(&app, person) - outcome.paid,
+            300,
+            "the automatic policy paid half of the 600 above its working-capital runway"
+        );
+        assert_eq!(
+            outcome.paid, 1_300,
+            "the same tick's manual request then paid the rest above the one-day reserve"
+        );
+        assert_eq!(outcome.withheld_reserves, 400);
+        assert_eq!((outcome.from_profit, outcome.return_of_capital), (1_300, 0));
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            400
+        );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.protected_reserves, 400);
+        assert_eq!(capacity.distributable, 0);
+        assert_eq!(capacity.retained_profit, 1_400);
+        assert_eq!((capacity.last_paid_day, capacity.last_paid), (0, 1_300));
+    }
+
+    #[test]
+    fn manual_dividend_may_return_contributed_capital_and_reports_the_split() {
+        // Founded with 40.00 coin, 8.00 coin of net profit since; the Master
+        // asks for everything above the reserve (two Farmstead positions at
+        // 1.00 coin plus the 2.00 coin float = 400).
+        let mut app = finance_app();
+        let founder = PersonId(100);
+        let company = CompanyId(101);
+        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 4_800,
+                    contributed_capital: 4_000,
+                    ..default()
+                },
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 0,
+                    ..default()
+                },
+            ))
+            .id();
+        app.world_mut().spawn(farm_site(
+            company,
+            102,
+            BusinessAccount {
+                gross_revenue: 1_000,
+                operating_expenses: 200,
+                ..default()
+            },
+        ));
+        request_dividend(&mut app, company, u64::MAX, founder);
+
+        app.update();
+
+        assert_eq!(balance_of(&app, person), 4_400);
+        let account = app.world().get::<CompanyAccount>(treasury).unwrap();
+        assert_eq!(account.cash, 400);
+        assert_eq!(account.owner_withdrawals, 4_400);
+        assert_eq!(
+            account.contributed_capital, 4_000,
+            "the lifetime contribution total is never decremented"
+        );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.distributable, 0);
+        assert_eq!(capacity.retained_profit, 0);
+        assert_eq!(capacity.protected_reserves, 400);
+        assert_eq!((capacity.last_paid_day, capacity.last_paid), (0, 4_400));
+        let outcome = take_outcomes(&mut app)[0];
+        assert_eq!(outcome.paid, 4_400);
+        assert_eq!(outcome.refusal, None);
+        assert_eq!(outcome.withheld_reserves, 400);
+        assert_eq!(
+            (outcome.from_profit, outcome.return_of_capital),
+            (800, 3_600),
+            "retained profit is paid first; the rest hands capital back"
+        );
+    }
+
+    #[test]
+    fn automatic_dividend_still_requires_retained_profit() {
+        // 40.00 coin of contributed capital and no profit: the daily policy
+        // pays nothing, while the published (manual) figure shows the 36.00
+        // coin a Master could take back as a return of capital.
+        let mut app = finance_app();
+        let founder = PersonId(110);
+        let company = CompanyId(111);
+        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 4_000,
+                    contributed_capital: 4_000,
+                    ..default()
+                },
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 25,
+                    ..default()
+                },
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn(farm_site(company, 112, BusinessAccount::default()))
+            .id();
+
+        app.update();
+
+        assert_eq!(balance_of(&app, person), 0);
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            4_000
+        );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.distributable, 3_600);
+        assert_eq!(capacity.retained_profit, 0);
+        assert_eq!(capacity.protected_reserves, 400);
+        assert_eq!(capacity.last_paid_day, u32::MAX);
+
+        // Profit arrives: the next day's automatic payout is the policy's
+        // 25% share of it, never of the capital underneath.
+        app.world_mut()
+            .get_mut::<BusinessAccount>(site)
+            .unwrap()
+            .record_sale(1, 500, 0, 5);
+        app.world_mut()
+            .get_mut::<CompanyAccount>(treasury)
+            .unwrap()
+            .credit(500);
+        let clock = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorldTime>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
+        app.update();
+        assert_eq!(balance_of(&app, person), 125);
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            4_375
+        );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.retained_profit, 375);
+        assert_eq!(capacity.distributable, 3_975);
+        assert_eq!((capacity.last_paid_day, capacity.last_paid), (1, 125));
+    }
+
+    #[test]
+    fn automatic_dividend_pauses_after_a_return_of_capital_until_profit_is_rebuilt() {
+        let mut app = finance_app();
+        let founder = PersonId(120);
+        let company = CompanyId(121);
+        let person = app.world_mut().spawn((founder, Wallet::new(0))).id();
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 4_800,
+                    contributed_capital: 4_000,
+                    ..default()
+                },
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 25,
+                    ..default()
+                },
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn(farm_site(
+                company,
+                122,
+                BusinessAccount {
+                    gross_revenue: 1_000,
+                    operating_expenses: 200,
+                    ..default()
+                },
+            ))
+            .id();
+        let clock = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorldTime>>()
+            .single(app.world())
+            .unwrap();
+
+        // Day 0: the automatic 2.00 coin (25% of the 8.00 coin of profit
+        // above the 8.00 coin runway) comes first, then the Master takes
+        // everything else above the 4.00 coin reserve: 44.00 coin in total
+        // against 8.00 coin of profit.
+        request_dividend(&mut app, company, u64::MAX, founder);
+        app.update();
+        assert_eq!(balance_of(&app, person), 4_400);
+        assert_eq!(
+            app.world().get::<CompanyAccount>(treasury).unwrap().cash,
+            400
+        );
+        assert_eq!(capacity_of(&app, treasury).retained_profit, 0);
+        assert_eq!(take_outcomes(&mut app)[0].paid, 4_200);
+
+        // Day 1: 10.00 coin of new sales rebuild only part of the 36.00 coin
+        // that was returned; the automatic policy stays paused.
+        app.world_mut()
+            .get_mut::<BusinessAccount>(site)
+            .unwrap()
+            .record_sale(1, 1_000, 0, 10);
+        app.world_mut()
+            .get_mut::<CompanyAccount>(treasury)
+            .unwrap()
+            .credit(1_000);
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
+        app.update();
+        assert_eq!(balance_of(&app, person), 4_400);
+        assert_eq!(
+            app.world()
+                .get::<CompanyManagementPolicy>(treasury)
+                .unwrap()
+                .last_dividend_day,
+            1,
+            "the day was reviewed; there was simply no retained profit"
+        );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.retained_profit, 0);
+        assert_eq!(
+            capacity.distributable, 1_000,
+            "the manual figure still shows the cash above the reserve"
+        );
+
+        // Day 2: cumulative profit exceeds cumulative withdrawals again.
+        app.world_mut()
+            .get_mut::<BusinessAccount>(site)
+            .unwrap()
+            .record_sale(2, 4_000, 0, 40);
+        app.world_mut()
+            .get_mut::<CompanyAccount>(treasury)
+            .unwrap()
+            .credit(4_000);
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 2;
+        app.update();
+        // 14.00 coin of profit above the runway again: 25% of it is 3.50.
+        assert_eq!(balance_of(&app, person), 4_750);
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.retained_profit, 1_050);
+        assert_eq!((capacity.last_paid_day, capacity.last_paid), (2, 350));
+    }
+
+    #[test]
+    fn capacity_is_republished_within_one_world_hour_of_a_treasury_change() {
+        let mut app = finance_app();
+        let founder = PersonId(130);
+        let company = CompanyId(131);
+        app.world_mut().spawn((founder, Wallet::new(0)));
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 2_000,
+                    ..default()
+                },
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 0,
+                    ..default()
+                },
+                CompanyDividendCapacity::default(),
+            ))
+            .id();
+        let mut account = BusinessAccount::default();
+        account.record_sale(0, 1_000, 0, 10);
+        app.world_mut().spawn(farm_site(company, 132, account));
+        let clock = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorldTime>>()
+            .single(app.world())
+            .unwrap();
+        let changed = |app: &mut App| {
+            app.world_mut()
+                .query_filtered::<Entity, Changed<CompanyDividendCapacity>>()
+                .iter(app.world())
+                .any(|entity| entity == treasury)
+        };
+
+        // The daily pass publishes 2,000 - 400 of reserve.
+        app.world_mut().clear_trackers();
+        app.world_mut().run_schedule(Update);
+        assert!(changed(&mut app));
+        assert_eq!(capacity_of(&app, treasury).distributable, 1_600);
+
+        // Sale proceeds land in the treasury mid-day. Within the same world
+        // hour the snapshot waits.
+        app.world_mut()
+            .get_mut::<CompanyAccount>(treasury)
+            .unwrap()
+            .credit(500);
+        app.world_mut().clear_trackers();
+        app.world_mut().run_schedule(Update);
+        assert!(!changed(&mut app));
+        assert_eq!(capacity_of(&app, treasury).distributable, 1_600);
+
+        // One world hour later the changed company is republished, once.
+        app.world_mut()
+            .get_mut::<WorldTime>(clock)
+            .unwrap()
+            .seconds_in_cycle += 60.0;
+        app.world_mut().clear_trackers();
+        app.world_mut().run_schedule(Update);
+        assert!(
+            changed(&mut app),
+            "a treasury change is published within the hour"
+        );
+        let capacity = capacity_of(&app, treasury);
+        assert_eq!(capacity.distributable, 2_100);
+        assert_eq!(capacity.day, 0);
+        app.world_mut().clear_trackers();
+        app.world_mut().run_schedule(Update);
+        assert!(!changed(&mut app), "the same figure is not published twice");
+    }
+
+    #[test]
+    fn a_quiet_treasury_never_republishes_capacity() {
+        let mut app = finance_app();
+        let founder = PersonId(140);
+        let company = CompanyId(141);
+        app.world_mut().spawn((founder, Wallet::new(0)));
+        let treasury = app
+            .world_mut()
+            .spawn((
+                company,
+                CompanyOwnership::sole(founder),
+                CompanyAccount {
+                    cash: 2_000,
+                    ..default()
+                },
+                CompanyManagementPolicy {
+                    automatic_payout_percent: 0,
+                    ..default()
+                },
+                CompanyDividendCapacity::default(),
+            ))
+            .id();
+        let mut account = BusinessAccount::default();
+        account.record_sale(0, 1_000, 0, 10);
+        let site = app.world_mut().spawn(farm_site(company, 142, account)).id();
+        let clock = app
+            .world_mut()
+            .query_filtered::<Entity, With<WorldTime>>()
+            .single(app.world())
+            .unwrap();
+        let changed = |app: &mut App| {
+            app.world_mut()
+                .query_filtered::<Entity, Changed<CompanyDividendCapacity>>()
+                .iter(app.world())
+                .any(|entity| entity == treasury)
+        };
+        app.world_mut().clear_trackers();
+        app.world_mut().run_schedule(Update);
+        assert!(changed(&mut app));
+        let published = capacity_of(&app, treasury);
+
+        // Hour after hour with an untouched treasury: nothing is written.
+        for hour in 1..=12 {
+            app.world_mut()
+                .get_mut::<WorldTime>(clock)
+                .unwrap()
+                .seconds_in_cycle += 60.0;
+            app.world_mut().clear_trackers();
+            app.world_mut().run_schedule(Update);
+            assert!(
+                !changed(&mut app),
+                "hour {hour} republished an unchanged capacity"
+            );
+        }
+        // A site ledger change that consolidation has not yet posted to the
+        // replicated treasury is not a treasury change either.
+        app.world_mut()
+            .get_mut::<BusinessAccount>(site)
+            .unwrap()
+            .record_sale(0, 500, 0, 5);
+        app.world_mut()
+            .get_mut::<WorldTime>(clock)
+            .unwrap()
+            .seconds_in_cycle += 60.0;
+        app.world_mut().clear_trackers();
+        app.world_mut().run_schedule(Update);
+        assert!(!changed(&mut app));
+        assert_eq!(capacity_of(&app, treasury), published);
     }
 
     #[test]

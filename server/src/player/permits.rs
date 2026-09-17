@@ -27,9 +27,10 @@ use shared::protocol::{
 use super::hero::OfflineHero;
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::village::{
-    minimum_startup_capital, road_access_blockers_for_new_plot, road_access_blockers_for_plot,
-    validate_manual_plot, BuildStage, BusinessProjectAccounting, ConstructionMaterialRoutine,
-    ManualPlotApproval, PlayerConstructionAssignment, UnderConstruction,
+    minimum_startup_capital, occupied_land_snapshot, road_access_blockers_for_new_plot,
+    road_access_blockers_for_plot, validate_manual_plot, BuildStage, BusinessProjectAccounting,
+    ConstructionMaterialRoutine, LandOwner, LaneReservation, ManualPlotApproval, PendingPlot,
+    PlacedBuilding, PlacementRefusal, PlayerConstructionAssignment, UnderConstruction,
 };
 use crate::world::village_roads::PlannedRoadAccess;
 
@@ -149,12 +150,14 @@ pub struct PlayerPermitWorld<'w, 's> {
         'w,
         's,
         (
+            Entity,
             &'static SettlementBuilding,
             &'static shared::components::BuildingOf,
             &'static PlayerPosition,
             Option<&'static PlayerRotation>,
             Option<&'static shared::components::OwnedBy>,
             Option<&'static OperatedBy>,
+            Option<&'static shared::components::BuildingId>,
         ),
     >,
     pending: Query<
@@ -178,7 +181,17 @@ pub struct PlayerPermitWorld<'w, 's> {
             &'static shared::components::RoadOf,
         ),
     >,
-    planned_accesses: Query<'w, 's, &'static PlannedRoadAccess>,
+    planned_accesses: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static PlannedRoadAccess,
+            Option<&'static UnderConstruction>,
+            Option<&'static SettlementBuilding>,
+            Option<&'static shared::components::BuildingId>,
+        ),
+    >,
     defenses: Query<'w, 's, &'static shared::components::SettlementDefenses>,
     civic_squares: Query<'w, 's, &'static shared::components::SettlementCivicSquare>,
     world_time: Query<'w, 's, &'static WorldTime>,
@@ -303,7 +316,7 @@ fn holding_count(
     let completed = world
         .buildings
         .iter()
-        .filter(|(_, building_of, _, _, owned_by, operated_by)| {
+        .filter(|(_, _, building_of, _, _, owned_by, operated_by, _)| {
             building_of.0 == settlement
                 && company.map_or_else(
                     || owned_by.is_some_and(|owned_by| owned_by.0 == owner),
@@ -345,7 +358,7 @@ fn owns_or_is_building_kind(
     world
         .buildings
         .iter()
-        .any(|(building, building_of, _, _, owned_by, operated_by)| {
+        .any(|(_, building, building_of, _, _, owned_by, operated_by, _)| {
             building_of.0 == settlement
                 && building.kind == kind
                 && company.map_or_else(
@@ -407,8 +420,24 @@ fn permit_price_for_player(
 fn reject(permit: Option<PermitId>, message: impl Into<String>) -> HeroPermitResult {
     HeroPermitResult {
         success: false,
-        outcome: HeroPermitOutcome::Rejected { permit },
+        outcome: HeroPermitOutcome::Rejected {
+            permit,
+            blocker: None,
+        },
         message: message.into(),
+    }
+}
+
+/// A refused plot keeps its structured blocker beside the sentence, so the
+/// client can highlight the reservation and show how far to move.
+fn reject_placement(permit: PermitId, refusal: PlacementRefusal) -> HeroPermitResult {
+    HeroPermitResult {
+        success: false,
+        outcome: HeroPermitOutcome::Rejected {
+            permit: Some(permit),
+            blocker: refusal.blocker,
+        },
+        message: refusal.message,
     }
 }
 
@@ -442,95 +471,63 @@ fn player_plot_snapshot(
     position: Vec3,
     rotation: f32,
     world: &PlayerPermitWorld,
-    accepted_accesses: &[PlannedRoadAccess],
+    accepted_accesses: &[LaneReservation],
     accepted_plots: &[(SettlementId, SettlementBuildingKind, Vec3, f32)],
-) -> Result<ManualPlotApproval, String> {
+) -> Result<ManualPlotApproval, PlacementRefusal> {
     let terrain = world
         .terrain
         .as_deref()
-        .ok_or_else(|| "Terrain is not ready yet.".to_string())?;
-    let mut occupied: Vec<_> = world
+        .ok_or_else(|| PlacementRefusal::from("Terrain is not ready yet."))?;
+    let placed_buildings: Vec<_> = world
         .buildings
         .iter()
-        .filter(|(_, building_of, ..)| building_of.0 == settlement_id)
-        .map(|(building, _, position, ..)| (position.0, building.kind.clearance()))
-        .chain(std::iter::once((
-            hall,
-            SettlementBuildingKind::Hall.clearance(),
-        )))
-        .chain(world.pending.iter().filter_map(|(_, pending, _)| {
-            (pending.settlement == settlement_entity)
-                .then_some((pending.position, pending.kind.clearance()))
-        }))
+        .filter(|(_, _, building_of, ..)| building_of.0 == settlement_id)
+        .map(
+            |(entity, building, _, position, rotation, _, _, id)| PlacedBuilding {
+                entity: Some(entity),
+                id: id.copied(),
+                kind: building.kind,
+                position: position.0,
+                rotation: rotation.map_or(0.0, |rotation| rotation.0),
+            },
+        )
+        .collect();
+    let pending_plots: Vec<_> = world
+        .pending
+        .iter()
+        .filter(|(_, pending, _)| pending.settlement == settlement_entity)
+        .map(|(entity, pending, _)| PendingPlot {
+            entity: Some(entity),
+            kind: pending.kind,
+            position: pending.position,
+            rotation: pending.rotation,
+        })
         .chain(
             accepted_plots
                 .iter()
                 .filter(|(accepted_settlement, ..)| *accepted_settlement == settlement_id)
-                .map(|(_, accepted_kind, accepted_position, _)| {
-                    (*accepted_position, accepted_kind.clearance())
+                .map(|(_, accepted_kind, accepted_position, accepted_rotation)| {
+                    PendingPlot {
+                        entity: None,
+                        kind: *accepted_kind,
+                        position: *accepted_position,
+                        rotation: *accepted_rotation,
+                    }
                 }),
         )
         .collect();
-    for (building, building_of, position, rotation, ..) in world.buildings.iter() {
-        if building_of.0 != settlement_id {
-            continue;
-        }
-        if let (Some(fields), Some(field_half)) = (
-            building
-                .kind
-                .field_positions(position.0, rotation.map_or(0.0, |rotation| rotation.0)),
-            building.kind.field_half_extents(),
-        ) {
-            occupied.extend(fields.into_iter().map(|field| {
-                (
-                    field,
-                    field_half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                )
-            }));
-        }
-    }
-    occupied.extend(world.fields.iter().flat_map(|(field, p, r)| {
-        field
-            .reservation_rects(p.0, r.0, 2.)
-            .into_iter()
-            .map(|(center, half, _)| (center, half.length()))
-    }));
-    for (_, pending, _) in world.pending.iter() {
-        if pending.settlement_id != settlement_id {
-            continue;
-        }
-        if let (Some(fields), Some(field_half)) = (
-            pending
-                .kind
-                .intended_field_positions(pending.position, pending.rotation),
-            pending.kind.intended_field_half_extents(),
-        ) {
-            occupied.extend(fields.into_iter().map(|field| {
-                (
-                    field,
-                    field_half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                )
-            }));
-        }
-    }
-    for (accepted_settlement, accepted_kind, accepted_position, accepted_rotation) in
-        accepted_plots.iter().copied()
-    {
-        if accepted_settlement != settlement_id {
-            continue;
-        }
-        if let (Some(fields), Some(field_half)) = (
-            accepted_kind.intended_field_positions(accepted_position, accepted_rotation),
-            accepted_kind.intended_field_half_extents(),
-        ) {
-            occupied.extend(fields.into_iter().map(|field| {
-                (
-                    field,
-                    field_half.length() + shared::components::FARM_FIELD_TERRACE_MARGIN,
-                )
-            }));
-        }
-    }
+    // The same snapshot NPC planning searches: shells, doorways, crop plots,
+    // pastures and the Hall, so the player command cannot see less land than
+    // the planner does.
+    let occupied = occupied_land_snapshot(
+        hall,
+        &placed_buildings,
+        &pending_plots,
+        world
+            .fields
+            .iter()
+            .map(|(field, position, rotation)| (field, position.0, rotation.0)),
+    );
 
     let roads: Vec<_> = world
         .roads
@@ -540,8 +537,13 @@ fn player_plot_snapshot(
     let mut planned_accesses: Vec<_> = world
         .planned_accesses
         .iter()
-        .filter(|access| access.settlement_id == settlement_id)
-        .cloned()
+        .filter(|(_, access, ..)| access.settlement_id == settlement_id)
+        .map(|(entity, access, site, building, id)| {
+            LaneReservation::new(
+                access,
+                LandOwner::of_reserving_entity(entity, site, building, id),
+            )
+        })
         .collect();
     planned_accesses.extend(
         accepted_accesses
@@ -549,39 +551,15 @@ fn player_plot_snapshot(
             .filter(|access| access.settlement_id == settlement_id)
             .cloned(),
     );
-    let mut blockers: Vec<_> = world
-        .buildings
+    let mut blockers: Vec<_> = placed_buildings
         .iter()
-        .filter(|(_, building_of, ..)| building_of.0 == settlement_id)
-        .flat_map(|(building, _, position, rotation, ..)| {
-            road_access_blockers_for_plot(
-                building.kind,
-                position.0,
-                rotation.map_or(0.0, |rotation| rotation.0),
-            )
+        .flat_map(|building| {
+            road_access_blockers_for_plot(building.kind, building.position, building.rotation)
         })
         .collect();
-    blockers.extend(
-        world
-            .pending
-            .iter()
-            .filter(|(_, pending, _)| pending.settlement_id == settlement_id)
-            .flat_map(|(_, pending, _)| {
-                road_access_blockers_for_new_plot(pending.kind, pending.position, pending.rotation)
-            }),
-    );
-    blockers.extend(
-        accepted_plots
-            .iter()
-            .filter(|(accepted_settlement, ..)| *accepted_settlement == settlement_id)
-            .flat_map(|(_, accepted_kind, accepted_position, accepted_rotation)| {
-                road_access_blockers_for_new_plot(
-                    *accepted_kind,
-                    *accepted_position,
-                    *accepted_rotation,
-                )
-            }),
-    );
+    blockers.extend(pending_plots.iter().flat_map(|plot| {
+        road_access_blockers_for_new_plot(plot.kind, plot.position, plot.rotation)
+    }));
 
     blockers.extend(
         world
@@ -659,7 +637,7 @@ pub fn handle_hero_permit_orders(
     mut company_finance: PlayerCompanyFinance,
 ) {
     let day = world.world_time.iter().next().map_or(0, |time| time.day);
-    let mut accepted_accesses = Vec::<PlannedRoadAccess>::new();
+    let mut accepted_accesses = Vec::<LaneReservation>::new();
     let mut accepted_plots = Vec::<(SettlementId, SettlementBuildingKind, Vec3, f32)>::new();
 
     for (remote, mut receiver, mut sender) in links.iter_mut() {
@@ -889,7 +867,7 @@ pub fn handle_hero_permit_orders(
                     // The board replicates no entity ids: resolve the listing
                     // back through (settlement, kind, position).
                     let target = world.sales.iter().find_map(|(entity, sale)| {
-                        if let Ok((building, building_of, building_position, ..)) =
+                        if let Ok((_, building, building_of, building_position, ..)) =
                             world.buildings.get(entity)
                         {
                             return (building.kind == kind
@@ -1057,8 +1035,8 @@ pub fn handle_hero_permit_orders(
                         &accepted_plots,
                     ) {
                         Ok(approval) => approval,
-                        Err(reason) => {
-                            sender.send::<ReliableChannel>(reject(Some(permit), reason));
+                        Err(refusal) => {
+                            sender.send::<ReliableChannel>(reject_placement(permit, refusal));
                             continue;
                         }
                     };
@@ -1136,7 +1114,10 @@ pub fn handle_hero_permit_orders(
                             capital_expenditure: entry.fee_escrow,
                         });
                     }
-                    accepted_accesses.push(planned_access);
+                    accepted_accesses.push(LaneReservation::new(
+                        &planned_access,
+                        LandOwner::pending(None, entry.kind),
+                    ));
                     accepted_plots.push((
                         entry.settlement,
                         entry.kind,
@@ -1328,6 +1309,63 @@ pub fn handle_hero_construction_orders(
 mod tests {
     use super::*;
     use bevy::ecs::system::SystemState;
+
+    /// The player command must see exactly the land NPC planning sees. A
+    /// completed Livestock Farm's fenced pasture is reserved by
+    /// `consider_permits`; the same snapshot must refuse a cabin standing in
+    /// it even when the cabin's centre is beyond the farm's coarse disc.
+    #[test]
+    fn player_snapshot_reserves_existing_pastures_like_npc_planning() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let mut terrain = shared::terrain::WorldTerrain::default();
+        let hall = Vec3::new(1700.0, 80.0, 0.0);
+        terrain.apply_flatten_rect(hall, Vec2::splat(160.0), 0.0, 4.0);
+        world.insert_resource(terrain);
+        let settlement_id = SettlementId(1);
+        let settlement = world.spawn((settlement_id, PlayerPosition(hall))).id();
+        let kind = SettlementBuildingKind::LivestockFarm;
+        let farm = Vec3::new(hall.x + 50.0, hall.y, hall.z + 30.0);
+        world.spawn((
+            SettlementBuilding {
+                kind,
+                settlement: "Lab Meadow".into(),
+                owner: None,
+                quality: 0.5,
+                workers: Vec::new(),
+            },
+            shared::components::BuildingOf(settlement_id),
+            shared::components::BuildingId(5),
+            PlayerPosition(farm),
+            PlayerRotation(0.0),
+        ));
+        let pasture = kind.pasture_position(farm, 0.0).unwrap();
+        let half = kind.pasture_half_extents().unwrap();
+        // The cabin's rear wall stands 1.7 m inside the fence line while its
+        // centre is 21 m from the barn, outside the old 20 m disc.
+        let house = Vec3::new(pasture.x, hall.y, pasture.z + half.y + 2.0);
+        let result = world
+            .run_system_once(move |permit_world: PlayerPermitWorld| {
+                player_plot_snapshot(
+                    settlement,
+                    settlement_id,
+                    hall,
+                    SettlementBuildingKind::House,
+                    house,
+                    std::f32::consts::PI,
+                    &permit_world,
+                    &[],
+                    &[],
+                )
+            })
+            .expect("the permit snapshot system runs");
+        let refusal = result.expect_err("a cabin standing inside a fenced pasture must be refused");
+        assert_eq!(refusal.message, "Overlaps LIVESTOCK FARM #5's pasture.");
+        let blocker = refusal.blocker.expect("land refusals carry a structured blocker");
+        assert_eq!(blocker.kind, shared::protocol::PlacementBlockerKind::Pasture);
+        assert_eq!(blocker.building, Some(shared::components::BuildingId(5)));
+        assert!(blocker.shortfall_cm > 0);
+    }
 
     #[test]
     fn surrender_refunds_only_the_paid_permit_fee() {

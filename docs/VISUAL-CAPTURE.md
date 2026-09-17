@@ -595,8 +595,9 @@ different experiment.
 `environment` is applied before Bevy plugins or assets initialize. It is the declarative form of
 the existing capture fixtures such as `FISTFORCE_CAPTURE_SETTLEMENT`,
 `FISTFORCE_CAPTURE_HERO`, `FISTFORCE_CAPTURE_DINGHY`, `FISTFORCE_CAPTURE_ENCYCLOPEDIA`,
-`FISTFORCE_CAPTURE_PAUSE`, and `FISTFORCE_CAPTURE_PERMIT_PLACEMENT`. These are trusted local
-developer inputs, not data accepted from a multiplayer server.
+`FISTFORCE_CAPTURE_PAUSE`, `FISTFORCE_CAPTURE_PERMIT_PLACEMENT` and
+`FISTFORCE_CAPTURE_PERMIT_TOUR`. These are trusted local developer inputs, not data accepted
+from a multiplayer server.
 
 ## Readiness and assertions
 
@@ -1392,16 +1393,18 @@ BEVY_ASSET_ROOT="$PWD/client/assets" target/playtest/capture \
 
 [`ui-company-dividends.ron`](../capture/scenarios/ui-company-dividends.ron) photographs the
 same page on its COMPANY tab, scrolled to TREASURY & DIVIDENDS
-(`FISTFORCE_CAPTURE_BUSINESS_PAGE=company`, `FISTFORCE_CAPTURE_BUSINESS_SCROLL=480`). The
-staged company carries a `CompanyDividendCapacity` (315.00 coin distributable on day 12,
-18.50 coin reserves, 250.00 coin last paid on day 11), the draft is preset to 150.00 coin
-(`FISTFORCE_CAPTURE_DIVIDEND_DRAFT=15000`) and a deferred server reply is staged in the
-feedback line (`FISTFORCE_CAPTURE_BUSINESS_FEEDBACK=ok:...`). The inspected shot shows the
+(`FISTFORCE_CAPTURE_BUSINESS_PAGE=company`, `FISTFORCE_CAPTURE_BUSINESS_SCROLL=660`). The
+staged company carries a `CompanyDividendCapacity` (71.00 coin distributable on day 12: the
+89.50 coin treasury above 18.50 coin of reserves; 250.00 coin last paid on day 11), the draft
+is preset to 50.00 coin (`FISTFORCE_CAPTURE_DIVIDEND_DRAFT=5000`) and a deferred server
+reply is staged in the feedback line (`FISTFORCE_CAPTURE_BUSINESS_FEEDBACK=ok:...`). The
+inspected shot shows the CONTRIBUTE PERSONAL COIN row (presets, the
+`-1 COIN / +1 COIN / +10 COIN / ALL` capital stepper and its confirm control), the
 `Available now … · reserves … · last paid …` line, the `-1 COIN / +1 COIN / 25% / 50% / ALL`
-picker, `DISTRIBUTE 150.00 COIN`, the IF DISTRIBUTED NOW preview (`1.50 coin` per 10
-shares, the 720-share holder's `108.00 coin`) and the reply text. The numbers are fixture
-values, not a finance-pass result; the two scene assertions check populated settlements and
-villagers only.
+picker, `DISTRIBUTE 50.00 COIN`, the IF DISTRIBUTED NOW preview (`0.50 coin` per 10
+shares, the 720-share holder's `36.00 coin`) and the reply text naming the
+profit / return-of-capital split and the reserve. The numbers are fixture values, not a
+finance-pass result; the two scene assertions check populated settlements and villagers only.
 
 `capture/scenarios/ui-music.ron` tests the actual Escape-menu music switch and
 Bevy audio sinks at 1280×720. Its seven shots cover background playback, off,
@@ -1799,6 +1802,48 @@ proof; it does not simulate horse movement or damage on the client.
 labels, equipment controls and compatible reinforcements in the actual Army page.
 See [CAVALRY.md](CAVALRY.md) for gameplay scope and limitations.
 
+## Permit placement preview
+
+`capture/scenarios/permit-placement.ron` (`target: window`, `village_lab`) founds Brackwater
+at the origin with `FISTFORCE_CAPTURE_SETTLEMENT=1` and lets
+`FISTFORCE_CAPTURE_PERMIT_TOUR=1` (`client/src/capture/permit_placement.rs`) stage a street
+30 m north of the Hall with two completed cabins (`HOUSE #10`, `#11`) one frontage lot apart,
+a completed `FARMSTEAD #12` with both accepted fields, a pending cabin worksite whose
+`ReservedAccessLane` still runs to the street, and a real armed HOUSE permit. Each shot parks
+the placement cursor at a scripted spot through `CursorTerrainOverride` and holds Shift for
+free placement where the road magnet must stay out of the way:
+
+- `00-overview` / `01-clear`: open ground 40 m from the street, accepted as
+  `Legal expansion plot`;
+- `02-street-gap`: the cursor on the street snaps the cabin onto the setback between its two
+  neighbours (`Road frontage locked`);
+- `03-field-edge`: a cabin whose wall stops 0.7 m from the farm's fence is refused
+  `Too close to FARMSTEAD #12's wheat field: 0.7 m of 2.5 m.` with the field drawn as the red
+  keep-out;
+- `04-reserved-lane`: a cabin across the pending cabin's lane is refused
+  `Overlaps the access lane reserved for HOUSE (under construction).` with the corridor in red.
+
+Every shot writes `NAME.placement.json` beside the PNG with the cursor, the preview's
+position, rotation, validity, wording and named keep-out; the run fails when a shot's verdict
+or wording differs from the script. This is the client's own prediction over replicated
+components, not a connected Hall's answer: builder reach, dry doorway approaches, prop
+collisions and the lane survey are only judged by the server.
+
+```sh
+BEVY_ASSET_ROOT="$PWD/client/assets" cargo run --profile playtest -p client --bin capture -- \
+  --scenario capture/scenarios/permit-placement.ron
+```
+
+The 2026-09-17 run in ignored `logs/captures/permit-placement/` passed all five shots.
+Inspection: the overview frames the Hall, both cabins, the farm's planted fields and the
+orange expansion ghost; the street-gap shot shows the green snapped ghost exactly between
+the two cabins with both neighbours' shells and door aprons outlined faintly, the door ring,
+shackle and dashed connector to the frontage; the field-edge shot draws the offending field
+solid red with its 2.5 m yard dashed while the farm shell and the other field stay faint; the
+lane shot draws the pending cabin's corridor in red from the street across the ghost. The
+status card shows the shared wording in every case and the Hall-checks line only on
+accepted plots.
+
 ## Nested encyclopedia pages
 
 The maintained [nested ledger scenarios](../capture/scenarios/ledger-nested/README.md)
@@ -1815,7 +1860,14 @@ native keyboard events, clear and no-match states, company and workplace setting
 worker profile links and their return paths. Two workers deliberately share a name:
 navigation must resolve the requested `PersonId`, not the first matching name.
 It also checks separate retained scroll positions for the Site and Company tabs
-and opens company settings when no workplaces are observed.
+and opens company settings when no workplaces are observed. Phases 19-22 return
+from the empty company's settings page, type `cassia` into the Companies search
+field (one row, `1 of 3`, the selection kept on the hidden company), clear it
+(three rows), cycle the SORT key to NAME (Aldric Grain & Bread, Aldric New
+Venture, Cassia River Fish) and reverse the direction; the `.economy-ui.json`
+sidecars record `companies_query`, `company_sort`, `company_rows` and
+`selected_company` beside the earlier fields. Phases are matched by their numeric
+prefix, so new phases are appended rather than renumbered.
 
 ```sh
 cargo build --profile playtest -p client --bin capture
@@ -1830,13 +1882,19 @@ does not establish successful network transactions, worker production or frame
 performance. Its hidden-window input driver supplies window focus explicitly so
 native text input follows the same focus guard as an interactive game window.
 
-The 2026-09-15 acceptance produced 18 passing captures at each of 1600×1000 and
-1280×720 in ignored `logs/captures/economy-navigation-20260915-1600-v4/` and
-`logs/captures/economy-navigation-20260915-1280/`. Visual inspection found no
-material overflow or navigation defects in those views. The tab tour retained
-43 controls and independent 220/240 scroll offsets; it does not inspect every
-control at the bottom of the longer pricing and share sections. Workspace
-all-target checking and 1,828 tests passed (29 existing tests ignored).
+The 2026-09-16 rerun (after the Companies search field and SORT controls were
+added) produced 22 passing captures at each of 1600×1000 and 1280×720 in ignored
+`logs/captures/economy-navigation-20260916-1600/` and
+`logs/captures/economy-navigation-20260916-1280/`, with `ui-companies.ron` in
+`logs/captures/ui-companies-20260916/`. Visual inspection found no material
+overflow or navigation defects in those views: the count/sort row fits the
+sidebar at both sizes, the `^` ascending caret is small but legible, and the
+detail pane stays on the selected company while the list is searched or
+re-sorted. The tab tour retained 48 controls and independent 220/240 scroll
+offsets; it does not inspect every control at the bottom of the longer pricing
+and share sections. Workspace all-target checking passed with no warnings and
+the full client unit suite passed (609 tests, none ignored); the server and
+shared suites were not rerun for this UI change.
 
 ## Connected chat
 

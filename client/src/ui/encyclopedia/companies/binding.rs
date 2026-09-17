@@ -34,7 +34,9 @@ use shared::components::{
     BuildingId, PersonId, SettlementBuildingKind, SettlementId, ShipId, ShipOrderId,
     ShipOrderStatus, TradeRouteId, TradeRouteMode, TradeRouteStatus, COMPANY_TOTAL_SHARES,
 };
-use shared::economy::{format_money, BusinessSourcingMode, CompanyDayLedger, Good};
+use shared::economy::{
+    BusinessSourcingMode, COMPANY_DIVIDEND_FLOAT, CompanyDayLedger, Good, format_money,
+};
 use shared::protocol::HeroCompanyAction;
 use std::hash::{Hash, Hasher};
 
@@ -326,7 +328,9 @@ impl BoundValue {
 }
 
 /// Who the local hero is to this company. Each class spawns a different set
-/// of position nodes, so it is structural.
+/// of position nodes, so it is structural. Every class from `Shareholder` up
+/// holds shares and may donate capital; a sale that keeps the hero inside
+/// one class is a value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum OwnershipClass {
     NoHero,
@@ -334,7 +338,6 @@ pub(super) enum OwnershipClass {
     Shareholder,
     Majority,
     Master,
-    SoleMaster,
 }
 
 pub(super) fn ownership_class(
@@ -347,8 +350,6 @@ pub(super) fn ownership_class(
     let shares = company.shares_owned_by(person);
     if shares == 0 {
         OwnershipClass::NoShares
-    } else if company.master == person && shares == COMPANY_TOTAL_SHARES {
-        OwnershipClass::SoleMaster
     } else if company.master == person {
         OwnershipClass::Master
     } else if shares > COMPANY_TOTAL_SHARES / 2 {
@@ -762,7 +763,7 @@ impl<'a> CompanyView<'a> {
             )),
             CompanyField::PositionRole => {
                 BoundValue::text(match ownership_class(company, self.directory) {
-                    OwnershipClass::Master | OwnershipClass::SoleMaster => {
+                    OwnershipClass::Master => {
                         "You are Company Master and control operating decisions."
                     }
                     OwnershipClass::Majority => {
@@ -782,7 +783,9 @@ impl<'a> CompanyView<'a> {
                     OwnershipClass::NoShares => {
                         "You own no shares. Public offers are listed below; open COMPANY SETTINGS to trade."
                     }
-                    _ => "Personal coin becomes company capital, not revenue or profit.",
+                    _ => {
+                        "A donation becomes company capital, not revenue: it raises what is distributable and is recoverable only pro rata."
+                    }
                 })
             }
             CompanyField::RoutesHint => BoundValue::text(if self.ready_warehouse() {
@@ -801,14 +804,20 @@ impl<'a> CompanyView<'a> {
                 },
                 company.policy.payroll_reserve_days,
             )),
-            CompanyField::Dividends => BoundValue::text(if company.policy.automatic_dividends {
-                format!(
-                    "automatic after reserves  /  up to {} coin per day",
-                    format_money(company.policy.max_daily_dividend)
-                )
-            } else {
-                "retained until the Company Master distributes available profit".to_string()
-            }),
+            CompanyField::Dividends => {
+                BoundValue::text(if company.policy.pays_automatic_dividends() {
+                    format!(
+                        "Pays {}% of retained profit above the working-capital runway (wage and tax debt, each site's payroll days and input coverage, {} coin float) every day.",
+                        company.policy.automatic_payout_percent,
+                        format_money(COMPANY_DIVIDEND_FLOAT)
+                    )
+                } else {
+                    format!(
+                        "Profits are retained until the Company Master distributes them. Anything above wage and tax debt, one day of every site's payroll and a {} coin float may be paid, contributed capital included.",
+                        format_money(COMPANY_DIVIDEND_FLOAT)
+                    )
+                })
+            }
             CompanyField::DividendCapacity => BoundValue::text(match company.capacity {
                 None => "awaiting the first finance review".to_string(),
                 Some(capacity) => format!(

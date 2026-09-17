@@ -23,6 +23,47 @@ fn the_three_company_postures_roundtrip_on_the_wire() {
 }
 
 #[test]
+fn automatic_payout_is_a_floor_share_of_headroom_and_zero_retains() {
+    // Whole pennies, floored: 25% of 999 pennies is 249, never 250.
+    assert_eq!(automatic_payout(999, 25), 249);
+    assert_eq!(automatic_payout(1_000, 25), 250);
+    assert_eq!(automatic_payout(1_000, 10), 100);
+    assert_eq!(automatic_payout(1_000, 50), 500);
+    assert_eq!(
+        automatic_payout(3, 25),
+        0,
+        "a share below one penny pays nothing"
+    );
+    // Zero retains every penny of headroom.
+    assert_eq!(automatic_payout(1_000, 0), 0);
+    assert_eq!(automatic_payout(u64::MAX, 0), 0);
+    // The share is bounded even for a value the server would have rejected,
+    // and a full-range headroom neither overflows nor saturates wrongly.
+    assert_eq!(automatic_payout(1_000, 100), 500);
+    assert_eq!(automatic_payout(u64::MAX, 50), u64::MAX / 2);
+    // The policy wrapper agrees with the free function.
+    let retain = CompanyManagementPolicy {
+        automatic_payout_percent: 0,
+        ..default()
+    };
+    assert!(!retain.pays_automatic_dividends());
+    assert_eq!(retain.automatic_payout(1_000), 0);
+    let quarter = CompanyManagementPolicy {
+        automatic_payout_percent: 25,
+        ..default()
+    };
+    assert!(quarter.pays_automatic_dividends());
+    assert_eq!(quarter.automatic_payout(1_000), 250);
+    // NPC autopilots keep a measured, self-limiting default; player-founded
+    // companies override it to 0 when they are created.
+    assert_eq!(
+        CompanyManagementPolicy::default().automatic_payout_percent,
+        DEFAULT_NPC_PAYOUT_PERCENT
+    );
+    assert!((1..=MAX_AUTOMATIC_PAYOUT_PERCENT).contains(&DEFAULT_NPC_PAYOUT_PERCENT));
+}
+
+#[test]
 fn new_heroes_begin_with_twenty_coins_without_changing_villager_money() {
     assert_eq!(Wallet::founding_hero().balance(), 20 * PENNIES_PER_COIN);
     assert_eq!(Wallet::founding_villager().balance(), 10 * PENNIES_PER_COIN);
@@ -610,6 +651,39 @@ fn company_dividend_capacity_protects_payroll_inputs_and_liabilities() {
     account.record_company_dividend(1, draw);
     assert!(company.cash >= reserve.total_with_liabilities(&account));
     assert_eq!(account.retained_profit(), 0);
+}
+
+#[test]
+fn dividend_reserve_is_one_day_of_payroll_plus_liabilities() {
+    let wage = BusinessWagePolicy {
+        daily_wage: 100,
+        ..default()
+    };
+    let mut account = BusinessAccount::default();
+    account.record_sale(1, 3_000, 0, 30);
+    account.incur_wages(1, 300);
+    account.incur_profit_tax(1, 100);
+    assert_eq!(
+        dividend_reserve(2, &wage, &account),
+        600,
+        "300 wage debt + 100 tax debt + one day of payroll for two positions"
+    );
+    assert_eq!(
+        dividend_reserve(0, &wage, &account),
+        400,
+        "no protected position leaves only the liabilities"
+    );
+    assert_eq!(
+        dividend_reserve(2, &wage, &BusinessAccount::default()),
+        200,
+        "input targets and strategy payroll days are not part of the dividend reserve"
+    );
+    let ruinous = BusinessWagePolicy {
+        daily_wage: u64::MAX,
+        ..default()
+    };
+    assert_eq!(dividend_reserve(2, &ruinous, &account), u64::MAX);
+    assert_eq!(COMPANY_DIVIDEND_FLOAT, 2 * PENNIES_PER_COIN);
 }
 
 #[test]

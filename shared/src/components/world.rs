@@ -220,6 +220,13 @@ impl WorldTime {
         (Self::SUNRISE_NORMALIZED + self.seconds_in_cycle / cycle).rem_euclid(1.0)
     }
 
+    /// The display clock's hour, `0..24` (0 = midnight), from the same linear
+    /// mapping as [`Self::normalized_time`]. Economy cadences that run "once
+    /// per world hour" compare this with the day, never raw cycle seconds.
+    pub fn clock_hour(&self) -> u32 {
+        ((self.normalized_time() * 24.0).floor() as u32).min(23)
+    }
+
     /// Sun position phase for lighting: elevation == `-cos(sun_phase())`,
     /// exactly the old `normalized * TAU` convention (PI/2 = sunrise on the
     /// horizon, PI = solar noon, 3*PI/2 = sunset). Derived from cycle

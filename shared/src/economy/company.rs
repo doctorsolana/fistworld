@@ -1,7 +1,7 @@
 //! Company treasuries, consolidation, branch policies and decision records.
 
 use super::money::signed_difference;
-use super::{BusinessStrategy, Good, PENNIES_PER_COIN};
+use super::{BusinessStrategy, Good};
 use crate::components::{CompanyOwnership, PersonId, COMPANY_TOTAL_SHARES};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -191,6 +191,28 @@ pub fn pro_rata_split(pennies: u64, ownership: &CompanyOwnership, out: &mut Vec<
     }
 }
 
+/// The automatic payout share NPC autopilots start with. Each day the finance
+/// pass distributes this percentage of the retained profit above the
+/// working-capital runway, so a firm earning a steady daily profit `P`
+/// settles at about `100 / percent` days of profit above its runway (four
+/// days at 25%) and pays out `P` per day from then on; a loss simply pays
+/// nothing. Chosen by measurement in the village lab; see
+/// `docs/COMPANY-ECONOMY-IMPLEMENTATION.md`, "NPC company decisions".
+pub const DEFAULT_NPC_PAYOUT_PERCENT: u8 = 25;
+
+/// The largest automatic payout share a Company Master may set. Half of the
+/// headroom per day already returns the whole buffer within a few days.
+pub const MAX_AUTOMATIC_PAYOUT_PERCENT: u8 = 50;
+
+/// The daily automatic dividend for `headroom` (consolidated retained profit
+/// above the working-capital runway): `headroom × percent / 100`, floored to
+/// whole pennies. `0` retains everything. The share never exceeds
+/// [`MAX_AUTOMATIC_PAYOUT_PERCENT`] even for a corrupt policy value.
+pub fn automatic_payout(headroom: u64, percent: u8) -> u64 {
+    let percent = u128::from(percent.min(MAX_AUTOMATIC_PAYOUT_PERCENT));
+    (u128::from(headroom) * percent / 100) as u64
+}
+
 /// Decisions applying to the whole legal company rather than one operating
 /// site. Individual sites still control their own product, price, wage offer,
 /// stock retention and input route.
@@ -198,11 +220,26 @@ pub fn pro_rata_split(pennies: u64, ownership: &CompanyOwnership, out: &mut Vec<
 pub struct CompanyManagementPolicy {
     pub strategy: BusinessStrategy,
     pub autopilot: bool,
-    pub automatic_dividends: bool,
-    pub max_daily_dividend: u64,
+    /// `0` retains every profit until the Company Master distributes it;
+    /// `1..=MAX_AUTOMATIC_PAYOUT_PERCENT` pays that share of the automatic
+    /// headroom (retained profit above the working-capital runway) once a
+    /// day. There is no other cap: the share is self-limiting.
+    pub automatic_payout_percent: u8,
     pub payroll_reserve_days: u8,
     pub last_review_day: u32,
     pub last_dividend_day: u32,
+}
+
+impl CompanyManagementPolicy {
+    /// Whether the finance pass distributes anything without a request.
+    pub fn pays_automatic_dividends(&self) -> bool {
+        self.automatic_payout_percent > 0
+    }
+
+    /// Today's automatic dividend for `headroom`; see [`automatic_payout`].
+    pub fn automatic_payout(&self, headroom: u64) -> u64 {
+        automatic_payout(headroom, self.automatic_payout_percent)
+    }
 }
 
 /// One resource decision for one company's operations in one settlement.
@@ -335,8 +372,7 @@ impl Default for CompanyManagementPolicy {
         Self {
             strategy,
             autopilot: true,
-            automatic_dividends: true,
-            max_daily_dividend: 2 * PENNIES_PER_COIN,
+            automatic_payout_percent: DEFAULT_NPC_PAYOUT_PERCENT,
             payroll_reserve_days: strategy.payroll_reserve_days(),
             last_review_day: u32::MAX,
             last_dividend_day: u32::MAX,
