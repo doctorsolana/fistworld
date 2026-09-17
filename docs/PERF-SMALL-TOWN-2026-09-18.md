@@ -10,8 +10,8 @@ for the first 120 s then 1x. Measurement window: the last 80 s of a 240 s run.
 **All runs are uncapped (`FISTFORCE_FRAME_CAP=0`).** Baselines run at **p50 ≈ 20.0 ms,
 p95 ≈ 21.8 ms** (≈ 50 fps) with `secure`; the dense-stress town baseline is 28.5 ms.
 
-Status: final except where marked. Sections 1-4 are done; §5 (implemented fix) was still
-being measured when this file was last written.
+Status: **final.** `cargo test --profile playtest -p client` on the final tree: 621 passed,
+0 failed. The attempted quiet-lane fix was measured, found neutral, and reverted (§5).
 
 ## 0. Measurement validity (decisions and limitations)
 
