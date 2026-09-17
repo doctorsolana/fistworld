@@ -69,16 +69,22 @@ pub struct CloudShadowParams {
     /// Generation each chunk entity last received. Chunks that stream out are
     /// pruned when the map outgrows the live chunk set.
     applied: HashMap<Entity, u32>,
+    /// `CloudFieldState::generation` last folded into a snapshot.
+    field_generation: Option<u32>,
 }
 
 /// The five palette lanes `sync_cloud_shadow_params` owns, as one snapshot.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct CloudShadowLanes {
     clouds_a: Vec4,
     clouds_b: Vec4,
     clouds_c: Vec4,
     climate: Vec4,
     storm: Vec4,
+    /// Baked cloud-shape window lane and the texture it was baked into; the
+    /// two travel together so a chunk never samples a window mismatch.
+    cloud_field: Vec4,
+    cloud_field_image: Handle<Image>,
 }
 
 /// At most `budget` pending writes, with never-initialized materials before
@@ -126,6 +132,7 @@ pub fn sync_cloud_shadow_params(
     terrain: Option<Res<WorldTerrain>>,
     mut terrain_materials: ResMut<Assets<TerrainSplatMaterial>>,
     mut water_materials: ResMut<Assets<ToonWaterMaterial>>,
+    field: Option<Res<super::cloud_field::CloudFieldState>>,
     mut state: Local<CloudShadowParams>,
 ) {
     let Some(world_time) = world_time_query.iter().next() else {
@@ -221,7 +228,10 @@ pub fn sync_cloud_shadow_params(
     {
         return;
     }
-    let write_due = match state.written {
+    let field_generation = field.as_ref().map(|field| field.generation);
+    let field_changed = field_generation != state.field_generation;
+    let write_due = field_changed
+        || match state.written {
         None => true,
         Some((a, b, c, s)) => {
             (clouds_a.x - a.x).abs() > COVERAGE_WRITE_STEP
@@ -253,16 +263,23 @@ pub fn sync_cloud_shadow_params(
         // entities missing from `applied`, so they are topped up the frame
         // they appear without a separate `is_added` path.
         state.generation = state.generation.wrapping_add(1);
+        state.field_generation = field_generation;
+        let (cloud_field, cloud_field_image) = match field.as_ref().and_then(|f| f.image.clone()) {
+            Some(image) => (field.as_ref().map(|f| f.lane).unwrap_or(Vec4::ZERO), image),
+            None => (Vec4::ZERO, Handle::default()),
+        };
         state.pending = Some(CloudShadowLanes {
             clouds_a,
             clouds_b,
             clouds_c,
             climate,
             storm,
+            cloud_field,
+            cloud_field_image,
         });
     }
 
-    let Some(lanes) = state.pending else {
+    let Some(lanes) = state.pending.clone() else {
         return;
     };
     let generation = state.generation;
@@ -282,6 +299,10 @@ pub fn sync_cloud_shadow_params(
             material.extension.palette.clouds_c = lanes.clouds_c;
             material.extension.palette.climate = lanes.climate;
             material.extension.palette.storm = lanes.storm;
+            material.extension.palette.cloud_field = lanes.cloud_field;
+            if material.extension.cloud_field != lanes.cloud_field_image {
+                material.extension.cloud_field = lanes.cloud_field_image.clone();
+            }
         }
         state.applied.insert(entity, generation);
     }

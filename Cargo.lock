@@ -2563,6 +2563,7 @@ dependencies = [
  "bevy",
  "bevy_dev_tools",
  "bytemuck",
+ "half",
  "image",
  "lightyear",
  "rand 0.8.5",

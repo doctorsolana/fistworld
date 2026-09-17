@@ -299,3 +299,42 @@ cargo test --profile playtest -p client      # 621 passed, 0 failed
 The generated reports, logs, traces and captures live under ignored
 `logs/perf-fundamentals/`; this document and the kill-switch/fix commits are the tracked
 deliverable.
+
+---
+
+# Follow-up (same evening): terrain cloud shadows from a baked field — implemented, +2.5 ms
+
+The audit above attributed ~2.7 ms of the 20 ms small-town frame to the per-fragment cloud
+density noise in `terrain_splat.wgsl` (two fbm + one ridge after a domain warp, 16
+value-noise taps per terrain pixel). The *shape* term is a pure function of cloud-space
+position: coverage is a threshold applied afterwards, wind is a translation, and the storm
+folds into coverage. So it is now baked once on the CPU (`cloud_field.rs`) into a 1024²
+R16Float texture over a window of cloud space around the map and sampled by the shader
+(`cloud_density_baked`), using the weight-map sampler so no sampler binding is added
+(Metal caps samplers per stage). The window slides with the wind; a re-bake runs on a
+background task when the drift nears the margin, and `sync_cloud_shadow_params` swaps the
+texture handle and the window lane into each chunk together, so no chunk ever pairs a
+window with the wrong texture. Kill switch: `FISTFORCE_CLOUD_FIELD=0` (per-fragment path).
+
+Measured with `run_uncapped.sh` (secure, uncapped, display on/unlocked, cool probes):
+
+| pair | per-fragment (off) p50 / p95 | baked field (on) p50 / p95 | Δ p50 |
+|---|---:|---:|---:|
+| 1 | 19.89 / 21.18 | 17.24 / 19.66 | **−2.65** |
+| 2 | 19.58 / 20.93 | 17.30 / 19.73 | **−2.28** |
+| 3 (cadence fix, on only) | — | 16.31 / 18.65 | — |
+
+Capture A/B (`cloud-shadow-diff.ron`, forced cloudy): mean 0.38/255, p99 14, max 20,
+1.77 % of pixels changed > 8/255, overall brightness 129.4 vs 129.1 — the same shadows in
+the same places; the residual is CPU-vs-GPU `sin` precision in the hash plus bilinear
+texels (3.6 m on this 560 m map, ~12 m at the full 8.2 km map). Side-by-side inspection
+showed no visible difference.
+
+Cadence: the first version re-baked whenever the wind drifted 20 % of the half extent, which
+on the 560 m lab map meant every ~70 s at 1x and every ~3 s at 10x warp (35 bakes per
+run, no hitches). The threshold is now the window margin minus a 600 m projection/slack
+reserve: 6 bakes per run, none at 1x. Tests: `cloud_field::tests` (shape range and
+determinism, WGSL `fract` semantics, window coverage, drift reserve, half-float packing).
+
+Not done: the water shader (`toon_water.wgsl`) and the sky layer evaluate the same noise and
+could sample the same texture; water is worth ~1.3 ms in total, so the share is small.

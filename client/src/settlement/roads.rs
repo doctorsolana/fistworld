@@ -1188,6 +1188,7 @@ mod tests {
                     weight_map: handle.clone(),
                     albedo_array: default(),
                     normal_array: default(),
+                    cloud_field: default(),
                     params: shared::terrain::TerrainSplatParams {
                         layer_tiling: Vec4::ONE,
                         water_params: Vec4::ZERO,
