@@ -207,12 +207,27 @@ pub(crate) fn update_far_terrain_hole(
         .next()
         .and_then(|(_, controller)| controller.map(|c| c.zoom))
         .unwrap_or(0.0);
-    let detail_ready = !streaming.desired_order.is_empty()
-        && loaded_water.as_ref().is_some_and(|water| {
-            streaming.desired_order.iter().all(|coord| {
-                loaded_chunks.chunks.contains(coord) && water.entries.contains_key(coord)
-            })
+    // The cutout opens only when the whole desired square is ready. `water` is
+    // part of that contract: the detailed water surface and the coarse far
+    // water must switch together. When the water subsystem is switched OFF for
+    // an ablation, its entries never fill, and gating on them would also hide
+    // every detailed terrain chunk behind the coarse far mesh -- i.e. the
+    // "water off" arm would silently be a "terrain off" arm too. The kill
+    // switch therefore removes the water surface WITHOUT changing which
+    // terrain the scene draws.
+    let water_ready = !crate::profiling::env_enabled_by_default("FISTFORCE_WATER")
+        || loaded_water.as_ref().is_some_and(|water| {
+            streaming
+                .desired_order
+                .iter()
+                .all(|coord| water.entries.contains_key(coord))
         });
+    let detail_ready = !streaming.desired_order.is_empty()
+        && water_ready
+        && streaming
+            .desired_order
+            .iter()
+            .all(|coord| loaded_chunks.chunks.contains(coord));
     let hole_filled = zoom > crate::terrain::map_view::HOLE_FILL_ZOOM;
 
     // Preserve the previous close-view hole while the leading chunk ring is
