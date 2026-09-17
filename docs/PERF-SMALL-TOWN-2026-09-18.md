@@ -338,3 +338,55 @@ determinism, WGSL `fract` semantics, window coverage, drift reserve, half-float 
 
 Not done: the water shader (`toon_water.wgsl`) and the sky layer evaluate the same noise and
 could sample the same texture; water is worth ~1.3 ms in total, so the share is small.
+
+## 7. Follow-up: terrain-shader per-pixel ablation (2026-09-18, after the cloud bake)
+
+Context: commit `d6bb2c4b` (by the reviewing agent) baked the terrain cloud-shadow shape
+into a texture and moved the small-town baseline from ~20.0 ms to **~18.0 ms**. That left the
+terrain material's own per-pixel work as the open question. `FISTFORCE_TERRAIN_DEBUG_MODE`
+(commit `4c6f7610`) now sets ablation bits in `TerrainSplatParams::debug_mode`
+(`shared/src/terrain/material.rs`): **16** skip normal maps, **32** skip albedo textures,
+**64** skip the mottle/wear ground noise; names `normal`, `albedo`, `neither`, `noise`,
+`all` are accepted. The shader gates each block behind a uniform branch and substitutes the
+flat palette (`client/assets/shaders/terrain_splat.wgsl`), so the fetches are not issued.
+
+Paired, uncapped 240 s runs on `secure` (baseline ≈ 18.0 ms):
+
+| mode | rep | base p50 | mode p50 | Δ50 | Δ95 | note |
+|---|---:|---:|---:|---:|---:|---|
+| normal | 1 | 18.01 | 18.05 | **+0.04** | +0.56 | second pair refused (screen locked 23:25) |
+| neither (normal+albedo) | 2 | 17.98 | 17.89 | **−0.09** | −0.04 | albedo pair refused; see `all` |
+| noise | 1 | 18.02 | 16.40 | **−1.62** | −1.29 | |
+| noise | 2 | 17.83 | 16.46 | **−1.37** | −1.94 | mean **−1.49** |
+| all (normal+albedo+noise) | 1 | 17.86 | 16.42 | **−1.44** | −1.27 | |
+| all | 2 | 17.70 | 16.50 | **−1.20** | −2.99 | mean **−1.32** |
+
+`all` is the same as `noise` within noise, so **normal maps and albedo textures together
+cost ≈ 0 ms** at this camera; only the ground noise moves the frame. (Normal sampling is
+already distance-LOD'd by the shader's `normal_strength > 0.001` gate and the per-chunk
+`splat_normal_radius`, which is why removing it does nothing at zoom 280.)
+
+Visual diff vs baseline (capture scenario `terrain-shader-diff.ron`, clear sky, 1400x900;
+far = zoom 280, near = zoom 45):
+
+| mode | far max / mean / % >8 | near max / mean / % >8 |
+|---|---|---|
+| normal | 35 / 0.40 / 0.00 % | 23 / 0.82 / 0.01 % |
+| albedo | 29 / 3.13 / 0.04 % | 59 / 5.20 / 0.21 % |
+| neither | 29 / 3.14 / 0.04 % | 60 / 5.22 / 0.59 % |
+| noise | 44 / 4.87 / **13.33 %** | 38 / 4.89 / **7.15 %** |
+| all | 43 / 6.44 / **29.54 %** | 59 / 8.13 / **42.74 %** |
+
+Reading:
+- **Normal maps: free and nearly invisible — no action.** The distance-LOD idea should not
+  be applied to them.
+- **Albedo fetches: free.** The flat-palette fallback is also visually close (0.04 % of far
+  pixels >8), so a texture distance-LOD would buy nothing. Not worth the risk.
+- **The ground mottle/wear noise is the one real terrain-material cost: ~1.5 ms, and it is
+  load-bearing visually** (13 % of far pixels change when it is removed). The fix is the
+  same pattern the cloud field already proved: bake the static world-space mottle/wear
+  fields into a small texture (they are static, so once per map, even cheaper than the cloud
+  bake) and sample it. Do not remove the noise.
+
+Reproduce: `FISTFORCE_TERRAIN_DEBUG_MODE=noise ./target/playtest/client` etc.; capture with
+`logs/perf-fundamentals/terrain-shader-diff.ron` (both paths under ignored `logs/`).
