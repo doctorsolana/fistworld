@@ -10,9 +10,40 @@ use super::materials::{TerrainRenderAssets, TerrainSplatExtension, TerrainSplatM
 use super::paint::build_weightmap_from_weights;
 
 /// Resource tracking which chunks are currently loaded.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Clone)]
 pub struct TerrainDebugSettings {
     pub mode: u32,
+}
+
+/// `FISTFORCE_TERRAIN_DEBUG_MODE`: numeric mode, or one of the shader-ablation
+/// names `normal`, `albedo`, `neither`, `noise`, `all`. E.g. `all` disables
+/// normal maps, albedo textures and the ground noise in one build, so the
+/// terrain material's per-pixel budget can be measured with paired runs.
+impl Default for TerrainDebugSettings {
+    fn default() -> Self {
+        let mode = std::env::var("FISTFORCE_TERRAIN_DEBUG_MODE")
+            .ok()
+            .and_then(|raw| parse_terrain_debug_mode(&raw))
+            .unwrap_or(0);
+        Self { mode }
+    }
+}
+
+fn parse_terrain_debug_mode(raw: &str) -> Option<u32> {
+    use shared::terrain::{
+        TERRAIN_DEBUG_SKIP_ALBEDO, TERRAIN_DEBUG_SKIP_NOISE, TERRAIN_DEBUG_SKIP_NORMALS,
+    };
+    let raw = raw.trim().to_ascii_lowercase();
+    match raw.as_str() {
+        "normal" | "normals" => Some(TERRAIN_DEBUG_SKIP_NORMALS),
+        "albedo" | "textures" => Some(TERRAIN_DEBUG_SKIP_ALBEDO),
+        "neither" => Some(TERRAIN_DEBUG_SKIP_NORMALS | TERRAIN_DEBUG_SKIP_ALBEDO),
+        "noise" => Some(TERRAIN_DEBUG_SKIP_NOISE),
+        "all" => Some(
+            TERRAIN_DEBUG_SKIP_NORMALS | TERRAIN_DEBUG_SKIP_ALBEDO | TERRAIN_DEBUG_SKIP_NOISE,
+        ),
+        other => other.parse::<u32>().ok(),
+    }
 }
 
 #[derive(Resource, Default)]
@@ -104,6 +135,13 @@ pub(super) fn sync_terrain_debug_materials(
     if !debug_settings.is_changed() {
         return;
     }
+    if debug_settings.mode != 0 {
+        info!(
+            "Terrain debug mode {} (mode {})",
+            terrain_debug_mode_label(debug_settings.mode),
+            debug_settings.mode
+        );
+    }
     for (_id, material) in materials.iter_mut() {
         material.extension.params.debug_mode = debug_settings.mode;
     }
@@ -114,6 +152,11 @@ fn terrain_debug_mode_label(mode: u32) -> &'static str {
         1 => "Weights RGBA",
         2 => "Cobblestone Only",
         3 => "Grass Only",
+        16 => "No normal maps",
+        32 => "No albedo textures",
+        48 => "No normal maps + no albedo textures",
+        64 => "No ground noise",
+        112 => "No normal maps + no albedo textures + no ground noise",
         _ => "Lit (Normal)",
     }
 }
