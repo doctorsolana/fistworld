@@ -185,6 +185,10 @@ appear as a span (it is `materials.get_mut` churn); the freeze switch bounds it 
 - **TAA alone −0.98 ms**, and the temporal shadow filter adds ~0.5 (shadow-filter-hw −1.47).
 - **Shadows (2 cascades, 2048², 700 m span) ~1.3 ms clean**; all 289 terrain chunks cast
   (no `NotShadowCaster` on chunk meshes, `terrain/streaming/spawn.rs:179`).
+  `FISTFORCE_RIG_VIS_DIAG=1` on the secure town: the main 3D view lists **330 meshes**; the
+  sun's cascades list **1,167 caster entries** per frame (of which 15 are villager parts);
+  the fill light casts 0. The 2D present camera lists **0** meshes (the off-screen
+  visibility bug from the previous audit is fixed on this branch).
 - **Props/trees/grass −1.60 ms**; grass instances are 81 batches / 12,228 instances at this
   camera, and grass does not cast (`enable_shadows() = false`,
   `props/ground_cover_instancing.rs:75`).
