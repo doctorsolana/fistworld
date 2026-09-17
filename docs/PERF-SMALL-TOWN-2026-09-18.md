@@ -41,17 +41,21 @@ while the game window was up.
 
 **With nothing but a 17-villager town on screen the frame costs ~20 ms (50 fps), and it is
 not one thing — it is a ~10.9 ms main-thread game frame plus a ~20 ms render side that the
-main thread then waits ~10 ms for. The single largest code-fixable cost is the cloud-shadow
-terrain material sweep at −2.7 ms; the largest knob is the 3D render scale (−3.6 ms at 0.5);
-no single subsystem explains more than ~18% of the frame.**
+main thread then waits ~10 ms for. The frame is spread across fill-rate and small per-frame
+render costs: the largest single knob is the 3D render scale (−3.6 ms at 0.5), and the
+largest single feature cost is cloud shading on terrain + sky (−3.4 ms together, of which
+~2.7 ms is the terrain/water cloud-shade fragment path). No single low-risk code change
+beyond ~1 ms was found; the one that looked like it (the cloud-lane material sweep) was
+implemented, measured twice on `secure` and once on `dense-stress`, and had no effect
+(§5) — its apparent cost was a mislabeled diagnostic.**
 
 Ranking (paired, uncapped, p50 ms saved; see §2 for both repeats):
 
 | rank | change | Δ p50 | kind |
 |---:|---|---:|---|
 | 1 | render_scale 0.60 → 0.50 | −3.59 | setting |
-| 2 | clouds off | −3.40 | content |
-| 3 | **cloud-shadow lane sweep frozen** | **−2.73** | **structural, fixed here** |
+| 2 | clouds off (sky layer + terrain cloud shade) | −3.40 | content |
+| 3 | cloud shading on terrain/water (freeze diagnostic) | −2.73 | content/fill | <!-- see §2 note; not material writes -->
 | 4 | shadows off | −2.66 (−1.25 clean pair) | quality |
 | 5 | props/trees/grass off | −1.60 | content |
 | 6 | shadow filter (temporal+TA A) → hw | −1.47 | quality |
@@ -66,10 +70,12 @@ Ranking (paired, uncapped, p50 ms saved; see §2 for both repeats):
 cheaper than the whole small town, so the terrain/water/sky/UI floor is ~16 ms and the town's
 buildings, props and villagers add only ~4 ms on top.
 
-Top three fixes for this frame: (1) the cloud-shadow lane sweep (implemented, §5); (2) the
-residual render-side CPU — `write_binned_instance_buffers` 3.5 ms + `prepare_windows` 1.6 ms
-+ `queue_submit` 3.3 ms per frame; (3) shadow casting reach (shadows cost 1.3-2.7 ms for two
-2048² cascades that draw every terrain chunk).
+Top three *levers* for this frame, all quality/content tradeoffs measured here:
+(1) render scale 0.5 (−3.6 ms); (2) cloud shadows (terrain shading ~2.7 ms + sky layer
+~0.7 ms); (3) props/trees/grass (−1.6 ms), water (−1.3 ms), shadow casting (−1.3 ms), fog
+(−1.2 ms), TAA (−1.0 ms). The residual render-side CPU (`write_binned_instance_buffers`
+3.5 ms, `prepare_windows` 1.6 ms, `queue_submit` 3.3 ms) is Bevy/driver plumbing and the
+GPU backpressure point, not client code.
 
 ## 2. Uncapped ablation ladder (both repeats, paired)
 
@@ -116,6 +122,14 @@ Notes on the two suspect rows:
   The switch was fixed to keep the hole logic identical (`FISTFORCE_WATER=0` no longer
   affects terrain selection) and the corrected measurement is −1.33 ms. The confounded
   results are kept in `logs/perf-fundamentals/confounded-water-v1/`.
+- `cloud-shadow-freeze` does **not** measure the material lane writes, despite its name.
+  It returns after the first lane write, so only the first sweep's 48 chunk materials carry
+  real cloud parameters; the other ~241 chunks keep `stylized_palette()`'s default
+  `clouds_b = ZERO` (`shared/src/terrain/material.rs:239-243`) and the terrain fragment
+  shader skips its cloud-shade block (`terrain_splat.wgsl:728`,
+  `if palette.clouds_b.z > 0.0005`). The −2.73 ms is therefore cloud *shading* on ~83% of
+  the terrain, not the cost of writing uniforms. The actual write cost is the quiet-mode
+  A/B in §5: **zero**.
 
 ## 3. Trace (uncapped secure town, 150 s, 17 GB, tail 30 s)
 
@@ -161,9 +175,11 @@ appear as a span (it is `materials.get_mut` churn); the freeze switch bounds it 
 
 ### Confirmed (paired numbers in §2)
 
-- **Cloud-shadow lane sweep is the top structural cost: −2.73 ms.** Every
-  `materials.get_mut` on a chunk's `TerrainSplatMaterial` re-prepares five uniform buffers
-  and a bind group (`cloud_shadows.rs:31-50`). The freeze switch isolates it.
+- **Cloud shading on terrain costs ~2.7 ms, and the sky layer ~0.7 ms more.** Measured by
+  the freeze diagnostic (terrain shade off, §2 note and §5) and clouds-off. Each
+  `materials.get_mut` on a chunk material does re-prepare five uniform buffers and a bind
+  group (`cloud_shadows.rs:31-50`), but the A/B in §5 shows that write path costs ~0 ms;
+  the 2.7 ms is the per-fragment cloud field in `terrain_splat.wgsl:728-741`.
 - **3D fill rate matters at this resolution: half-res −3.59 ms** (1764x1108 → 1470x923).
   Unlike the dense-town audit, uncapped small-town frames are not purely CPU-bound.
 - **TAA alone −0.98 ms**, and the temporal shadow filter adds ~0.5 (shadow-filter-hw −1.47).
@@ -211,23 +227,71 @@ appear as a span (it is `materials.get_mut` churn); the freeze switch bounds it 
 - **Per-frame terrain material rewrites at 1x**: `ClientPerfChangedMeshes` shows
   `std_material=0` per frame; the only writer is the cloud-lane sweep above.
 
-## 5. Implemented fix and its A/B
+## 5. Implemented change and its A/B — a measured negative, reverted
 
-**Chosen: the cloud-shadow terrain lane sweep** (largest code-fixable cost that is not a
-quality setting), behind `FISTFORCE_CLOUD_LANE_QUIET=1`:
+**What was implemented.** The apparent top structural cost was the cloud-shadow terrain
+lane sweep, so it was made quiet behind `FISTFORCE_CLOUD_LANE_QUIET=1`: a `LaneGate` widened
+every diff gate (anchor 1 s → 4 s, sun projection 0.01 → 0.05, coverage/strength 0.005 →
+0.02, speed 0.01 → 0.04) and a new snapshot was published only after the previous sweep had
+reached every live chunk. The shaders extrapolate drift from the anchor, so motion stays
+continuous with a lagged correction. `cargo test --profile playtest -p client`: 621 passed,
+0 failed.
 
-- `LaneGate` widens the diff gates (anchor 1 s → 4 s, sun projection 0.01 → 0.05, coverage
-  0.005 → 0.02, strength 0.005 → 0.02, speed 0.01 → 0.04).
-- A new snapshot is published only when the previous sweep has reached every live chunk
-  (`sweep_busy`), so a fast trigger stream can no longer re-upload the same chunk materials
-  every frame. Lanes are recomputed from live state each frame, so skipped snapshots lose
-  nothing.
-- The shaders already extrapolate cloud drift and sun sweep from the anchor, so motion stays
-  continuous; only the periodic correction lags (bounded by 4 s).
+**A/B (uncapped, paired, 240 s runs each):**
 
-Tests: `cargo test --profile playtest -p client` → **621 passed, 0 failed**.
+| pair | env | base p50 | quiet p50 | Δ50 | base p95 | quiet p95 | Δ95 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| secure, repeat 1 | `FISTFORCE_CLOUD_LANE_QUIET=1` | 19.41 | 19.95 | **+0.54** | 20.64 | 21.14 | +0.50 |
+| secure, repeat 2 | | 20.11 | 20.20 | **+0.09** | 21.52 | 21.41 | −0.11 |
+| dense-stress | | 28.40 | 28.40 | **0.00** | 35.52 | 37.58 | +2.06 |
 
-A/B (uncapped, `secure`, two pairs; dense-stress one pair) and the capture pixel diff are
-filled in below when the runs finish.
+**Pixel diff** (capture scenario `logs/perf-fundamentals/cloud-shadow-diff.ron`, forced
+`cloudy`, 1400x900, midday; `quiet-off.png` vs `quiet-on.png`): max **17/255**, mean 0.18,
+p99 5, p99.9 11, **0.29 % of pixels changed > 8/255**, overall brightness unchanged. So the
+change does alter the image slightly (lagged anchors) while buying **no** frame time.
 
-(Commands and reproduction are in §6; this section is completed last.)
+**Decision: reverted** (commit `07e4f561`). The measurement shows the lane writes cost ~0 ms
+at 1x — the freeze diagnostic's −2.73 ms was the terrain cloud-shade fragment path, not the
+writes (§2 note). What remains is correctly attributed in §1/§4; no low-risk code change
+above ~1 ms was found in this frame, so the actionable levers are the measured quality
+settings (render scale, cloud shadows, props, water, shadows, fog, TAA).
+
+## 6. Commands (reproduction)
+
+```sh
+# build (pinned toolchain; the machine shares rustup with other agents)
+RUSTUP_TOOLCHAIN=stable-aarch64-apple-darwin cargo build --profile playtest -p server -p client
+
+# uncapped small-town run (one condition); harness enforces display/lock/thermal gates,
+# writes <label>.meta.txt / .session.txt / .summary.txt into logs/perf-fundamentals/
+logs/perf-fundamentals/run_uncapped.sh <label> secure            # baseline
+logs/perf-fundamentals/run_uncapped.sh <label> secure FISTFORCE_SHADOWS=0   # example switch
+
+# the whole ladder (13 conditions, each baseline+switch twice, retries invalid sessions)
+logs/perf-fundamentals/ladder_uncapped.sh
+python3 logs/perf-fundamentals/collect_uncapped.py
+
+# server env used by every run
+CITYSIM_MAP_ID=village_lab FISTWORLD_VILLAGE_LAB_RUNTIME=1 FISTWORLD_LAB_SCENARIO=secure \
+FISTWORLD_LAB_WARP=10 FISTWORLD_DEV=1 ./target/playtest/server
+
+# chrome trace (separate target dir; both features are required)
+CARGO_TARGET_DIR=target-trace cargo build --profile playtest -p client \
+  --features bevy/trace,bevy/trace_chrome
+logs/perf-fundamentals/trace_run_small.sh          # 150 s, uncapped, TRACE_CHROME=trace.json
+python3 logs/perf-audit-2026-09-17/trace_tail2.py logs/perf-fundamentals/trace.json 30
+
+# the quiet-lane A/B and its pixel diff
+logs/perf-fundamentals/cloud_lane_pair.sh
+BEVY_ASSET_ROOT=$PWD/client/assets ./target/playtest/capture \
+  --scenario logs/perf-fundamentals/cloud-shadow-diff.ron
+BEVY_ASSET_ROOT=$PWD/client/assets FISTFORCE_CLOUD_LANE_QUIET=1 ./target/playtest/capture \
+  --scenario logs/perf-fundamentals/cloud-shadow-diff.ron   # then diff the two PNGs
+
+# tests
+cargo test --profile playtest -p client      # 621 passed, 0 failed
+```
+
+The generated reports, logs, traces and captures live under ignored
+`logs/perf-fundamentals/`; this document and the kill-switch/fix commits are the tracked
+deliverable.
