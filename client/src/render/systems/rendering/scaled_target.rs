@@ -83,7 +83,13 @@ pub(super) fn setup_scene_render_target(
 
     // Native-resolution present camera. Renders after the 3D camera and hosts
     // all UI (IsDefaultUiCamera) so HUD/menus stay sharp at any render scale.
-    commands.spawn((
+    // Empty render layers: this 2D camera sits at the world origin with the
+    // default orthographic box (viewport-sized, +-1000 m deep), and Bevy ORs
+    // ViewVisibility across every camera. Without this, every 3D entity within
+    // ~1.4 km of the origin was marked visible each frame regardless of what
+    // the 3D camera looked at, so it was extracted, batched and animated.
+    // UI does not use render layers and is unaffected.
+    let mut present = commands.spawn((
         PresentCamera,
         Camera2d,
         Camera {
@@ -93,6 +99,10 @@ pub(super) fn setup_scene_render_target(
         Msaa::Off,
         IsDefaultUiCamera,
     ));
+    // `FISTFORCE_VIS_FIX_OFF=1` restores the old behaviour for A/B measurement.
+    if std::env::var("FISTFORCE_VIS_FIX_OFF").is_err() {
+        present.insert(bevy::camera::visibility::RenderLayers::none());
+    }
 
     // Fullscreen upscale surface, kept behind every other UI root.
     commands.spawn((

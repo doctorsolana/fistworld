@@ -66,6 +66,9 @@ pub(super) const BODY_ANIMATION_FADE_SECONDS: f32 = 0.14;
 /// animating even when no view sees a single mesh part yet, so a character
 /// stepping into frame arrives mid-stride instead of catching up by a frame.
 pub(super) const RIG_ANIMATION_MARGIN: f32 = 6.0;
+/// Beyond this distance from the camera, a rig that is only visible to a
+/// shadow cascade (not the camera frustum) is not animated.
+const RIG_SHADOW_ANIMATION_RANGE: f32 = 250.0;
 
 /// The mesh primitives of one character rig, gathered as they instantiate.
 ///
@@ -89,6 +92,8 @@ pub(super) struct RigAnimationTally {
     pub(super) with_parts: u64,
     pub(super) any_seen: u64,
     pub(super) in_margin: u64,
+    /// A/B switch cache (`FISTFORCE_VIS_FIX_OFF`).
+    pub(super) legacy_rule: Option<bool>,
 }
 
 /// Mask group ids. In Bevy a SET bit means "this node may not animate that
@@ -481,7 +486,7 @@ pub(super) fn drive_hero_locomotion(
         Option<&GlobalTransform>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
-    frusta: Query<&Frustum, With<Camera3d>>,
+    frusta: Query<(&Frustum, &GlobalTransform), With<Camera3d>>,
     view_visibilities: Query<&ViewVisibility>,
     mut tally: Local<RigAnimationTally>,
     clocks: Query<&shared::components::WorldTime>,
@@ -546,16 +551,32 @@ pub(super) fn drive_hero_locomotion(
             }
             None => (false, false),
         };
-        let in_margin = transform.is_some_and(|transform| {
+        let (in_margin, near_camera) = transform.map_or((false, false), |transform| {
+            let center = transform.translation();
             let sphere = Sphere {
-                center: transform.translation().into(),
+                center: center.into(),
                 radius: RIG_ANIMATION_MARGIN,
             };
-            frusta
-                .iter()
-                .any(|frustum| frustum.intersects_sphere(&sphere, false))
+            let mut in_margin = false;
+            // No camera (headless/tests): fall back to view visibility alone.
+            let mut near_camera = frusta.is_empty();
+            for (frustum, camera) in frusta.iter() {
+                in_margin |= frustum.intersects_sphere(&sphere, false);
+                near_camera |= camera.translation().distance_squared(center)
+                    <= RIG_SHADOW_ANIMATION_RANGE * RIG_SHADOW_ANIMATION_RANGE;
+            }
+            (in_margin, near_camera)
         });
-        let unseen = has_parts && !any_seen && !in_margin;
+        // `any_seen` is ViewVisibility, which Bevy ORs across every view. The
+        // sun's shadow cascades count anything up-sun of the camera as a
+        // caster at any distance, so a rig hundreds of metres off-screen is
+        // "seen" every frame. Shadow-only visibility therefore only keeps a
+        // rig animating when it is close enough for its shadow to matter.
+        let unseen = if *tally.legacy_rule.get_or_insert_with(|| std::env::var("FISTFORCE_VIS_FIX_OFF").is_ok()) {
+            has_parts && !any_seen && !in_margin
+        } else {
+            has_parts && !in_margin && !(any_seen && near_camera)
+        };
         if census {
             tally.with_parts += u64::from(has_parts);
             tally.any_seen += u64::from(any_seen);
@@ -745,6 +766,96 @@ pub(super) fn drive_hero_locomotion(
             if (active.weight() - 1.0).abs() > 0.01 {
                 active.set_weight(1.0);
             }
+        }
+    }
+}
+
+/// Diagnostic (env `FISTFORCE_RIG_VIS_DIAG=1`): every 10 s, for one
+/// rig, log which views list its mesh parts as visible and each part's bounds.
+pub(super) fn rig_visibility_diag(
+    time: Res<Time>,
+    mut since: Local<f32>,
+    mut enabled: Local<Option<bool>>,
+    rigs: Query<(Entity, &RigMeshParts, &GlobalTransform)>,
+    parts: Query<(
+        Option<&Name>,
+        &ViewVisibility,
+        &InheritedVisibility,
+        Option<&bevy::camera::primitives::Aabb>,
+        &GlobalTransform,
+        Has<bevy::camera::visibility::NoFrustumCulling>,
+        Has<bevy::camera::visibility::DynamicSkinnedMeshBounds>,
+    )>,
+    views: Query<(
+        Entity,
+        &bevy::camera::visibility::VisibleEntities,
+        &Camera,
+        Has<Camera2d>,
+        Has<Camera3d>,
+        Option<&bevy::camera::visibility::RenderLayers>,
+        &GlobalTransform,
+    )>,
+    lights: Query<(
+        Entity,
+        &bevy::camera::visibility::CascadesVisibleEntities,
+        &DirectionalLight,
+    )>,
+) {
+    let enabled = *enabled.get_or_insert_with(|| std::env::var("FISTFORCE_RIG_VIS_DIAG").is_ok());
+    if !enabled {
+        return;
+    }
+    *since += time.delta_secs();
+    if *since < 10.0 {
+        return;
+    }
+    *since = 0.0;
+    let Some((rig, list, rig_tf)) = rigs.iter().next() else {
+        return;
+    };
+    let mesh3d = std::any::TypeId::of::<Mesh3d>();
+    info!(
+        "RigVisDiag rig={rig} at {:?} parts={}",
+        rig_tf.translation(),
+        list.0.len()
+    );
+    for (ve, vis, cam, is2d, is3d, layers, tf) in &views {
+        let listed = vis.get(mesh3d);
+        let seen = list.0.iter().filter(|p| listed.contains(p)).count();
+        info!(
+            "RigVisDiag view={ve} active={} order={} cam2d={is2d} cam3d={is3d} layers={:?} at {:?} mesh3d_visible={} rig_parts_in_view={seen}",
+            cam.is_active,
+            cam.order,
+            layers,
+            tf.translation(),
+            listed.len()
+        );
+    }
+    for (le, cv, dl) in &lights {
+        let mut seen = 0usize;
+        let mut total = 0usize;
+        for cascades in cv.entities.values() {
+            for c in cascades {
+                total += c.entities.len();
+                seen += list.0.iter().filter(|p| c.entities.contains(p)).count();
+            }
+        }
+        info!(
+            "RigVisDiag light={le} shadows={} cascade_visible_total={total} rig_parts_in_cascades={seen}",
+            dl.shadow_maps_enabled
+        );
+    }
+    for p in list.0.iter().take(4) {
+        if let Ok((name, vv, iv, aabb, tf, nfc, dynb)) = parts.get(*p) {
+            info!(
+                "RigVisDiag part={p} name={:?} view_visible={} inherited={} aabb={:?} world_pos={:?} scale={:?} no_frustum_culling={nfc} dynamic_bounds={dynb}",
+                name.map(|n| n.as_str()),
+                vv.get(),
+                iv.get(),
+                aabb.map(|a| (a.center, a.half_extents)),
+                tf.translation(),
+                tf.scale()
+            );
         }
     }
 }

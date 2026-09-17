@@ -27,7 +27,7 @@ pub(crate) use mounted::MountedVisual;
 pub(crate) mod motion;
 
 use crate::states::GameState;
-use animation::{drive_hero_locomotion, setup_hero_animation};
+use animation::{drive_hero_locomotion, rig_visibility_diag, setup_hero_animation};
 use appearance::{
     apply_hero_skin, attach_hero_visuals, dress_heroes, matte_character_materials,
     sync_indoor_visibility,
@@ -148,6 +148,7 @@ impl Plugin for HeroPlugin {
                         recover_stale_porter_cart_animation,
                         setup_porter_cart_animation,
                         drive_hero_locomotion.after(mounted::bind_riders),
+                        rig_visibility_diag,
                         drive_porter_cart_motion,
                         archery::setup_bows,
                         archery::drive_bows,
