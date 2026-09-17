@@ -34,6 +34,21 @@ pub struct HeroAssets {
 #[derive(Component)]
 pub struct HeroPreviewRig;
 
+/// Mesh primitives of a wardrobe item that is not worn, despawned to keep
+/// ~18 unused items per rig out of transform propagation, visibility,
+/// skinned-bounds updates and extraction. Rebuilt when the item is worn.
+#[derive(Component)]
+pub(super) struct WardrobeStash(pub(super) Vec<StashedPrimitive>);
+
+pub(super) struct StashedPrimitive {
+    pub(super) name: Name,
+    pub(super) mesh: Handle<Mesh>,
+    pub(super) material: Handle<StandardMaterial>,
+    pub(super) skin: Option<bevy::mesh::skinning::SkinnedMesh>,
+    pub(super) aabb: Option<bevy::camera::primitives::Aabb>,
+    pub(super) transform: Transform,
+}
+
 /// Marks a hero whose wardrobe matches its replicated outfit.
 #[derive(Component)]
 pub(crate) struct HeroDressed;
@@ -140,7 +155,21 @@ pub(super) fn dress_heroes(
     children_q: Query<&Children>,
     mut named: Query<(&Name, &mut Visibility)>,
     mut scene_roots: Query<&mut Visibility, (With<HeroSceneRoot>, Without<Name>)>,
+    primitives: Query<(
+        &Name,
+        &Mesh3d,
+        &MeshMaterial3d<StandardMaterial>,
+        Option<&bevy::mesh::skinning::SkinnedMesh>,
+        Option<&bevy::camera::primitives::Aabb>,
+        &Transform,
+    )>,
+    stashes: Query<&WardrobeStash>,
+    mut stash_off: Local<Option<bool>>,
 ) {
+    // `FISTFORCE_WARDROBE_STASH_OFF=1` keeps unworn primitives alive (hidden)
+    // for A/B measurement.
+    let stash_off =
+        *stash_off.get_or_insert_with(|| std::env::var("FISTFORCE_WARDROBE_STASH_OFF").is_ok());
     // Every wardrobe item across all slots must be present before dressing,
     // or a half-instantiated scene would show the whole closet for a frame.
     let wardrobe_node_count: usize = manifest.slots.iter().map(|slot| slot.items.len()).sum();
@@ -182,6 +211,55 @@ pub(super) fn dress_heroes(
                 if *visibility != target {
                     *visibility = target;
                 }
+            }
+            if stash_off {
+                continue;
+            }
+            if hide {
+                // Unworn: despawn the mesh primitives, keep what rebuilds them.
+                let Ok(children) = children_q.get(node) else {
+                    continue;
+                };
+                let mut stash = Vec::new();
+                for child in children.iter() {
+                    if let Ok((name, mesh, material, skin, aabb, transform)) = primitives.get(child)
+                    {
+                        stash.push(StashedPrimitive {
+                            name: name.clone(),
+                            mesh: mesh.0.clone(),
+                            material: material.0.clone(),
+                            skin: skin.cloned(),
+                            aabb: aabb.copied(),
+                            transform: *transform,
+                        });
+                        commands.entity(child).despawn();
+                    }
+                }
+                if !stash.is_empty() {
+                    commands.entity(node).insert(WardrobeStash(stash));
+                }
+            } else if let Ok(stash) = stashes.get(node) {
+                // Worn again (outfit change / creator preview): rebuild.
+                for primitive in &stash.0 {
+                    let mut child = commands.spawn((
+                        primitive.name.clone(),
+                        Mesh3d(primitive.mesh.clone()),
+                        MeshMaterial3d(primitive.material.clone()),
+                        primitive.transform,
+                        Visibility::Inherited,
+                        ChildOf(node),
+                    ));
+                    if let Some(skin) = &primitive.skin {
+                        child.insert((
+                            skin.clone(),
+                            bevy::camera::visibility::DynamicSkinnedMeshBounds,
+                        ));
+                    }
+                    if let Some(aabb) = primitive.aabb {
+                        child.insert(aabb);
+                    }
+                }
+                commands.entity(node).remove::<WardrobeStash>();
             }
         }
         // Dressed: reveal the (hidden-at-spawn) scene.

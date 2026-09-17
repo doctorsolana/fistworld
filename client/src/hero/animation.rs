@@ -58,6 +58,13 @@ pub(super) struct HeroAnim {
     /// Bevy evaluates every PAUSED clip in full each frame; only a weight of
     /// exactly 0 skips the graph walk, curve sampling and bone writes.
     pub(super) saved_weights: Vec<(AnimationNodeIndex, f32)>,
+    /// Animation update-rate LOD: real-time instant of the next evaluation.
+    /// 0.0 = unscheduled.
+    pub(super) lod_next_eval: f32,
+    /// True while this rig's clip weights are zeroed for an LOD-skipped frame.
+    pub(super) lod_skipped: bool,
+    /// Weights zeroed by the LOD skip, restored before the next evaluation.
+    pub(super) lod_saved_weights: Vec<(AnimationNodeIndex, f32)>,
 }
 
 pub(super) const BODY_ANIMATION_FADE_SECONDS: f32 = 0.14;
@@ -69,6 +76,28 @@ pub(super) const RIG_ANIMATION_MARGIN: f32 = 6.0;
 /// Beyond this distance from the camera, a rig that is only visible to a
 /// shadow cascade (not the camera frustum) is not animated.
 const RIG_SHADOW_ANIMATION_RANGE: f32 = 250.0;
+
+/// Animation update-rate LOD. Bevy evaluates every rig's clips every frame;
+/// at RTS zoom a villager is a few pixels tall and a 10-20 Hz pose update is
+/// indistinguishable from 60 Hz. Rigs beyond each `(max camera distance,
+/// evaluation interval)` tier keep their clips PLAYING (seek time advances)
+/// but hold the last written pose on skipped frames by zeroing clip weights,
+/// which is Bevy's only per-rig early-out. Tiers are by distance from the
+/// camera position; `0.0` means every frame.
+const ANIM_LOD_TIERS: [(f32, f32); 3] = [(40.0, 0.0), (100.0, 1.0 / 20.0), (200.0, 1.0 / 12.0)];
+/// Evaluation interval beyond the last tier.
+const ANIM_LOD_FAR_INTERVAL: f32 = 1.0 / 10.0;
+
+/// Seconds between animation evaluations for a rig `dist2` (squared metres)
+/// from the nearest camera.
+pub(super) fn animation_lod_interval(dist2: f32) -> f32 {
+    for (max_distance, interval) in ANIM_LOD_TIERS {
+        if dist2 <= max_distance * max_distance {
+            return interval;
+        }
+    }
+    ANIM_LOD_FAR_INTERVAL
+}
 
 /// The mesh primitives of one character rig, gathered as they instantiate.
 ///
@@ -94,6 +123,10 @@ pub(super) struct RigAnimationTally {
     pub(super) in_margin: u64,
     /// A/B switch cache (`FISTFORCE_VIS_FIX_OFF`).
     pub(super) legacy_rule: Option<bool>,
+    /// A/B switch cache (`FISTFORCE_ANIM_LOD_OFF`).
+    pub(super) lod_off: Option<bool>,
+    /// Rigs whose evaluation was skipped this frame by the update-rate LOD.
+    pub(super) lod_skipped: u64,
 }
 
 /// Mask group ids. In Bevy a SET bit means "this node may not animate that
@@ -350,6 +383,9 @@ pub(super) fn setup_hero_animation(
             body_fade_seconds: BODY_ANIMATION_FADE_SECONDS,
             paused: false,
             saved_weights: Vec::new(),
+            lod_next_eval: 0.0,
+            lod_skipped: false,
+            lod_saved_weights: Vec::new(),
         });
         debug!("Hero animation configured for {rig_root:?}");
     }
@@ -510,14 +546,15 @@ pub(super) fn drive_hero_locomotion(
         if tally.since >= 10.0 {
             let frames = tally.frames.max(1) as u64;
             info!(
-                "ClientPerfRigs rigs={} animating={} unseen_culled={} hidden_or_indoors={} with_parts={} any_part_seen={} in_frustum_margin={} (per-frame averages)",
+                "ClientPerfRigs rigs={} animating={} unseen_culled={} hidden_or_indoors={} with_parts={} any_part_seen={} in_frustum_margin={} lod_skipped={} (per-frame averages)",
                 tally.rigs / frames,
                 (tally.rigs - tally.hidden - tally.unseen) / frames,
                 tally.unseen / frames,
                 tally.hidden / frames,
                 tally.with_parts / frames,
                 tally.any_seen / frames,
-                tally.in_margin / frames
+                tally.in_margin / frames,
+                tally.lod_skipped / frames
             );
             *tally = RigAnimationTally {
                 enabled: Some(true),
@@ -551,22 +588,25 @@ pub(super) fn drive_hero_locomotion(
             }
             None => (false, false),
         };
-        let (in_margin, near_camera) = transform.map_or((false, false), |transform| {
-            let center = transform.translation();
-            let sphere = Sphere {
-                center: center.into(),
-                radius: RIG_ANIMATION_MARGIN,
-            };
-            let mut in_margin = false;
-            // No camera (headless/tests): fall back to view visibility alone.
-            let mut near_camera = frusta.is_empty();
-            for (frustum, camera) in frusta.iter() {
-                in_margin |= frustum.intersects_sphere(&sphere, false);
-                near_camera |= camera.translation().distance_squared(center)
-                    <= RIG_SHADOW_ANIMATION_RANGE * RIG_SHADOW_ANIMATION_RANGE;
-            }
-            (in_margin, near_camera)
-        });
+        let (in_margin, near_camera, cam_dist2) =
+            transform.map_or((false, false, f32::INFINITY), |transform| {
+                let center = transform.translation();
+                let sphere = Sphere {
+                    center: center.into(),
+                    radius: RIG_ANIMATION_MARGIN,
+                };
+                let mut in_margin = false;
+                // No camera (headless/tests): fall back to view visibility alone.
+                let mut near_camera = frusta.is_empty();
+                let mut cam_dist2 = f32::INFINITY;
+                for (frustum, camera) in frusta.iter() {
+                    in_margin |= frustum.intersects_sphere(&sphere, false);
+                    let dist2 = camera.translation().distance_squared(center);
+                    cam_dist2 = cam_dist2.min(dist2);
+                    near_camera |= dist2 <= RIG_SHADOW_ANIMATION_RANGE * RIG_SHADOW_ANIMATION_RANGE;
+                }
+                (in_margin, near_camera, cam_dist2)
+            });
         // `any_seen` is ViewVisibility, which Bevy ORs across every view. The
         // sun's shadow cascades count anything up-sun of the camera as a
         // caster at any distance, so a rig hundreds of metres off-screen is
@@ -596,6 +636,14 @@ pub(super) fn drive_hero_locomotion(
         let Ok(mut player) = players.get_mut(anim.player) else {
             continue;
         };
+        if anim.lod_skipped {
+            for (node, weight) in anim.lod_saved_weights.drain(..) {
+                if let Some(active) = player.animation_mut(node) {
+                    active.set_weight(weight);
+                }
+            }
+            anim.lod_skipped = false;
+        }
 
         if hidden {
             if !anim.paused {
@@ -621,6 +669,36 @@ pub(super) fn drive_hero_locomotion(
             }
             player.resume_all();
             anim.paused = false;
+        }
+
+        // Update-rate LOD: far rigs hold their last pose on most frames.
+        let lod_off = *tally
+            .lod_off
+            .get_or_insert_with(|| std::env::var("FISTFORCE_ANIM_LOD_OFF").is_ok());
+        if !lod_off && cam_dist2.is_finite() {
+            let interval = animation_lod_interval(cam_dist2);
+            if interval > 0.0 {
+                let now_secs = time.elapsed_secs();
+                if anim.lod_next_eval > 0.0 && now_secs < anim.lod_next_eval {
+                    anim.lod_saved_weights.clear();
+                    for (node, active) in player.playing_animations_mut() {
+                        anim.lod_saved_weights.push((*node, active.weight()));
+                        active.set_weight(0.0);
+                    }
+                    anim.lod_skipped = true;
+                    if census {
+                        tally.lod_skipped += 1;
+                    }
+                    continue;
+                }
+                // Stagger rigs across frames so they do not all evaluate together.
+                let stagger = if anim.lod_next_eval > 0.0 {
+                    0.0
+                } else {
+                    interval * (entity.to_bits() % 8) as f32 / 8.0
+                };
+                anim.lod_next_eval = now_secs + interval + stagger;
+            }
         }
 
         let mount = mounts.get(entity).ok().and_then(|(mounted, visual)| {

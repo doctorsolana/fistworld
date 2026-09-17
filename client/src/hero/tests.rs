@@ -5,8 +5,8 @@ use super::animation::{
     RigMeshParts, BODY_ANIMATION_FADE_SECONDS,
 };
 use super::appearance::{
-    apply_hero_skin, matte_character_materials, HeroAssets, HeroFullRig, HeroManifest,
-    HeroSkinApplied,
+    apply_hero_skin, dress_heroes, matte_character_materials, HeroAssets, HeroDressed,
+    HeroFullRig, HeroManifest, HeroSceneRoot, HeroSkinApplied, WardrobeStash,
 };
 use super::attachments::{carried_asset_spec, carried_bundle_transform, desired_tool, ToolKind};
 use super::carts::{advanced_cart_wheel_angle, PORTER_CART_WHEEL_RADIUS};
@@ -395,6 +395,9 @@ fn a_seated_passenger_does_not_walk_when_the_vessel_moves() {
         body_fade_seconds: 0.0,
         paused: false,
         saved_weights: Vec::new(),
+        lod_next_eval: 0.0,
+        lod_skipped: false,
+        lod_saved_weights: Vec::new(),
     };
 
     let (clip, speed, frozen) = desired_body_animation(
@@ -445,6 +448,9 @@ fn farming_uses_harvest_without_leaking_into_the_build_clip() {
             body_fade_seconds: 0.0,
             paused: false,
             saved_weights: Vec::new(),
+            lod_next_eval: 0.0,
+            lod_skipped: false,
+            lod_saved_weights: Vec::new(),
         },
         CharacterActivity::Farming,
     ));
@@ -494,6 +500,9 @@ fn a_loaded_stationary_villager_freezes_in_the_carry_pose() {
             body_fade_seconds: 0.0,
             paused: false,
             saved_weights: Vec::new(),
+            lod_next_eval: 0.0,
+            lod_skipped: false,
+            lod_saved_weights: Vec::new(),
         },
         CarriedLoad {
             good: Some(shared::economy::Good::Wood),
@@ -550,6 +559,9 @@ fn a_loaded_worker_chops_instead_of_freezing_with_their_partial_load() {
             body_fade_seconds: 0.0,
             paused: false,
             saved_weights: Vec::new(),
+            lod_next_eval: 0.0,
+            lod_skipped: false,
+            lod_saved_weights: Vec::new(),
         },
         CarriedLoad {
             good: Some(shared::economy::Good::Wood),
@@ -611,6 +623,9 @@ fn a_rig_no_view_can_see_stops_evaluating_and_resumes_where_it_left_off() {
             body_fade_seconds: 0.0,
             paused: false,
             saved_weights: Vec::new(),
+            lod_next_eval: 0.0,
+            lod_skipped: false,
+            lod_saved_weights: Vec::new(),
         },
         RigMeshParts(vec![part]),
         GlobalTransform::default(),
@@ -701,6 +716,9 @@ fn an_active_porter_cart_walks_even_before_visual_interpolation_reports_speed() 
             body_fade_seconds: 0.0,
             paused: false,
             saved_weights: Vec::new(),
+            lod_next_eval: 0.0,
+            lod_skipped: false,
+            lod_saved_weights: Vec::new(),
         },
         CarriedLoad {
             good: Some(shared::economy::Good::Wood),
@@ -756,6 +774,9 @@ fn gait_hysteresis_swimming_and_outdoor_rest_select_distinct_clips() {
         body_fade_seconds: 0.,
         paused: false,
         saved_weights: vec![],
+        lod_next_eval: 0.0,
+        lod_skipped: false,
+        lod_saved_weights: Vec::new(),
     };
     let choose = |anim: &HeroAnim, speed, activity, swim| {
         desired_body_animation(
@@ -842,6 +863,9 @@ fn bevy_advancement_keeps_a_clock_sampled_death_at_its_last_frame() {
             body_fade_seconds: 0.,
             paused: false,
             saved_weights: vec![],
+            lod_next_eval: 0.0,
+            lod_skipped: false,
+            lod_saved_weights: Vec::new(),
         },
     ));
     for _ in 0..8 {
@@ -861,4 +885,160 @@ fn bevy_advancement_keeps_a_clock_sampled_death_at_its_last_frame() {
             "a corpse must not wrap back to standing"
         );
     }
+}
+
+/// Update-rate LOD: a rig far from the camera is evaluated on its scheduled
+/// frames only; in between its clip weights are zero (Bevy's per-rig
+/// early-out) while the clip keeps playing, and the weight comes back on
+/// the next evaluation.
+#[test]
+fn a_far_rig_skips_evaluation_between_scheduled_frames() {
+    use bevy::camera::primitives::Frustum;
+    let mut world = World::new();
+    world.insert_resource(Time::<()>::default());
+    let idle = AnimationNodeIndex::new(0);
+    let mut player = AnimationPlayer::default();
+    player.play(idle).repeat().set_weight(1.0);
+    let player_entity = world.spawn(player).id();
+    // A camera 300 m away; the default frustum intersects everything, so the
+    // rig counts as in view and is not culled by the unseen path.
+    world.spawn((
+        Camera3d::default(),
+        Frustum::default(),
+        GlobalTransform::from_translation(Vec3::new(300.0, 0.0, 0.0)),
+    ));
+    let part = world.spawn(ViewVisibility::VISIBLE).id();
+    world.spawn((
+        HeroVisual { speed: 0.0 },
+        HeroAnim {
+            archery: Default::default(),
+            riding: Default::default(),
+            movement: Default::default(),
+            combat: Default::default(),
+            player: player_entity,
+            idle: Some(idle),
+            walk: None,
+            build: None,
+            chop: None,
+            harvest: None,
+            carry: None,
+            pull: None,
+            sit_idle: None,
+            current_body: Some(idle),
+            fading_body: None,
+            body_fade_seconds: 0.0,
+            paused: false,
+            saved_weights: Vec::new(),
+            lod_next_eval: 0.0,
+            lod_skipped: false,
+            lod_saved_weights: Vec::new(),
+        },
+        RigMeshParts(vec![part]),
+        GlobalTransform::default(),
+    ));
+
+    // First frame: unscheduled rigs evaluate and get a schedule.
+    world.run_system_once(drive_hero_locomotion).unwrap();
+    let weight = |world: &World| {
+        world
+            .get::<AnimationPlayer>(player_entity)
+            .unwrap()
+            .animation(idle)
+            .unwrap()
+            .weight()
+    };
+    assert_eq!(weight(&world), 1.0);
+    // Same instant again: skipped, weight zero, clip still playing (not paused).
+    world.run_system_once(drive_hero_locomotion).unwrap();
+    assert_eq!(weight(&world), 0.0, "a far rig must skip between evaluations");
+    assert!(!world
+        .get::<AnimationPlayer>(player_entity)
+        .unwrap()
+        .animation(idle)
+        .unwrap()
+        .is_paused());
+    // Past the far-tier interval (plus stagger): evaluated again at full weight.
+    world
+        .resource_mut::<Time<()>>()
+        .advance_by(std::time::Duration::from_millis(250));
+    world.run_system_once(drive_hero_locomotion).unwrap();
+    assert_eq!(weight(&world), 1.0, "the weight must come back on an evaluation frame");
+}
+
+/// Unworn wardrobe items have their mesh primitives despawned and stashed on
+/// the wardrobe node; wearing the item again rebuilds them.
+#[test]
+fn dressing_despawns_unworn_primitives_and_rebuilds_them_when_worn() {
+    let mut world = World::new();
+    world.init_resource::<Assets<Mesh>>();
+    world.init_resource::<Assets<StandardMaterial>>();
+    let manifest = CharacterManifest::load().expect("shipped character manifest");
+    assert!(manifest.slots[0].items.len() >= 2, "test needs a slot with two items");
+    world.insert_resource(HeroManifest(manifest.clone()));
+    let mesh = world.resource_mut::<Assets<Mesh>>().add(Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    ));
+    let material = world
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+
+    let mut outfit = HeroOutfit::default();
+    outfit.slots[0] = 0;
+    let hero = world
+        .spawn((HeroVisual { speed: 0.0 }, HeroFullRig, outfit, Visibility::default()))
+        .id();
+    let scene = world
+        .spawn((HeroSceneRoot, Visibility::Hidden, ChildOf(hero)))
+        .id();
+    // Every wardrobe node must exist (with one mesh primitive) for dressing to run.
+    let mut nodes: Vec<(String, Entity)> = Vec::new();
+    for slot in &manifest.slots {
+        for item in &slot.items {
+            let node = world
+                .spawn((Name::new(item.clone()), Visibility::default(), ChildOf(scene)))
+                .id();
+            world.spawn((
+                Name::new(format!("{item}.Skin")),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::default(),
+                Visibility::default(),
+                ChildOf(node),
+            ));
+            nodes.push((item.clone(), node));
+        }
+    }
+    let primitives_under = |world: &World, node: Entity| -> usize {
+        world.get::<Children>(node).map_or(0, |children| {
+            children
+                .iter()
+                .filter(|child| world.get::<Mesh3d>(*child).is_some())
+                .count()
+        })
+    };
+    let check = |world: &World, outfit: &HeroOutfit| {
+        for (name, node) in &nodes {
+            let hidden = outfit.hides_node(&manifest, name);
+            let count = primitives_under(world, *node);
+            assert_eq!(count, usize::from(!hidden), "{name}: hidden={hidden} primitives={count}");
+            assert_eq!(world.get::<WardrobeStash>(*node).is_some(), hidden, "{name}: stash");
+        }
+    };
+
+    world.run_system_once(dress_heroes).unwrap();
+    world.flush();
+    assert!(world.get::<HeroDressed>(hero).is_some(), "dressing must complete");
+    let worn = world.get::<HeroOutfit>(hero).unwrap().clone();
+    check(&world, &worn);
+
+    // Change the first slot to its second item: the old item is despawned,
+    // the new one rebuilt from its stash.
+    world.get_mut::<HeroOutfit>(hero).unwrap().slots[0] = 1;
+    world.run_system_once(dress_heroes).unwrap(); // clears HeroDressed
+    world.flush();
+    world.run_system_once(dress_heroes).unwrap();
+    world.flush();
+    let worn = world.get::<HeroOutfit>(hero).unwrap().clone();
+    check(&world, &worn);
 }
