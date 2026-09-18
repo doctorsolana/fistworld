@@ -269,6 +269,23 @@ struct PlacementSurvey {
     corridors: Vec<SurveyCorridor>,
     corridor_points: Vec<Vec2>,
     farmsteads: Vec<(Vec2, ClaimOwner)>,
+    /// Reserved civic squares, for DRAWING only.
+    ///
+    /// Deliberately not pushed through `claims`: the square refuses a plot by
+    /// its own rule with its own message, and feeding it into the generic claim
+    /// list would let the claim check answer first with the wrong reason and the
+    /// wrong required gap. The player only needed to see it coming.
+    squares: Vec<CivicSquareOutline>,
+}
+
+/// Enough of a civic square to draw it: its apron and the Market shell inside.
+#[derive(Clone, Copy)]
+struct CivicSquareOutline {
+    center: Vec2,
+    half_extents: Vec2,
+    rotation: f32,
+    market_center: Vec2,
+    market_rotation: f32,
 }
 
 impl PlacementSurvey {
@@ -277,6 +294,7 @@ impl PlacementSurvey {
         self.corridors.clear();
         self.corridor_points.clear();
         self.farmsteads.clear();
+        self.squares.clear();
     }
 
     fn push(&mut self, claims: impl IntoIterator<Item = LandClaim>, owner: ClaimOwner) {
@@ -1176,6 +1194,17 @@ fn survey_reserved_land(
         );
     }
     survey.push(hall_claims(hall), ClaimOwner::HALL);
+    // The square blocks placement, so the player has to be able to see it while
+    // steering rather than discovering it in a refusal.
+    for square in world.squares.iter() {
+        survey.squares.push(CivicSquareOutline {
+            center: square.center.xz(),
+            half_extents: square.half_extents,
+            rotation: square.rotation,
+            market_center: square.market_position.xz(),
+            market_rotation: square.market_rotation,
+        });
+    }
     for (site, position) in world.sites.iter() {
         if site.settlement != settlement_name {
             continue;
@@ -2112,7 +2141,36 @@ fn draw_reserved_land(
     const NEIGHBOUR_SHELL: Color = Color::srgba(1.0, 0.62, 0.30, 0.22);
     const NEIGHBOUR_CROP: Color = Color::srgba(0.72, 0.86, 0.32, 0.22);
     const NEIGHBOUR_LANE: Color = Color::srgba(0.95, 0.85, 0.55, 0.18);
+    /// The civic square reads cooler than private claims: it is public ground
+    /// the town keeps, not a neighbour's plot you might negotiate around.
+    const CIVIC_SQUARE: Color = Color::srgba(0.55, 0.78, 0.95, 0.40);
+    const CIVIC_MARKET: Color = Color::srgba(0.55, 0.78, 0.95, 0.26);
     let here = preview.position.xz();
+    for square in &survey.squares {
+        let reach = NEIGHBOUR_REACH + square.half_extents.length();
+        if square.center.distance_squared(here) > reach * reach {
+            continue;
+        }
+        // Built as a claim purely to reuse the ground-following outline; it
+        // never enters the survey's claim list.
+        let apron = LandClaim::new(
+            square.center,
+            square.half_extents,
+            square.rotation,
+            0.0,
+            LandUse::Forecourt,
+        );
+        draw_claim_outline(gizmos, terrain, &apron, 0.0, CIVIC_SQUARE, false);
+        // The Market that will stand in it, dashed: reserved but not yet built.
+        let market = LandClaim::new(
+            square.market_center,
+            SettlementBuildingKind::Market.placement_definition().footprint * 0.5,
+            square.market_rotation,
+            0.0,
+            LandUse::Building,
+        );
+        draw_claim_outline(gizmos, terrain, &market, 0.0, CIVIC_MARKET, true);
+    }
     let shell =
         shared::components::footprint_claim(preview.kind, preview.position, preview.rotation);
     for (index, entry) in survey.claims.iter().enumerate() {
