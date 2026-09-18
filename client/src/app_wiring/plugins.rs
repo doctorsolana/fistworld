@@ -32,6 +32,14 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
                     // not Metal. RenderDiagnosticsPlugin still reports CPU
                     // timings here; enabling counter sample buffers provides
                     // no GPU timings and can fail under heavy diagnostics.
+                    //
+                    // RE-TESTED 2026-09-18 on an M5: Bevy's recorder is purely
+                    // feature-driven with no backend check, so the features were
+                    // re-enabled to see whether the note was merely stale. wgpu
+                    // accepts them and the query set is created, but every
+                    // `elapsed_gpu` resolves to exactly 0.000000 ms (220 samples,
+                    // 0 non-zero). The note is accurate. Per-pass GPU time on
+                    // macOS needs Instruments' Metal System Trace instead.
                     #[cfg(target_os = "macos")]
                     {
                         settings.disabled_features = Some(

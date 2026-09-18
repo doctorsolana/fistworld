@@ -88,5 +88,12 @@ were rare multi-hundred-millisecond freezes from work batched into one tick.
 - **A performance preset** is the honest route to a big client win: render scale
   0.5, hardware shadow filter, fog and bloom off is 5-7 ms on a weak machine. All
   the switches exist.
-- No GPU-side measurement has ever been taken. Instruments' Metal System Trace
-  would give per-pass GPU milliseconds and is the one tool never used here.
+- No GPU-side measurement has ever been taken, and **Bevy cannot provide one here**:
+  re-tested on 2026-09-18 by re-enabling the wgpu timestamp features the client
+  disables on macOS. wgpu accepts them and creates the query set, but every
+  `elapsed_gpu` resolves to exactly 0.000000 ms (220 samples, none non-zero). Only
+  four passes are even instrumented (bloom, tonemapping, upscaling, clustering).
+  Per-pass GPU time on macOS needs Instruments' **Metal System Trace**, which
+  requires a full Xcode install; the `xctrace` binary in the Command Line Tools is
+  only a stub that refuses to run. This is the one measurement never taken, and the
+  ~16 ms empty-scene floor is what it would explain.
