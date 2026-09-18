@@ -32,7 +32,7 @@ fn completing_an_existing_lane_reopens_a_real_inner_service_site() {
         .site_search_radii
         .insert((settlement, kind), MAX_SETTLEMENT_SEARCH_RADIUS);
     clock.failed_site_searches.insert(
-        settlement,
+        (settlement, kind),
         FailedSiteSearch {
             kind,
             occupied_plots: 0,
@@ -43,7 +43,9 @@ fn completing_an_existing_lane_reopens_a_real_inner_service_site() {
     road.built_through = 2;
     let current = refresh_land_search_access(&mut clock, settlement, hall, &terrain, &[&road]);
     assert_ne!(current, initial);
-    assert!(!clock.failed_site_searches.contains_key(&settlement));
+    assert!(!clock
+        .failed_site_searches
+        .contains_key(&(settlement, kind)));
     assert!(!clock.site_search_radii.contains_key(&(settlement, kind)));
     // The first 18 m ring can legitimately be occupied by civic/road
     // clearance. Resume ordinary bounded reviews; never jump to a full scan.

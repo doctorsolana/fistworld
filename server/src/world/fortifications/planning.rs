@@ -11,6 +11,11 @@ use super::geometry::{fit_circuit, Plot, RoadApproach};
 /// Reservation work runs at most once per settlement per game day. No district
 /// or wall survey runs per person, and completed circuits never get reshaped.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+/// Settlements whose defences may be planned in a single tick. One wall
+/// circuit is tens of milliseconds of geometry; several in one tick is a
+/// server-wide stall.
+const DEFENSE_PLANS_PER_TICK: usize = 1;
+
 pub fn plan_settlement_defenses(
     mut commands: Commands,
     terrain: Option<Res<WorldTerrain>>,
@@ -40,6 +45,15 @@ pub fn plan_settlement_defenses(
         return;
     };
     // Delay allocating the accepted-property snapshot until somebody can plan.
+    //
+    // ONE settlement per tick. The day guard below bounds how OFTEN a town is
+    // planned, not how many are planned together, and towns cross the
+    // 24-resident threshold in clusters: measured in a 12-town world, a dozen
+    // wall circuits landed on the same tick and this system's worst single
+    // call was 325 ms -- a visible freeze for every connected player, against
+    // an average of 0.09 ms. Taking one candidate per tick spreads them over
+    // consecutive ticks; each still gets its attempt in the same world day,
+    // since a day is tens of thousands of ticks.
     let candidates: Vec<_> = settlements
         .iter()
         .filter(|(_, id, town, _, _, defenses)| {
@@ -47,6 +61,7 @@ pub fn plan_settlement_defenses(
                 && defenses.is_none_or(|d| d.circuits.len() < 2)
                 && attempted.get(id) != Some(&clock.day)
         })
+        .take(DEFENSE_PLANS_PER_TICK)
         .collect();
     if candidates.is_empty() {
         return;

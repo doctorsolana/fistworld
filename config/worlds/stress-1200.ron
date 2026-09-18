@@ -1,0 +1,14 @@
+// PERF STRESS: 12 towns x 100 founders = 1200 people on the full 8.2 km map,
+// with heavy immigration on top. Not a playable opening; it exists to load the
+// server's per-NPC simulation, pathfinding and town planning at once.
+(
+    world_area_scale: 1.0,
+    opening: Frontier,
+    settlement_count: 12,
+    founders_per_settlement: 100,
+    immigrants_per_day: Some(10.0),
+    world_npc_cap: 5000,
+    seed: None,
+    hall_stock: Some((bread: 40, wheat: 12, wood: 24)),
+    hall_treasury_pennies: None,
+)

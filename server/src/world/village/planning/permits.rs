@@ -1154,7 +1154,7 @@ pub fn consider_permits(
         };
         let repeated_failed_search = clock
             .failed_site_searches
-            .get(&settlement_entity)
+            .get(&(settlement_entity, missing))
             .is_some_and(|failed| *failed == search_signature);
         if repeated_failed_search {
             // This opportunity has already exhausted unchanged geometry. Do
@@ -1313,7 +1313,9 @@ pub fn consider_permits(
                 // not a failed geometry signature; caching it here would make
                 // an explicit Fisher opportunity inspect exactly one ring for
                 // the rest of the settlement's life.
-                clock.failed_site_searches.remove(&settlement_entity);
+                clock
+                    .failed_site_searches
+                    .retain(|(owner, _), _| *owner != settlement_entity);
                 clock.deferred_opportunities.insert(
                     (settlement_entity, SettlementBuildingKind::FishermansHut),
                     permit_round.saturating_add(2),
@@ -1331,7 +1333,9 @@ pub fn consider_permits(
                 .filter(|kind| *kind != SettlementBuildingKind::FishermansHut && !anchored_market)
             {
                 if advance_land_search(&mut clock, settlement_entity, searched_kind) {
-                    clock.failed_site_searches.remove(&settlement_entity);
+                    clock
+                    .failed_site_searches
+                    .retain(|(owner, _), _| *owner != settlement_entity);
                     clock.deferred_opportunities.insert(
                         (settlement_entity, searched_kind),
                         permit_round.saturating_add(2),
@@ -1347,7 +1351,7 @@ pub fn consider_permits(
             );
             clock
                 .failed_site_searches
-                .insert(settlement_entity, search_signature);
+                .insert((settlement_entity, search_signature.kind), search_signature);
             clock
                 .deferred_opportunities
                 .insert((settlement_entity, missing), permit_round.saturating_add(4));
@@ -1416,15 +1420,19 @@ pub fn consider_permits(
             if kind == SettlementBuildingKind::FishermansHut
                 && advance_incremental_fishing_search(&mut clock, settlement_entity)
             {
-                clock.failed_site_searches.remove(&settlement_entity);
+                clock
+                    .failed_site_searches
+                    .retain(|(owner, _), _| *owner != settlement_entity);
             } else if kind != SettlementBuildingKind::FishermansHut
                 && advance_land_search(&mut clock, settlement_entity, kind)
             {
-                clock.failed_site_searches.remove(&settlement_entity);
+                clock
+                    .failed_site_searches
+                    .retain(|(owner, _), _| *owner != settlement_entity);
             } else {
                 clock
                     .failed_site_searches
-                    .insert(settlement_entity, search_signature);
+                    .insert((settlement_entity, search_signature.kind), search_signature);
             }
             continue;
         };
@@ -1437,15 +1445,19 @@ pub fn consider_permits(
             if kind == SettlementBuildingKind::FishermansHut
                 && advance_incremental_fishing_search(&mut clock, settlement_entity)
             {
-                clock.failed_site_searches.remove(&settlement_entity);
+                clock
+                    .failed_site_searches
+                    .retain(|(owner, _), _| *owner != settlement_entity);
             } else {
                 clock
                     .failed_site_searches
-                    .insert(settlement_entity, search_signature);
+                    .insert((settlement_entity, search_signature.kind), search_signature);
             }
             continue;
         }
-        clock.failed_site_searches.remove(&settlement_entity);
+        clock
+                    .failed_site_searches
+                    .retain(|(owner, _), _| *owner != settlement_entity);
         // Resource plots rank their actual radius. Domestic/civic frontage may
         // lie beyond the current band; retain that band's cursor instead of
         // skipping legal inner infill after a far frontage happens to succeed.
