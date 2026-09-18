@@ -15,10 +15,17 @@ towns uses about **4.3 ms of the 16.67 ms budget (26%)**, its population is stab
 and the pathfinding queue is two routes deep. Ten towns with 249 people cost 4.2 ms.
 There is no throughput problem at any population this game is likely to host.
 
-**What was wrong was a stall.** One system, the fortification planner, occasionally
-took **325 ms in a single tick** against an average of 0.09 ms — a visible freeze for
-every connected player. It is fixed, and the worst tick in a 12-town world fell
-**491 ms -> 139 ms (-72%)**.
+**What was wrong was stalls, and one form of waste.** Two systems did all of their
+per-town work in a single tick instead of spreading it: the fortification planner
+(worst single call **325 ms** against a 0.09 ms average) and the permit reviewer
+(58.7 ms, and the second-largest average cost). Both are fixed. In a 12-town,
+1,200-villager world:
+
+| | at the start | after |
+|---|---:|---:|
+| core average | 4.96 ms | **3.73 ms** (-25%) |
+| worst tick | ~491 ms | **~90 ms** (-82%) |
+| wasted land surveys per 600 s | ~1,835 | ~321 (-83%) |
 
 ## 2. What was fixed
 
@@ -41,6 +48,24 @@ ticks. Measured over four alternating 600-second runs of the 12-town world:
 | core average | 4.99 ms | 4.62 ms |
 
 19 fortification tests pass.
+
+### Permit review: at most three land surveys per review (the biggest average win)
+
+`world/village/planning/permits.rs`. The same shape: every eligible settlement ran a
+full 60-sample land survey in the same review, so a dozen towns surveyed back to
+back. A review now runs at most three; the rest defer by one round through the
+`deferred_opportunities` mechanism the code already uses, so each town still surveys
+within a few world seconds and none can starve.
+
+| | before | after |
+|---|---:|---:|
+| core average | 4.91 ms | **3.73 ms** |
+| typical worst tick per 3 s window | 30.9 ms | **20.1 ms** |
+| wasted surveys per 600 s | 1,331 | **321** |
+| villagers grown to | 1,226 | 1,239 |
+
+Town growth is slightly *ahead* with the cap, so deferring a survey does not slow
+construction. 734 village and planning tests pass.
 
 ### Permit memo: keyed per building kind (correctness, not speed)
 
@@ -76,7 +101,7 @@ Worst *single call* per system, which is what causes freezes:
 | worst call | system | status |
 |---:|---|---|
 | 325 ms | `plan_settlement_defenses` | **fixed** |
-| 59 ms | `consider_permits` | open, same batching shape |
+| 59 ms | `consider_permits` | **fixed** (survey cap) |
 | 53 ms | `wildlife::population::populate` | not a stall: runs once, then early-returns forever |
 | 53 ms | `plan_villager_travel_routes` | open, see below |
 | 29 ms | `plan_requested_roads` | open |
@@ -86,11 +111,7 @@ Worst *single call* per system, which is what causes freezes:
 
 ## 4. Open items, in the order I would take them
 
-1. **`consider_permits` reviews every settlement in one batch** (59 ms worst, and the
-   second-largest average cost). The same one-per-tick treatment applies, but it is
-   entangled with economy ordering and fairness between towns, so it needs more care
-   than the defence planner did.
-2. **The pathfinding budget is not a cap.** `plan_villager_travel_routes` is configured
+1. **The pathfinding budget is not a cap.** `plan_villager_travel_routes` is configured
    for 4 ms per tick but its worst call is 52.7 ms, because the budget is checked
    *between* requests and a single long search overruns it. If stalls matter more than
    route latency, individual searches need their own bound.
