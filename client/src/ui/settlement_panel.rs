@@ -462,6 +462,7 @@ fn sync_compact_panel(
     building_of: Query<&BuildingOf>,
     settlement_ids: Query<(Entity, &SettlementId), With<Settlement>>,
     sites: Query<(
+        Entity,
         &ConstructionSite,
         Option<&BusinessForSale>,
         Option<&OwnedBy>,
@@ -577,6 +578,38 @@ fn sync_compact_panel(
                     opportunity_summary(opportunities),
                 ),
             ];
+            // The hall's own worksite is a separate entity that no longer takes
+            // the click, so the works have to report here or the player has no
+            // way to see how the rebuild is going.
+            if let Some(works) = settlement_id.and_then(|settlement_id| {
+                sites.iter().find_map(|(works, site, _, _, upgrade, _)| {
+                    let upgrade = upgrade?;
+                    (building_of.get(works).ok()?.0 == settlement_id).then_some((
+                        works, site, upgrade,
+                    ))
+                })
+            }) {
+                let (works, site, upgrade) = works;
+                let delivered = inventories
+                    .get(works)
+                    .map_or(0, |inventory| inventory.amount(upgrade.material));
+                let status = if site.raising {
+                    "raising frame"
+                } else if delivered >= upgrade.material_required {
+                    "ready to build"
+                } else {
+                    "awaiting materials"
+                };
+                rows.push((
+                    "HALL WORKS".to_string(),
+                    format!(
+                        "{} / {status} / {delivered} of {} {}",
+                        upgrade.target.label(),
+                        upgrade.material_required,
+                        upgrade.material.label(),
+                    ),
+                ));
+            }
             if let Some(economy) = economy.filter(|economy| economy.unmet_food > 0) {
                 rows.push((
                     "UNFED".to_string(),
@@ -830,7 +863,7 @@ fn sync_compact_panel(
                 business_history,
             });
         }
-        if let Ok((site, for_sale, site_owner, hall_upgrade, house_upgrade)) = sites.get(entity) {
+        if let Ok((_, site, for_sale, site_owner, hall_upgrade, house_upgrade)) = sites.get(entity) {
             let (good, required) = hall_upgrade.map_or(
                 (
                     Good::Wood,

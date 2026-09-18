@@ -375,19 +375,35 @@ pub(super) fn tag_settlements_selectable(
             Entity,
             &shared::components::Settlement,
             Option<&shared::components::CivicHallLevel>,
+            Option<&shared::components::SettlementId>,
             Option<&shared::components::PlayerRotation>,
             Option<&Selectable>,
         ),
         With<shared::components::PlayerPosition>,
     >,
+    hall_works: Query<(
+        &shared::components::CivicHallUpgradeWorksite,
+        &shared::components::BuildingOf,
+    )>,
 ) {
-    for (entity, settlement, level, rotation, selectable) in settlements.iter() {
-        let desired = Selectable::hall_rotated(
-            level
-                .copied()
-                .unwrap_or_else(|| shared::components::CivicHallLevel::for_tier(settlement.tier)),
-            rotation.map_or(0.0, |rotation| rotation.0),
-        );
+    for (entity, settlement, level, id, rotation, selectable) in settlements.iter() {
+        let standing = level
+            .copied()
+            .unwrap_or_else(|| shared::components::CivicHallLevel::for_tier(settlement.tier));
+        // While the hall is being rebuilt, point at the plot the works claim
+        // rather than the old building inside it. The worksite is spawned at the
+        // hall's own position and stakes out the TARGET footprint, which is
+        // always the larger of the two, so this box covers both the standing
+        // hall and the ground the player sees marked out around it.
+        let level = id
+            .and_then(|id| {
+                hall_works
+                    .iter()
+                    .find(|(_, owner)| owner.0 == *id)
+                    .map(|(upgrade, _)| upgrade.target)
+            })
+            .unwrap_or(standing);
+        let desired = Selectable::hall_rotated(level, rotation.map_or(0.0, |rotation| rotation.0));
         if selectable != Some(&desired) {
             commands.entity(entity).insert(desired);
         }
@@ -433,11 +449,21 @@ pub(super) fn tag_construction_sites_selectable(
     >,
 ) {
     for (entity, site, hall_upgrade) in sites.iter() {
-        let selectable = hall_upgrade.map_or_else(
-            || Selectable::settlement_building_rotated(site.kind, site.rotation),
-            |upgrade| Selectable::hall_rotated(upgrade.target, site.rotation),
-        );
-        commands.entity(entity).insert(selectable);
+        // A hall upgrade is NOT a separate thing to point at. Its worksite sits
+        // exactly on top of the settlement entity, so tagging it stole every
+        // click on the hall: the player got a worksite card with no permits, no
+        // trade and no property while the town was mid-upgrade. Leave it
+        // untagged and the click lands on the settlement, which widens its own
+        // box to the works for the duration (`tag_settlements_selectable`).
+        if hall_upgrade.is_some() {
+            continue;
+        }
+        commands
+            .entity(entity)
+            .insert(Selectable::settlement_building_rotated(
+                site.kind,
+                site.rotation,
+            ));
     }
 }
 
@@ -659,6 +685,89 @@ mod tests {
     }
 
     use super::*;
+
+    /// A hall mid-upgrade must stay the hall you click. The worksite is spawned
+    /// on top of the settlement entity, so tagging both left the player holding
+    /// a worksite card -- no permits, no trade, no property -- for as long as
+    /// the rebuild took.
+    #[test]
+    fn an_upgrading_hall_is_clicked_as_the_settlement_not_as_its_worksite() {
+        use shared::components::{
+            BuildingOf, CivicHallLevel, CivicHallUpgradeWorksite, ConstructionSite, PlayerPosition,
+            PlayerRotation, Settlement, SettlementBuildingKind, SettlementId, SettlementTier,
+        };
+
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (tag_settlements_selectable, tag_construction_sites_selectable),
+        );
+        let hall = app
+            .world_mut()
+            .spawn((
+                Settlement {
+                    name: "Ashby".into(),
+                    tier: SettlementTier::Hamlet,
+                    residents: 12,
+                    treasury: 0,
+                },
+                CivicHallLevel::Moot,
+                SettlementId(1),
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        let works = app
+            .world_mut()
+            .spawn((
+                ConstructionSite {
+                    kind: SettlementBuildingKind::Hall,
+                    settlement: "Ashby".into(),
+                    raising: false,
+                    stand: Vec3::new(0.0, 0.0, -6.0),
+                    rotation: 0.0,
+                },
+                CivicHallUpgradeWorksite {
+                    target: CivicHallLevel::Village,
+                    material: shared::economy::Good::Wood,
+                    material_required: 60,
+                },
+                BuildingOf(SettlementId(1)),
+                PlayerPosition(Vec3::ZERO),
+            ))
+            .id();
+        // A second, ordinary site to prove only hall upgrades are exempt.
+        let shed = app
+            .world_mut()
+            .spawn((
+                ConstructionSite {
+                    kind: SettlementBuildingKind::Bakery,
+                    settlement: "Ashby".into(),
+                    raising: false,
+                    stand: Vec3::new(20.0, 0.0, 0.0),
+                    rotation: 0.0,
+                },
+                PlayerPosition(Vec3::new(20.0, 0.0, 0.0)),
+            ))
+            .id();
+        app.update();
+
+        assert!(
+            app.world().get::<Selectable>(works).is_none(),
+            "the hall's own worksite must not take the click"
+        );
+        assert!(
+            app.world().get::<Selectable>(shed).is_some(),
+            "an ordinary worksite is still clickable"
+        );
+        // ...and the settlement claims the works' footprint, so clicking the
+        // staked-out ground around the old hall still selects the town.
+        assert_eq!(
+            app.world().get::<Selectable>(hall).copied(),
+            Some(Selectable::hall_rotated(CivicHallLevel::Village, 0.0)),
+            "the hall must widen to the plot the upgrade staked out"
+        );
+    }
 
     /// Command gating decides whether you can move a thing, so getting it wrong
     /// either hands you someone else's units or takes away your own.
