@@ -42,12 +42,13 @@ struct Pulse {
     material: Handle<StandardMaterial>,
 }
 
-/// Ring radius in metres at birth and at death. The unit itself is about a
-/// metre wide, so the pulse starts a little larger than the target and opens to
-/// roughly a house's width -- big enough to find at a glance, small enough not
-/// to claim ground the order did not.
-const START_RADIUS: f32 = 0.9;
-const END_RADIUS: f32 = 3.4;
+/// Ring radius in metres at birth and at death. Sized against the unit, which
+/// is about a metre wide: the pulse starts just larger than the target and
+/// opens to a little over a unit's width. Big enough to find at a glance,
+/// small enough that it marks a spot rather than claiming ground the order did
+/// not.
+const START_RADIUS: f32 = 0.55;
+const END_RADIUS: f32 = 2.05;
 const LIFETIME: f32 = 0.62;
 /// The second ring starts this many seconds after the first.
 const SECOND_RING_DELAY: f32 = 0.12;
@@ -73,7 +74,11 @@ fn setup_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     // A unit annulus scaled per frame: one mesh for every pulse ever drawn,
     // rather than a new ring mesh per click.
     commands.insert_resource(PulseAssets {
-        mesh: meshes.add(Annulus::new(0.93, 1.0)),
+        // Proportions of the scaled radius, so the stroke would thin with the
+        // ring: widened to hold roughly the same line weight in metres. MSAA is
+        // off, and `ring.rs` documents that a sub-2px stroke shimmers rather
+        // than reading as a line.
+        mesh: meshes.add(Annulus::new(0.90, 1.0)),
     });
 }
 
