@@ -84,6 +84,11 @@ pub struct PermitPlanningDiagnostics {
 /// founder explicitly capitalises a company before its site is approved.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
+/// Full land surveys one permit review may run before deferring the rest to the
+/// next round. A survey samples ~60 candidate sites against terrain, water,
+/// roads, props and access; a dozen in one tick is a server-wide stall.
+const MAX_LAND_SURVEYS_PER_REVIEW: usize = 3;
+
 pub fn consider_permits(
     simulation_time: crate::world::simulation_time::SimulationTime,
     world_time: Query<&WorldTime>,
@@ -168,6 +173,7 @@ pub fn consider_permits(
     clock.permit = 0.0;
     clock.permit_round = clock.permit_round.wrapping_add(1);
     let permit_round = clock.permit_round;
+    let mut land_surveys_this_review = 0usize;
     let day = civic_day.saturating_sub(1);
     let review_entry = entry_review.day != Some(day);
     if review_entry {
@@ -1201,6 +1207,19 @@ pub fn consider_permits(
                 .fishing_site_milliseconds
                 .push(started.elapsed().as_secs_f64() * 1_000.0);
         }
+        // Bound how many full land surveys one review may run. Every eligible
+        // settlement used to survey in the same review, so a world of a dozen
+        // towns paid a dozen 60-sample surveys back to back: measured worst
+        // single call of this system, 58.7 ms. Towns past the cap defer by one
+        // round through the existing mechanism, so each still surveys within a
+        // few world seconds and none can starve.
+        if land_surveys_this_review >= MAX_LAND_SURVEYS_PER_REVIEW {
+            clock
+                .deferred_opportunities
+                .insert((settlement_entity, missing), permit_round.saturating_add(1));
+            continue;
+        }
+        land_surveys_this_review += 1;
         let primary_started = planning
             .diagnostics
             .as_ref()
