@@ -12,6 +12,7 @@
 pub mod attack_ring;
 pub(crate) mod archer_range;
 pub mod commands;
+pub mod destination;
 pub mod formation_preview;
 pub mod order;
 pub mod pick;
@@ -38,6 +39,7 @@ impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selection>();
         archer_range::install(app);
+        destination::install(app);
         app.add_systems(
             OnEnter(GameState::Playing),
             formation_preview::spawn_preview_label,

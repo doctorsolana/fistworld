@@ -64,6 +64,7 @@ impl Plugin for HudPlugin {
                 actions::handle_immigrant_boat_button,
                 actions::handle_found_village_button,
                 actions::handle_selection_expand_button,
+                actions::handle_selection_portrait_button,
                 sync_clock_chip,
                 sync_mode_chip,
                 sync_god_panel,
@@ -251,6 +252,12 @@ struct SelectionHealthFill;
 
 #[derive(Component)]
 struct SelectionExpandButton;
+
+/// The portrait medallion on the selection card. Clicking it reframes the
+/// camera on whoever is selected, mirroring the hero button in the top bar:
+/// having a card for someone you cannot find on screen is a dead end.
+#[derive(Component)]
+struct SelectionPortraitButton;
 
 #[derive(Component)]
 struct SpawnCatapultButton;

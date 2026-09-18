@@ -45,6 +45,55 @@ pub(super) fn handle_selection_expand_button(
     }
 }
 
+/// Click the selection card's portrait to reframe the camera on that character.
+///
+/// The top bar's hero button already does this for your own hero; the card had
+/// no equivalent, so a selection made by clicking a name in the encyclopedia, or
+/// one that walked off screen, left you with a card for someone you could not
+/// find. Reframing is deliberately NOT a selection change: the unit stays
+/// selected and ready for a right-click order at the destination, exactly as the
+/// town button behaves.
+pub(super) fn handle_selection_portrait_button(
+    selection: Res<crate::selection::Selection>,
+    input: Res<InputState>,
+    positions: Query<&shared::components::PlayerPosition>,
+    mut cameras: Query<&mut crate::camera_rts::CommanderCamera>,
+    buttons: Query<
+        &Interaction,
+        (
+            With<SelectionPortraitButton>,
+            Changed<Interaction>,
+            Without<bevy::ui::InteractionDisabled>,
+        ),
+    >,
+) {
+    /// Close enough to read a face, matching the hero button rather than
+    /// inventing a second "looking at someone" distance.
+    const WATCH_ZOOM: f32 = 82.0;
+
+    if input.gameplay_blocking() {
+        return;
+    }
+    for interaction in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        // Whatever the card is showing is what we fly to. A unit that has just
+        // died loses its position component, so a stale card cannot drag the
+        // camera to the origin.
+        let Some(position) = selection
+            .primary()
+            .and_then(|entity| positions.get(entity).ok())
+        else {
+            continue;
+        };
+        for mut camera in &mut cameras {
+            camera.focus_target = position.0;
+            camera.zoom_target = WATCH_ZOOM.clamp(camera.zoom_min, camera.zoom_max);
+        }
+    }
+}
+
 pub(super) fn handle_mode_toggle_key(
     keyboard: Res<ButtonInput<KeyCode>>,
     input_state: Res<InputState>,

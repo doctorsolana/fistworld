@@ -101,6 +101,12 @@ pub(super) fn view() -> impl Bundle {
 }
 fn portrait() -> impl Bundle {
     (
+        // Clickable: reframes the camera on the selected character. Everything
+        // inside stays `Pickable::IGNORE` so the whole medallion is one target
+        // rather than the click landing on the crest or the portrait image.
+        SelectionPortraitButton,
+        Button,
+        Interaction::default(),
         Node {
             width: Val::Px(78.0),
             height: Val::Px(78.0),
@@ -109,7 +115,6 @@ fn portrait() -> impl Bundle {
             ..default()
         },
         chrome::medallion(),
-        Pickable::IGNORE,
         children![(
             Node {
                 width: Val::Percent(100.0),

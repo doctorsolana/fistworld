@@ -76,6 +76,9 @@ pub(super) struct GroundOrderWorld<'w, 's> {
         &'static mut MessageSender<HeroConstructionOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
+    /// Where to draw the "your click landed here" pulse. Pushed here, drained
+    /// by `destination.rs`, so the order path stays free of render concerns.
+    pulses: ResMut<'w, super::destination::DestinationPulses>,
     siege_aim: ResMut<'w, crate::siege::SiegeAim>,
     catapults: Query<'w, 's, (), With<shared::components::Catapult>>,
     combat_mode: Res<'w, crate::combat_mode::CombatMode>,
@@ -432,6 +435,9 @@ pub(super) fn issue_order_on_right_click(
                 mode: ground_world.command_mode.0,
             },
         });
+        // Confirm the click on the ground itself. Only once the order is really
+        // going out: a pulse over a refused order would be a lie.
+        ground_world.pulses.0.push(target);
         ground_world.command_mode.0 = MovementMode::Move;
         if sailing_order {
             boat_world.notice.show("Sailing to destination");
