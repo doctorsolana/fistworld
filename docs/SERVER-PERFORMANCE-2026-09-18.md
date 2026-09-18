@@ -27,6 +27,18 @@ per-town work in a single tick instead of spreading it: the fortification planne
 | worst tick | ~491 ms | **~90 ms** (-82%) |
 | wasted land surveys per 600 s | ~1,835 | ~321 (-83%) |
 
+**Read that table honestly.** It is measured at 25x time warp, which is the only
+practical way to make a world's growth events happen inside a ten-minute run. Both
+stalls are triggered by towns crossing a threshold together — several reaching 24
+residents, or several wanting a building on the same review — and at normal speed
+those clusters are hours apart. A matched pair of warp-1 runs before and after the
+fixes shows no steady-state difference (core 3.0 ms either way, worst tick ~59 ms
+either way), because a ten-minute real-time window contains almost none of the
+triggering events. So the correct claim is: **these changes remove occasional
+multi-hundred-millisecond freezes, not steady-state cost.** The freezes are real in
+normal play; they are just rare enough that you have to accelerate the world to
+measure them.
+
 ## 2. What was fixed
 
 ### Fortification planner: one settlement per tick (the win)
