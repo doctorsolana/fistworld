@@ -14,7 +14,8 @@ A small town uncapped costs ~17 ms; an empty sea view still costs ~16 ms, so the
 floor is terrain, water, sky and presentation rather than content. Halving the 3D
 resolution saves 3.6 ms, which is the single biggest knob. Everything else is a
 few milliseconds each: cloud shading on terrain 2.7, ground mottle noise 1.5,
-shadows 1.3, fog 1.2, TAA 1.0, bloom 0.75, atmosphere 0.6, props 1.6, water 1.3.
+shadows 1.3, fog 1.2 (now off by default), TAA 1.0, bloom 0.75, atmosphere 0.6,
+props 1.6, water 1.3.
 None of it is a bug; it is the cost of the look.
 
 **Client with a crowd:** a 1,000-villager town is bound by animation and by
@@ -35,6 +36,7 @@ were rare multi-hundred-millisecond freezes from work batched into one tick.
 | Permit review: at most three land surveys | server core average -24% |
 | Civic square: one survey per town per world day | surveys -99%, squares still placed |
 | Permit memo keyed per building kind | correctness only, no timing change |
+| Distance fog off by default | -1.2 ms, no visible change at any zoom or time of day |
 
 ## Tested and rejected — do not re-audit without new evidence
 
