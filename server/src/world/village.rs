@@ -1062,7 +1062,10 @@ pub struct VillageClock {
     /// terrain change instead of rescanning and logging the
     /// same failure every four simulated seconds at 100x. Population is not
     /// geometry: immigration alone must not invalidate this cache.
-    failed_site_searches: HashMap<Entity, FailedSiteSearch>,
+    /// Keyed by (settlement, kind): one slot per settlement let each
+    /// requested kind evict the previous one, so an exhausted search was
+    /// re-run in full on every review.
+    failed_site_searches: HashMap<(Entity, SettlementBuildingKind), FailedSiteSearch>,
     /// Resumable outward ring for each settlement/building kind. Meaningful
     /// local road access or terrain changes reopen the inner land search.
     site_search_radii: HashMap<(Entity, SettlementBuildingKind), f32>,

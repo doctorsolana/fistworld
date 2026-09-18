@@ -91,13 +91,9 @@ pub(super) fn refresh_land_search_access(
         clock.site_search_radii.retain(|(owner, kind), _| {
             *owner != settlement || *kind == SettlementBuildingKind::FishermansHut
         });
-        if clock
-            .failed_site_searches
-            .get(&settlement)
-            .is_some_and(|failed| failed.kind != SettlementBuildingKind::FishermansHut)
-        {
-            clock.failed_site_searches.remove(&settlement);
-        }
+        clock.failed_site_searches.retain(|(owner, kind), _| {
+            *owner != settlement || *kind == SettlementBuildingKind::FishermansHut
+        });
     }
     revision
 }
