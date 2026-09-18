@@ -176,6 +176,12 @@ pub(super) fn spawn_water_chunks(
     mut meshes: ResMut<Assets<Mesh>>,
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
 ) {
+    // `FISTFORCE_WATER=0`: no detailed water meshes ever spawn. The far-terrain
+    // mesh keeps its baked ocean tint, so the switch isolates the animated
+    // water surface's draws, variants and material updates.
+    if !crate::profiling::env_enabled_by_default("FISTFORCE_WATER") {
+        return;
+    }
     let Some(render_assets) = render_assets else {
         return;
     };

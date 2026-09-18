@@ -104,6 +104,18 @@ fn normalize_weights(weights: vec4<f32>) -> vec4<f32> {
     return clamped / sum;
 }
 
+// Ablation helpers (`FISTFORCE_TERRAIN_DEBUG_MODE`; bit values mirror
+// TERRAIN_DEBUG_SKIP_* in shared/src/terrain/material.rs):
+//   16 = skip normal maps, 32 = skip albedo textures, 64 = skip ground noise.
+// `skip` comes from a uniform, so these branches are uniform control flow and
+// the fetches in the skipped arm are never issued.
+fn albedo_layer(skip: bool, layer: i32, uv: vec2<f32>, fallback: vec3<f32>) -> vec3<f32> {
+    if (skip) {
+        return fallback;
+    }
+    return textureSample(albedo_array, albedo_sampler, uv, layer).rgb;
+}
+
 fn tiled_uv(world_uv: vec2<f32>, tile_size: f32) -> vec2<f32> {
     let size = max(tile_size, 0.0001);
     return world_uv / size;
@@ -314,6 +326,9 @@ fn fragment(
     weight_uv = mix(weight_uv, endpoint_uv, terrain_params.weightmap_endpoint_samples);
     let sampled_weights = textureSample(weight_map, weight_map_sampler, weight_uv);
     let base_weights = normalize_weights(sampled_weights);
+    let skip_normal_maps = (terrain_params.debug_mode & 16u) != 0u;
+    let skip_albedo_textures = (terrain_params.debug_mode & 32u) != 0u;
+    let skip_ground_noise = (terrain_params.debug_mode & 64u) != 0u;
 
     if (terrain_params.debug_mode == 1u) {
         pbr_input.material.flags = pbr_input.material.flags | pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT;
@@ -333,7 +348,7 @@ fn fragment(
         // shortcut: small soil/chip marks must survive on grassy shoulders too.
         // This is the existing array slot, reused below on pure/mixed earth.
         var dirt_albedo = vec3<f32>(0.704, 0.390, 0.132);
-        if (weights.y > 0.01) {
+        if (weights.y > 0.01 && !skip_albedo_textures) {
             dirt_albedo = textureSample(albedo_array, albedo_sampler, uv_dirt, 1).rgb;
         }
         // The weightmap carries the durable road ribbon. Erode only its mixed
@@ -405,18 +420,18 @@ fn fragment(
         var albedo = vec3<f32>(0.0, 0.0, 0.0);
         if (use_single_layer_fast_path) {
             if (dominant_layer == 0u) {
-                albedo = textureSample(albedo_array, albedo_sampler, uv_grass, 0).rgb;
+                albedo = albedo_layer(skip_albedo_textures, 0, uv_grass, palette.grass.rgb);
             } else if (dominant_layer == 1u) {
                 albedo = dirt_albedo;
             } else if (dominant_layer == 2u) {
-                albedo = textureSample(albedo_array, albedo_sampler, uv_sand, 2).rgb;
+                albedo = albedo_layer(skip_albedo_textures, 2, uv_sand, palette.sand.rgb);
             } else {
-                albedo = textureSample(albedo_array, albedo_sampler, uv_cobble, 3).rgb;
+                albedo = albedo_layer(skip_albedo_textures, 3, uv_cobble, palette.cobble.rgb);
             }
         } else {
-            let grass_albedo = textureSample(albedo_array, albedo_sampler, uv_grass, 0).rgb;
-            let sand_albedo = textureSample(albedo_array, albedo_sampler, uv_sand, 2).rgb;
-            let cobble_albedo = textureSample(albedo_array, albedo_sampler, uv_cobble, 3).rgb;
+            let grass_albedo = albedo_layer(skip_albedo_textures, 0, uv_grass, palette.grass.rgb);
+            let sand_albedo = albedo_layer(skip_albedo_textures, 2, uv_sand, palette.sand.rgb);
+            let cobble_albedo = albedo_layer(skip_albedo_textures, 3, uv_cobble, palette.cobble.rgb);
             albedo = grass_albedo * weights.x
                 + dirt_albedo * weights.y
                 + sand_albedo * weights.z
@@ -476,7 +491,7 @@ fn fragment(
             // cliffs, beaches, seabeds and the snow line stay disciplined.
             // `bands.w` is the master strength: 0.0 previews it off.
             let vary = palette.bands.w;
-            if (vary > 0.001) {
+            if (vary > 0.001 && !skip_ground_noise) {
                 let vary_seed = vec2<f32>(palette.climate.y * 130.0, palette.climate.y * 71.0);
                 let ground_xz = pbr_input.world_position.xz;
                 let waterline_v = terrain_params.water_params.x * step(0.5, terrain_params.water_params.y);
@@ -574,7 +589,10 @@ fn fragment(
             // across the transition band. The wide band un-torn reads as an
             // airbrushed gradient; a hard per-bump threshold reads as leopard
             // spots — ~34m fbm tears give one ragged, drifted edge instead.
-            let tear = cloud_fbm(pbr_input.world_position.xz * (1.0 / 34.0));
+            var tear = 0.5;
+            if (!skip_ground_noise) {
+                tear = cloud_fbm(pbr_input.world_position.xz * (1.0 / 34.0));
+            }
             let snow_cover = smoothstep(0.30, 0.72, snow + (tear - 0.5) * 0.55);
             // Frost first: cold, pale, desaturated ground leading the snowline.
             let frost_tone = mix(albedo, vec3<f32>(0.62, 0.66, 0.70), 0.55);
@@ -588,8 +606,10 @@ fn fragment(
             albedo = mix(albedo, vec3<f32>(0.87, 0.91, 0.97), snow_final);
             // Snow grain sparkle: rare static bright grains, like the low-poly
             // art itself (view-tracking glitter belongs to the water).
-            let grain = cloud_hash(floor(pbr_input.world_position.xz * 5.0));
-            albedo += vec3<f32>(0.20) * step(0.988, grain) * snow_final;
+            if (!skip_ground_noise) {
+                let grain = cloud_hash(floor(pbr_input.world_position.xz * 5.0));
+                albedo += vec3<f32>(0.20) * step(0.988, grain) * snow_final;
+            }
             // Desert south: sun-scorched savanna yellowing first, then the
             // deep south settles toward true sand (quadratic so the
             // transition belt stays grassy-gold, not instantly a dune sea).
@@ -653,7 +673,7 @@ fn fragment(
         pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
 
 #ifdef VERTEX_TANGENTS
-        if (terrain_params.normal_strength > 0.001) {
+        if (terrain_params.normal_strength > 0.001 && !skip_normal_maps) {
             var blended_nt = vec3<f32>(0.5, 0.5, 1.0);
             if (use_single_normal_fast_path) {
                 if (dominant_layer == 0u) {

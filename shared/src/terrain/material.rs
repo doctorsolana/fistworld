@@ -219,6 +219,15 @@ pub struct TerrainPalette {
     pub cloud_field: Vec4,
 }
 
+/// Terrain shader ablation bits (`TerrainSplatParams::debug_mode`). Modes 0-3
+/// are the interactive previews; these bits can be OR-ed on top (see
+/// `FISTFORCE_TERRAIN_DEBUG_MODE` in the client) so one build can measure each
+/// per-pixel block. The shader mirrors these literals in
+/// `terrain_splat.wgsl`.
+pub const TERRAIN_DEBUG_SKIP_NORMALS: u32 = 1 << 4;
+pub const TERRAIN_DEBUG_SKIP_ALBEDO: u32 = 1 << 5;
+pub const TERRAIN_DEBUG_SKIP_NOISE: u32 = 1 << 6;
+
 /// Flat palette for the stylised terrain.
 ///
 /// Slightly desaturated, slightly blue-shifted in shadow-facing values so the world reads
