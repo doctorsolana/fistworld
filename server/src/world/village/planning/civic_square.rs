@@ -84,7 +84,9 @@ pub fn ensure_civic_squares(
     fields: Query<(&FarmField, &PlayerPosition, &PlayerRotation)>,
     defenses: Query<&SettlementDefenses>,
     squares: Query<&SettlementCivicSquare>,
+    world_time: Query<&WorldTime>,
     mut failed: Local<HashMap<Entity, SurveySignature>>,
+    mut surveyed_day: Local<HashMap<Entity, u32>>,
 ) {
     if halls.is_empty() {
         return;
@@ -97,16 +99,26 @@ pub fn ensure_civic_squares(
         return;
     };
     failed.retain(|entity, _| halls.contains(*entity));
+    surveyed_day.retain(|entity, _| halls.contains(*entity));
+    // A settlement whose geography cannot host a square stays in this query for
+    // the rest of its life, and the signature below is built from WORLD-WIDE
+    // counts, so any construction anywhere re-triggers its survey: measured at
+    // 12,935 failed surveys in 900 s across five towns. One survey per
+    // settlement per world day is plenty for town planning, and it matches how
+    // `plan_settlement_defenses` paces itself.
+    let today = world_time.iter().next().map(|clock| clock.day);
+    let due = |entity: &Entity, surveyed_day: &HashMap<Entity, u32>| {
+        today.is_none_or(|today| surveyed_day.get(entity) != Some(&today))
+    };
     let signature = (
         buildings.iter().count() + pending.iter().count(),
         roads.iter().count() + accesses.iter().count(),
         defenses.iter().map(|d| d.circuits.len()).sum(),
         terrain.modification_version(),
     );
-    if halls
-        .iter()
-        .all(|(entity, ..)| failed.get(&entity) == Some(&signature))
-    {
+    if halls.iter().all(|(entity, ..)| {
+        failed.get(&entity) == Some(&signature) || !due(&entity, &surveyed_day)
+    }) {
         return;
     }
     let placed_buildings: Vec<_> = buildings
@@ -144,7 +156,7 @@ pub fn ensure_civic_squares(
         }))
         .collect();
     for (entity, settlement, hall, rotation) in &halls {
-        if failed.get(&entity) == Some(&signature) {
+        if failed.get(&entity) == Some(&signature) || !due(&entity, &surveyed_day) {
             continue;
         }
         let nearby: Vec<_> = plots
@@ -264,12 +276,16 @@ pub fn ensure_civic_squares(
             );
             commands.entity(entity).insert(square);
             failed.remove(&entity);
+            surveyed_day.remove(&entity);
         } else {
             info!(
                 "Settlement '{}': no clear, dry civic square with a certified Market approach near the Hall; existing plots preserved",
                 settlement.name
             );
             failed.insert(entity, signature);
+            if let Some(today) = today {
+                surveyed_day.insert(entity, today);
+            }
         }
     }
 }

@@ -130,12 +130,19 @@ Worst *single call* per system, which is what causes freezes:
 3. **Startup costs 1.6 seconds** before the first tick (founding 1.44 s, coast
    preparation 0.15 s). Irrelevant for a dedicated server, noticeable when hosting
    locally.
-4. **The civic-square survey retries forever** for a town whose geography cannot host
+4. ~~**The civic-square survey retries forever**~~ **FIXED**: one survey per
+   settlement per world day, matching how `plan_settlement_defenses` paces itself.
+   Verified in a 420 s run of the 12-town world: **40 surveys instead of ~6,000**
+   (-99%), while 7 civic squares were still reserved, so the feature is intact.
+   Tick time is unchanged, as expected — this was always tidiness, not speed.
+   Original note follows.
+
+   **The civic-square survey retried forever** for a town whose geography cannot host
    one: its memo is invalidated by a count of every building and road *in the world*,
    so any construction anywhere restarts it. 12,935 failed surveys in 900 seconds.
-   **Measured cost: 1.99 ms/s, 0.03 ms per tick, worst call 3.7 ms.** It is a design
-   smell, not a performance problem. A backoff patch is written but deliberately not
-   applied: `logs/perf-server/apply_fix_civic_square.py`.
+   **Measured cost was 1.99 ms/s, 0.03 ms per tick, worst call 3.7 ms** — a design
+   smell, not a performance problem, which is why the fix is paced rather than
+   clever.
 
 ## 5. Method notes for whoever measures this next
 
