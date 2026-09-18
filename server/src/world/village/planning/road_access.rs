@@ -186,7 +186,20 @@ pub(in crate::world::village) fn planned_road_access_path(
     connected_keys: &HashSet<(i32, i32)>,
 ) -> Option<Vec<Vec2>> {
     const CELL: f32 = 4.0;
-    const PADDING: f32 = 28.0;
+    /// How far outside the doorway-to-goal rectangle the lane may wander.
+    ///
+    /// This is the room available for a DETOUR, and 28 m was not enough for
+    /// one: a farmstead with its fields, or two houses side by side, is wider
+    /// than that, so a plot behind a neighbour was refused outright with "No
+    /// dry access lane can connect this doorway to the Hall network" while open
+    /// ground sat a few metres beyond the box. Both the player's placement and
+    /// the settlement's own planner call this, so the planner answered the same
+    /// refusal by pushing plots further out -- which is why towns sprawled
+    /// instead of packing in.
+    ///
+    /// Widening this does NOT raise the worst-case cost: `MAX_NODES` bounds the
+    /// work, this only bounds where that work is allowed to look.
+    const PADDING: f32 = 96.0;
     const MAX_NODES: usize = 2_000;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -578,6 +591,52 @@ mod road_access_tests {
                 .windows(2)
                 .all(|segment| !reserved.blocks_segment(segment[0], segment[1])),
             "a permit reserved road through the future Town Hall: {route:?}"
+        );
+    }
+
+    /// A lane must be allowed to go AROUND a wide neighbour, not just a narrow one.
+    ///
+    /// The search box used to be the rectangle between the doorway and the goal
+    /// plus 28 m, and cells outside it were rejected outright. A single
+    /// farmstead with its fields is wider than that, so a plot tucked in behind
+    /// one was refused with "No dry access lane can connect this doorway to the
+    /// Hall network" even with open ground a few metres further out. That is
+    /// what stopped towns packing in tightly: both the player's placement and
+    /// the settlement's own planner share this function, so the planner pushed
+    /// plots outward until the straight corridor happened to be clear.
+    #[test]
+    fn access_routes_around_a_neighbour_wider_than_the_old_search_box() {
+        let terrain = WorldTerrain::default();
+        let hall = Vec3::new(1700.0, terrain.get_height(1700.0, 0.0), 0.0);
+        let position = Vec3::new(1760.0, terrain.get_height(1760.0, 0.0), 0.0);
+        let kind = SettlementBuildingKind::House;
+        let rotation = 0.0;
+        let (_, start) = crate::world::village_roads::doorway_approach(kind, position, rotation);
+        let (_, goal) =
+            crate::world::village_roads::doorway_approach(SettlementBuildingKind::Hall, hall, 0.0);
+        // Straddles the direct corridor and reaches 34 m to either side: wider
+        // than the old +-28 m box, narrower than the open ground beyond it.
+        let blocker = RoadAccessBlocker {
+            center: start.lerp(goal, 0.5),
+            half: Vec2::new(6.0, 34.0),
+            rotation: 0.0,
+        };
+        let route = planned_road_access_path(
+            &terrain,
+            hall,
+            kind,
+            position,
+            rotation,
+            &[],
+            &[blocker],
+            &HashSet::new(),
+        )
+        .expect("a lane must be able to route around a neighbour wider than the search box");
+        assert!(
+            route
+                .windows(2)
+                .all(|segment| !blocker.blocks_segment(segment[0], segment[1])),
+            "the lane was routed straight through the neighbour: {route:?}"
         );
     }
 
